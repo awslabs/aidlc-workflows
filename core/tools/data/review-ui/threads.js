@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { diffOps, escapeHtml } from "./diff.js";
+import { icon } from "./icons.js";
 import { agentFor, decisionInFlight, persistAnnotations, setNotice, store, selectedThreadIds } from "./store.js";
 
 const slot = document.getElementById("slot");
@@ -454,7 +455,7 @@ function render() {
         <button class="threads-note-link" type="button">${generalNote ? "Edit general note" : "Add general note"}</button>
       </header>
       ${renderNoteEditor()}
-      ${pending.length || drafts.length ? `<p class="threads-pending-line"><b>${pending.length + drafts.length} pending</b> · nothing is applied yet — <b>Send changes</b> (top right) hands them to the agent; Approve records them as notes only</p>` : ""}
+      ${pending.length || drafts.length ? `<p class="threads-pending-line" title="Nothing is applied until you send. Approve records them as notes only."><i class="state-dot"></i><b>${pending.length + drafts.length} unsent</b> · sent with <b>Send changes</b></p>` : ""}
       <div class="thread-list">${renderThreadList()}</div>
     </section>`;
   bindThreads();
@@ -552,13 +553,20 @@ function sortedSentThreads() {
     : (left.line_start || Number.MAX_SAFE_INTEGER) - (right.line_start || Number.MAX_SAFE_INTEGER));
 }
 
+const UNSENT_TITLE = "Not sent yet — Send changes (top right) hands it to the agent; Approve records it as a note";
+
+/** A quiet state glyph in the card's header row; the explanation lives in its tooltip. */
+function stateGlyph(kind, title, label = "") {
+  const glyph = kind === "unsent" ? `<i class="state-dot"></i>` : icon(kind === "resolved" || kind === "addressed" ? "checkmarkCircle" : "comment", { size: 12 });
+  return `<span class="thread-state ${kind}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${glyph}${label ? `<span>${escapeHtml(label)}</span>` : ""}</span>`;
+}
+
 function renderDraft(draft) {
   return `<article class="thread-card pending-card" data-draft-id="${escapeHtml(draft.id)}" data-thread-id="${escapeHtml(draft.id)}">
     ${quoteHtml(draft.selection)}
-    <div class="thread-editor-row">${kindSelect(draft.kind)}<span>Not posted</span></div>
+    <div class="thread-editor-row">${kindSelect(draft.kind)}<span class="thread-meta">Draft</span></div>
     <textarea rows="3" placeholder="${draft.kind === "edit" ? "Replacement text" : "Write a remark…"}">${escapeHtml(draft.body)}</textarea>
     <div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div>
-    <p class="thread-status pending">Pending · Send changes hands this to the agent</p>
   </article>`;
 }
 
@@ -570,19 +578,17 @@ function renderPending(annotation) {
     const summary = editSummary(annotation.before, annotation.after_block);
     const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
     return `<article class="thread-card pending-card edit-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
-      <div class="thread-editor-row"><span class="thread-kind">Suggested edit</span><span>${escapeHtml(where)}</span></div>
+      <div class="thread-editor-row"><span class="thread-kind">Suggested edit</span><span class="thread-meta">${escapeHtml(where)}${stateGlyph("unsent", UNSENT_TITLE)}</span></div>
       <p class="edit-summary">${summary}</p>
       <textarea rows="1" placeholder="Why (optional) — the agent reads this with the edit">${escapeHtml(annotation.body || "")}</textarea>
       <div class="thread-card-actions"><button data-show-annotation type="button">Show in document</button><button data-remove-annotation type="button">Undo edit</button></div>
-      <p class="thread-status pending">Not sent yet · Send changes hands it to the agent</p>
     </article>`;
   }
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${quoteHtml(annotation.selection)}
-    <div class="thread-editor-row">${kindSelect(annotation.kind)}<span>You · just now</span></div>
+    <div class="thread-editor-row">${kindSelect(annotation.kind)}<span class="thread-meta">You · just now${stateGlyph("unsent", UNSENT_TITLE)}</span></div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     <div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div>
-    <p class="thread-status pending">Not sent yet · Send changes hands it to the agent</p>
   </article>`;
 }
 
@@ -618,14 +624,13 @@ function renderSent(thread) {
   const resolved = status.name === "Resolved";
   return `<article class="thread-card sent-card${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
     ${quoteHtml(thread.quote)}
-    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span><span class="thread-kind">${kindLabel(thread.kind)}</span></div>
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span><span class="thread-kind">${kindLabel(thread.kind)}</span>${stateGlyph(status.className, status.detail ? `${status.name} · ${status.detail}` : status.name, status.name)}</div>
     ${thread.diff ? `<p class="edit-summary">${diffSummary(thread.diff)}</p>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
     ${renderReply(thread.response)}
     ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
     ${pendingReplies.map((reply) => drafts.includes(reply)
       ? `<div class="thread-followup pending" data-draft-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>replying</span></div><textarea rows="2" placeholder="Reply…">${escapeHtml(reply.body || "")}</textarea><div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div></div>`
-      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span></div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div><p class="thread-status pending">Pending · Send changes hands this to the agent</p></div>`).join("")}
-    <p class="thread-status ${status.className}">${status.name}${status.detail ? ` · ${escapeHtml(status.detail)}` : ""}</p>
+      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span>${stateGlyph("unsent", UNSENT_TITLE)}</div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div></div>`).join("")}
     ${hasOpenGate() ? `<div class="thread-card-actions sent-actions"><button data-reply-to="${escapeHtml(thread.id)}" type="button">Reply</button><button data-resolve="${escapeHtml(thread.id)}" type="button">${resolved && resolvedSet().has(thread.id) ? "Reopen" : resolved ? "" : "Resolve"}</button></div>` : ""}
   </article>`;
 }

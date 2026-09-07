@@ -15,11 +15,11 @@
 .threads-segment button.on { background: var(--soft); color: var(--accent); font-weight: 650; }
 .threads-note-link { margin-top: 9px; color: var(--accent); font-size: 11.5px; }
 .threads-note-link:hover { text-decoration: underline; }
-.threads-pending-line { margin: 10px 14px 0; padding: 8px 10px; border: 1px dashed #c9d5ff; border-radius: 7px; background: #fff; color: var(--ink); font-size: 11.5px; }
-.threads-pending-line b { color: var(--accent); }
+.threads-pending-line { margin: 8px 14px 0; padding: 0 2px; color: var(--muted); font-size: 11px; }
+.threads-pending-line b { color: var(--ink); font-weight: 600; }
 .thread-list { min-height: 0; flex: 1; overflow: auto; padding: 10px; }
 .thread-card { margin-bottom: 9px; padding: 10px 11px; border: 1px solid var(--line2); border-radius: 8px; background: #fff; font-size: 12px; transition: box-shadow 120ms ease, border-color 120ms ease; }
-.thread-card.pending-card { border-style: dashed; border-color: #b8c9ed; }
+.thread-card.pending-card { border-color: var(--line2); }
 .thread-card:hover { border-color: #cbd5e1; }
 /* The selected thread - from its badge, its marked text, or the card itself:
    the blue ring the reference uses. One at a time. */
@@ -35,10 +35,17 @@
 .thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 7px; }
 .thread-card-actions > button:not(.btn) { color: var(--muted); font-size: 11px; }
 .thread-card-actions > button:not(.btn):hover { color: var(--rose); }
-.thread-status { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
-.thread-status.pending { color: var(--accent); }
-.thread-status.addressed, .thread-status.resolved { color: var(--green); }
-.thread-status.open { color: var(--ink); }
+/* Card state is a glyph, not a sentence: an amber ring while still yours to
+   send, a check once the agent addressed or you resolved it. The sentence is
+   the tooltip. */
+.thread-meta { display: inline-flex; align-items: center; gap: 6px; }
+.thread-state { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10.5px; cursor: help; }
+.thread-who .thread-state { margin-left: 4px; }
+.state-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--amber-deep); box-sizing: border-box; }
+.thread-state.addressed, .thread-state.resolved { color: var(--green); }
+.thread-state.open { color: var(--muted); }
+.threads-pending-line .state-dot { margin-right: 7px; vertical-align: 0; }
+.threads-pending-line b { white-space: nowrap; }
 .thread-avatar { width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: #fff; font-size: 9px; font-weight: 700; }
 .thread-avatar.agent { background: var(--accent); }
 .thread-who b { color: var(--ink); font-weight: 650; }
