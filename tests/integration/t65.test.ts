@@ -199,12 +199,37 @@ beforeAll(() => {
     }
   }
 
+  // Producer universe for OPTIONAL consumes: produces[] UNION
+  // optional_produces[]. Mirrors aidlc-graph.ts's producersOf(), which unions
+  // both so a CONDITIONAL output (functional-design's frontend-components,
+  // written only for a UI unit) still resolves to its producing stage.
+  const anyProduces = new Set<string>(produces);
+  for (const p of parsed) {
+    if (Array.isArray(p.obj.optional_produces)) {
+      for (const name of p.obj.optional_produces as unknown[]) {
+        if (typeof name === "string") anyProduces.add(name);
+      }
+    }
+  }
+
   // Consumer coverage: every consumes[].artifact has a producer.
+  //
+  // The bar depends on `required`, matching what the engine enforces in
+  // aidlc-graph.ts's validate seam (which skips `required: false` consumes):
+  //   - required: true  -> the producer must GUARANTEE the artifact, so it must
+  //     appear in some stage's produces[]. A required consume of a merely
+  //     optional output is an unsatisfiable contract: the producing stage may
+  //     legitimately never write it, starving a hard input.
+  //   - required: false -> produces[] UNION optional_produces[] is enough. The
+  //     consumer already handles absence, so a conditional producer is a valid
+  //     upstream (this is what lets code-generation declare frontend-components).
   const missingProducers: Aggregate["missingProducers"] = [];
   for (const p of parsed) {
     if (Array.isArray(p.obj.consumes)) {
       for (const c of p.obj.consumes as Array<Record<string, unknown>>) {
-        if (c && typeof c.artifact === "string" && !produces.has(c.artifact)) {
+        if (!c || typeof c.artifact !== "string") continue;
+        const universe = c.required === true ? produces : anyProduces;
+        if (!universe.has(c.artifact)) {
           missingProducers.push({ slug: p.slug, artifact: c.artifact });
         }
       }
@@ -519,6 +544,8 @@ describe("t65 produces[] union + slug shape (in-process)", () => {
 // ============================================================
 describe("t65 cross-stage integrity (in-process)", () => {
   // .sh #14: "every consumes[].artifact appears in some stage's produces[]"
+  // (required consumes need produces[]; optional ones may resolve to
+  // optional_produces[] too - see the missingProducers derivation above)
   test("every consumes[].artifact appears in some stage's produces[]", () => {
     expect(agg.missingProducers).toEqual([]);
   });

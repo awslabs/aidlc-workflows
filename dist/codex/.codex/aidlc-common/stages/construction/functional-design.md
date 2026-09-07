@@ -36,6 +36,12 @@ consumes:
     required: true
   - artifact: contract-summary
     required: false
+  - artifact: wireframes
+    required: false
+  - artifact: mockups
+    required: false
+  - artifact: interaction-spec
+    required: false
 requires_stage:
   - units-generation
   - contract-design
@@ -52,7 +58,7 @@ scopes:
   - refactor
   - classic
   - workshop
-inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)
+inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced), mockups.md/interaction-spec.md or wireframes.md (if a UI unit and the mockups exist)
 outputs: "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views."
 ---
 
@@ -83,6 +89,8 @@ Execute all steps sequentially as written.
 ### Step 1: Read Unit Context
 
 Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the component catalogue from `<record>/inception/domain-design/components.md` (if it exists), and the contracts for this unit's boundaries from `<record>/inception/contract-design/contract-summary.md` (if it exists).
+
+For a unit with frontend/UI, also read whichever mockups exist: the refined mockups from `<record>/inception/refined-mockups/` (`mockups.md`, `interaction-spec.md`) and, failing that, the rough wireframes from `<record>/ideation/rough-mockups/` (`wireframes.md`). These are the human-approved layout. When `frontend-components.md` re-authors any of it — component tree, screen composition, the top-to-bottom order of sections on a screen — reproduce the approved layout faithfully and cite the mockup you took it from. Do not silently reorder or drop a section that the approved design placed; if a design decision (e.g. an approved in-flight requirement change) supersedes the mockup, record that as an explicit deviation. These inputs are optional — absent for non-UI units and for scopes that skip the mockup stages; never invent their content.
 
 Incremental scopes (refactor) deliberately skip units-generation and domain-design, so those inputs are absent by design there. When an input is absent, work from what the scope does provide — the requirements and, on a brownfield workspace, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints) — and treat the existing code structure as the de-facto domain design. Never invent the content of a missing artifact.
 
@@ -116,7 +124,7 @@ Generate the following in `<record>/construction/{unit-name}/functional-design/`
 - **entities.md**: The entity model. Carries a fenced ```yaml source-of-truth block listing each entity with its description, attributes (name, logical type, required/unique, references, allowed values, defaults, min/max, constraints), entity-level constraints, and relationships (cardinality + direction). Follow the block with a short human-readable summary of the entity set.
 - **rules.md**: The business rules. Carries a fenced ```yaml source-of-truth block listing each numbered rule (`id: BRx.y`, e.g. `BR1.1` — the `BR{group}.{seq}` format the traceability sensor recognizes) with its statement, category (validation/authorization/constraint/calculation/policy), what it applies to, trigger, logic (IF…THEN in plain language), violation behaviour, and source (FR-n/NFR-n). Follow the block with a short human-readable rules summary table.
 - **functional-spec.md**: The behavioural specification. It is the **source of truth for workflows and state machines** — the numbered step sequences a use case follows and the lifecycle-entity state transitions — because `entities.md` (data shape) and `rules.md` (decision logic) do not capture ordered behaviour or transitions. It also carries two **derived** views for readability: an entity-relationship `mermaid` diagram (derived from `entities.md` — the YAML there is source of truth) and a rules summary (derived from `rules.md`). For a UI-only unit that produces `functional-spec.md` without `entities.md`/`rules.md`, this file is self-contained: it authoritatively specifies the interaction workflows and screen/state transitions from the unit definition and requirements, with no entity/rule dependency.
-- **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points
+- **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points. Where the mockups (refined `mockups.md`/`interaction-spec.md`, or rough `wireframes.md`) exist, the component hierarchy and on-screen composition — including the top-to-bottom order of sections — must match the approved layout, and each screen must cite the mockup it derives from. Any intentional departure from the approved layout is a recorded deviation, not a silent one.
 
 Create
 `<record>/construction/{unit-name}/functional-design/traceability.json`.
@@ -168,7 +176,7 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 
 Imports: `required-sections`, `upstream-coverage`, `linter`, `type-check`, `traceability`.
 
-Upstream targets: `unit-of-work`, `unit-of-work-story-map`, `requirements`, `components`, `contract-summary`.
+Upstream targets: `unit-of-work`, `unit-of-work-story-map`, `requirements`, `components`, `contract-summary`, `wireframes`, `mockups`, `interaction-spec`.
 
 `linter` and `type-check` inspect matching TypeScript/JavaScript snippets.
 `traceability` validates per-Unit acceptance-criteria coverage, checks

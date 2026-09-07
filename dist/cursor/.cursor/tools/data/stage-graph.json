@@ -977,6 +977,14 @@
       {
         "artifact": "team-practices",
         "required": false
+      },
+      {
+        "artifact": "wireframes",
+        "required": false
+      },
+      {
+        "artifact": "user-flow",
+        "required": false
       }
     ],
     "requires_stage": [
@@ -1734,6 +1742,18 @@
       {
         "artifact": "contract-summary",
         "required": false
+      },
+      {
+        "artifact": "wireframes",
+        "required": false
+      },
+      {
+        "artifact": "mockups",
+        "required": false
+      },
+      {
+        "artifact": "interaction-spec",
+        "required": false
       }
     ],
     "requires_stage": [
@@ -1760,7 +1780,7 @@
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
-    "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)",
+    "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced), mockups.md/interaction-spec.md or wireframes.md (if a UI unit and the mockups exist)",
     "outputs": "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views.",
     "rules_in_context": [
       {
@@ -2359,6 +2379,22 @@
       {
         "artifact": "requirements",
         "required": true
+      },
+      {
+        "artifact": "frontend-components",
+        "required": false
+      },
+      {
+        "artifact": "mockups",
+        "required": false
+      },
+      {
+        "artifact": "interaction-spec",
+        "required": false
+      },
+      {
+        "artifact": "wireframes",
+        "required": false
       }
     ],
     "requires_stage": [
