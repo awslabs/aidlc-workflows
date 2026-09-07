@@ -341,10 +341,11 @@ function captureSelection(event) {
   // browser may do between mousedown and mouseup - destroying the selection
   // this handler would read. Settle first, then read; if the selection was
   // lost, the click's own target still says which line was meant.
-  requestAnimationFrame(() => captureSettled(target));
+  const point = Number.isFinite(event.clientX) ? { x: event.clientX, y: event.clientY } : null;
+  requestAnimationFrame(() => captureSettled(target, point));
 }
 
-function captureSettled(target) {
+function captureSettled(target, point = null) {
   if (!target?.isConnected && !target?.closest) return;
   if (activePopover && !activePopover.isConnected) closeCommentPopover();
   if (activePopover) return;
@@ -389,12 +390,17 @@ function captureSettled(target) {
     return;
   }
   const lines = selectedLines(block, text);
-  // Where the affordance goes: the first line of the highlight (or the caret's
-  // line), relative to the block, so it sits in the gutter beside that line.
-  const lineRect = (caret ? lineElementFor(caretNode, start).getBoundingClientRect() : (range.getClientRects()[0] || range.getBoundingClientRect()));
+  // Where the affordance goes: the first line of the highlight, or the caret's
+  // VISUAL line - a wrapped paragraph is one element but several lines, and the
+  // trigger belongs beside the line the caret is on, not the paragraph's middle
+  // (where it would land on whatever badge sits there). The left edge stays the
+  // paragraph's own, so the comment card opens where the text starts.
+  const lineElement = caret ? lineElementFor(caretNode, start) : null;
+  const lineRect = caret ? (caretLineRect(range, point) || lineElement.getBoundingClientRect()) : (range.getClientRects()[0] || range.getBoundingClientRect());
   const blockRect = start.getBoundingClientRect();
+  const leftRect = caret ? lineElement.getBoundingClientRect() : lineRect;
   const descriptor = {
-    anchor_left: Math.max(0, lineRect.left - blockRect.left),
+    anchor_left: Math.max(0, leftRect.left - blockRect.left),
     artifact: basename(store.document?.path || store.view.path || ""),
     path: store.document?.path || store.view.path,
     block: Number(block.index),
@@ -408,6 +414,19 @@ function captureSettled(target) {
     anchor_height: lineRect.height || 20,
   };
   store.set({ selection: descriptor });
+}
+
+/** The line box the caret sits on: from the collapsed range, else from the click point. */
+function caretLineRect(range, point) {
+  if (range?.collapsed) {
+    const rect = range.getBoundingClientRect();
+    if (rect.height > 0) return rect;
+  }
+  if (point && typeof document.caretRangeFromPoint === "function") {
+    const rect = document.caretRangeFromPoint(point.x, point.y)?.getBoundingClientRect();
+    if (rect && rect.height > 0) return rect;
+  }
+  return null;
 }
 
 // Two affordances, as in the reference editor:
