@@ -527,6 +527,10 @@ function renderThreadList() {
  * of its block. Unknown places sort last.
  */
 function documentLine(item) {
+  // A thread on another artifact of this stage has no place in this document.
+  const current = basename(store.document?.path || "");
+  const owner = basename(item.path || item.artifact || "");
+  if (!current || (owner && owner !== current)) return Number.MAX_SAFE_INTEGER;
   const recorded = Number(item.line_start);
   if (Number.isFinite(recorded) && recorded > 0 && recorded < Number.MAX_SAFE_INTEGER) return recorded;
   const source = typeof store.document?.source === "string" ? store.document.source : null;
@@ -536,7 +540,7 @@ function documentLine(item) {
     const at = needle ? source.indexOf(needle) : -1;
     if (at >= 0) return source.slice(0, at).split("\n").length;
   }
-  const block = store.document?.blocks?.[Number(item.block)];
+  const block = (store.document?.blocks || []).find((candidate) => Number(candidate.index) === Number(item.block));
   if (block && Number.isFinite(Number(block.line_start))) return Number(block.line_start);
   return Number.MAX_SAFE_INTEGER;
 }
