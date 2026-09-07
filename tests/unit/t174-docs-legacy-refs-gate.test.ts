@@ -11,7 +11,8 @@
 // template `core/templates/onboarding.md` (the source-of-truth that renders to the
 // shipped dist `CLAUDE.md` / `AGENTS.md` — the FIRST surface a user reads, and the
 // blind spot that let stale flat-layout prose ship in an earlier pass) for a
-// surviving `aidlc-docs` or `--init` occurrence and FAILS unless:
+// surviving occurrence of any RETIRED TOKEN (the five lanes documented below and
+// enumerated in the fixture's `_comment`) and FAILS unless:
 //   (a) the occurrence is pinned in tests/fixtures/docs-legacy-refs.json by exact
 //       file + line text — so widening the allowlist needs a visible diff there; AND
 //   (b) the pinned-set size stays <= the fixture's `ceiling` — so blanket-
@@ -24,6 +25,17 @@
 // `--init` token: every aidlc-command `--init` reference is retired; `git init`/
 // `npm init` are NOT the aidlc command, so the scanner only flags a bare `--init`
 // token (a hyphen-led flag), never an `<word> init` shell command.
+//
+// `<slug>-<id8>` token: the retired RECORD-DIR NAME shape. The date-prefix spike
+// made the on-disk name `<YYMMDD>-<label>` (aidlc-lib.ts createIntent →
+// `${dateStamp()}-${slug}`), and `<slug>-<id8>` survives in the engine only as
+// recordDirMatches()'s back-compat fallback for pre-spike registry rows. Prose
+// that still states it as the CURRENT shape mis-instructs every session: the
+// onboarding template (#1009) told agents `<slug>-<id8>` while
+// core/aidlc-common/protocols/stage-definition.md told them `<YYMMDD>-<label>`.
+// The four lanes above did not cover that line — this fifth one does, and there
+// are ZERO legitimate survivors in the scanned set (the occurrences that remain
+// in authored source are TypeScript comments, outside this gate's scope).
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -89,8 +101,10 @@ function listDocs(dir: string): string[] {
   return out;
 }
 
-/** A surviving legacy-ref occurrence: a docs line carrying `aidlc-docs` OR a bare
- *  `--init` flag token (the retired aidlc command — NOT `git init`/`npm init`). */
+/** A surviving legacy-ref occurrence: a docs line carrying any retired token —
+ *  `aidlc-docs`, a bare `--init` flag (the retired aidlc command, NOT `git init`/
+ *  `npm init`), a dotted rules dir, a `*-learnings.md` filename, or the retired
+ *  `<slug>-<id8>` record-dir shape. */
 interface Occurrence {
   file: string;
   line: number;
@@ -121,7 +135,14 @@ function scanOccurrences(): Occurrence[] {
       // `*-learnings.md` surface. Filename-anchored so the live tool
       // `aidlc-learnings.ts` and the phrase "learnings ritual" never match.
       const hasLearningsLog = /[a-z]+-learnings\.md/.test(line);
-      if (hasAidlcDocs || hasInit || hasRulesDir || hasLearningsLog) {
+      // The retired RECORD-DIR shape. The on-disk name is `<YYMMDD>-<label>`;
+      // `<slug>-<id8>` is only recordDirMatches()'s pre-spike fallback, never the
+      // shape to instruct a reader with. The `<id\d*>` tail also catches the
+      // longer-prefix variants the pre-spike collision scheme used (id8→id10→…),
+      // so a doc reintroducing `<slug>-<id10>` reds too. Angle-bracket-anchored,
+      // so live prose about a bolt/artifact `slug` never matches.
+      const hasLegacyRecordShape = /<slug>-<id\d*>/.test(line);
+      if (hasAidlcDocs || hasInit || hasRulesDir || hasLearningsLog || hasLegacyRecordShape) {
         out.push({ file: rel, line: i + 1, text: line.trim() });
       }
     }
@@ -137,7 +158,7 @@ describe("t174 docs legacy-ref allowlist gate (P9 — closed predicate)", () => 
     allowedByFile.get(e.file)?.add(e.text.trim());
   }
 
-  test("every surviving aidlc-docs/--init/rules-dir/learnings-log docs occurrence is pinned in the allowlist", () => {
+  test("every surviving aidlc-docs/--init/rules-dir/learnings-log/record-shape docs occurrence is pinned in the allowlist", () => {
     const unpinned = occurrences.filter(
       (o) => !(allowedByFile.get(o.file)?.has(o.text) ?? false),
     );
