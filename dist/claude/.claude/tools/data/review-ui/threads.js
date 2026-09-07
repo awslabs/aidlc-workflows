@@ -90,9 +90,9 @@ function reactionsHtml(target) {
   return `<div class="reactions" data-reactions-for="${escapeHtml(target)}">${pills}${pills ? `<button type="button" class="reaction add" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 13 })}</button>` : ""}</div>`;
 }
 
-/** The hover-revealed icon in a message header that opens the picker. */
+/** The icon in a message header that opens the picker. */
 function reactButton(target) {
-  return `<button type="button" class="icon-btn hover-only" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 14 })}</button>`;
+  return `<button type="button" class="icon-btn" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 14 })}</button>`;
 }
 
 function openReactionPicker(anchor, target) {
@@ -685,7 +685,7 @@ function renderPending(annotation) {
       ${headRow(where, `<span class="thread-kind">Edit</span>`, { plain: true })}
       <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
       <p class="edit-summary">${summary}</p>
-      <textarea rows="1" placeholder="Why (optional) — the agent reads this with the edit">${escapeHtml(annotation.body || "")}</textarea>
+      <textarea rows="1" placeholder="Add a reason (optional)">${escapeHtml(annotation.body || "")}</textarea>
       <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
     </article>`;
   }

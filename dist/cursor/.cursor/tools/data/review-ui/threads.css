@@ -37,20 +37,19 @@
 .thread-editor-row select { min-width: 0; max-width: 128px; padding: 3px 22px 3px 6px; border: 1px solid var(--line2); border-radius: 5px; background: #fff; font-size: 11.5px; }
 .thread-editor-row > .thread-meta { margin-left: 0; }
 .thread-editor-row { margin-bottom: 2px; }
-.thread-card textarea { width: 100%; margin-top: 8px; padding: 7px 8px; resize: vertical; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); outline: 0; font-size: 12px; line-height: 1.45; }
+/* The body reads as text, as in the reference - no box, no resize handle. It
+   grows with what is typed; the box only shows while it is being edited. */
+.thread-card textarea { display: block; width: 100%; margin: 6px 0 0; padding: 4px 6px; margin-left: -6px; width: calc(100% + 12px); resize: none; border: 1px solid transparent; border-radius: 6px; background: transparent; outline: 0; color: var(--ink); font: inherit; font-size: 12.5px; line-height: 1.5; }
+.thread-card textarea::placeholder { color: var(--muted); }
+.thread-card textarea:hover { background: var(--panel); }
 .thread-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); background: #fff; }
 .thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 7px; }
 .thread-card-actions > button:not(.btn) { color: var(--muted); font-size: 11px; }
 .thread-card-actions > button:not(.btn):hover { color: var(--rose); }
-/* As in the reference, actions and the reaction button wait for the hand: they
-   fade in when the card is hovered, selected, or holds the keyboard focus. The
-   state label at bottom-left is information and always shows. */
-.thread-card-actions > button, .thread-card .hover-only { opacity: 0; transition: opacity 120ms ease; }
-.thread-card:hover .thread-card-actions > button, .thread-card.focused .thread-card-actions > button, .thread-card:focus-within .thread-card-actions > button,
-.thread-card:hover .hover-only, .thread-card.focused .hover-only, .thread-card:focus-within .hover-only { opacity: 1; }
-.thread-card .thread-card-actions > .btn.primary { opacity: 1; }
+/* Actions stay put: a row that appears and disappears under the hand reads as
+   flicker, most of all when it holds one word. Quiet colour does the work. */
 .thread-card { position: relative; }
-.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: auto; border-radius: 5px; color: var(--muted); }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: auto; border-radius: 5px; color: #a3adbb; }
 .icon-btn:hover { background: var(--panel); color: var(--ink); }
 .thread-who .icon-btn { margin-left: auto; }
 /* Reactions: pills with the emoji and how many; yours carries the accent. */
@@ -95,7 +94,7 @@
 .decision-note-form { margin: 10px 14px 0; padding: 10px; border: 1px solid var(--line2); border-radius: 8px; background: #fff; }
 .decision-note-form label { display: block; font-weight: 700; }
 .decision-note-form label span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
-.decision-note-form textarea { width: 100%; margin-top: 7px; padding: 7px; resize: vertical; border: 1px solid var(--line2); border-radius: 6px; outline: 0; }
+.decision-note-form textarea { width: 100%; margin-top: 7px; padding: 7px; resize: none; field-sizing: content; min-height: 3.2em; max-height: 14em; border: 1px solid var(--line2); border-radius: 6px; outline: 0; }
 .decision-note-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); }
 .decision-note-form > div { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
 .general-note-preview { margin: 10px 14px 0; padding: 9px 10px; border-radius: 7px; background: #fff; white-space: pre-wrap; font-size: 11.5px; }
@@ -108,7 +107,7 @@
 .sent-actions button { color: var(--muted); font-size: 12px; }
 .sent-actions button:hover { color: var(--accent); }
 
-.thread-card textarea { field-sizing: content; min-height: 3.2em; max-height: 14em; resize: vertical; }
+.thread-card textarea { field-sizing: content; min-height: 1.5em; max-height: 14em; }
 
 .decision-warning { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--amber-soft, #fff7e6); color: #7c4a03; font-size: 12px; line-height: 1.45; }
 
