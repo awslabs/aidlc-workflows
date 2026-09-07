@@ -240,8 +240,13 @@ function run(
   };
 }
 
-function direct(tool: string, args: string[], projectDir: string): RunResult {
-  return run([BUN, join(CORE_TOOLS_DIR, tool), ...args], projectDir);
+function direct(
+  tool: string,
+  args: string[],
+  projectDir: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+): RunResult {
+  return run([BUN, join(CORE_TOOLS_DIR, tool), ...args], projectDir, extraEnv);
 }
 
 function viaDispatcher(args: string[], projectDir: string, extraEnv: NodeJS.ProcessEnv = {}, stdin?: string): RunResult {
@@ -332,6 +337,7 @@ describe("t230 dispatcher route parity", () => {
     tool: string;
     toolArgs: string[];
     fixture?: boolean;
+    env?: NodeJS.ProcessEnv;
   }> = [
     {
       name: "compose translates to orchestrate next compose",
@@ -516,6 +522,7 @@ describe("t230 dispatcher route parity", () => {
       tool: "aidlc-lifecycle.ts",
       toolArgs: ["update"],
       fixture: true,
+      env: { AIDLC_OFFLINE: "1" },
     },
     {
       name: "gen runners maps to runner write",
@@ -578,8 +585,8 @@ describe("t230 dispatcher route parity", () => {
   for (const item of cases) {
     test(`${item.name}`, () => {
       const projectDir = item.fixture ? makeProject() : REPO_ROOT;
-      const routed = viaDispatcher(item.routerArgs, projectDir);
-      const old = direct(item.tool, item.toolArgs, projectDir);
+      const routed = viaDispatcher(item.routerArgs, projectDir, item.env);
+      const old = direct(item.tool, item.toolArgs, projectDir, item.env);
       expectSameRun(routed, old, item.name);
     });
   }

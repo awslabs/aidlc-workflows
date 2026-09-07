@@ -416,6 +416,8 @@ function scratchProject(): string {
   for (const t of [
     "aidlc-lib.ts",
     "aidlc-settings.ts",
+    "aidlc-install-paths.ts",
+    "aidlc-distribution.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",

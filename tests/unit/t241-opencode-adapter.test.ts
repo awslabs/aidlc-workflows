@@ -128,10 +128,16 @@ function copyCore(root: string, relativePath: string): void {
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(source, destination);
   if (relativePath === "tools/aidlc-lib.ts") {
-    copyFileSync(
-      join(REPO_ROOT, "core", "tools", "aidlc-settings.ts"),
-      join(root, ".aidlc", "tools", "aidlc-settings.ts"),
-    );
+    for (const dependency of [
+      "aidlc-settings.ts",
+      "aidlc-install-paths.ts",
+      "aidlc-distribution.ts",
+    ]) {
+      copyFileSync(
+        join(REPO_ROOT, "core", "tools", dependency),
+        join(root, ".aidlc", "tools", dependency),
+      );
+    }
   }
 }
 

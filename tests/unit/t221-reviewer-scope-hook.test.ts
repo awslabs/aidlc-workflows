@@ -378,7 +378,10 @@ function scratchProject(): string {
   for (const t of [
     "aidlc-lib.ts",
     "aidlc-artifact-vocabulary.ts",
-    "aidlc-settings.ts", "aidlc-runtime-paths.ts",
+    "aidlc-settings.ts",
+    "aidlc-install-paths.ts",
+    "aidlc-distribution.ts",
+    "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
