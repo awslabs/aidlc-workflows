@@ -498,6 +498,16 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
     expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
   });
 
+  test("25b: explicit prose audits Source=keyword (explicitness is routing metadata, not an audit source)", () => {
+    const p = proj();
+    const r = detectFromText("create a todo application using the express scope", p);
+    expect(r.status).toBe(0);
+    const f = readAudit(p);
+    expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1);
+    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("express");
+    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
+  });
+
   test("26: keyword-match SCOPE_DETECTED includes Matched keywords field", () => {
     const p = proj();
     detectFromText("fix the login bug", p);
