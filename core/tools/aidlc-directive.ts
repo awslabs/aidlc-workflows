@@ -348,10 +348,9 @@ export interface PresentGateDirective {
   memory_path: string;
 }
 
-// ask — render a specific structured question. Most asks return through report.
-// The new-work-routing subtype is different: it classifies prose that has not
-// started stage work, so its answer routes through `next` and must never be
-// recorded as a stage report.
+// ask - render a specific structured question. Every ask names its response
+// route, and engine-routed asks carry the exact command or command template the
+// conductor follows after the human answers.
 interface AskDirectiveBase {
   kind: "ask";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
@@ -359,17 +358,37 @@ interface AskDirectiveBase {
   question: string;
 }
 
-export interface ReportAskDirective extends AskDirectiveBase {
-  ask_type?: undefined;
-  response_route?: undefined;
-  new_work_description?: undefined;
-  proposed_scope?: undefined;
-  available_intents?: undefined;
-  numbered_prose_question?: undefined;
-  claimable_units?: undefined;
-  claimed_units?: undefined;
-  waiting_units?: undefined;
-  recovery_choice?: undefined;
+export interface ScopeConfirmAskDirective extends AskDirectiveBase {
+  ask_type: "scope-confirm";
+  response_route: "next";
+  proposed_scope: string;
+  intent_text: string;
+  confirm_command: string;
+  compose_command: string;
+  scope_command_template: string;
+}
+
+export interface ComposeOfferAskDirective extends AskDirectiveBase {
+  ask_type: "compose-offer";
+  response_route: "next";
+  intent_text: string;
+  compose_command: string;
+  scope_command_template: string;
+}
+
+export interface IntentPickAskDirective extends AskDirectiveBase {
+  ask_type: "intent-pick";
+  response_route: "next";
+  available_intents: string[];
+  select_commands: Array<{ selector: string; command: string }>;
+}
+
+export interface UnitPausedAskDirective extends AskDirectiveBase {
+  ask_type: "unit-paused";
+  response_route: "command";
+  stage: string;
+  unit: string;
+  resume_command: string;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -435,7 +454,10 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
 }
 
 export type AskDirective =
-  | ReportAskDirective
+  | ScopeConfirmAskDirective
+  | ComposeOfferAskDirective
+  | IntentPickAskDirective
+  | UnitPausedAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -629,6 +651,14 @@ const ASK_FIELDS = [
   "question",
   "ask_type",
   "response_route",
+  "intent_text",
+  "confirm_command",
+  "compose_command",
+  "scope_command_template",
+  "select_commands",
+  "stage",
+  "unit",
+  "resume_command",
   "new_work_description",
   "proposed_scope",
   "available_intents",
@@ -637,8 +667,6 @@ const ASK_FIELDS = [
   "claimed_units",
   "waiting_units",
   "recovery_choice",
-  "stage",
-  "unit",
   "reason_codes",
   "remedies",
   "state_signature",
@@ -790,50 +818,141 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "phase", kind, errors);
       checkString(o, "memory_path", kind, errors);
       break;
-    case "ask":
+    case "ask": {
       checkString(o, "question", kind, errors);
-      checkOptionalString(o, "ask_type", kind, errors);
-      checkOptionalString(o, "response_route", kind, errors);
+      checkString(o, "ask_type", kind, errors);
+      checkString(o, "response_route", kind, errors);
+      checkOptionalString(o, "intent_text", kind, errors);
+      checkOptionalString(o, "confirm_command", kind, errors);
+      checkOptionalString(o, "compose_command", kind, errors);
+      checkOptionalString(o, "scope_command_template", kind, errors);
+      checkOptionalString(o, "stage", kind, errors);
+      checkOptionalString(o, "unit", kind, errors);
+      checkOptionalString(o, "resume_command", kind, errors);
       checkOptionalString(o, "new_work_description", kind, errors);
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
       checkOptionalString(o, "recovery_choice", kind, errors);
       if (
-        "ask_type" in o &&
-        o.ask_type !== "new-work-routing" &&
-        o.ask_type !== "unit-claim" &&
-        o.ask_type !== "legacy-plan-approval-recovery" &&
-        o.ask_type !== "guard-recovery"
+        typeof o.ask_type === "string" &&
+        ![
+          "scope-confirm",
+          "compose-offer",
+          "intent-pick",
+          "unit-paused",
+          "new-work-routing",
+          "unit-claim",
+          "legacy-plan-approval-recovery",
+          "guard-recovery",
+        ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
         );
       }
-      if (o.ask_type === "new-work-routing") {
+      const askPayloadFields = [
+        "intent_text",
+        "confirm_command",
+        "compose_command",
+        "scope_command_template",
+        "select_commands",
+        "stage",
+        "unit",
+        "resume_command",
+        "new_work_description",
+        "proposed_scope",
+        "available_intents",
+        "numbered_prose_question",
+        "claimable_units",
+        "claimed_units",
+        "waiting_units",
+        "recovery_choice",
+        "reason_codes",
+        "remedies",
+        "state_signature",
+      ] as const;
+      const rejectUnexpected = (
+        askType: string,
+        allowed: Readonly<Record<string, true>>,
+      ): void => {
+        for (const field of askPayloadFields) {
+          if (field in o && allowed[field] !== true) {
+            errors.push(`${kind}: ${field} is not valid for ${askType}`);
+          }
+        }
+      };
+      if (o.ask_type === "scope-confirm") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: scope-confirm response_route must be "next"`);
+        }
+        checkString(o, "proposed_scope", kind, errors);
+        checkString(o, "intent_text", kind, errors);
+        checkString(o, "confirm_command", kind, errors);
+        checkString(o, "compose_command", kind, errors);
+        checkString(o, "scope_command_template", kind, errors);
+        rejectUnexpected(
+          "scope-confirm",
+          {
+            proposed_scope: true,
+            intent_text: true,
+            confirm_command: true,
+            compose_command: true,
+            scope_command_template: true,
+          },
+        );
+      } else if (o.ask_type === "compose-offer") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: compose-offer response_route must be "next"`);
+        }
+        checkString(o, "intent_text", kind, errors);
+        checkString(o, "compose_command", kind, errors);
+        checkString(o, "scope_command_template", kind, errors);
+        rejectUnexpected(
+          "compose-offer",
+          {
+            intent_text: true,
+            compose_command: true,
+            scope_command_template: true,
+          },
+        );
+      } else if (o.ask_type === "intent-pick") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: intent-pick response_route must be "next"`);
+        }
+        checkStringArray(o, "available_intents", kind, errors);
+        checkSelectCommands(o, kind, errors);
+        rejectUnexpected(
+          "intent-pick",
+          { available_intents: true, select_commands: true },
+        );
+      } else if (o.ask_type === "unit-paused") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: unit-paused response_route must be "command"`);
+        }
+        checkString(o, "stage", kind, errors);
+        checkString(o, "unit", kind, errors);
+        checkString(o, "resume_command", kind, errors);
+        rejectUnexpected(
+          "unit-paused",
+          { stage: true, unit: true, resume_command: true },
+        );
+      } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
         }
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
-        for (const field of [
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "recovery_choice",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(
-              `${kind}: ${field} is not valid for new-work-routing`,
-            );
-          }
-        }
+        rejectUnexpected(
+          "new-work-routing",
+          {
+            new_work_description: true,
+            proposed_scope: true,
+            available_intents: true,
+            numbered_prose_question: true,
+          },
+        );
       } else if (o.ask_type === "unit-claim") {
         if (o.response_route !== "claim") {
           errors.push(`${kind}: unit-claim response_route must be "claim"`);
@@ -841,22 +960,10 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkStringArray(o, "claimable_units", kind, errors);
         checkUnitClaimRows(o, "claimed_units", "holder", kind, errors);
         checkUnitClaimRows(o, "waiting_units", "blocked_by", kind, errors);
-        for (const field of [
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "recovery_choice",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(`${kind}: ${field} is not valid for unit-claim`);
-          }
-        }
+        rejectUnexpected(
+          "unit-claim",
+          { claimable_units: true, claimed_units: true, waiting_units: true },
+        );
       } else if (o.ask_type === "legacy-plan-approval-recovery") {
         if (o.response_route !== "next") {
           errors.push(
@@ -868,26 +975,10 @@ export function validateDirective(obj: unknown): ValidationResult {
             `${kind}: legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"`,
           );
         }
-        for (const field of [
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(
-              `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
-            );
-          }
-        }
+        rejectUnexpected(
+          "legacy-plan-approval-recovery",
+          { recovery_choice: true },
+        );
       } else if (o.ask_type === "guard-recovery") {
         if (o.response_route !== "execute-remedy") {
           errors.push(
@@ -898,45 +989,19 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkOptionalString(o, "unit", kind, errors);
         checkStringArray(o, "reason_codes", kind, errors);
         checkGuardRemedies(o, kind, errors);
-        for (const field of [
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "recovery_choice",
-        ] as const) {
-          if (field in o) {
-            errors.push(`${kind}: ${field} is not valid for guard-recovery`);
-          }
-        }
-      } else {
-        for (const field of [
-          "response_route",
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "recovery_choice",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(
-              `${kind}: ${field} requires ask_type "new-work-routing"`,
-            );
-          }
-        }
+        rejectUnexpected(
+          "guard-recovery",
+          {
+            stage: true,
+            unit: true,
+            reason_codes: true,
+            remedies: true,
+            state_signature: true,
+          },
+        );
       }
       break;
+    }
     case "print":
       checkString(o, "message", kind, errors);
       break;
@@ -1719,6 +1784,46 @@ function checkEnum(
   }
 }
 
+function checkSelectCommands(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("select_commands" in o)) {
+    errors.push(`${kind}: missing required field: select_commands`);
+    return;
+  }
+  const value = o.select_commands;
+  if (!Array.isArray(value)) {
+    errors.push(`${kind}: select_commands must be array, got ${describe(value)}`);
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const row = value[i];
+    if (!isPlainObject(row)) {
+      errors.push(
+        `${kind}: select_commands[${i}] must be object, got ${describe(row)}`,
+      );
+      continue;
+    }
+    for (const key of Object.keys(row)) {
+      if (key !== "selector" && key !== "command") {
+        errors.push(`${kind}: select_commands[${i}] unknown key: ${key}`);
+      }
+    }
+    if (typeof row.selector !== "string") {
+      errors.push(
+        `${kind}: select_commands[${i}].selector must be string, got ${describe(row.selector)}`,
+      );
+    }
+    if (typeof row.command !== "string") {
+      errors.push(
+        `${kind}: select_commands[${i}].command must be string, got ${describe(row.command)}`,
+      );
+    }
+  }
+}
+
 function checkUnitClaimRows(
   o: Record<string, unknown>,
   field: string,
@@ -1842,7 +1947,20 @@ if (import.meta.main) {
       phase: "inception",
       memory_path: "aidlc-docs/inception/domain-design/memory.md",
     },
-    { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" },
+    {
+      kind: "ask",
+      ask_type: "scope-confirm",
+      response_route: "next",
+      question: "Continue with the proposed bugfix plan?",
+      proposed_scope: "bugfix",
+      intent_text: "fix the login bug",
+      confirm_command:
+        "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --pending-request a1b2c3d4",
+      compose_command:
+        "bun .claude/tools/aidlc-orchestrate.ts next compose --pending-request a1b2c3d4",
+      scope_command_template:
+        "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope> --pending-request a1b2c3d4",
+    },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },

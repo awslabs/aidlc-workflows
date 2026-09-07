@@ -121,10 +121,6 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     const d = directiveOf(runNext(proj, ["compose", task]).out);
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain("aidlc-composer-agent");
-    expect(String(d.message)).toContain(
-      `creationDescription\` MUST equal the original task text verbatim: "${task}"`,
-    );
-    expect(String(d.message)).toContain(`next --scope <scopeName> -- '${task}'`);
     // Front mode, not in-flight: no state file exists.
     expect(String(d.message)).not.toContain("RUNNING workflow");
   });
@@ -142,43 +138,19 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("Never approve a proposal that would continue into a scope-only creation");
   });
 
-  test("compose task shell metacharacters are rendered as one single-quoted argv", () => {
-    proj = createTestProject();
-    const task = "build $(touch /tmp/compose-pwn) with `uname` and $HOME";
-    const d = directiveOf(runNext(proj, ["compose", task]).out);
-    expect(String(d.message)).toContain(`next --scope <scopeName> -- '${task}'`);
-    expect(String(d.message)).not.toContain(`next --scope <scopeName> "${task}"`);
-  });
 
-  test("embedded single quotes use POSIX-safe shell escaping", () => {
-    proj = createTestProject();
-    const task = "fix user's $(echo unsafe) workflow";
-    const d = directiveOf(runNext(proj, ["compose", task]).out);
-    expect(String(d.message)).toContain(
-      `next --scope <scopeName> -- 'fix user'"'"'s $(echo unsafe) workflow'`,
-    );
-  });
 
-  test("flag-like compose task text survives dispatch and continue-into-creation parsing", () => {
-    proj = createTestProject();
-    const task = "--enable SSO for admins";
-    const compose = directiveOf(runNext(proj, ["compose", task]).out);
-    expect(String(compose.message)).toContain(`next --scope <scopeName> -- '${task}'`);
-
-    cleanupTestProject(proj);
+  test("flag-like compose task survives approval and creation via its pending token", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const creation = directiveOf(runNext(proj, ["--scope", "feature", task]).out);
-    expect(String(creation.message)).toContain(`--arguments='${task}'`);
-    expect(String(creation.message)).not.toContain("intent-create --scope feature`");
-
+    const task = "--enable SSO for admins";
+    const compose = directiveOf(runNext(proj, ["compose", task]).out);
+    const id = String(compose.message).match(/--pending-request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    const creation = directiveOf(runNext(proj, ["--scope", "feature", "--pending-request", id!]).out);
+    expect(creation.kind).toBe("print");
     const created = runUtility(proj, [
-      "intent-create",
-      "--scope",
-      "feature",
-      `--arguments=${task}`,
-      "--label",
-      "enable-sso",
+      "intent-create", "--scope", "feature", "--pending-request", id!, "--label", "enable-sso",
     ]);
     expect(created.rc, created.out).toBe(0);
     const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
@@ -187,26 +159,29 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(state).toContain(`- **Project**: ${task}`);
   });
 
-  test("literal delimiter, --new-scope, and positional-scope tasks preserve flag tokens", () => {
-    proj = createTestProject();
-    const literal = directiveOf(runNext(proj, ["compose", "--", "--scope", "migration"]).out);
-    expect(String(literal.message)).toContain("'--scope migration'");
-
-    const globalLooking = directiveOf(
-      runNext(proj, ["compose", "--", "--project-dir", "/tmp/not-a-project"]).out,
-    );
-    expect(String(globalLooking.message)).toContain("'--project-dir /tmp/not-a-project'");
-
-    cleanupTestProject(proj);
-    proj = createTestProject();
-    const custom = directiveOf(runNext(proj, ["--new-scope", "--enable SSO"]).out);
-    expect(String(custom.message)).toContain("'--enable SSO'");
-
-    cleanupTestProject(proj);
-    proj = createTestProject();
-    removeWorkspaceRecord(proj);
-    const positional = directiveOf(runNext(proj, ["bugfix", "--enable"]).out);
-    expect(String(positional.message)).toContain("--arguments=--enable");
+  test("literal delimiter, --new-scope, and positional-scope tasks preserve flag tokens at creation", () => {
+    for (const [args, description] of [
+      [["compose", "--", "--scope", "migration"], "--scope migration"],
+      [["compose", "--", "--project-dir", "/tmp/not-a-project"], "--project-dir /tmp/not-a-project"],
+      [["--new-scope", "--enable SSO"], "--enable SSO"],
+      [["bugfix", "--enable"], "--enable"],
+      [["bugfix", "Fix", "duplicate", "todo", "persistence"], "Fix duplicate todo persistence"],
+      [["--scope", "feature", "feature", "flags", "for", "billing"], "feature flags for billing"],
+      [["bugfix", "Fix", "duplicate", "todo", "--scope", "mvp"], "bugfix Fix duplicate todo"],
+    ] as const) {
+      proj = createTestProject();
+      removeWorkspaceRecord(proj);
+      const dispatch = directiveOf(runNext(proj, [...args]).out);
+      const id = String(dispatch.message).match(/--pending-request ([0-9a-f]{8})/)?.[1];
+      expect(id).toBeDefined();
+      const created = runUtility(proj, ["intent-create", "--scope", "bugfix", "--pending-request", id!]);
+      expect(created.rc, created.out).toBe(0);
+      const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
+      const record = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+      expect(readFileSync(join(intentsDir, record, "aidlc-state.md"), "utf-8")).toContain(`- **Project**: ${description}`);
+      cleanupTestProject(proj);
+      proj = "";
+    }
   });
 
   test("composer schema requires creationDescription for front/report proposals", () => {

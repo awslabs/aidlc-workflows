@@ -90,6 +90,11 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  pendingRequestUnavailable,
+  readPendingRequest,
+  savePendingRequest,
+} from "./aidlc-pending-request.ts";
+import {
   type AskDirective,
   type Directive,
   type ErrorDirective,
@@ -1005,8 +1010,83 @@ function touchEngineMarker(projectDir: string | undefined): void {
 
 // --- Terminal-directive constructors (the non-run-stage kinds) ---
 
-function askDirective(question: string): AskDirective {
-  return { kind: "ask", question };
+function requestPreview(text: string): string {
+  return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+}
+
+function scopeConfirmAskDirective(
+  question: string,
+  proposedScope: string,
+  intentText: string,
+  projectDir: string,
+): AskDirective {
+  const tool = aidlcToolInvocation("orchestrate");
+  const pending = savePendingRequest(projectDir, intentText, proposedScope);
+  return {
+    kind: "ask",
+    ask_type: "scope-confirm",
+    response_route: "next",
+    question,
+    proposed_scope: proposedScope,
+    intent_text: intentText,
+    confirm_command:
+      `${tool} next --scope ${shellArg(proposedScope)} --pending-request ${pending.id}`,
+    compose_command: `${tool} next compose --pending-request ${pending.id}`,
+    scope_command_template: `${tool} next --scope <scope> --pending-request ${pending.id}`,
+  };
+}
+
+function composeOfferAskDirective(
+  question: string,
+  intentText: string,
+  projectDir: string,
+): AskDirective {
+  const tool = aidlcToolInvocation("orchestrate");
+  const pending = savePendingRequest(projectDir, intentText, "");
+  return {
+    kind: "ask",
+    ask_type: "compose-offer",
+    response_route: "next",
+    question,
+    intent_text: intentText,
+    compose_command: `${tool} next compose --pending-request ${pending.id}`,
+    scope_command_template: `${tool} next --scope <scope> --pending-request ${pending.id}`,
+  };
+}
+
+function intentPickAskDirective(
+  question: string,
+  availableIntents: string[],
+): AskDirective {
+  const tool = aidlcToolInvocation("orchestrate");
+  return {
+    kind: "ask",
+    ask_type: "intent-pick",
+    response_route: "next",
+    question,
+    available_intents: availableIntents,
+    select_commands: availableIntents.map((selector) => ({
+      selector,
+      command: `${tool} next intent ${shellArg(selector)}`,
+    })),
+  };
+}
+
+function unitPausedAskDirective(
+  question: string,
+  stage: string,
+  unit: string,
+): AskDirective {
+  return {
+    kind: "ask",
+    ask_type: "unit-paused",
+    response_route: "command",
+    question,
+    stage,
+    unit,
+    resume_command:
+      `${aidlcToolInvocation("state")} unit resume --stage ${shellArg(stage)} --unit ${shellArg(unit)}`,
+  };
 }
 
 function newWorkRoutingAskDirective(
@@ -1014,16 +1094,22 @@ function newWorkRoutingAskDirective(
   numberedProseQuestion: string,
   description: string,
   proposedScope: string,
+  projectDir: string,
   availableIntents?: string[],
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
+  const pending = savePendingRequest(projectDir, description, proposedScope);
+  const tool = aidlcToolInvocation("orchestrate");
+  const routes = ` For option 2 run \`${tool} next --new-intent --scope ${shellArg(proposedScope)} --pending-request ${pending.id}\`; ` +
+    `for option 3 select the existing work first, then run \`${tool} next compose --pending-request ${pending.id}\`.` +
+    (availableIntents?.map((selector) => ` Select ${JSON.stringify(selector)} with \`${tool} next intent ${shellArg(selector)}\`.`).join("") ?? "");
   return {
     kind: "ask",
     ask_type: "new-work-routing",
     response_route: "next",
-    question,
-    numbered_prose_question: numberedProseQuestion,
+    question: question + routes,
+    numbered_prose_question: numberedProseQuestion + routes,
     new_work_description: description,
     proposed_scope: proposedScope,
     ...(availableIntents ? { available_intents: availableIntents } : {}),
@@ -1502,6 +1588,7 @@ interface ParsedFlags {
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME creation directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
+  pendingRequest?: string;
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
@@ -1631,6 +1718,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
       flags.single = true;
     } else if (a === "--new-intent") {
       flags.newIntent = true;
+    } else if (a === "--pending-request") {
+      flags.pendingRequest = args[i + 1] ?? "";
+      i++;
     } else if (a === "--scope" && i + 1 < args.length) {
       flags.scope = args[i + 1];
       i++;
@@ -1771,8 +1861,8 @@ function createPrintDirective(
   const cmd = [`--scope ${scope}`];
   let labelHint = "";
   if (description && description.length > 0) {
-    // Shell-quote the freeform description so multi-word intents survive intact.
-    cmd.push(`--arguments=${shellArg(description)}`);
+    const pendingId = flags.pendingRequest ?? savePendingRequest(projectDir, description, scope).id;
+    cmd.push(`--pending-request ${pendingId}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
@@ -1780,6 +1870,7 @@ function createPrintDirective(
     cmd.push(`--label "<2-3 word kebab essence>"`);
     labelHint =
       ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
+    labelHint += ` Description: ${requestPreview(description)}`;
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
@@ -1845,7 +1936,7 @@ function composeDispatchDirective(
     );
     if (flags.intent) {
       parts.push(
-        `The proposal's required \`creationDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\`. Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the created Project field preserves the real description.`,
+        `The proposal's required \`creationDescription\` MUST equal the original task text above verbatim. On approval, run \`next --scope <scopeName> --pending-request ${flags.pendingRequest}\`. The engine retrieves the original description; never reconstruct it in a shell command and never use a bare \`next --scope <scopeName>\`.`,
       );
     } else {
       parts.push(
@@ -1993,22 +2084,16 @@ function intentPickPromptIfRecordsExist(
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
-  // Only Kiro consumes the typed prose contract. Other harnesses retain their
-  // established picker and scope-confirm behavior.
-  if (
-    isKiroRoutingHarness() &&
-    pendingWork?.description.trim() &&
-    selectors.length > 0
-  ) {
+  if (pendingWork?.description.trim()) {
     return newWorkRoutingAskDirective(
       `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
-        `and none is currently selected: ${list}. You said: "${pendingWork.description}". ` +
+        `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}". ` +
         `Is this (1) part of existing work - select its record and continue it; ` +
         `(2) a separate new piece of work - Yes, set it up alongside the existing work as ` +
         `"${pendingWork.proposedScope}" work without changing it; or (3) a change to an ` +
         "existing remaining plan - select its record, then reshape it?",
       `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
-        `and none is currently selected: ${list}. You said: "${pendingWork.description}". What should I do?\n\n` +
+        `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}". What should I do?\n\n` +
         `1. **Part of existing work** — Select one of ${list} and continue it\n` +
         `2. **Separate new piece of work** — Yes, set it up alongside the existing work as "${pendingWork.proposedScope}" work without changing it\n` +
         `3. **Reshape existing work** — Select one of ${list}, then reshape its remaining plan\n` +
@@ -2016,14 +2101,16 @@ function intentPickPromptIfRecordsExist(
         "Reply with a number (or just tell me).",
       pendingWork.description,
       pendingWork.proposedScope,
+      projectDir,
       selectors,
     );
   }
-  return askDirective(
+  return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
       `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
       "That selects it; re-run `next` afterward to carry on where it left off.",
+    selectors,
   );
 }
 
@@ -4065,6 +4152,18 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  if (flags.pendingRequest !== undefined) {
+    const pending = readPendingRequest(resolveProjectDir(projectDir), flags.pendingRequest);
+    if (!pending) {
+      emit(errorDirective(pendingRequestUnavailable(flags.pendingRequest)));
+      return;
+    }
+    flags.intent = pending.description;
+    if (!flags.scope && !flags.positionalScope && !flags.compose) {
+      flags.scope = pending.proposedScope || undefined;
+    }
+  }
+
   // Review changes mutate workflow configuration. Compound modes that return
   // before the config branch cannot silently discard the flag; require callers
   // to apply the override first, then invoke the other mode separately.
@@ -4237,9 +4336,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       : verb === "space-create"
       ? "space create"
       : verb === "intent"
-      ? `intent ${tail[0] && !tail[0].startsWith("--") ? tail.shift() : "list"}`
+      ? `intent ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb === "space"
-      ? `space ${tail[0] && !tail[0].startsWith("--") ? tail.shift() : "list"}`
+      ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
@@ -4513,6 +4612,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    if (flags.intent && !flags.pendingRequest) {
+      flags.pendingRequest = savePendingRequest(pd, flags.intent, flags.scope ?? "").id;
+    }
     emit(composeDispatchDirective(flags, stateContent !== null));
     return;
   }
@@ -4746,9 +4848,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       // resolve (a fixture tree without it) rather than emit a broken preview.
       const clause = costClause(inferred.scope, pd);
       const cost = clause ? ` - ${clause}` : "";
-      emit(askDirective(
-        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
+      emit(scopeConfirmAskDirective(
+        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(flags.intent)}"${cost}. ` +
           "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+        inferred.scope,
+        flags.intent,
+        pd,
       ));
       return;
     }
@@ -4762,10 +4867,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const examples = express && classic && feat
       ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
-    emit(askDirective(
-      `None of the ready-made plans is an obvious fit for: "${flags.intent}". ` +
+    emit(composeOfferAskDirective(
+      `None of the ready-made plans is an obvious fit for: "${requestPreview(flags.intent)}". ` +
         "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
         `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+      flags.intent,
+      pd,
     ));
     return;
   }
@@ -4856,11 +4963,11 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // selection-aware fallback for rich prose.
     const inferred = inferScopeFromText(flags.intent);
     emit(newWorkRoutingAskDirective(
-      `Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". ` +
+      `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}". ` +
         `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
         `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
         "or (3) a change to how the remaining plan is shaped?",
-      `**New work routing** — Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". What should I do?\n\n` +
+      `**New work routing** — Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}". What should I do?\n\n` +
         "1. **Part of the active work** — Continue the current workflow\n" +
         `2. **Separate new piece of work** — Yes, set it up alongside the current one as "${inferred.scope}" work without changing it\n` +
         "3. **Reshape the active work** — Change how the remaining plan is shaped\n" +
@@ -4868,6 +4975,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
         "Reply with a number (or just tell me).",
       flags.intent,
       inferred.scope,
+      pd,
     ));
     return;
   }
@@ -5966,13 +6074,15 @@ function emitPerUnitRunStage(
   // wave has no single active Unit; every entry settles with `complete --wave`.
   if (ledger.checkpoint?.state === "paused") {
     const cp = ledger.checkpoint;
-    emit(askDirective(
+    emit(unitPausedAskDirective(
       `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
         `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
         `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
         `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
         `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
         "the human how to proceed. STOP until the unit is explicitly resumed.",
+      node.slug,
+      cp.unit,
     ));
     return;
   }
@@ -6594,13 +6704,15 @@ function emitTeamUnitMajorRunStage(
   for (const stage of block) {
     const checkpoint = ledgers.get(stage.slug)?.checkpoint;
     if (checkpoint?.state === "paused") {
-      emit(askDirective(
+      emit(unitPausedAskDirective(
         `Unit "${checkpoint.unit}" of stage "${stage.slug}" is PAUSED (unit_state: paused)` +
           `${checkpoint.reason ? ` — reason: ${checkpoint.reason}` : ""}.` +
           `${checkpoint.nextAction ? ` Recorded next action: ${checkpoint.nextAction}.` : ""} ` +
           `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
           `--stage ${stage.slug} --unit ${checkpoint.unit}) and continue from the recorded next action, or ask ` +
           "the human how to proceed. STOP until the unit is explicitly resumed.",
+        stage.slug,
+        checkpoint.unit,
       ));
       return;
     }
@@ -6917,13 +7029,15 @@ function emitUnitMajorRunStage(
   for (const k of block) {
     const cp = ledgers.get(k.slug)?.checkpoint;
     if (cp?.state === "paused") {
-      emit(askDirective(
+      emit(unitPausedAskDirective(
         `Unit "${cp.unit}" of stage "${k.slug}" is PAUSED (unit_state: paused)` +
           `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
           `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
           `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
           `--stage ${k.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
           "the human how to proceed. STOP until the unit is explicitly resumed.",
+        k.slug,
+        cp.unit,
       ));
       return;
     }
@@ -8389,7 +8503,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       kind: "error",
       message:
         `Unknown --result "${flags.result}". ` +
-        `accepted outcomes: ${[...REPORT_RESULTS].join(", ")}.`,
+        `accepted outcomes: ${[...REPORT_RESULTS].join(", ")}. ` +
+        "An ask's answer is never reported except for the resume menu; follow the ask's response_route and named command.",
     });
     return;
   }
@@ -8400,7 +8515,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit({
       kind: "error",
       message:
-        "No active intent workflow state found (aidlc-state.md is absent) — nothing to report a transition for.",
+        "No active intent workflow state found (aidlc-state.md is absent) - nothing to report a transition for. " +
+        "An ask's answer is never reported except for the resume menu; follow the ask's response_route and named command.",
     });
     return;
   }

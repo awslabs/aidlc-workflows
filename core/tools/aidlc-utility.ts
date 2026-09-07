@@ -27,6 +27,11 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  clearPendingRequest,
+  pendingRequestUnavailable,
+  readPendingRequest,
+} from "./aidlc-pending-request.ts";
+import {
   appendAuditEntries,
   appendAuditEntry,
   appendAuditEntryUnlocked,
@@ -5836,6 +5841,17 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  const pendingId = flags["pending-request"];
+  if (pendingId !== undefined) {
+    const pending = readPendingRequest(projectDir, pendingId);
+    if (!pending) {
+      process.stdout.write(`${JSON.stringify({ kind: "error", message: pendingRequestUnavailable(pendingId) })}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    flags.arguments = pending.description;
+    flags.scope ||= pending.proposedScope;
+  }
   // Creation mutates the registry and active cursor. Refuse an invocation that
   // carries no meaningful scope or description instead of minting a default
   // record from an accidental bare command.
@@ -6182,6 +6198,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       effectiveChangeControl,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  if (pendingId !== undefined) clearPendingRequest(projectDir, pendingId);
 }
 
 // The scope→stage state-build half of creation: the workspace detection + state
@@ -9014,7 +9031,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>"] [--label "<short label>"] ' +
+        '[--arguments "<description>" | --pending-request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
