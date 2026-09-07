@@ -269,7 +269,8 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // UNIT_STARTED + UNIT_PAUSED + UNIT_RESUMED + UNIT_COMPLETED (+4) = 82,
     // plus DOCUMENT_INDEXED + DOCUMENT_UPDATED + DOCUMENT_REMOVED (DocumentKB
     // indexing lifecycle, +3) = 85, plus upstream link/reuse receipts (+1) = 86,
-    // plus SWARM_SOURCE_MERGED (+1) = 87.
+    // plus SWARM_SOURCE_MERGED (+1) = 87, plus SOURCE_COMMITTED (the commit
+    // provenance anchor receipt, +1) = 88.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -277,7 +278,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(87);
+    expect(count).toBe(88);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

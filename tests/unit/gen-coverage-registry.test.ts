@@ -988,6 +988,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.
     "unit/t305-per-unit-attribution-receipts.test.ts",
+    // t312 spawns aidlc-attest/aidlc-log because commit-provenance acceptance
+    // is defined over real receipts, manual git commits, and CLI exit codes.
+    "unit/t312-attest-resolve-anchor.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",

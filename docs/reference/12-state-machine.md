@@ -529,7 +529,7 @@ One enrichment event. `aidlc attest anchor` records that a commit was observed t
 
 | Event | Emitter | Trigger |
 |---|---|---|
-| `SOURCE_COMMITTED` | `tools/aidlc-attest.ts` | `anchor` attributed a commit's changed paths to reviewed units, either as a session observation or during a bounded `--reconcile` first-parent history sweep |
+| `SOURCE_COMMITTED` | `tools/aidlc-attest.ts` (runAnchor — called by the session-start hook's automatic sweep or the explicit `anchor` verb) | A commit's changed paths were attributed to reviewed units, either at session start or by an explicit `anchor` invocation |
 
 Every event in the taxonomy is either backed by a real emitter or marked `Reserved (v0.4.0 PR N)` / `Reserved (v0.5.0 PR N)` / `Reserved (v0.6.0 PR N)` for a pre-registered upcoming consumer. The drift test enforces both halves — the `Reserved` early-skip applies only while the cell literally contains "Reserved"; consumer PRs replace it with the real emitter file path in the same commit they ship the emit call.
 

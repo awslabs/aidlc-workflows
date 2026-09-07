@@ -501,9 +501,11 @@ When Claude Code starts a session (or resumes after compaction), this hook check
 1. **Project directory resolution:** Multi-fallback methods (`$CLAUDE_PROJECT_DIR`, script path, CWD).
 2. **State file guard:** Exits if no `aidlc-state.md` exists.
 3. **Health heartbeat:** Writes to `.aidlc-hooks-health/session-start.last`.
-4. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope.
-5. **Recovery check:** If `.aidlc-recovery.md` exists, includes a compaction warning note.
-6. **JSON output:** Outputs `{"additionalContext": "..."}` with native JSON serialization.
+4. **Session event:** Appends `SESSION_STARTED` (startup/clear) or `SESSION_RESUMED` (resume); compact emits nothing (PreCompact owns it).
+5. **Commit-provenance sweep:** Best-effort `runAnchor` reconcile over the last 25 first-parent commits — manual commits that landed reviewed claims gain `SOURCE_COMMITTED` anchors (idempotent; skipped on compact and rebind probes; `AIDLC_SKIP_SESSION_ANCHOR=1` disables; never blocks startup). See [Commit Provenance](19-commit-provenance.md).
+6. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope.
+7. **Recovery check:** If `.aidlc-recovery.md` exists, includes a compaction warning note.
+8. **JSON output:** Outputs `{"additionalContext": "..."}` with native JSON serialization.
 
 **Output format:**
 
@@ -580,7 +582,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` | `aidlc-sensor.ts fire`, `aidlc-utility.ts doctor` (`GUARDRAIL_LOADED`) |
 | **Learning loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` | `aidlc-runtime.ts compile`, `aidlc-learnings.ts persist` |
 | **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` | `aidlc-swarm.ts` emits prepare/finalize rows; `aidlc-worktree.ts merge` emits the post-application-source aggregate binding |
-| **Commit Provenance** | 1 | `SOURCE_COMMITTED` | `aidlc-attest.ts anchor` (enrichment only; `resolve` never reads it) |
+| **Commit Provenance** | 1 | `SOURCE_COMMITTED` | `aidlc-session-start.ts` sweep or `aidlc-attest.ts anchor` (enrichment only; `resolve` never reads it) |
 
 ### Entry Format
 
@@ -789,7 +791,7 @@ Resolves git commits/diffs back to the reviewed units of work that own each chan
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
 | `resolve [<commit>] [--diff <base>..<head>] [--fail-on <statuses>]` | Read-only: classify each changed path as `verified` \| `drifted` \| `unattested` \| `unverifiable` \| `indeterminate` \| `excluded` against the owning unit's newest READY receipt. Exit 3 when `--fail-on` matches | — |
-| `anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` | Record that a commit landed reviewed claims (deduplicated per intent; `--reconcile` sweeps first-parent history, default bound 100). Enrichment only — `resolve` never reads anchors | `SOURCE_COMMITTED` |
+| `anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` | Record that a commit landed reviewed claims (deduplicated per intent; `--reconcile` sweeps first-parent history, default bound 100). Enrichment only — `resolve` never reads anchors. The session-start hook runs this sweep automatically (bound 25); the verb remains for CI and deeper backfills | `SOURCE_COMMITTED` |
 
 Both verbs accept `--repo <name>`, `--space <name>`, `--intent <dir>`, and `--project-dir <path>`.
 

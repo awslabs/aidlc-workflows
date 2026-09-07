@@ -12,7 +12,11 @@
 // 3 --fail-on match), evidence fallback order (committed then local, fail
 // closed when neither binds), cross-shard timestamp ties failing closed, and
 // anchor's SOURCE_COMMITTED enrichment (dedupe, SWARM_SOURCE_MERGED respect,
-// bounded --reconcile sweeps).
+// bounded --reconcile sweeps). The last case fires the REAL session-start
+// hook (the workflow's automatic anchoring path — commits happen between
+// sessions, so the next session start is when the sweep runs) and pins its
+// reconcile sweep, idempotence, the compact/probe gate, and the
+// AIDLC_SKIP_SESSION_ANCHOR switch.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -29,6 +33,7 @@ import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 
 const ATTEST = join(AIDLC_SRC, "tools", "aidlc-attest.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const SESSION_START_HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const dirs: string[] = [];
 
@@ -360,5 +365,62 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const badBound = attest(["anchor", "--reconcile", "--max-commits", "0"], project);
     expect(badBound.rc).toBe(1);
     expect(JSON.parse(badBound.stderr).error).toContain("--max-commits must be a positive integer");
+  }, 60000);
+
+  test("session-start hook anchors automatically: reconcile sweep, idempotent re-fire, compact and skip-switch gates", () => {
+    const { project, record } = runtimeFixture();
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const c1 = git(project, ["rev-parse", "HEAD"]); // seed commit; app.ts bytes are the reviewed bytes
+    writeFileSync(join(project, "unclaimed.ts"), "export const u = 1;\n");
+    const c2 = commitAll(project, "unattributable churn"); // record shell + an unclaimed file
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    const c3 = commitAll(project, "claimed change, committed by a human");
+
+    const fireHook = (json: string, extraEnv: Record<string, string> = {}) => {
+      const r = Bun.spawnSync({
+        cmd: [process.execPath, SESSION_START_HOOK],
+        stdin: new TextEncoder().encode(json),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...extraEnv },
+      });
+      return { rc: r.exitCode, stdout: new TextDecoder().decode(r.stdout) };
+    };
+    const anchorRows = () =>
+      readAllAuditShards(project).match(/\*\*Event\*\*: SOURCE_COMMITTED/g) ?? [];
+
+    // A real session start sweeps recent first-parent history: c3 and c1 land
+    // reviewed claims and get anchored, c2 does not. The hook's normal output
+    // contract (exit 0, additionalContext JSON) is untouched by the sweep.
+    expect(anchorRows().length).toBe(0);
+    let fired = fireHook('{"source":"startup"}');
+    expect(fired.rc).toBe(0);
+    expect(typeof JSON.parse(fired.stdout.trim()).additionalContext).toBe("string");
+    let audit = readAllAuditShards(project);
+    expect(anchorRows().length).toBe(2);
+    expect(audit).toContain(`**Commit**: ${c1}`);
+    expect(audit).toContain(`**Commit**: ${c3}`);
+    expect(audit).not.toContain(`**Commit**: ${c2}`);
+    expect(audit).toContain("**Observed**: reconciled");
+
+    // Re-firing (a resume) re-scans but dedupes — no duplicate anchor rows.
+    fired = fireHook('{"source":"resume"}');
+    expect(fired.rc).toBe(0);
+    expect(anchorRows().length).toBe(2);
+
+    // New manual commit, but compact resumes and the kill switch never sweep.
+    writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
+    const c4 = commitAll(project, "post-sweep manual commit");
+    fireHook('{"source":"compact"}');
+    expect(anchorRows().length).toBe(2);
+    fireHook('{"source":"startup"}', { AIDLC_SKIP_SESSION_ANCHOR: "1" });
+    expect(anchorRows().length).toBe(2);
+
+    // The next real session start picks c4 up — commits made between sessions
+    // are anchored without any explicit `attest anchor` invocation.
+    fireHook('{"source":"startup"}');
+    audit = readAllAuditShards(project);
+    expect(anchorRows().length).toBe(3);
+    expect(audit).toContain(`**Commit**: ${c4}`);
   }, 60000);
 });

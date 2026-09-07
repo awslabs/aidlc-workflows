@@ -21,11 +21,16 @@
 //   clear   → SESSION_STARTED
 //   compact → no emission (PreCompact already fired)
 //
+// After the session event, a bounded best-effort commit-provenance sweep
+// (runAnchor in reconcile mode) anchors recent manual commits that landed
+// reviewed claims. See docs/reference/19-commit-provenance.md.
+//
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent born later in the turn can bind to it.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
@@ -144,6 +149,28 @@ if (eventType) {
   } catch (e) {
     recordHookDrop(projectDir, "session-start", errorMessage(e));
     // Non-fatal — continue with context injection
+  }
+}
+
+// --- Commit-provenance anchor sweep -------------------------------------------
+//
+// Humans commit manually, mostly between sessions, so commit-time capture can
+// never be the anchoring path — the next session start is. Sweep a bounded
+// first-parent window of recent history and append SOURCE_COMMITTED anchors
+// for commits that land reviewed claims; dedupe against prior anchors and
+// SWARM_SOURCE_MERGED receipts lives inside runAnchor, so re-running every
+// session is idempotent. Anchors are enrichment only — `attest resolve`
+// recomputes attribution from committed receipts + evidence and never reads
+// them — so a failed or skipped sweep self-heals on the next session start.
+// The eventType gate above keeps this off compact resumes and rebind probes.
+// See docs/reference/19-commit-provenance.md §6.
+if (eventType && process.env.AIDLC_SKIP_SESSION_ANCHOR !== "1") {
+  try {
+    runAnchor(projectDir, { reconcile: true, maxCommits: 25 });
+  } catch {
+    // Best-effort: a project dir that is not a git repository (and has no
+    // sole recorded repo to auto-select) or a transient git failure must
+    // never break session startup.
   }
 }
 

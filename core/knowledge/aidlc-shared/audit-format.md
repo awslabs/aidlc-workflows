@@ -307,7 +307,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `SOURCE_COMMITTED` | `anchor` attributed a commit's changed paths to reviewed units (session observation, or a bounded `--reconcile` first-parent history sweep) | Timestamp, Commit, Repo (recorded selector or `-` for the workspace root), Units, Attributed Paths, Observed (`session` \| `reconciled`) | `tools/aidlc-attest.ts anchor` |
+| `SOURCE_COMMITTED` | A commit's changed paths were attributed to reviewed units (the session-start hook's bounded reconcile sweep, or an explicit `anchor` invocation) | Timestamp, Commit, Repo (recorded selector or `-` for the workspace root), Units, Attributed Paths, Observed (`session` \| `reconciled`) | `tools/aidlc-attest.ts anchor` (runAnchor — also called by the session-start hook's automatic sweep) |
 
 ## Hook-Generated Format
 

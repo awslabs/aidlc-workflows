@@ -2,7 +2,7 @@
 
 > Audience: Tier 2/3 (team adopter, framework contributor).
 
-This chapter is the canonical reference for the **commit provenance** subsystem: the durable reverse lookup from an arbitrary git commit or diff range to the reviewed units of work that own its changed paths. It has three parts — **committed reviewed-source evidence** (a snapshot of what a reviewer approved, written into the intent record so it travels with every clone), the read-only resolver **`aidlc attest resolve`** (attribution + drift classification, built to run in CI), and the **`SOURCE_COMMITTED`** audit anchor (**enrichment only** — the resolver never reads it). Cross-link to [State Machine](12-state-machine.md) (the event taxonomy `SOURCE_COMMITTED` joins), [Hooks and Tools](06-hooks-and-tools.md) (the `aidlc-attest.ts` tool entry), the audit format registry (`knowledge/aidlc-shared/audit-format.md`), and the user-facing command walkthrough in [Guide: CLI Commands](../guide/12-cli-commands.md).
+This chapter is the canonical reference for the **commit provenance** subsystem: the durable reverse lookup from an arbitrary git commit or diff range to the reviewed units of work that own its changed paths. It has three parts — **committed reviewed-source evidence** (a snapshot of what a reviewer approved, written into the intent record so it travels with every clone), the read-only resolver **`aidlc attest resolve`** (attribution + drift classification, built to run in CI), and the **`SOURCE_COMMITTED`** audit anchor (**enrichment only** — the resolver never reads it; written automatically by the session-start hook's bounded sweep, or explicitly via `aidlc attest anchor`). Cross-link to [State Machine](12-state-machine.md) (the event taxonomy `SOURCE_COMMITTED` joins), [Hooks and Tools](06-hooks-and-tools.md) (the `aidlc-attest.ts` tool entry), the audit format registry (`knowledge/aidlc-shared/audit-format.md`), and the user-facing command walkthrough in [Guide: CLI Commands](../guide/12-cli-commands.md).
 
 ---
 
@@ -88,10 +88,10 @@ Fields: `Commit`, `Repo` (recorded selector or `-` for the workspace root), `Uni
 
 - **Deduplicated** per intent on `(commit, repo)` — re-anchoring an already-anchored commit is reported as skipped, not duplicated.
 - **Swarm-aware** — a commit already bound by a `SWARM_SOURCE_MERGED` event's `Merge commit` is skipped (the swarm referee already anchored it with richer context).
-- **Bounded reconciliation** — `--reconcile` walks first-parent history until it hits already-anchored territory, capped by `--max-commits` (default 100), reporting each commit as anchored, skipped, or unattributed.
+- **Bounded reconciliation** — `--reconcile` walks the last `--max-commits` first-parent commits (default 100) regardless of prior anchors — dedupe is per commit, so an unanchored gap behind already-anchored territory still backfills — reporting each commit as anchored, skipped, or unattributed.
 - **CLI-protected** — `SOURCE_COMMITTED` is in `CLI_PROTECTED_EVENT_TYPES` (`aidlc-audit.ts`): only the owning tool appends it through the library path; agents cannot fabricate one via the audit CLI. It is *not* merge-protected — shard merges carry it like any other event.
 
-Anchoring on the orchestrate tick (automatically anchoring fresh commits during a session) is deliberately **deferred**: v1 keeps `anchor` an explicit verb so the enrichment/foundation boundary stays observable before any automation is layered on.
+Anchoring is automatic in the workflow: the session-start hook (`hooks/aidlc-session-start.ts`) runs a best-effort `runAnchor` reconcile sweep (bound: 25 commits) on every real session start — humans commit mostly *between* sessions, so the next session start is the natural observation point, and per-intent dedupe makes the every-session re-run idempotent. The sweep never blocks startup (failures such as a non-git workspace are swallowed; a missed sweep self-heals next session because anchors are enrichment, not foundation) and is skipped on compact resumes and rebind probes; `AIDLC_SKIP_SESSION_ANCHOR=1` disables it. The explicit `anchor` verb remains for CI checkouts, harnesses with hooks disabled, and history backfills deeper than the session bound (`--max-commits`, default 100).
 
 ## 7. Guarantees and edge cases
 
@@ -111,6 +111,7 @@ Anchoring on the orchestrate tick (automatically anchoring fresh commits during 
 | Surface | Location |
 |---------|----------|
 | Resolver + anchor CLI | `tools/aidlc-attest.ts` (dispatcher route: `aidlc attest …`) |
+| Automatic anchoring | `hooks/aidlc-session-start.ts` (bounded best-effort reconcile sweep on session start; `AIDLC_SKIP_SESSION_ANCHOR=1` disables) |
 | Evidence write/parse/exclusion library | `aidlc-lib.ts` — `writeUnitSourceSnapshot`, `reviewedSourceEvidencePath`, `parseUnitSourceListing`, `serializeSourceListing`, `normalizeManifestSourcePath`, `sourcePathIsExcluded`, `gitCommitSourceListing` |
 | Event registration | `aidlc-audit.ts` (`SOURCE_COMMITTED` in `VALID_EVENT_TYPES` + `CLI_PROTECTED_EVENT_TYPES`), registry in `knowledge/aidlc-shared/audit-format.md` |
-| Tests | `tests/unit/t311-committed-reviewed-source-evidence.test.ts` (evidence grammar, dual-write, exclusion), `tests/unit/t312-attest-resolve-anchor.test.ts` (resolve flows, fallback, indeterminate, anchor) |
+| Tests | `tests/unit/t311-committed-reviewed-source-evidence.test.ts` (evidence grammar, dual-write, exclusion), `tests/unit/t312-attest-resolve-anchor.test.ts` (resolve flows, fallback, indeterminate, anchor, the session-start hook sweep) |

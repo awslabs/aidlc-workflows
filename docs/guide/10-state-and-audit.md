@@ -105,7 +105,7 @@ Events are organized into 23 categories:
 | **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
 | **Learning Loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` |
 | **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` |
-| **Commit Provenance** | 1 | `SOURCE_COMMITTED` (`aidlc attest anchor` — enrichment only; `resolve` never reads it) |
+| **Commit Provenance** | 1 | `SOURCE_COMMITTED` (the session-start sweep or `aidlc attest anchor` — enrichment only; `resolve` never reads it) |
 
 ### What gets logged and when
 

@@ -151,8 +151,9 @@ but do not yet have committed release versions.
   `aidlc attest resolve` maps any commit or diff range back to its owning
   units, intents, and drift status — no hooks, trailers, or session state
   required (see [Commit Provenance](reference/19-commit-provenance.md)).
-  Anchoring commits automatically during orchestration (rather than via the
-  explicit `attest anchor` verb) remains future work.
+  On top of that foundation, the session-start hook anchors recent manual
+  commits automatically (a bounded, idempotent `SOURCE_COMMITTED` sweep);
+  the explicit `attest anchor` verb remains for CI and deep backfills.
 
 ### Governed feedback loops
 

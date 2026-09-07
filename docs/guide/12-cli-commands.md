@@ -900,7 +900,7 @@ Answers "which reviewed unit of work owns this commit's changes, and does the co
 | `resolve [<commit>]` | Read-only. Attribute the commit's first-parent delta (default `HEAD`) to reviewed units and classify each changed path: `verified` (committed content equals the reviewed content), `drifted` (reviewed but edited since), `unattested` (no unit claims it), `unverifiable` (evidence missing or tampered — fails closed), `indeterminate` (ambiguous receipts — fails closed), `excluded` (framework shell/record paths). JSON report on stdout |
 | `resolve --diff <base>..<head>` | Same classification over an arbitrary range (`...` uses the merge-base, matching PR semantics) |
 | `resolve … --fail-on drifted,unattested` | Exit 3 when any path matches one of the named statuses — the CI gate form. Accepts any subset of `drifted,unattested,unverifiable,indeterminate` |
-| `anchor [--commit <rev>]` | Append a `SOURCE_COMMITTED` audit row recording that the commit landed reviewed claims. Enrichment only — `resolve` never reads anchors, so unanchored manual commits lose nothing |
+| `anchor [--commit <rev>]` | Append a `SOURCE_COMMITTED` audit row recording that the commit landed reviewed claims. Enrichment only — `resolve` never reads anchors, so unanchored manual commits lose nothing. Runs automatically at session start (a bounded, idempotent sweep of recent commits); the verb remains for CI checkouts and deeper backfills |
 | `anchor --reconcile [--max-commits <n>]` | Sweep first-parent history (default 100 commits) and backfill anchors for attributable commits; already-anchored and swarm-merged commits are skipped, unattributable ones reported |
 
 ```
