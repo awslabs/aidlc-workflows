@@ -81,6 +81,22 @@ export function persistAnnotations(state, annotations) {
   else sessionStorage.setItem(key, JSON.stringify(annotations));
 }
 
+/** "just now", "4 min ago", "2 hr ago", "3 days ago" - for who-did-what rows. */
+export function relativeTime(value) {
+  if (!value) return "";
+  let time = typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(time)) return "";
+  if (time < 10_000_000_000) time *= 1000;
+  const seconds = Math.round((Date.now() - time) / 1000);
+  if (Math.abs(seconds) < 45) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return `${Math.abs(minutes)} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return `${Math.abs(hours)} hr ago`;
+  const days = Math.round(hours / 24);
+  return `${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} ago`;
+}
+
 export function setNotice(message, kind = "error") {
   store.emit("notice", message ? { message, kind } : null);
 }

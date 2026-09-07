@@ -2,7 +2,7 @@
 import { api } from "./api.js";
 import { trackedChangesFragment, wordDiffHtml } from "./diff.js";
 import { icon } from "./icons.js";
-import { agentFor, decisionInFlight, persistAnnotations, setNotice, store, selectedThreadIds } from "./store.js";
+import { agentFor, decisionInFlight, persistAnnotations, relativeTime, setNotice, store, selectedThreadIds } from "./store.js";
 
 const elements = {};
 let loadVersion = 0;
@@ -1810,21 +1810,6 @@ function basename(path) {
 
 function humanize(value) {
   return String(value || "").replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function relativeTime(value) {
-  if (!value) return "";
-  let time = typeof value === "number" ? value : Date.parse(value);
-  if (!Number.isFinite(time)) return "";
-  if (time < 10_000_000_000) time *= 1000;
-  const seconds = Math.round((Date.now() - time) / 1000);
-  if (Math.abs(seconds) < 45) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (Math.abs(minutes) < 60) return `${Math.abs(minutes)} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return `${Math.abs(hours)} hr ago`;
-  const days = Math.round(hours / 24);
-  return `${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} ago`;
 }
 
 function cssEscape(value) {

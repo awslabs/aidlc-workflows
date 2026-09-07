@@ -49,7 +49,9 @@
 .thread-avatar { width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: #fff; font-size: 9px; font-weight: 700; }
 .thread-avatar.agent { background: var(--accent); }
 .thread-who b { color: var(--ink); font-weight: 650; }
-.thread-kind { margin-left: auto; padding: 1px 6px; border-radius: 5px; background: var(--panel); color: var(--ink); font-size: 10px; }
+.thread-kind { padding: 2px 7px; border-radius: 5px; background: var(--panel); color: var(--ink); font-size: 10.5px; }
+.thread-editor-row > .thread-kind { margin-left: 0; }
+.thread-who .thread-kind { margin-left: auto; }
 .thread-body { margin: 8px 0 0; white-space: pre-wrap; }
 .thread-reply { margin: 9px -2px 0; padding: 9px; border-radius: 7px; background: var(--soft); }
 .thread-reply p { margin: 7px 0 0; line-height: 1.45; }

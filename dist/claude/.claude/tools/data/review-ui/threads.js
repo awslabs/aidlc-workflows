@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { diffOps, escapeHtml } from "./diff.js";
 import { icon } from "./icons.js";
-import { agentFor, decisionInFlight, persistAnnotations, setNotice, store, selectedThreadIds } from "./store.js";
+import { agentFor, decisionInFlight, persistAnnotations, relativeTime, setNotice, store, selectedThreadIds } from "./store.js";
 
 const slot = document.getElementById("slot");
 const KINDS = [
@@ -96,6 +96,7 @@ function openComposer(payload = {}) {
     css_path: typeof selection.css_path === "string" ? selection.css_path : undefined,
     reply_to: typeof payload.reply_to === "string" ? payload.reply_to : undefined,
     body: typeof payload.body === "string" ? payload.body : "",
+    created: new Date().toISOString(),
   };
   drafts.push(draft);
   if (store.panel !== "threads") store.set({ panel: "threads" });
@@ -120,7 +121,7 @@ function upsertSuggestion(payload = {}) {
   const annotations = store.annotations.slice();
   const index = annotations.findIndex((item) => item.id === annotation.id);
   if (index === -1) annotations.push(annotation);
-  else annotations[index] = { ...annotations[index], ...annotation };
+  else annotations[index] = { ...annotations[index], ...annotation, created: annotations[index].created || annotation.created };
   saveAnnotations(annotations);
   if (store.panel !== "threads") store.set({ panel: "threads" });
 }
@@ -286,6 +287,7 @@ function normalizeAnnotation(value) {
     line_end: numberOrUndefined(value.line_end),
     selection: typeof value.selection === "string" ? value.selection : typeof value.text === "string" ? value.text : "",
     body: typeof value.body === "string" ? value.body : "",
+    created: typeof value.created === "string" ? value.created : new Date().toISOString(),
   };
 }
 
@@ -600,7 +602,8 @@ function renderPending(annotation) {
     const summary = editSummary(annotation.before, annotation.after_block);
     const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
     return `<article class="thread-card pending-card edit-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
-      <div class="thread-editor-row"><span class="thread-kind">Suggested edit</span><span class="thread-meta">${escapeHtml(where)}</span></div>
+      <p class="thread-quote">${escapeHtml(where)}</p>
+      <div class="thread-editor-row"><span class="thread-kind">Edit</span><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
       <p class="edit-summary">${summary}</p>
       <textarea rows="1" placeholder="Why (optional) — the agent reads this with the edit">${escapeHtml(annotation.body || "")}</textarea>
       <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
@@ -608,7 +611,7 @@ function renderPending(annotation) {
   }
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${quoteHtml(annotation.selection)}
-    <div class="thread-editor-row">${kindSelect(annotation.kind)}<span class="thread-meta">You · just now</span></div>
+    <div class="thread-editor-row">${kindSelect(annotation.kind)}<span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Remove</button></div>
   </article>`;
