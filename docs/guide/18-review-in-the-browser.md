@@ -142,8 +142,8 @@ pill beneath it — *Your edit · not sent yet · Undo*. Clicking back into the
 block edits the suggested text, so successive edits compose; typing it back to
 the file's text withdraws the suggestion. The Threads card for an edit is an
 index entry (*Suggested edit · Functional requirements · +6 words −1 word ·
-"…"*, with **Show in document** and **Undo edit**), not a second copy of the
-change. After you send, the block keeps showing your change in a muted style
+"…"*, with **Undo edit**; clicking the card scrolls the document to the
+change), not a second copy of the change. After you send, the block keeps showing your change in a muted style
 (*Your edit · sent in r1 · awaiting the agent*) until the agent's revision
 replaces the file. Browser suggestions become `edit` remarks in
 `feedback-NNN.md`; the terminal equivalent is to describe the exact change in

@@ -603,7 +603,7 @@ function renderPending(annotation) {
       <div class="thread-editor-row"><span class="thread-kind">Suggested edit</span><span class="thread-meta">${escapeHtml(where)}</span></div>
       <p class="edit-summary">${summary}</p>
       <textarea rows="1" placeholder="Why (optional) — the agent reads this with the edit">${escapeHtml(annotation.body || "")}</textarea>
-      <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-show-annotation type="button">Show in document</button><button data-remove-annotation type="button">Undo edit</button></div>
+      <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
     </article>`;
   }
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
@@ -771,9 +771,6 @@ function bindThreads() {
       const item = store.annotations[index];
       if (item?.kind === "edit" && typeof item.after_block === "string") store.emit("undo-suggestion", item.id);
       else saveAnnotations(store.annotations.filter((_, itemIndex) => itemIndex !== index));
-    });
-    card.querySelector("[data-show-annotation]")?.addEventListener("click", () => {
-      store.emit("focus", store.annotations[index]?.id);
     });
   }
 }
