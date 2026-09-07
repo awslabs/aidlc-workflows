@@ -4,9 +4,15 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--line2);
   background: var(--panel);
+  transition: transform .18s ease, opacity .18s ease, visibility 0s linear .18s, border-right-width 0s linear .18s;
 }
+.app:not(.panel-hidden) .panel { transition: transform .18s ease, opacity .18s ease; }
+/* Children keep the panel's full width while the track collapses, so the
+   content slides instead of rewrapping. */
+.panel > * { min-width: var(--panel-w); }
 .workflow-context { position: relative; padding: 14px 14px 12px; border-bottom: 1px solid var(--line2); background: #fff; }
 .intent-selector {
   position: relative;

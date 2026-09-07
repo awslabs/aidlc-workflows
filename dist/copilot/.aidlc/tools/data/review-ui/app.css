@@ -41,10 +41,15 @@ code { font: 12px var(--mono); background: var(--panel); padding: 1px 5px; borde
    scrollIntoView() can never drag the header off-screen — Chrome otherwise
    counts a nested scroller's content toward the document's scroll height;
    `clip` rather than `hidden` so the shell itself is never a scroll target. */
-.app { position: fixed; inset: 0; display: grid; grid-template-columns: var(--rail-w) var(--panel-w) minmax(0, 1fr); height: 100vh; overflow: clip; }
+.app { position: fixed; inset: 0; display: grid; grid-template-columns: var(--rail-w) var(--panel-w) minmax(0, 1fr); height: 100vh; overflow: clip; transition: grid-template-columns .18s ease; }
 .app > * { min-height: 0; }
-.app.panel-hidden { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
-.app.panel-hidden .panel { display: none; }
+/* The workflow panel slides in from the rail and back behind it: the column
+   keeps its track (so the widths interpolate) and collapses to zero. */
+.app.panel-hidden { grid-template-columns: var(--rail-w) 0px minmax(0, 1fr); }
+.app.panel-hidden .panel { transform: translateX(-32px); opacity: 0; visibility: hidden; border-right-width: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .app, .panel { transition: none; }
+}
 .work { min-width: 0; min-height: 0; display: grid; grid-template-rows: var(--header-h) minmax(0, 1fr); }
 .header { display: flex; align-items: center; gap: 12px; padding: 0 14px 0 18px; border-bottom: 1px solid var(--line2); min-width: 0; }
 .body { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--slot-w); }
