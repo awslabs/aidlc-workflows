@@ -89,9 +89,22 @@
 
 .decision-warning { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--amber-soft, #fff7e6); color: #7c4a03; font-size: 12px; line-height: 1.45; }
 
-.edit-card .edit-summary { margin: 4px 0 6px; font-size: 12px; color: var(--ink); }
-.edit-card .edit-summary ins { background: var(--green-soft); color: #166534; text-decoration: none; padding: 0 3px; border-radius: 3px; }
-.edit-card .edit-summary del { background: var(--rose-soft); color: #9f1239; text-decoration: none; padding: 0 3px; border-radius: 3px; }
-.edit-card .edit-summary q { color: var(--muted); }
+/* The change, shown as the reader would see it: counts, then the words that
+   went (struck) and came (highlighted); formatting as before → after with the
+   after actually bold, italic, struck, coded, or linked. */
+.edit-summary { margin: 4px 0 6px; font-size: 12.5px; line-height: 1.7; color: var(--ink); }
+.edit-summary .count { font-size: 11px; padding: 0 5px; border-radius: 3px; }
+.edit-summary .count.ins { background: var(--green-soft); color: #166534; }
+.edit-summary .count.del { background: var(--rose-soft); color: #9f1239; }
+.edit-summary ins { background: var(--green-soft); color: #166534; text-decoration: none; padding: 0 3px; border-radius: 3px; }
+.edit-summary del { background: var(--rose-soft); color: #9f1239; text-decoration: line-through; padding: 0 3px; border-radius: 3px; }
+.edit-summary .fmt-change { white-space: nowrap; }
+.edit-summary .fmt-was { color: var(--muted); }
+.edit-summary .fmt-arrow, .edit-summary .fmt-sep { color: var(--muted); }
+.edit-summary .fmt-b { font-weight: 700; }
+.edit-summary .fmt-i { font-style: italic; }
+.edit-summary .fmt-s { text-decoration: line-through; }
+.edit-summary .fmt-code { font: 11.5px/1 var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--panel); border: 1px solid var(--line2); }
+.edit-summary .fmt-a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.edit-summary .fmt-block { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--panel); color: var(--ink); }
 
-.edit-summary .fmt { color: var(--ink); }

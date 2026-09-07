@@ -202,17 +202,18 @@ export function parseUnifiedHunks(unified) {
 //
 // An edit made with the toolbar changes markers, not words: bolding "simple"
 // turns it into "**simple**". A word diff of the raw source would report that
-// as "+2 words · **", which tells the reader nothing. The summary therefore
-// names the formatting it sees - "Bold “simple”", "Heading 2", "Bulleted
-// list" - and counts words on the text with the markers stripped, so a real
-// rewording is still "+3 words −1 word · “…”".
+// as "+2 words · **", which tells the reader nothing. The summary shows the
+// change the way the reader would see it - the word, then the word in bold
+// ("simple → **simple**") - and counts words on the text with the markers
+// stripped, so a real rewording is still "+3 words −1 word" with the removed
+// and added words shown struck and highlighted, as the document shows them.
 
 const INLINE = [
-  { name: "Bold", re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/g },
-  { name: "Strikethrough", re: /~~([^~\n]+?)~~/g },
-  { name: "Code", re: /`([^`\n]+?)`/g },
-  { name: "Link", re: /\[([^\]\n]+?)\]\([^)\n]*\)/g },
-  { name: "Italic", re: /(?<![*\w])\*(?!\*)([^*\n]+?)\*(?!\*)|(?<![_\w])_(?!_)([^_\n]+?)_(?!_)/g },
+  { name: "bold", tag: "b", re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/g },
+  { name: "strikethrough", tag: "s", re: /~~([^~\n]+?)~~/g },
+  { name: "code", tag: "code", re: /`([^`\n]+?)`/g },
+  { name: "link", tag: "a", re: /\[([^\]\n]+?)\]\([^)\n]*\)/g },
+  { name: "italic", tag: "i", re: /(?<![*\w])\*(?!\*)([^*\n]+?)\*(?!\*)|(?<![_\w])_(?!_)([^_\n]+?)_(?!_)/g },
 ];
 
 /** The text a reader sees: inline markers and line prefixes removed. */
@@ -231,10 +232,10 @@ export function plainText(markdown) {
 
 function inlineSpans(text) {
   const found = new Map();
-  for (const { name, re } of INLINE) {
+  for (const { name, tag, re } of INLINE) {
     for (const match of String(text).matchAll(re)) {
       const inner = (match[1] ?? match[2] ?? "").trim();
-      if (inner) found.set(`${name}:${inner}`, { name, inner });
+      if (inner) found.set(`${name}:${inner}`, { name, tag, inner });
     }
   }
   return found;
@@ -252,19 +253,22 @@ function linePrefix(line) {
   return "Paragraph";
 }
 
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
 /**
- * What changed in formatting between two Markdown texts, as short phrases:
- * ["Bold “simple”", "Heading 2 → Heading 3", "Bulleted list"]. Empty when only
- * words changed.
+ * Formatting changes between two Markdown texts, as HTML fragments the reader
+ * can see rather than read about: "simple → <b>simple</b>", "<b>web app</b> →
+ * web app", and block changes as small labels ("Heading 2 → Heading 3",
+ * "Bulleted list"). Empty when only words changed.
  */
 export function formattingChanges(before, after) {
   const notes = [];
   const was = inlineSpans(before);
   const now = inlineSpans(after);
-  const quote = (inner) => `“${inner.length > 40 ? `${inner.slice(0, 40)}…` : inner}”`;
-  for (const [key, { name, inner }] of now) if (!was.has(key)) notes.push(`${name} ${quote(inner)}`);
-  for (const [key, { name, inner }] of was) if (!now.has(key)) notes.push(`Removed ${name.toLowerCase()} ${quote(inner)}`);
-  // Block-level: compare the line prefixes of lines whose visible text matches.
+  const styled = (tag, inner) => `<${tag} class="fmt-${tag}">${escapeHtml(clip(inner, 40))}</${tag}>`;
+  const plain = (inner) => `<span class="fmt-was">${escapeHtml(clip(inner, 40))}</span>`;
+  for (const [key, { tag, inner }] of now) if (!was.has(key)) notes.push(`<span class="fmt-change">${plain(inner)} <span class="fmt-arrow">→</span> ${styled(tag, inner)}</span>`);
+  for (const [key, { tag, inner }] of was) if (!now.has(key)) notes.push(`<span class="fmt-change">${styled(tag, inner)} <span class="fmt-arrow">→</span> ${plain(inner)}</span>`);
   const beforeLines = String(before ?? "").split("\n");
   const afterLines = String(after ?? "").split("\n");
   const seen = new Set();
@@ -276,16 +280,17 @@ export function formattingChanges(before, after) {
     if (twin === undefined) continue;
     const previous = linePrefix(twin);
     if (previous === prefix) continue;
-    const note = previous === "Paragraph" ? prefix : prefix === "Paragraph" ? `Removed ${previous.toLowerCase()}` : `${previous} → ${prefix}`;
-    if (!seen.has(note)) { seen.add(note); notes.push(note); }
+    const label = previous === "Paragraph" ? prefix : `${previous} <span class="fmt-arrow">→</span> ${prefix}`;
+    if (!seen.has(label)) { seen.add(label); notes.push(`<span class="fmt-block">${label}</span>`); }
   }
   return notes;
 }
 
 /**
- * "+3 words −1 word · “…”" for a reworded block; "Bold “simple”" for a
- * formatting change; both when both happened. Words are counted and quoted
- * on the visible text, never on markers.
+ * The edit card's one line about the change. Words: counts, then the first
+ * removed and added words shown as the document shows them (struck, then
+ * highlighted). Formatting: the word before and after, formatted. Both when
+ * both happened.
  */
 export function editSummary(before, after) {
   const notes = formattingChanges(before, after);
@@ -295,13 +300,13 @@ export function editSummary(before, after) {
   const removed = ops.filter((op) => op.type === "del").reduce((total, op) => total + words(op.text), 0);
   const parts = [];
   if (added || removed) {
-    const first = ops.find((op) => op.type === "ins")?.text || ops.find((op) => op.type === "del")?.text || "";
-    const excerpt = first.replace(/\s+/g, " ").trim();
-    const shown = excerpt.length > 90 ? `${excerpt.slice(0, 90)}…` : excerpt;
-    const counts = [added ? `<ins>+${added} ${added === 1 ? "word" : "words"}</ins>` : "", removed ? `<del>−${removed} ${removed === 1 ? "word" : "words"}</del>` : ""].filter(Boolean).join(" ");
-    parts.push(`${counts}${shown ? ` · <q>${escapeHtml(shown)}</q>` : ""}`);
+    const counts = [added ? `<span class="count ins">+${added} ${added === 1 ? "word" : "words"}</span>` : "", removed ? `<span class="count del">−${removed} ${removed === 1 ? "word" : "words"}</span>` : ""].filter(Boolean).join(" ");
+    const firstDel = ops.find((op) => op.type === "del")?.text.replace(/\s+/g, " ").trim() || "";
+    const firstIns = ops.find((op) => op.type === "ins")?.text.replace(/\s+/g, " ").trim() || "";
+    const change = [firstDel ? `<del>${escapeHtml(clip(firstDel, 60))}</del>` : "", firstIns ? `<ins>${escapeHtml(clip(firstIns, 60))}</ins>` : ""].filter(Boolean).join(" ");
+    parts.push(`${counts}${change ? ` <span class="fmt-change">${change}</span>` : ""}`);
   }
-  for (const note of notes) parts.push(`<span class="fmt">${escapeHtml(note)}</span>`);
-  if (!parts.length) parts.push(`<span class="fmt">Formatting</span>`);
-  return parts.join(" · ");
+  parts.push(...notes);
+  if (!parts.length) parts.push(`<span class="fmt-block">Formatting</span>`);
+  return parts.join(`<span class="fmt-sep"> · </span>`);
 }
