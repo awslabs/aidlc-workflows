@@ -128,6 +128,7 @@ beforeAll(async () => {
       "",
       "A. Encryption",
       "B. Audit logs",
+      "X. Other",
       "",
       "[Answer]:",
       "",
@@ -242,6 +243,15 @@ describe("t351 review UI questions routes", () => {
     rmSync(guidePath);
     expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: false });
     writeFileSync(guidePath, VALID_GUIDE);
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ ready: true, preparing: false });
+
+    // A malformed questions file is held back the same way: Q2 without its
+    // `[Answer]:` tag would be refused by answers-apply after the human saved,
+    // so the round stays `preparing` until the agent fixes the file.
+    const questionsSource = readFileSync(questionsPath, "utf-8");
+    writeFileSync(questionsPath, questionsSource.replace("X. Other\n\n[Answer]:\n\n## Consolidated", "X. Other\n\n## Consolidated"));
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
+    writeFileSync(questionsPath, questionsSource);
     expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ ready: true, preparing: false });
 
     const questionsResponse = await authorized(`/api/questions?path=${encodeURIComponent(questionsFile)}`);
@@ -385,7 +395,7 @@ describe("t351 review UI questions routes", () => {
       "code-generation",
     );
     mkdirSync(perUnitStage, { recursive: true });
-    writeFileSync(join(perUnitStage, "code-generation-questions.md"), "## Q1\n\nA. Proceed\n\n[Answer]:\n");
+    writeFileSync(join(perUnitStage, "code-generation-questions.md"), "## Q1\n\nA. Proceed\nX. Other\n\n[Answer]:\n");
     writeFileSync(
       statePath,
       readFileSync(statePath, "utf-8")

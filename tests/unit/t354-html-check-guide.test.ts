@@ -22,6 +22,7 @@ X. Other (please specify)
 
 A. Cloud
 B. On-prem
+X. Other (please specify)
 
 [Answer]:
 `;
@@ -115,6 +116,37 @@ describe("aidlc-html check --guide", () => {
     expect(result.output).toContain('Q1 has an empty paragraph under "Why now"');
     expect(result.output).toContain("Q1 trade-off table has 2 empty cells");
     expect(result.output).not.toContain("Q2 has an empty paragraph");
+  });
+
+  test("a question without its [Answer]: tag fails before the round is shown", () => {
+    const result = check(GUIDE, QUESTIONS.replace("X. Other (please specify)\n\n[Answer]:\n\n## Q2", "X. Other (please specify)\n\n## Q2"));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("Q1 must contain exactly one [Answer]: line (found 0)");
+    expect(result.output).not.toContain("Q2 must contain");
+  });
+
+  test("a question with two [Answer]: tags fails the same way", () => {
+    const result = check(GUIDE, QUESTIONS.replace("## Q2. Hosting", "[Answer]:\n\n## Q2. Hosting"));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("Q1 must contain exactly one [Answer]: line (found 2)");
+  });
+
+  test("a question without X. Other is named", () => {
+    const result = check(GUIDE, QUESTIONS.replace("B. On-prem\nX. Other (please specify)", "B. On-prem"));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('Q2 has no "X. Other (please specify)" option');
+    expect(result.output).not.toContain("Q1 has no");
+  });
+
+  test("a duplicated ## Qn heading is reported and not merged into the first section", () => {
+    // Recommend the duplicate's letter: if the sections were merged, "C" would
+    // be accepted as an option of Q1; it must instead be rejected against the
+    // first occurrence's own letters.
+    const guide = GUIDE.replace('data-aidlc-recommend="A"', 'data-aidlc-recommend="C"');
+    const result = check(guide, `${QUESTIONS}\n## Q1. Runtime again\n\nC. Deno\nX. Other (please specify)\n\n[Answer]:\n`);
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("Q1 appears 2 times in the questions file");
+    expect(result.output).toContain('recommendation "C" is not an option for Q1 (offered: A, B, X)');
   });
 
   test("the summary finding points at the scaffold", () => {

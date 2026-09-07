@@ -517,6 +517,10 @@ export interface GuideQuestion {
 	options: Map<string, string>;
 	/** Option-looking lines the parser had to ignore (`- A. …`, `1. …`, indented letters). */
 	rejectedOptionLines: string[];
+	/** `[Answer]:` lines in the section; `answers-apply` requires exactly one. */
+	answerLines: number;
+	/** Times this `## Q<n>` heading appears; `answers-apply` refuses duplicates. */
+	occurrences: number;
 }
 
 /**
@@ -540,11 +544,16 @@ export function parseGuideQuestions(markdown: string): GuideQuestion[] {
 		const heading = /^\s{0,3}##[ \t]+(Q([1-9][0-9]*)(?:[.:][ \t]*(.*?))?)[ \t]*#*[ \t]*$/.exec(line);
 		if (heading) {
 			const id = `Q${heading[2]}`;
-			current = questions.find((question) => question.id === id) ?? null;
-			if (!current) {
-				current = { id, title: (heading[3] ?? "").trim() || id, options: new Map(), rejectedOptionLines: [] };
-				questions.push(current);
+			const existing = questions.find((question) => question.id === id);
+			if (existing) {
+				// A duplicate heading is reported, never merged: its options and tags
+				// stay out of the first occurrence so that diagnosis stays local.
+				existing.occurrences += 1;
+				current = null;
+				continue;
 			}
+			current = { id, title: (heading[3] ?? "").trim() || id, options: new Map(), rejectedOptionLines: [], answerLines: 0, occurrences: 1 };
+			questions.push(current);
 			continue;
 		}
 		if (/^\s{0,3}##(?:[ \t]|$)/.test(line)) {
@@ -552,6 +561,10 @@ export function parseGuideQuestions(markdown: string): GuideQuestion[] {
 			continue;
 		}
 		if (!current) continue;
+		if (/^\s*\[Answer\]:/.test(line)) {
+			current.answerLines += 1;
+			continue;
+		}
 		const option = /^([A-Z])\.\s+(.*?)\s*$/.exec(line);
 		if (option) {
 			current.options.set(option[1], option[2]);
@@ -591,6 +604,28 @@ export function checkGuideArtifact(
 				(sample ? ` (saw "${sample}")` : "") +
 				': options must be bare lines "A. text" starting at column 0 — no "- " bullet, no numbering, no indent. Fix the questions file, then re-check.',
 		);
+	}
+	// The structural invariants `answers-apply` enforces after the human has
+	// saved — exactly one `[Answer]:` per question, an `X. Other` escape — are
+	// checked here, before the round is shown, so a malformed file is fixed by
+	// the agent instead of refusing the human's saved answers.
+	for (const question of parsed) {
+		if (question.occurrences > 1) {
+			findings.push(
+				`${question.id} appears ${question.occurrences} times in the questions file — answers-apply refuses duplicate sections. Fix the questions file, then re-check.`,
+			);
+		}
+		if (unparsable.has(question.id)) continue;
+		if (question.answerLines !== 1) {
+			findings.push(
+				`${question.id} must contain exactly one [Answer]: line (found ${question.answerLines}) — answers-apply would refuse the saved round. Fix the questions file, then re-check.`,
+			);
+		}
+		if (!question.options.has("X")) {
+			findings.push(
+				`${question.id} has no "X. Other (please specify)" option: every ordinary question ends with one so the browser form and the terminal both offer an escape. Fix the questions file, then re-check.`,
+			);
+		}
 	}
 	const root = parseHtml(html);
 	const guideSections = elements(root.children).filter(
