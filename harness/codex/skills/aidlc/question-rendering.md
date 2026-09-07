@@ -85,8 +85,8 @@ prompt: "[Stage Name] complete. How would you like to proceed?"
 header: Approval
 multiSelect: false
 options:
-  - label: Approve
-    description: Continue to [next stage]
+  - label: Approve (Recommended)
+    description: Reviewer verdict READY (or no reviewer) and no blocking sensor fired; continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
 ```
@@ -96,7 +96,7 @@ becomes:
 ```
 **Approval** — [Stage Name] complete. How would you like to proceed?
 
-1. **Approve** — Continue to [next stage]
+1. **Approve (Recommended)** — Reviewer verdict READY (or no reviewer) and no blocking sensor fired; continue to [next stage]
 2. **Request Changes** — Provide revision feedback
 3. **Other** — describe what you want instead
 
@@ -119,7 +119,7 @@ tool supplies its own escape. On the numbered-prose floor, render:
 ```
 **Confirm** — Does this all look correct before I generate the artifact?
 
-1. **Looks correct** — Generate the artifact from these answers
+1. **Looks correct (Recommended)** — Generate the artifact from these answers; the summary restates each recorded answer verbatim
 2. **Request changes** — Revise one or more answers before generation
 3. **Other** — describe what you want instead
 

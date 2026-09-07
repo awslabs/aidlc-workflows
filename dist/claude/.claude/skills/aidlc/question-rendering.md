@@ -64,8 +64,8 @@ prompt: "[Stage Name] complete. How would you like to proceed?"
 header: Approval
 multiSelect: false
 options:
-  - label: Approve
-    description: Continue to [next stage]
+  - label: Approve (Recommended)
+    description: Reviewer verdict READY (or no reviewer) and no blocking sensor fired; continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
 ```
@@ -79,7 +79,7 @@ AskUserQuestion({
     header: "Approval",
     multiSelect: false,
     options: [
-      { label: "Approve", description: "Continue to [next stage]" },
+      { label: "Approve (Recommended)", description: "Reviewer verdict READY (or no reviewer) and no blocking sensor fired; continue to [next stage]" },
       { label: "Request Changes", description: "Provide revision feedback" }
     ]
   }]
@@ -128,8 +128,8 @@ AskUserQuestion({
     multiSelect: false,
     options: [
       {
-        label: "Looks correct",
-        description: "Generate the artifact from these answers"
+        label: "Looks correct (Recommended)",
+        description: "Generate the artifact from these answers - the summary restates each recorded answer verbatim"
       },
       {
         label: "Request changes",

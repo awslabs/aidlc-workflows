@@ -735,8 +735,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (!annex.includes("Never present file letters as response keys")) {
         missing.push(`${annexRel}  missing no-letter response rule`);
       }
-      if (!annex.includes("1. **Looks correct**")) {
-        missing.push(`${annexRel}  missing numbered Looks correct option`);
+      // The example the conductor copies carries the always-recommend marker on
+      // its first option, as the protocol mandates for every structured question.
+      if (!annex.includes("1. **Looks correct (Recommended)**")) {
+        missing.push(`${annexRel}  missing numbered, recommended Looks correct option`);
       }
       if (!annex.includes("options have no source letters")) {
         missing.push(`${annexRel}  missing file-label exception`);
