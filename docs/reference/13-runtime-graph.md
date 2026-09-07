@@ -38,7 +38,7 @@ bumping every consumer in the same PR.
 
 ```ts
 interface RuntimeGraph {
-  workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so a re-birthed intent identifies the live workflow, not a dead one)
+  workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so a re-created intent identifies the live workflow, not a dead one)
   scope: string;                  // from state.md "Scope" field
   started_at: string;             // ISO 8601, same row as workflow_id
   stages: RuntimeStage[];         // chronological order by started_at
@@ -448,7 +448,7 @@ main's location. Its lifecycle is:
    that were active at this Bolt's audit-fork instant; later-starting
    siblings won't appear in the fragment because the worktree's audit
    is a snapshot at fork time.
-3. **Merge on Bolt complete.** `aidlc-bolt complete --merge --slug
+3. **Merge on Bolt complete (solo/swarm path).** `aidlc-bolt complete --merge --slug
    <slug>` delegates to `aidlc-runtime fragment-merge --slug <slug>`
    after state-merge + audit-merge. fragment-merge hashes the
    fragment for stdout observability, `unlinkSync`'s it, and emits a
@@ -491,7 +491,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 88-event taxonomy
+- **The audit log this graph is derived from** - the 92-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

@@ -147,6 +147,9 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     expect(`${first.id}|${first.path}`).toBe(
       "required-sections|.claude/sensors/aidlc-required-sections.md",
     );
+    expect(first.fire_on).toBe("write");
+    expect(first.default_severity).toBe("advisory");
+    expect(first.category).toBe("document-shape");
   });
 
   // Case 3 (.sh:72-75): matches glob copied verbatim from the manifest.

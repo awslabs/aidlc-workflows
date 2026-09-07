@@ -164,7 +164,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     // loses the emission site for the GATE_APPROVED doc row (t48:745 source).
     const f = distFile(sb, STATE_TS);
     const before = readFileSync(f, "utf-8");
-    const after = before.replace(
+    const after = before.replaceAll(
       'emitAudit(pd, "GATE_APPROVED"',
       'emitAudit(pd, "GATE_APPROVED_RENAMED"',
     );

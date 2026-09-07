@@ -9,7 +9,7 @@
 // refuses `--result approved` while any is missing or malformed, naming the
 // gap and the remediation; AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 is the escape
 // hatch; inline stages carry no requirement (pipeline receipts are covered by
-// t304); an already-[x]
+// t315); an already-[x]
 // stage is an idempotent replay and is never blocked.
 //
 // SOURCE UNDER TEST: the ensemble-evidence guard in handleReport
@@ -42,6 +42,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -235,7 +237,26 @@ function reportSingle(proj: string): Directive {
     "user-stories",
     "--result",
     "approved",
-  ]);
+  ], { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" });
+}
+
+function startSingle(
+  proj: string,
+  env: Record<string, string | undefined> = {},
+): void {
+  seedAidlcMemory(proj);
+  const result = runOrchestrateNext(
+    ORCH,
+    proj,
+    ["--scope", "feature", "--stage", "user-stories", "--single"],
+    { cwd: proj, env: { ...process.env, ...env } },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(
+    result.directive?.kind,
+    JSON.stringify(result.directive),
+  ).toBe("run-stage");
+  expect(result.directive?.single).toBe(true);
 }
 
 function auditText(proj: string): string {
@@ -455,7 +476,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
         result,
       ]);
       expect(d.kind, result).toBe("error");
-      expect(d.message, result).toContain("ensemble must convene");
+      expect(d.message, result).toContain("collaborator notes are missing or incomplete");
       expect(readFileSync(seededStateFile(proj), "utf-8"), result).toBe(
         before.state,
       );
@@ -497,7 +518,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       { AIDLC_STAGE_GRAPH: graph },
     );
     expect(d.kind).toBe("error");
-    expect(d.message).toContain("1 of 2 units are not yet complete (beta)");
+    expect(d.message).toContain("1 of 2 work items are not complete (beta)");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       "- [-] user-stories — EXECUTE",
     );
@@ -568,11 +589,12 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
   test("report --single refuses missing mob evidence without writing synthetic audit rows", () => {
     const proj = seedProject();
+    startSingle(proj);
     const before = auditText(proj);
     const d = reportSingle(proj);
     expect(d.kind).toBe("error");
     expect(d.message).toContain("aidlc-developer-agent");
-    expect(d.message).toContain("ensemble must convene");
+    expect(d.message).toContain("collaborator notes are missing or incomplete");
     expect(auditText(proj)).toBe(before);
   });
 
@@ -589,7 +611,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     ]);
 
     expect(d.kind).toBe("done");
-    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expect(d.message ?? "").not.toContain("collaborator notes are missing or incomplete");
     const state = readFileSync(seededStateFile(proj), "utf-8");
     const audit = auditText(proj);
     expect(state).not.toBe(before.state);
@@ -709,7 +731,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
     expect(d.kind).toBe("error");
     expect(d.message).toContain("aidlc-design-agent (no contribution file)");
-    expect(d.message).toContain("ensemble must convene");
+    expect(d.message).toContain("collaborator notes are missing or incomplete");
   });
 
   test("Practices Discovery subagent spokes require all three contribution files", () => {
@@ -741,7 +763,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "awaiting-approval",
     ]);
     expect(missing.kind).toBe("error");
-    expect(missing.message).toContain("ensemble must convene");
+    expect(missing.message).toContain("collaborator notes are missing or incomplete");
     expect(readFileSync(seededStateFile(missingProj), "utf-8")).toBe(
       missingBefore.state,
     );
@@ -796,7 +818,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     ]);
     expect(unpromoted.kind).toBe("error");
     expect(unpromoted.message).toContain(
-      "before practices-promote succeeds",
+      "approved practices have not been saved yet",
     );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       unpromotedBefore.state,
@@ -818,7 +840,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     ]);
     expect(malformed.kind).toBe("error");
     expect(malformed.message).toContain(
-      "before practices-promote succeeds",
+      "approved practices have not been saved yet",
     );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       malformedBefore.state,
@@ -839,7 +861,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "Approve",
     ]);
     expect(forged.kind).toBe("error");
-    expect(forged.message).toContain("before practices-promote succeeds");
+    expect(forged.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       forgedBefore.state,
     );
@@ -862,7 +884,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "Approve",
     ]);
     expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("fresh PRACTICES_AFFIRMED receipt");
+    expect(stale.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       staleBefore.state,
     );
@@ -883,7 +905,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "Approve",
     ]);
     expect(mismatched.kind).toBe("error");
-    expect(mismatched.message).toContain("fresh PRACTICES_AFFIRMED receipt");
+    expect(mismatched.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       mismatchedBefore.state,
     );
@@ -945,7 +967,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "Approve",
     ]);
     expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("fresh PRACTICES_AFFIRMED receipt");
+    expect(stale.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       staleBefore.state,
     );
@@ -1038,7 +1060,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
     expect(d.kind).toBe("error");
     expect(d.message).toContain("(unit-a, unit-b)");
-    expect(d.message).toContain("not yet complete");
+    expect(d.message).toContain("not complete");
   });
 
   test("a malformed swarm DAG fails closed because the expected unit set is unknowable", () => {
@@ -1079,9 +1101,13 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const missingProj = seedProject();
     seedBoltDag(missingProj, ["unit-a", "unit-b"]);
     const missingGraph = perUnitEnsembleGraph(missingProj);
+    startSingle(missingProj, { AIDLC_STAGE_GRAPH: missingGraph });
     const missing = runReport(missingProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
-    ], { AIDLC_STAGE_GRAPH: missingGraph });
+    ], {
+      AIDLC_STAGE_GRAPH: missingGraph,
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    });
     expect(missing.kind).toBe("error");
     // Refused at the STAGE level (no per-unit paths in the remediation).
     expect(missing.message).toContain("aidlc-design-agent (no contribution file)");
@@ -1090,17 +1116,21 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const completeProj = seedProject();
     seedBoltDag(completeProj, ["unit-a", "unit-b"]);
     const completeGraph = perUnitEnsembleGraph(completeProj);
+    startSingle(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
     writeFallbackContribution(completeProj, "aidlc-design-agent");
     const before = mutationSnapshot(completeProj);
     const complete = runReport(completeProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
-    ], { AIDLC_STAGE_GRAPH: completeGraph });
+    ], {
+      AIDLC_STAGE_GRAPH: completeGraph,
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    });
     expect(complete.kind).toBe("done");
     expect(readFileSync(seededStateFile(completeProj), "utf-8")).toBe(before.state);
     const afterAudit = auditText(completeProj);
     expect(afterAudit).not.toBe(before.audit);
     expect(eventCount(afterAudit, "STAGE_STARTED")).toBe(
-      eventCount(before.audit, "STAGE_STARTED") + 1,
+      eventCount(before.audit, "STAGE_STARTED"),
     );
     expect(eventCount(afterAudit, "STAGE_COMPLETED")).toBe(
       eventCount(before.audit, "STAGE_COMPLETED") + 1,

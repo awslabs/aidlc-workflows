@@ -31,8 +31,6 @@ outputs: <record>/aidlc-state.md (full populated version, engine-resolved)
 
 Runs deterministically inside `aidlc-utility init`. Kept as reference for state-file contract.
 
-MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
-
 ## Steps
 
 ### Step 1: Update State
@@ -45,7 +43,9 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 Read the state contract from `.claude/knowledge/aidlc-shared/state-template.md`.
 Overwrite `<record>/aidlc-state.md` with the full populated version generated
 from the compiled stage graph and scope grid:
-- Project description (from orchestrator's $ARGUMENTS or `<record>/audit/<host>-<clone>.md`)
+- Project description: persist the exact text in
+  `<record>/project-description.json` as one JSON string; write only a safe
+  single-line preview to the state `Project` field
 - Project type (greenfield/brownfield from workspace-detection)
 - Workspace state (languages, frameworks, build system from workspace-detection)
 - Start date — run `date -u +'%Y-%m-%dT%H:%M:%SZ'` via Bash
@@ -99,25 +99,16 @@ This stage writes `<record>/aidlc-state.md` deterministically through
 of free-form artefact the markdown-shape sensors target — so the
 frontmatter `sensors:` list is empty.
 
-A future check that validates state-file shape (heading set, required
-fields) would land as its own manifest, imported here via `sensors:`.
+Imports: none.
+
+A future state-shape check should be a dedicated manifest imported here.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-This is an auto-proceeding bootstrap stage (`gate: false`), so it has no
-approval gate. Keep `memory.md` as the stage's permanent execution record, but
-do not surface or persist §13 learnings and do not ask the mandatory
-"Anything to add for next time?" question here. The gate-bound learnings ritual
-begins with the first post-initialization stage.
+Follow stage-protocol.md §13 by maintaining
+`<record>/<phase>/<stage>/memory.md` under the four standard headings; the
+memory file stays in the artefact directory and the stage file remains
+immutable. This auto-proceeding bootstrap stage (`gate: false`) has no
+approval gate, so skip surfacing and persisting learnings and the mandatory
+"Anything to add for next time?" question; the gate-bound ritual begins with
+the first post-initialization stage.

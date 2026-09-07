@@ -759,7 +759,14 @@ describe("t66 validateScope (in-process)", () => {
   // baseline is updated consciously in the same commit.
   test("validateScope: the per-scope advisory edge sets are exactly the accepted baseline", () => {
     const EXPECTED: Record<string, string[]> = {
-      bugfix: ["code-generation->unit-of-work"],
+      bugfix: [
+        "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
+      ],
       enterprise: [],
       feature: [],
       infra: [
@@ -777,6 +784,11 @@ describe("t66 validateScope (in-process)", () => {
       poc: ["code-generation->unit-of-work"],
       refactor: [
         "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
         "functional-design->components",
         "functional-design->unit-of-work",
       ],

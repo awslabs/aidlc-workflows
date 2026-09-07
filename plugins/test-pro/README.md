@@ -2,7 +2,8 @@
 
 > A first-party **AIDLC plugin**: comprehensive, traceable test coverage layered
 > onto the AI-DLC workflow. Reference implementation of the plugin mechanism —
-> copy its shape for your own plugin. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
+> start a new plugin with `aidlc-plugin-create.ts`, then use this richer example
+> for advanced surfaces. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
 
 ## 1. What it does
 
@@ -29,9 +30,13 @@ test-pro is emitted by the packager as a real host plugin per harness. Install i
 the way each host installs plugins (the hybrid model — see
 [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md)):
 
-**Author / build** (from the repo):
+**Author / build** (from any plugin repository with a copied tools bundle):
 ```bash
-bun scripts/package.ts          # emits all seven dist/plugins/test-pro/<harness>/ projections
+bun <tools-dir>/aidlc-plugin-validate.ts .
+bun <tools-dir>/aidlc-plugin-build.ts . claude
+bun <tools-dir>/aidlc-plugin-build.ts . codex
+bun <tools-dir>/aidlc-plugin-test.ts . --install <claude-project> --harness claude
+# repeat for each supported harness; output defaults to dist/<harness>/
 ```
 
 **Claude Code** (host store):
@@ -99,6 +104,19 @@ plugins/test-pro/
   tests/plugin.test.ts               # the plugin's own content validation
   README.md
 ```
+
+### Validate the authored plugin
+
+Run the shipped offline validator before packaging:
+
+```bash
+bun dist/claude/.claude/tools/aidlc-plugin-validate.ts plugins/test-pro
+```
+
+The validator requires no project install and checks the manifest, stage
+schema, scope/agent identity, duplicate plugin-local artifact producers,
+`tools/` payload hygiene, and any vendored compose hook. This plugin does not
+vendor `hooks/compose.ts`; the packager injects the current bundled template.
 
 ### The contribution seam
 A contribution declares **structural** additions (`adds.produces` / `consumes` /

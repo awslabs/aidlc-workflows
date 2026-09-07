@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-terminal-command","description":"Runs deterministic AIDLC utility commands before the model when this IDE generation exposes the submitted prompt.","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts verb-intercept"}}

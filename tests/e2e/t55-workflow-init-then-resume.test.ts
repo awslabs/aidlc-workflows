@@ -93,32 +93,32 @@ const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
-describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () => {
+describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", () => {
   // -------------------------------------------------------------------------
-  // Two sequential turns against one fresh project: turn 1 births the workflow
-  // from a scope (P4 retired --init — a scope on a clean workspace auto-births),
+  // Two sequential turns against one fresh project: turn 1 creates the workflow
+  // from a scope (P4 retired --init - a scope on a clean workspace auto-creates),
   // turn 2 a --scope bugfix turn RESUMES from it (init [x] markers persist, audit
   // grows). Deep progression is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
-    "birth establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
+    "creation establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        // P4: birth writes per-intent — state at the active intent's record dir
+        // P4: creation writes per-intent - state at the active intent's record dir
         // (aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md) and audit as
         // per-clone shards under <record>/audit/, NOT the flat aidlc-docs/. Resolve
-        // both lazily (the cursors only exist after birth) via the record-aware
-        // harness helpers, which fall back to flat for a not-yet-born project.
+        // both lazily (the cursors only exist after creation) via the record-aware
+        // harness helpers, which fall back to flat for a not-yet-created project.
         const statePath = () => stateFilePathFor(proj);
         const auditDir = () => auditDirFor(proj);
 
-        // ---- Turn 1: /aidlc --scope bugfix (BIRTH the workflow) ----
-        // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-births
+        // ---- Turn 1: /aidlc --scope bugfix (CREATE the workflow) ----
+        // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-creates
         // the first intent from a resolved scope (the old --init had no scope and
         // now errors directing the user to a scope/description). A named scope on a
         // clean workspace NAMES intent-create, which scaffolds state + marks the 3
-        // init stages [x] — the birth this journey starts from.
+        // init stages [x] - the creation this journey starts from.
         const r1 = await driveAidlc("/aidlc --scope bugfix", {
           projectDir: proj,
           answerScript: "default",
@@ -126,7 +126,7 @@ describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () =>
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // .sh test 1: after birth, the state file exists.
+        // .sh test 1: after creation, the state file exists.
         expect(existsSync(statePath())).toBe(true);
         const stateAfterInit = readStateFile(proj);
         expect(stateAfterInit).toBeDefined();

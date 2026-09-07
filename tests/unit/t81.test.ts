@@ -247,7 +247,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: canonical event count includes both new receipts -------------
-  test("3: framework event count pinned at 86", () => {
+  test("3: framework event count pinned at 92", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
@@ -255,7 +255,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
     // new event. The framework total is 86: the v0.6.0 Wave 4 milestone 16
-    // baseline of 67 (SWARM_DEGRADED was the last event born then), plus
+    // baseline of 67 (SWARM_DEGRADED was the last event created then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
     // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
     // RECOMPOSED (the adaptive composer's in-flight re-shape, +1), plus
@@ -268,9 +268,11 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // REVIEW_CLASS_CHANGED (the --review per-run override, +1), plus
     // UNIT_STARTED + UNIT_PAUSED + UNIT_RESUMED + UNIT_COMPLETED (+4) = 82,
     // plus DOCUMENT_INDEXED + DOCUMENT_UPDATED + DOCUMENT_REMOVED (DocumentKB
-    // indexing lifecycle, +3) = 85, plus upstream link/reuse receipts (+1) = 86,
-    // plus SWARM_SOURCE_MERGED (+1) = 87, plus SOURCE_COMMITTED (the commit
-    // provenance anchor receipt, +1) = 88.
+    // indexing lifecycle, +3) = 85, plus UNIT_OWNERSHIP_SET and
+    // UNIT_GATE_RHYTHM_SET (+2) = 87; UNIT_MERGED = 88;
+    // PIPELINE_LINK_COMPLETED = 89; SWARM_SOURCE_MERGED = 90;
+    // PLAN_APPROVAL_RECORDED = 91; and SOURCE_COMMITTED (the commit-provenance
+    // anchor receipt) = 92.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -278,7 +280,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(88);
+    expect(count).toBe(92);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

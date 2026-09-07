@@ -44,18 +44,18 @@ graph LR
     C7 -->|"Verification Gate 3"| O1
     O7 -.->|"Feedback Loop"| I1
 
-    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
-    style INCEPTION fill:#e3f2fd,stroke:#2196f3
-    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800
-    style OPERATION fill:#fce4ec,stroke:#e91e63
+    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
+    style INCEPTION fill:#e3f2fd,stroke:#2196f3,color:#000
+    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800,color:#000
+    style OPERATION fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 ## Five Layers
 
 **Rules** (`rules/`) -- Organization and project guardrails. Self-learning: human corrections become persistent behavioral rules. Only ~35 lines total -- kept minimal to avoid context bloat in non-AI-DLC conversations.
 
-**Agents** (`agents/*.md`) -- Fourteen flat agent files: 11 domain-expert personas, 2 review-only agents, and the adaptive-workflows composer. Each defines its role, responsibilities, collaboration pattern, tools, and knowledge loading order. Authored core personas carry `disallowedTools: Task`; the packager keeps that native denial where supported and projects the same no-nested-delegation boundary to each harness's tool policy. Kiro agent Markdown omits the unsupported key, while Kiro CLI agent JSON and Kiro IDE `tools:` grants exclude the `subagent` tool from delegates.
+**Agents** (`agents/*.md`) -- Fourteen flat agent files: 11 domain-expert personas, 2 review-only agents, and the adaptive-workflows composer. Each defines its role, responsibilities, collaboration pattern, tools, and relevant memory focus. Authored core personas carry `disallowedTools: Task`; the packager keeps that native denial where supported and projects the same no-nested-delegation boundary to each harness's tool policy. Kiro agent Markdown omits the unsupported key, while Kiro CLI agent JSON and Kiro IDE `tools:` grants exclude the `subagent` tool from delegates.
 
 **Knowledge** (`knowledge/`) -- Two-tier methodology reference:
 - `aidlc-shared/` -- Principles, verification, brownfield safeguards, **audit event taxonomy** (canonical event registry), state template
@@ -200,9 +200,9 @@ flowchart LR
         TS1 --> TS2 --> TS3 --> TS4 --> TS5 --> TS6
     end
 
-    style INLINE fill:#e8f5e9,stroke:#4caf50
-    style SUBAGENT fill:#e3f2fd,stroke:#2196f3
-    style TWOSTEP fill:#fff3e0,stroke:#ff9800
+    style INLINE fill:#e8f5e9,stroke:#4caf50,color:#000
+    style SUBAGENT fill:#e3f2fd,stroke:#2196f3,color:#000
+    style TWOSTEP fill:#fff3e0,stroke:#ff9800,color:#000
 ```
 
 ### Conductor Inline Stage Execution
@@ -423,28 +423,53 @@ aidlc/                                    # neutral, harness-independent, commit
                 +-- <phase>/<stage>/*.md    # artifacts + the per-stage memory.md diary
 ```
 
-**Resolution.** Two per-user cursors select context; neither ever errors (a
-missing cursor falls back to a default):
+**Resolution.** Workflow identity is resolved at one library chokepoint with
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > PID ancestry >
+none`. Hook payload identity uses the in-process option and is authoritative.
+An invalid environment value is ignored. A valid environment override that
+differs from ancestry throws a typed refusal before a binding or workflow record
+path is derived. Explicit selectors and the resulting machine-local session
+binding then precede the two shared per-user cursors:
 
-- **Space** — `aidlc/active-space`, precedence `explicit arg > cursor > "default"`
-  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:285`; resolver `activeSpace()`,
-  `aidlc-lib.ts:354-366`). `listSpaces()` always reports `default` even with
-  nothing on disk (`aidlc-lib.ts:713-728`).
-- **Intent** — `aidlc/spaces/<space>/intents/active-intent`, precedence
-  `explicit arg > cursor (if it names a real record holding aidlc-state.md) >
-  lone-intent > null` (`activeIntent`, `aidlc-lib.ts:411-435`). A `null` intent
-  means "no record yet" — the signal the orchestrator uses to auto-birth the
+- **Space** - precedence `explicit arg > session binding > aidlc/active-space
+  cursor > "default"`
+  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:591`; resolver `activeSpace()`,
+  `aidlc-lib.ts:1300`). `listSpaces()` always reports `default` even with
+  nothing on disk (`aidlc-lib.ts:1973`).
+- **Intent** - precedence `explicit arg > session binding >
+  aidlc/spaces/<space>/intents/active-intent cursor (if it names a real record
+  holding aidlc-state.md) > lone-intent > null`. A `null` intent
+  means "no record yet" - the signal the orchestrator uses to auto-creation the
   first intent.
 
-The path helpers — `intentsDir`, `knowledgeDir`, `codekbDir` (`aidlc-lib.ts`),
-and `memoryDirFor` (`aidlc-graph.ts:234`) — all default their space argument to
-`activeSpace(projectDir)`, so AI-DLC's own resolvers follow the cursor; switching
-spaces with `/aidlc space <name>` also
+Session bindings live at
+`aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
+their session through the nearest live entry in
+`aidlc/.aidlc-sessions/pids/<pid>`. Both stores are gitignored and best-effort;
+the cursors remain the write-through fallback. The engine passes its resolved
+identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
+headless automation seam when set on the harness process.
+
+The Codex adapter additionally pins its validated payload identity into every
+POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
+`ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
+does not apply there; multiple Kiro IDE chats can also share one process.
+Spawned tools in those cases use shared-cursor behavior unless the harness
+process supplies `AIDLC_SESSION_OVERRIDE`.
+
+Project-aware path helpers resolve through the same selection ladder: an
+explicit selector, then the session binding, then the shared cursor as the
+final fallback. Helpers that receive a resolved `intent:null` retain its
+selected space when choosing the bare space root. Switching spaces with
+`/aidlc space <name>` also
 re-points each harness-native rule include (the Claude `@`-import stub described
 above, Kiro CLI resources or IDE steering, Codex's rules dir, opencode's
 `instructions` glob, and Copilot's `AGENTS.md` `@`-imports) at the switched space's
 `memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
-committed tree never churns.
+committed tree never churns. SessionStart uses the resolved session space for
+that re-point, but the include remains one checkout-global mutable surface:
+workflow selection is session-bound across spaces, while simultaneous
+multi-space ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore:34-54`): the two cursors
@@ -480,7 +505,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 88-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 92-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
@@ -529,7 +554,7 @@ introduce regressions.
 | Level | Directory | What It Covers |
 |-------|-----------|----------------|
 | **Smoke** (L1) | `tests/smoke/` | File existence, agent/stage/protocol structure, SKILL.md graph consistency, settings.json schema. Fast structural checks that catch missing or misnamed files. No LLM. |
-| **Unit** (L1) | `tests/unit/` | The 16 hooks, CLI tools, stage/agent frontmatter, knowledge inventory, the orchestration-engine handlers, and other single-component contracts. Each test isolates one component. No LLM. |
+| **Unit** (L1) | `tests/unit/` | The 17 hooks, CLI tools, stage/agent frontmatter, knowledge inventory, the orchestration-engine handlers, and other single-component contracts. Each test isolates one component. No LLM. |
 | **Integration** (L2) | `tests/integration/` | Cross-component contracts (scope-to-stage mapping, stage-agent cross-checks, protocol compliance, audit/runtime-graph end-to-end) and the live stage/CLI utilities driven through the `claude` CLI or SDK. The live files skip cleanly when `claude` is absent. |
 | **E2E** (L3) | `tests/e2e/` | Full lifecycle and worktree primitives, plus the rendered-terminal (`tui-drive.ts`) journeys that prove answering real AskUserQuestion gates advances disk state. The live journeys require `claude` + Bedrock creds and are gated behind `AIDLC_TUI_LIVE=1`. |
 

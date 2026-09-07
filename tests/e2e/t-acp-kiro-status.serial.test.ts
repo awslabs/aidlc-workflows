@@ -20,7 +20,7 @@
 // ACP tool_call — the seam ran it, and the conductor only relays prose (which is
 // non-deterministic, never assertable). So the only robust surfaces for this
 // seam-dispatched read-only command are stopReason === "end_turn" and the
-// on-disk NO-OP (status births nothing). This mirrors how the staged
+// on-disk NO-OP (status creates nothing). This mirrors how the staged
 // t-acp-kiro-journey-workspace leg drives terminal verbs to end_turn and asserts
 // on disk rather than on stopAfterToolTitle.
 //
@@ -90,7 +90,7 @@ describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)
         expect(r.stopReason).toBe("end_turn");
 
         // Read-only: no state scaffolded by a status run. The seeded record was
-        // stripped (noAidlcDocs); status births nothing, so the per-intent state
+        // stripped (noAidlcDocs); status creates nothing, so the per-intent state
         // file the seeded record would hold never appears.
         expect(r.stateFile).toBeUndefined();
         expect(existsSync(seededStateFile(sandbox))).toBe(false);

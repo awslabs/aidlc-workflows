@@ -46,14 +46,15 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
+  decodeHarnessPlainText,
   hasOpenGate,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
-  markHumanTurn,
+  sanitizeHarnessPlainText,
+  splitKiroCommandArgs,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -216,49 +217,6 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // The repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
 // #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
 // typed `/aidlc …` text. The fallback recovers argv directly from that raw shape.
-function shellWords(input: string): string[] {
-  const words: string[] = [];
-  let word = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-  let started = false;
-  for (const ch of input) {
-    if (escaped) {
-      word += ch;
-      escaped = false;
-      started = true;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaped = true;
-      started = true;
-      continue;
-    }
-    if (quote !== null) {
-      if (ch === quote) quote = null;
-      else word += ch;
-      started = true;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      started = true;
-    } else if (/\s/.test(ch)) {
-      if (started) {
-        words.push(word);
-        word = "";
-        started = false;
-      }
-    } else {
-      word += ch;
-      started = true;
-    }
-  }
-  if (escaped) word += "\\";
-  if (started) words.push(word);
-  return words;
-}
-
 function extractNextInvocation(
   expandedPrompt: string,
 ): { raw: string; args: string[] } {
@@ -271,7 +229,7 @@ function extractNextInvocation(
     : expandedPrompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
   if (rawInvocation === undefined) return { raw: "", args: [] };
   const raw = rawInvocation.trim();
-  return { raw, args: shellWords(raw) };
+  return { raw, args: splitKiroCommandArgs(raw) };
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
@@ -331,14 +289,15 @@ if (target === "verb-intercept") {
   // what makes the Stop hook's conversational carve-out work on this harness.
   // kiro-cli delivers no `transcript_path`, so the carve-out cannot read the turn
   // history; it compares this marker's mtime against .aidlc-engine-touch instead.
-  // Both writes ride this one seam so the ledger and the marker can never
-  // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+  // Both writes ride this seam, but AIDLC_UNATTENDED=1 deliberately withholds
+  // only the authority-bearing ledger event while retaining the conversational
+  // marker. See the marker family in aidlc-lib.ts.
   try {
-    const cwd = projectDir;
-    if (existsSync(stateFilePath(cwd))) {
-      appendAuditEntry("HUMAN_TURN", {}, cwd);
-      markHumanTurn(cwd);
-    }
+    runCore("aidlc-record-human-turn.ts", {
+      hook_event_name: "UserPromptSubmit",
+      ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
+      prompt: kiro.prompt ?? "",
+    });
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
@@ -363,7 +322,9 @@ if (target === "verb-intercept") {
           command,
           { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
         );
-        const directive = run.stdout?.toString().trim() ?? "";
+        const directive = new TextDecoder("utf-8").decode(
+          run.stdout ?? new Uint8Array(),
+        ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
           rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
             force: true,
@@ -419,6 +380,8 @@ if (target === "verb-intercept") {
         if (cmd.subcommand === "plugin-list") return ["plugin", "list", ...forwarded];
         if (cmd.subcommand === "plugin-sync") return ["plugin", "sync", ...forwarded];
         if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
+        if (cmd.subcommand === "plugin-validate") return ["plugin", "validate", ...forwarded];
+        if (cmd.subcommand === "plugin-build") return ["plugin", "build", ...forwarded];
         if (cmd.subcommand === "help") return ["plugin", "help"];
       }
       if (cmd.source === "knowledge-verb") {
@@ -443,7 +406,10 @@ if (target === "verb-intercept") {
       executable ? [executable, ...compiledArgs] : [process.execPath, ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
-    out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
+    out = (
+      decodeHarnessPlainText(run.stdout) +
+      decodeHarnessPlainText(run.stderr)
+    ).trim();
   }
 
   // Turn-scoped latch: a terminal command was handled OFF-BAND this turn (the
@@ -495,7 +461,7 @@ if (target === "guard-tool-call") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = projectDir;
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
-  const nextArgs = m ? shellWords(m[1].trim()) : [];
+  const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
@@ -532,7 +498,8 @@ if (target === "guard-tool-call") {
   // First-next argument fidelity. The userPromptSubmit hook records the exact
   // expanded argv for a non-terminal /aidlc command. Reject any altered first
   // next in the same turn, including the observed total-drop `next` call. Shell
-  // quoting and backslash escapes normalize through shellWords before compare.
+  // Quoting and path-safe escapes normalize through splitKiroCommandArgs
+  // before compare.
   try {
     const forwardingPath = join(cwd, "aidlc", ".aidlc-forwarding-latch");
     if (m !== null && existsSync(forwardingPath)) {
@@ -629,16 +596,42 @@ if (target === "state-transition-guard") {
 
 // --- plan-approval-guard: code-generation plan-before-generation (preToolUse) ---
 //
-// Legacy `subagent` calls carry {task, stages: [{role, prompt_template}]};
-// newer direct calls carry the agent in `subagent_<agent>` (or a structured
-// field on `invoke_sub_agent`) and the brief in tool_input.prompt. The shim
-// forwards one Task-shaped payload to the core hook when a dispatch targets
-// the developer agent. Exit 2 + stderr is Kiro's
-// reject contract, forwarded verbatim. Fail-open: a different tool, no
-// developer role in the pipeline, or an unspawnable core hook allows the call.
+// Dispatches normalize to Task. fs_write aliases normalize to Write/Edit and
+// execute_bash normalizes to Bash, matching the same payload family used by
+// review-freeze. Exit 2 + stderr is Kiro's reject contract, forwarded verbatim.
 if (target === "plan-approval-guard") {
   const dispatch = kiroDispatch(kiro);
-  if (!dispatch?.agents.includes("aidlc-developer-agent")) return 0;
+  const tool = kiro.tool_name ?? "";
+  const ti = kiro.tool_input ?? {};
+  const canonical = canonicalTool(tool, ti);
+  let payload: Record<string, unknown>;
+  if (dispatch?.agents.includes("aidlc-developer-agent")) {
+    payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: "aidlc-developer-agent",
+        prompt: dispatch.prompt,
+      },
+    };
+  } else if (canonical === "Bash") {
+    payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: (ti.command as string) ?? "" },
+      cwd: projectDir,
+    };
+  } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
+    const paths = inputPaths(ti);
+    payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: canonical === "Write" ? "Write" : "Edit",
+      tool_input: { file_path: paths[0] ?? "", paths },
+      cwd: projectDir,
+    };
+  } else {
+    return 0;
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "hook", "plan-approval-guard"]
@@ -647,14 +640,7 @@ if (target === "plan-approval-guard") {
     command,
     {
       stdin: Buffer.from(
-        JSON.stringify({
-          hook_event_name: "PreToolUse",
-          tool_name: "Task",
-          tool_input: {
-            subagent_type: "aidlc-developer-agent",
-            prompt: dispatch.prompt,
-          },
-        }),
+        JSON.stringify(payload),
         "utf-8",
       ),
       cwd: childCwd,
@@ -949,6 +935,7 @@ function buildForward(): Forward {
         hook: "aidlc-log-subagent.ts",
         input: {
           hook_event_name: "SubagentStop",
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
           agent_type: roles || "unknown",
           agent_id: kiro.session_id ?? "",
         },
@@ -1006,7 +993,12 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     cwd: childCwd,
     env: projectEnv,
   });
-  return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+  return {
+    stdout: new TextDecoder("utf-8").decode(
+      r.stdout ?? new Uint8Array(),
+    ),
+    code: r.exitCode ?? 0,
+  };
 }
 
 const fwd = buildForward();
@@ -1033,10 +1025,12 @@ if (target === "session-start") {
   try {
     const parsed = JSON.parse(result.stdout) as { additionalContext?: string };
     if (parsed.additionalContext) {
-      process.stdout.write(parsed.additionalContext);
+      process.stdout.write(sanitizeHarnessPlainText(parsed.additionalContext));
     }
   } catch {
-    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stdout) {
+      process.stdout.write(sanitizeHarnessPlainText(result.stdout));
+    }
   }
   return 0;
 }

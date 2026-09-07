@@ -7,8 +7,15 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { sourceBaselineAuditFields } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -90,10 +97,10 @@ function run(
     env: {
       ...process.env,
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   const stdout = result.stdout ?? "";
@@ -117,10 +124,10 @@ function next(args: string[] = []): Directive {
     env: {
       ...process.env,
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -184,6 +191,22 @@ function writeCodeGenerationArtifacts(unitName: string): void {
 }
 
 function recordReview(unitName: string): void {
+  const artifact = join(
+    seededRecordDir(project),
+    "construction",
+    unitName,
+    "code-generation",
+    "code-generation-plan.md",
+  );
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) {
+    writeFileSync(
+      artifact,
+      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      "utf-8",
+    );
+  }
   const args = [
     "review",
     "--stage",
@@ -197,6 +220,11 @@ function recordReview(unitName: string): void {
   ];
   const requested = run(LOG, args);
   expect(requested.status, requested.out).toBe(0);
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
   const completed = run(LOG, [...args, "--verdict", "READY"]);
   expect(completed.status, completed.out).toBe(0);
   expect(completed.stdout).toContain('"emitted":"REVIEW_COMPLETED"');
@@ -206,6 +234,16 @@ function seedProject(unitMajor: boolean): void {
   project = createOrchestrationTestProject();
   writeFileSync(seededStateFile(project), stateContent(unitMajor), "utf-8");
   seedBoltDag(project, UNITS);
+  appendAuditEntry(
+    "WORKFLOW_STARTED",
+    {
+      Scope: "feature",
+      ...sourceBaselineAuditFields(project, "code-generation"),
+    },
+    project,
+  );
+  const boundarySecond = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === boundarySecond) {}
 }
 
 function completeInitialAttempt(): void {
@@ -225,7 +263,7 @@ function completeInitialAttempt(): void {
     "--user-input",
     "Approve",
   ]);
-  expect(approved.kind).not.toBe("error");
+  expect(approved.kind, JSON.stringify(approved)).not.toBe("error");
   expect(readFileSync(seededStateFile(project), "utf-8")).toContain(
     "- **Current Stage**: build-and-test",
   );
@@ -296,8 +334,9 @@ describe("t307 autonomous unit-major loop-back receipts", () => {
     ]);
     expect(missingReview.kind).toBe("error");
     expect(missingReview.message).toContain(
-      "1 of 2 applicable units have no fresh recorded review (beta)",
+      "1 of 2 applicable units do not have a current review",
     );
+    expect(missingReview.message).toContain("(beta)");
 
     recordReview("beta");
     const refreshed = report([

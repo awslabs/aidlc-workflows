@@ -21,7 +21,7 @@
 //     Inception stage progressed"):
 //       * the Completed counter crosses 5 (init=3 + >= 2 Inception); this is the
 //         answer-gate terminator (--until-state-field "Completed=([5-9]|[1-9][0-9])"),
-//       * the born intent's aidlc-state.md records the `bugfix` scope + a brownfield
+//       * the created intent's aidlc-state.md records the `bugfix` scope + a brownfield
 //         classification (.sh tests 3 + 16),
 //       * State Version is 7 (.sh test 12),
 //       * MORE than 4 stages are marked complete `- [x]` (.sh test 13),
@@ -101,7 +101,10 @@ import {
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The space-level per-repo codekb dir the RE stage writes into
@@ -261,9 +264,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // gates are up. Do not require the phase to paint before answer-gate starts:
         // current live runs can spend >120s bootstrapping init while the statusline
         // still shows `[AIDLC] ready`; the on-disk Completed terminator below is the
-        // deterministic start/progress proof. Use the shared gridHasMenu() so the
-        // caret is matched platform-invariantly (`❯` on tmux, ASCII `>` on Windows
-        // ConPTY — the same detector the answer-gate uses).
+        // deterministic start/progress proof. Use the shared gridHasMenu(), which
+        // requires the exact `❯` caret in both reconstructed backends.
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (gridHasMenu(grid)) {
@@ -371,7 +373,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // .sh test 11: knowledge directory created. The knowledge relocation
         // (b29ced6) moved this from the per-intent record to the SPACE level
         // (aidlc/spaces/<space>/knowledge — a sibling of intents/), ensured at
-        // birth by ensureWorkspaceDirs (aidlc-utility.ts:1975, which runs in the
+        // creation by ensureWorkspaceDirs (aidlc-utility.ts:1975, which runs in the
         // workspace-scaffold init stage for every scope, bugfix included).
         const knowledgeDir = spaceKnowledgeDirFor(sandbox);
         expect(existsSync(knowledgeDir) && statSync(knowledgeDir).isDirectory()).toBe(true);
@@ -409,8 +411,11 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         expect(sawMenu).toBe(true);
       } finally {
         if (pollTimer) clearInterval(pollTimer);
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

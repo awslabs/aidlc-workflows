@@ -8,6 +8,16 @@ AI-DLC maintains two persistent files that together provide full traceability fr
 
 Each intent has its own state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
 
+The exact initial description is stored beside it in
+`project-description.json` as one JSON string. `aidlc-state.md` names that
+committed source and keeps only a safe single-line
+`Project` preview, so multiline user input cannot introduce additional state
+fields. Pre-2.6.115 records without the source marker continue to use the
+existing `Project` field as their description; a marked new record whose file
+is missing or malformed fails source validation instead of silently degrading.
+JSON decoding preserves the original description even if Git normalizes the
+sidecar's final line ending.
+
 ### What it contains
 
 | Section | Purpose |
@@ -16,8 +26,9 @@ Each intent has its own state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<la
 | **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level |
 | **Workspace State** | Project root, detected languages, frameworks, build system |
 | **Execution Plan Summary** | Total stages, completed count, in-progress stage |
-| **Runtime State** | Revision count for the current stage |
+| **Runtime State** | Revision count and optional Construction iteration, Unit ownership, and Unit gate rhythm |
 | **Stage Progress** | Per-stage checkboxes tracking completion status |
+| **Unit Progress** | Team mode only: derived per-Unit Construction stage and gate cells; rewritten by `next`, never authoritative |
 | **Current Status** | Lifecycle phase, current/next stage, status, last updated timestamp |
 | **Session Resume Point** | Last completed stage, next action, pending artifacts |
 
@@ -77,7 +88,7 @@ stateDiagram-v2
 
 The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
-### 88-event taxonomy
+### 92-event taxonomy
 
 Events are organized into 23 categories:
 
@@ -89,8 +100,8 @@ Events are organized into 23 categories:
 | **Session** | 5 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
 | **Navigation** | 7 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `PLUGIN_SELECTION_CHANGED` |
-| **Interaction** | 8 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
-| **Unit Lifecycle** | 4 | `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED` |
+| **Interaction** | 9 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
+| **Unit Configuration and Lifecycle** | 7 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED` (write-audit-log hook), `ARTIFACT_REUSED` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` (log-subagent hook) |
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
@@ -121,7 +132,7 @@ Events are organized into 23 categories:
 Each entry follows a structured format with these fields:
 
 - **Timestamp** — ISO 8601 timestamp
-- **Event** - One of the 88 event types
+- **Event** - One of the 92 event types
 - **Details** — Event-specific data (stage name, decision, artifact path, etc.)
 
 Entries are appended chronologically. To review the history of a specific stage, search for its `STAGE_STARTED` and `STAGE_COMPLETED` entries and everything in between.
@@ -195,7 +206,11 @@ The state file and audit trail serve complementary purposes:
 | **Session resume** | Primary source for determining where to continue | Provides the original project description and decision context |
 | **Git policy** | Commit to version control | Commit (per-clone shards under `audit/`; no merge conflicts) |
 
-The orchestrator uses `aidlc-state.md` for all routing decisions. It does not read the `audit/` shards for routing. The audit trail is a traceability record that lets you trace every decision from intent through to production.
+The orchestrator uses `aidlc-state.md` as the durable cursor. Team-owned
+Construction additionally derives Unit cells, receipt floors, gates, and merged
+rows from the active intent's audit shards; solo routing keeps the state-only
+cursor behavior. The audit trail also lets you trace every decision from intent
+through to production.
 
 If the state file is corrupted, you can reconstruct it from the audit trail by reviewing `STAGE_STARTED` and `STAGE_COMPLETED` events. See [Troubleshooting](15-troubleshooting.md) for repair instructions.
 

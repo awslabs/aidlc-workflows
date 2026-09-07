@@ -17,6 +17,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Symptom | Quick Fix |
 |---------|-----------|
 | No audit entries appearing | Verify `bun` is installed and on PATH |
+| Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
@@ -51,9 +52,15 @@ bun --version
 
 Ensure `bun` is on your PATH in `~/.zshenv` (zsh), `~/.bashrc` (bash / Git Bash on Windows) -- not just `~/.zshrc`. On native Windows PowerShell, the system PATH entry set by `npm install -g bun` is sufficient.
 
-### Reviewer tool calls refused ("reviewer read-scope: ...")
+### Claude managed policy blocks project hooks
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal message names the scoped unit and the passed contract paths, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+If `/hooks` reports that hooks are restricted by policy and shows zero configured hooks, run `/aidlc --doctor`. On Claude Code, doctor reads `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on Linux/WSL, or `%ProgramFiles%\ClaudeCode\managed-settings.json` followed by the legacy `%PROGRAMDATA%\ClaudeCode\` location on Windows. Each candidate also includes alphabetical JSON fragments under its sibling `managed-settings.d/` directory. An effective top-level `allowManagedHooksOnly: true` blocks every project hook declared in `.claude/settings.json`. Set `AIDLC_MANAGED_SETTINGS_PATH` when the managed file lives elsewhere; its sibling fragment directory is included automatically.
+
+Only the Claude Code administrator can lift this managed setting. After hooks are approved, fully restart the CLI session. Until the policy changes, an attended recovery session can set `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1` in the environment that launches the CLI; these are temporary bypasses for the receipts that blocked hooks cannot mint.
+
+### Reviewer tool calls refused ("This review cannot open ...")
+
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 ### Statusline shows a cost segment you don't want (or usage tracking concerns)
 
@@ -62,6 +69,15 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 ### Hook not configured
 
 Hooks are registered project-wide in `.claude/settings.json` (as of v0.6.0; earlier versions declared the workflow-spine hooks in the SKILL.md frontmatter). Verify that `settings.json` contains a `hooks` block with `PreToolUse`, `PostToolUse`, `PreCompact`, `SubagentStop`, and `Stop` entries (plus `SessionStart`/`SessionEnd`). If you took an upgrade that moved these and your on-disk `settings.json` predates it, re-copy the shipped `settings.json` hooks block.
+
+### Hooks disabled globally (`disableAllHooks`)
+
+Claude Code honours `"disableAllHooks": true` in any settings layer — enterprise managed settings, `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json`. When set, **every** hook is silently skipped even though the files are present and correctly wired, so the workflow blocks on the first stage (no audit, no state sync, no sensors, no stage-graph rebuild). This is common in regulated environments where IT policy disables hooks via managed settings. `/aidlc --doctor` detects this and fails a **Hooks enabled** row naming the offending layer, following Claude Code's layer precedence so a higher-precedence `false` suppresses a lower `true`.
+
+- If the offending layer is a **project or user file**, remove `"disableAllHooks": true` (or set it to `false` in a higher-precedence layer such as `.claude/settings.local.json`) and restart the session.
+- If it is **enterprise managed settings** — the highest-precedence layer — a project or user file cannot override it; IT policy must change it. If policy mandates disabled hooks, AI-DLC v2 is not compatible with that environment: its engine is hook-driven.
+
+The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
 
 ---
 
@@ -124,6 +140,26 @@ After 3 revision cycles on the same stage, a third option appears: **Accept as-i
 
 Use `/aidlc --stage <target>` to jump to a different stage. Intervening stages will be marked `[S]` (skipped) in the state file.
 
+### A reviewed document needs another change
+
+If a final review already covers the document, direct edits are blocked so the
+review cannot silently certify different content.
+
+- While the stage is active or awaiting approval, describe the change and choose
+  **Request Changes**. The decision can be recorded before the gate opens.
+- While the stage is `[R]`, restart it with `/aidlc --stage <slug>`.
+- After the stage is `[x]`, restore the reviewed source state or jump back with
+  `/aidlc --stage <slug>` to redo it.
+
+When only workspace source changed and the one recovery review is still
+available, start that recovery request before replacing the old Review section.
+The pending request temporarily permits writes only to that stage or Unit while
+the stale condition remains. Restoring the reviewed workspace source, recording
+the verdict, or starting/resuming another session re-arms the freeze. Restoring
+output-document bytes does not clear audit-recorded artifact staleness. After a
+session restart, retry the same pending request before replacing the Review
+section. The gate remains closed until the matching verdict is recorded.
+
 ---
 
 ## Context Compaction
@@ -185,6 +221,11 @@ Lock directories are named `.aidlc-audit-<hash>.lock` and `.aidlc-subagent-<hash
 
 ### Clearing stale locks
 
+Run `/aidlc --doctor` first. It automatically clears only a provably-dead
+generation, a reused PID whose creation generation no longer matches, or an old
+lock whose owner stamp is genuinely missing. Matching/unknown live generations,
+malformed stamps, and unreadable stamps are reported but not removed.
+
 ```bash
 # macOS / Linux
 rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
@@ -193,7 +234,10 @@ rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
 Remove-Item "$env:TEMP\.aidlc-audit-*.lock", "$env:TEMP\.aidlc-subagent-*.lock" -Recurse -Force
 ```
 
-Safe to run at any time when no AI-DLC workflow is actively executing. Locks are transient and recreated on each hook invocation.
+Manual removal is safe only after stopping all AI-DLC processes and confirming
+the project is quiescent. Locks and their owner-stamped `.reap` recovery gates
+are transient and recreated as needed. `.gate-mutex` files are persistent
+advisory-lock anchors and may remain empty in the temp directory.
 
 ---
 
@@ -225,8 +269,11 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 /aidlc --doctor
 ```
 
-It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), selection-aware plugin-authored checks, scope validation across all 11 scopes, stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Rule drift**, **Paired sensor coverage**, plugin advisory checks, uncommitted workspace records, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is born. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
+On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
+
+Until an administrator changes the managed policy, an attended recovery session can launch the CLI with both `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`. These are temporary bypasses: they allow human-presence and consolidated-summary checkpoints to proceed without receipts that blocked hooks cannot mint, so use them only while a human is actively supervising the session.
 When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.

@@ -57,11 +57,11 @@ flowchart TD
     PARKED -->|Yes| UNPARK --> CONTINUE
     PARKED -->|No| CONTINUE
 
-    style START fill:#e1bee7,stroke:#7b1fa2
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style CONTINUE fill:#c8e6c9,stroke:#388e3c
-    style WARN fill:#ffcdd2,stroke:#c62828
-    style NO_STATE fill:#ffcdd2,stroke:#c62828
+    style START fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
+    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
+    style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
 <!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and shows four resume options; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->

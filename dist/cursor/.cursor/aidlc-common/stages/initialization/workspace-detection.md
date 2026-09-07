@@ -31,8 +31,6 @@ outputs: workspace classification (greenfield/brownfield), technology stack dete
 
 Runs deterministically inside `aidlc-utility init`. The detection rules in Step 3 below are the source of truth for the scanner's classification logic.
 
-MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
-
 ## Steps
 
 ### Step 1: Update State
@@ -102,7 +100,7 @@ From the scan results, identify:
 
 ### Step 6a: Relay the Submodule Warning (if present)
 
-When the birth output carries the uninitialized-submodules warning (the scanner
+When the creation output carries the uninitialized-submodules warning (the scanner
 found a `.gitmodules` whose submodule paths are empty/uninitialized), relay it to
 the user verbatim and tell them to run `git submodule update --init --recursive`
 before proceeding, since reverse-engineering needs the code on disk. Do NOT offer
@@ -119,26 +117,16 @@ This stage runs the workspace scanner inside `aidlc-utility init`. It
 emits classification state, not agent-authored markdown — so the
 frontmatter `sensors:` list is empty.
 
-Forks that customise this stage to write a discovery report can import
-`required-sections` and `upstream-coverage` via `sensors:`; the resolver
-will populate `sensors_applicable` at the next compile.
+Imports: none.
+
+A customised discovery report should import the relevant manifests here.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-This is an auto-proceeding bootstrap stage (`gate: false`), so it has no
-approval gate. Keep `memory.md` as the stage's permanent execution record, but
-do not surface or persist §13 learnings and do not ask the mandatory
-"Anything to add for next time?" question here. The gate-bound learnings ritual
-begins with the first post-initialization stage.
+Follow stage-protocol.md §13 by maintaining
+`<record>/<phase>/<stage>/memory.md` under the four standard headings; the
+memory file stays in the artefact directory and the stage file remains
+immutable. This auto-proceeding bootstrap stage (`gate: false`) has no
+approval gate, so skip surfacing and persisting learnings and the mandatory
+"Anything to add for next time?" question; the gate-bound ritual begins with
+the first post-initialization stage.

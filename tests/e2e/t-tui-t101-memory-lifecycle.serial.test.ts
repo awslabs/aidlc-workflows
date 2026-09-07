@@ -55,7 +55,10 @@ import { join } from "node:path";
 import { parseMemoryHeadings } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -278,8 +281,11 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // The captured numbered choices above prove the real approval gate
         // rendered and remained unanswered.
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

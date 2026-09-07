@@ -129,6 +129,7 @@ describe("t286 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () =
     } catch {
       return; // mkfifo unavailable on this platform; the other kinds still cover TYPE
     }
+    if (!existsSync(fifo)) return; // a foreign mkfifo executable may not create a native FIFO
     // THE regression this pins: without O_NONBLOCK, open() on a writer-less
     // FIFO blocks before fstat can report the kind, so the process hangs rather
     // than refusing. A hang is not catchable -- if this test times out instead
@@ -230,6 +231,7 @@ describe("t286 writeBufferAtomic", () => {
   });
 
   test("throws and cleans up its own temp when the destination dir is unwritable", () => {
+    if (process.platform === "win32") return; // chmod does not remove write access on Windows
     const d = scratch();
     const sub = join(d, "ro");
     mkdirSync(sub);
@@ -325,10 +327,63 @@ describe("t286 assertNoSymlinkInChainOrThrow - EVERY component, not just the lea
       .toBe(join(d, "not", "yet", "there.txt"));
   });
 
-  test("refuses lexical escape and absolute rel before touching the disk", () => {
+  test("both separator families delimit a valid in-bound path", () => {
     const d = scratch();
-    expect(() => assertNoSymlinkInChainOrThrow(d, "../escape")).toThrow(/escapes its anchor/);
-    expect(() => assertNoSymlinkInChainOrThrow(d, "/etc/passwd")).toThrow(/escapes its anchor/);
+    mkdirSync(join(d, "a", "b"), { recursive: true });
+    writeFileSync(join(d, "a", "b", "c.txt"), "ok");
+    expect(assertNoSymlinkInChainOrThrow(d, "a\\b/c.txt"))
+      .toBe(join(d, "a", "b", "c.txt"));
+    expect(assertNoSymlinkInChainOrThrow(d, "not\\yet/there.txt"))
+      .toBe(join(d, "not", "yet", "there.txt"));
+  });
+
+  test("refuses mixed traversal and every rooted Windows/POSIX form", () => {
+    const d = scratch();
+    for (const bad of [
+      "../escape",
+      "..\\escape",
+      "safe/..\\escape",
+      "safe\\../escape",
+      "/etc/passwd",
+      "\\Windows\\System32",
+      "C:\\outside",
+      "C:/outside",
+      "C:drive-relative",
+      "\\\\server\\share\\outside",
+      "//server/share/outside",
+    ]) {
+      expect(() => assertNoSymlinkInChainOrThrow(d, bad), bad)
+        .toThrow(/escapes its anchor/);
+    }
+  });
+
+  test("mixed separators cannot hide a symlink or junction before an existing or missing leaf", () => {
+    const d = scratch();
+    const root = join(d, "root");
+    const outside = join(d, "outside");
+    mkdirSync(join(root), { recursive: true });
+    mkdirSync(join(outside, "existing"), { recursive: true });
+    writeFileSync(join(outside, "existing", "leaf.txt"), "foreign");
+    symlinkSync(
+      outside,
+      join(root, "alias"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    for (const rel of ["alias/existing\\leaf.txt", "alias/missing\\leaf.txt"]) {
+      expect(() => assertNoSymlinkInChainOrThrow(root, rel), rel)
+        .toThrow(/is a symlink/);
+    }
+  });
+
+  test("native Windows drive and UNC anchors retain their roots", () => {
+    const d = scratch();
+    expect(assertNoSymlinkInChainOrThrow(d, "child/grandchild\\leaf.txt"))
+      .toBe(join(d, "child", "grandchild", "leaf.txt"));
+    if (process.platform === "win32") {
+      const uncAnchor = "\\\\localhost\\__aidlc_missing_share__\\anchor";
+      expect(assertNoSymlinkInChainOrThrow(uncAnchor, "child/grandchild\\leaf.txt"))
+        .toBe(join(uncAnchor, "child", "grandchild", "leaf.txt"));
+    }
   });
 
   test("one poisoned sibling does not strand its healthy siblings", () => {

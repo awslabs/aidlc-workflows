@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-plan-approval-guard","description":"Blocks Code Generation before a human-owned Plan Approval receipt, with a source-floor fallback for legacy argument-less payloads.","when":{"type":"preToolUse"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard"}}

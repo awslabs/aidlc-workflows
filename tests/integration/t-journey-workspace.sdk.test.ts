@@ -12,7 +12,7 @@
 // the cross-session on-disk record state IS the proof of composition):
 //   1. `/aidlc "build auth across both repos"` on a fresh two-sibling-repo
 //      workspace → the engine names intent-create, the conductor runs it, and the
-//      intent auto-births spanning repo-a + repo-b. Asserted on disk: one
+//      intent auto-creates spanning repo-a + repo-b. Asserted on disk: one
 //      intents.json row, repos == the SORTED set ["repo-a","repo-b"], a real
 //      UUIDv7, status "in-flight".
 //   2. (cheaper variant the card sanctions) a reverse-engineering stage writes a
@@ -22,13 +22,13 @@
 //      WITHOUT driving the full worktree-forking swarm (the most fragile/expensive
 //      beat, which combines badly with the in-turn forwarding loop). Asserted:
 //      both per-repo codekb dirs exist with content.
-//   3. birth a SECOND intent alongside the active one via the deterministic
+//   3. create a SECOND intent alongside the active one via the deterministic
 //      `intent-create` verb (the engine has NO "offer a 2nd intent" directive on
 //      the logic path — it would advance A via Branch 10; intent-create mints
 //      unconditionally, the shared cross-harness path). Asserted: two isolated
 //      registry rows + record dirs, distinct UUIDs, and A's state + audit shard
-//      byte-untouched by B's birth.
-//   4. `/aidlc space-create teamB` → `/aidlc space teamB` → birth an intent
+//      byte-untouched by B's creation.
+//   4. `/aidlc space-create teamB` → `/aidlc space teamB` → create an intent
 //      there. The two space verbs are driven the PLAIN user way — the engine now
 //      routes a leading space/space-create/intent token through the conductor
 //      (aidlc-orchestrate.ts Branch 1b → terminal print naming aidlc-utility.ts),
@@ -36,7 +36,7 @@
 //      utility and stops without touching the active intent. Asserted:
 //      teamB/memory/org.md copied from default's; team.md + project.md are FRESH
 //      EMPTY stubs (default's promoted learnings do NOT leak); the space-level
-//      knowledge/ dir appears at FIRST BIRTH into teamB (lazy ensure-exists), NOT
+//      knowledge/ dir appears on the FIRST INTENT CREATION in teamB (lazy ensure-exists), NOT
 //      at space-create; the active-space cursor moved.
 //   5. `/aidlc space default` (again the plain conductor-routed switch) → intent A
 //      is still resumable (the cursor flip is a pure write) and its audit shard is
@@ -45,8 +45,8 @@
 // DRIFT NOTE (verified @ this branch, surfaced for the runbook): the engine's
 // `next` flag parser (aidlc-orchestrate.ts parseNextFlags :249) does NOT
 // recognise `--repos`, and createPrintDirective (:304) never threads it into the
-// named intent-create command — so on the AUTO-BIRTH path the repo span is
-// captured by SIBLING AUTO-DISCOVERY (resolveBirthRepoSet → discoverSiblingRepos,
+// named intent-create command - so on the AUTO-CREATE path the repo span is
+// captured by SIBLING AUTO-DISCOVERY (resolveIntentRepoSet → discoverSiblingRepos,
 // lib:1299/1273), not by an explicit flag. Step 1 therefore drives the bare
 // `/aidlc "<desc>"` (no --repos, which would pollute the slug as a stray
 // positional) and relies on auto-discovery to capture both git-init'd siblings —
@@ -94,7 +94,7 @@ const VERB_DRIVE_MS = 300_000;
 const CODEKB_DRIVE_MS = Math.max(600_000, TEST_TIMEOUT_MS - 6 * VERB_DRIVE_MS);
 
 const INIT_STATE_SUMMARY = "State initialized:";
-const STOP_AFTER_BIRTH = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
+const STOP_AFTER_CREATION = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const SINGLE_RE_DONE = "single-stage:reverse-engineering";
 
 // A UUIDv7 has version nibble 7 and variant nibble in {8,9,a,b}.
@@ -111,13 +111,13 @@ const TEAM_B_SLUG = "teamb";
  * bare `/aidlc intent-create …` slash command is parsed by the conductor as
  * freeform input and fed to `aidlc-orchestrate.ts next`; with intent A ALREADY
  * active, the engine then advances/scope-changes A (Branch 10) instead of
- * birthing — a verified live failure: the conductor ran `scope-change --scope poc`
+ * creating - a verified live failure: the conductor ran `scope-change --scope poc`
  * on A, rewriting A's state Scope feature→poc. The journey wants the
  * mints-unconditionally handler (aidlc-utility.ts intent-create, :1995), so we
  * instruct the conductor to invoke that tool verbatim and NOT touch the active
  * intent. (This is the SKILL.md run-then-continue shape, named explicitly.)
  */
-function birthToolPrompt(scope: string, args: string): string {
+function intentCreationToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
@@ -163,9 +163,9 @@ function shellCommand(result: CapturedToolResult): string | undefined {
 /** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
  *  intact. Brownfield: reverse-engineering EXECUTEs and writes a per-repo codekb
  *  store, so the codekbFiles asserts below hold. Greenfield: the engine stamps
- *  reverse-engineering SKIP at intent birth (aidlc-utility.ts records it in the
+ *  reverse-engineering SKIP at intent creation (aidlc-utility.ts records it in the
  *  Stages to Skip row), so no codekb is written and the asserts must not run (the
- *  skip is the correct behaviour, not a flake). This reads the born intent's
+ *  skip is the correct behaviour, not a flake). This reads the created intent's
  *  aidlc-state.md and returns true only for that greenfield RE-skip: Project Type is
  *  Greenfield AND the Stages to Skip row names the reverse-engineering slug. We match
  *  the bare slug, never the row's human annotation (the engine writes it with an
@@ -184,7 +184,7 @@ function greenfieldReSkip(recordDir: string): boolean {
 }
 
 /** How many WORKFLOW_STARTED audit events the record's shards hold. An intent's
- *  birth emits exactly one; a SECOND would mean another intent's birth bled into
+ *  creation emits exactly one; a SECOND would mean another intent's creation bled into
  *  this record — the collision the vision forbids. (Per-session SessionStart/End
  *  hooks append SESSION_* events to the active intent, so the raw shard bytes are
  *  not stable across fresh sessions; this count is the stable collision signal.) */
@@ -209,23 +209,23 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
       const journey = setupWorkspaceJourney("claude");
       const root = journey.root;
       try {
-        // --- Step 1: auto-birth intent A spanning both sibling repos ----------
-        // Name the scope explicitly so the engine births via Branch 9a (no
+        // --- Step 1: auto-create intent A spanning both sibling repos ----------
+        // Name the scope explicitly so the engine creates via Branch 9a (no
         // scope-confirm gate) — a bare prose `/aidlc "<desc>"` emits an `ask`
         // scope-confirm (Branch 8, orchestrate:1148) that the single-turn ACP /
         // one-shot codex drivers cannot answer, so the cross-harness journey names
         // the scope. The repo span is STILL captured by sibling auto-discovery
-        // (the DRIFT NOTE above), so this stays the genuine multi-repo auto-birth.
+        // (the DRIFT NOTE above), so this stays the genuine multi-repo auto-create.
         const r1 = await driveAidlc(
           `/aidlc --scope feature "build auth across both repos"`,
           {
             projectDir: root,
             answerScript: "default",
             timeoutMs: VERB_DRIVE_MS,
-            stopAfterToolResult: STOP_AFTER_BIRTH,
+            stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
-        // The conductor acted on the engine's birth print: intent-create ran and
+        // The conductor acted on the engine's creation print: intent-create ran and
         // its verbatim summary landed.
         assertToolResultContains(r1, "Bash", INIT_STATE_SUMMARY);
 
@@ -305,7 +305,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         // can read its state-file and tell which of the two valid RE outcomes applies.
         const recordADir = join(root, "aidlc", "spaces", "default", "intents", recordA as string);
         if (greenfieldReSkip(recordADir)) {
-          // Greenfield: reverse-engineering was stamped SKIP at birth, so no per-repo
+          // Greenfield: reverse-engineering was stamped SKIP at creation, so no per-repo
           // codekb is expected here. The recorded skip is the correct outcome; accept
           // it and do NOT run the codekb asserts. This branch is permissive by design
           // (if the LLM writes codekb anyway despite the skip, the journey stays green).
@@ -318,32 +318,32 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           expect(codekbFiles(root, "repo-b").length).toBeGreaterThan(0);
         }
 
-        // Snapshot A's WORKFLOW STATE before birthing B — the deterministic
-        // isolation proof (B's birth must never touch A's aidlc-state.md). We do
+        // Snapshot A's WORKFLOW STATE before creating B - the deterministic
+        // isolation proof (B's creation must never touch A's aidlc-state.md). We do
         // NOT byte-compare A's audit SHARD: the per-session SessionStart/SessionEnd
         // hooks (aidlc-session-{start,end}.ts → appendAuditEntry) legitimately
         // append SESSION_* events to whatever intent is active, and a fresh
         // driveAidlc() is a new session — so the shard gains session-lifecycle
         // noise that is NOT a collision. The collision the vision forbids is B's
-        // BIRTH bleeding into A; that surfaces as a SECOND WORKFLOW_STARTED in A's
+        // INTENT CREATION bleeding into A; that surfaces as a SECOND WORKFLOW_STARTED in A's
         // shard, which we guard directly via workflowStartedCount().
         const stateABefore = readFileSync(join(recordADir, "aidlc-state.md"), "utf-8");
         expect(workflowStartedCount(recordADir)).toBe(1);
 
-        // --- Step 3: birth a SECOND intent alongside active A -----------------
+        // --- Step 3: create a SECOND intent alongside active A -----------------
         // The deterministic shared path: the intent-create utility mints
         // unconditionally (aidlc-utility.ts:1995). Routed through `next` with A
         // active, freeform prose now surfaces the engine's routing ask (Branch
         // 9c) — a human turn this deterministic journey deliberately avoids —
-        // so we name the tool command directly (see birthToolPrompt). The
+        // so we name the tool command directly (see intentCreationToolPrompt). The
         // conversational offer arc is t176's subject, not this journey's.
         const r3 = await driveAidlc(
-          birthToolPrompt("poc", "build a standalone metrics dashboard"),
+          intentCreationToolPrompt("poc", "build a standalone metrics dashboard"),
           {
             projectDir: root,
             answerScript: "default",
             timeoutMs: VERB_DRIVE_MS,
-            stopAfterToolResult: STOP_AFTER_BIRTH,
+            stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
         assertToolResultContains(r3, "Bash", INIT_STATE_SUMMARY);
@@ -358,9 +358,9 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const dirs = listIntents(root).map((i) => i.dirName).filter(Boolean);
         expect(new Set(dirs).size).toBe(2);
 
-        // A's WORKFLOW STATE untouched by B's birth (B took the workspace lock
+        // A's WORKFLOW STATE untouched by B's creation (B took the workspace lock
         // and wrote into B's record; A's state file is byte-identical), and B's
-        // birth event did NOT bleed into A's shard (still exactly one
+        // creation event did NOT bleed into A's shard (still exactly one
         // WORKFLOW_STARTED — A's own).
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
@@ -394,7 +394,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(existsSync(join(teamBRoot, "codekb"))).toBe(true);
         expect(existsSync(join(teamBRoot, "codekb", ".gitkeep"))).toBe(true);
 
-        // Switch into teamB and birth an intent there. The plain `/aidlc space
+        // Switch into teamB and create an intent there. The plain `/aidlc space
         // teamB` is forwarded to `next`, which (with intent A active in default)
         // recognises the leading `space` verb and emits a TERMINAL print naming
         // `aidlc-utility.ts space teamB` (Branch 1b, before state inspection — so
@@ -409,19 +409,19 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(activeSpace(root)).toBe(TEAM_B_SLUG); // the active-space cursor moved
 
         const r4b = await driveAidlc(
-          birthToolPrompt("poc", "teamB onboarding flow"),
+          intentCreationToolPrompt("poc", "teamB onboarding flow"),
           {
             projectDir: root,
             answerScript: "default",
             timeoutMs: VERB_DRIVE_MS,
-            stopAfterToolResult: STOP_AFTER_BIRTH,
+            stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
         assertToolResultContains(r4b, "Bash", INIT_STATE_SUMMARY);
         // teamB now holds exactly one intent, isolated from default's two.
         expect(readIntentRegistry(root, TEAM_B_SLUG).length).toBe(1);
         expect(readIntentRegistry(root, "default").length).toBe(2);
-        // The space-level knowledge/ dir appeared at FIRST BIRTH into teamB (lazy
+        // The space-level knowledge/ dir appeared on the FIRST INTENT CREATION in teamB (lazy
         // ensure-exists), not at space-create.
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
@@ -435,7 +435,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         });
         expect(activeSpace(root)).toBe("default");
         // A's WORKFLOW STATE survived the round trip untouched (the cursor flip is
-        // a pure write; nothing rewrote A's state), and no foreign birth bled into
+        // a pure write; nothing rewrote A's state), and no foreign creation bled into
         // its shard. The audit shard itself may carry session-lifecycle events
         // from the intervening turns (see workflowStartedCount's note) — that is
         // not a collision.

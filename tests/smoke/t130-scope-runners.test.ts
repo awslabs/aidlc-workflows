@@ -188,18 +188,20 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // recognise, offer, `next --new-intent` guidance is rendered for every
   // first-batch scope, that the offer proposes THIS runner's scope as the default
   // (correctable to a different scope for genuinely unrelated work), and that the
-  // confirmed scope, not a hardcoded one, flows onto the birth command.
+  // confirmed scope, not a hardcoded one, flows onto the creation command.
   // ===========================================================================
   for (const scope of BATCH) {
     test(`aidlc-${scope}: carries the new-work offer routed through next --new-intent`, () => {
       const body = readFileSync(runnerPath(scope), "utf-8");
-      // The section header + the AskUserQuestion offer (never auto-birth) + the
+      // The section header + the AskUserQuestion offer (never auto-create) + the
       // --new-intent escape hatch driven by the CONFIRMED scope.
       expect(body).toContain("Starting unrelated new work?");
       expect(body).toContain("AskUserQuestion");
       expect(body).toContain("next --new-intent --scope <the confirmed scope>");
       expect(body).toContain("`intent-create` command");
-      expect(body).not.toContain("`intent-birth`");
+      // Guard generated prose from resurfacing the retired command.
+      const retiredIntentCommand = "intent-" + "b" + "irth";
+      expect(body).not.toContain(`\`${retiredIntentCommand}\``);
       // The offer defaults the proposed scope to THIS runner's baked scope
       // (same-flavour follow-up) while allowing a different one, so the runner's
       // own scope is named in the offer prose. (Asserted on newline-collapsed
@@ -216,7 +218,7 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
       expect(rendered).toContain("`intent-create` command");
-      expect(rendered).not.toContain("`intent-birth`");
+      expect(rendered).not.toContain(`\`${retiredIntentCommand}\``);
       expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
       expect(rendered).toContain("/clear");
     });

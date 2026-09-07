@@ -17,7 +17,7 @@
 //                   (scope/stage strings render in the pane) and the per-intent
 //                   record's state file is byte-untouched afterwards.
 //   without state — the run reports no active workflow (and does NOT
-//                   birth an intent or invent state).
+//                   create an intent or invent state).
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -25,7 +25,11 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { seededStateFile } from "../harness/fixtures.ts";
-import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  KIRO_SRC,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -126,8 +130,11 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         // Read-only contract: the state file is byte-identical afterwards.
         expect(readFileSync(statePath, "utf8")).toBe(stateBefore);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,
@@ -145,12 +152,15 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         // (aidlc-utility.ts:186, verified live): "No active AI-DLC workflow".
         expect(waitFor(session, "No active AI-DLC workflow", 240000, 0)).toBe(true);
         // And it must NOT scaffold: status is read-only even with no state. The
-        // seeded record was stripped (noAidlcDocs); status births nothing, so the
+        // seeded record was stripped (noAidlcDocs); status creates nothing, so the
         // per-intent state file the seeded record would hold never appears.
         expect(existsSync(seededStateFile(sandbox))).toBe(false);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

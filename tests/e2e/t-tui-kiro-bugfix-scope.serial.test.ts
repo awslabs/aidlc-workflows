@@ -34,7 +34,7 @@ import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import {
-  cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
   markdownH2Section,
@@ -209,8 +209,11 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         expect(questionAnsweredAt).toBeGreaterThan(-1);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

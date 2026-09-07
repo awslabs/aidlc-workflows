@@ -35,7 +35,7 @@
 //       wrongly Englished Markdown artifacts that only mix in parsed islands).
 //
 // MECHANISM. (a)/(b)/(d) read the shipped files directly (the `none` floor).
-// (c) SPAWNS the real engine CLI to birth an intent into a temp project, then
+// (c) SPAWNS the real engine CLI to create an intent into a temp project, then
 // calls the shipped hook's exported pure entry in-process. Zero tokens, zero
 // network.
 
@@ -51,6 +51,13 @@ import { augmentDispatchRules } from "../../dist/claude/.claude/hooks/aidlc-deli
 const BUN = process.execPath;
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const AUTHORED_ORG_MD = join(REPO_ROOT, "core", "memory", "org.md");
+const AUTHORED_STAGE_PROTOCOL = join(
+  REPO_ROOT,
+  "core",
+  "aidlc-common",
+  "protocols",
+  "stage-protocol.md",
+);
 
 /** The four rules' stable lead-ins. Deliberately the bold label only: the bodies
  *  are prose a maintainer may reword, but a MISSING or RENAMED rule is a
@@ -241,16 +248,61 @@ describe("t266 conversation-language rule layer", () => {
     }
   });
 
+  test("b: what-to-localize covers conversational output and structured-question prose", () => {
+    const entries = sectionEntries(readFileSync(AUTHORED_ORG_MD, "utf-8"), "Mandated");
+    const rule = entries.find((entry) =>
+      entry.startsWith("**Conversation language — what to localize**"),
+    );
+    expect(rule, "the what-to-localize rule exists").toBeDefined();
+    for (const required of [
+      "agent's own human-facing conversational output",
+      "orchestrator and delegated agents alike",
+      "conversational chat messages",
+      "status updates",
+      "progress reports",
+      "transitional narration between tool calls",
+      "`prompt`",
+      "`header`",
+      "`options[].description`",
+      "free-text follow-ups",
+      "`options[].label` literals the protocol spells verbatim are preserved tokens",
+    ]) {
+      expect(rule!.includes(required), `what-to-localize rule names: ${required}`).toBe(true);
+    }
+  });
+
+  test("b: structured questions localize prose while preserving verbatim labels", () => {
+    const body = readFileSync(AUTHORED_STAGE_PROTOCOL, "utf-8");
+    const start = body.indexOf("### Structured questions (harness-neutral contract)");
+    const end = body.indexOf("\n### ", start + 4);
+    expect(start, "the structured-questions section exists").toBeGreaterThan(-1);
+    const section = body.slice(start, end === -1 ? body.length : end);
+
+    expect(section).toContain("The `prompt`, `header`, and `options[].description` fields");
+    expect(section).toContain("plus any free-text follow-up");
+    expect(section).toContain("render them in the\nresolved conversation language");
+    expect(section).toContain("An `options[].label` literal that this\nprotocol spells verbatim");
+    for (const label of [
+      "`Approve`",
+      "`Request Changes`",
+      "`Accept as-is`",
+      "`X. Other (please specify)`",
+    ]) {
+      expect(section, `structured-question contract preserves ${label}`).toContain(label);
+    }
+    expect(section).toContain("is a preserved token and\nstays English");
+  });
+
   // === (c) DELEGATED EXECUTION =============================================
   test("c: a delegated dispatch is rewritten to carry all four rules", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-"));
     tempDirs.push(proj);
-    const birth = spawnSync(
+    const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
       { encoding: "utf-8" },
     );
-    expect(birth.status, `intent-create failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+    expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
     const result = augmentDispatchRules(
       "task",
@@ -805,12 +857,12 @@ describe("t266 conversation-language rule layer", () => {
     // of a deterministic test.
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-switch-"));
     tempDirs.push(proj);
-    const birth = spawnSync(
+    const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
       { encoding: "utf-8" },
     );
-    expect(birth.status, `intent-create failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+    expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
     // Persist BOTH rules the way the learnings ritual actually leaves them.
     // The write path appends and dedupes on the per-(stage, candidate_id) cid
@@ -916,12 +968,12 @@ describe("t266 conversation-language rule layer", () => {
   test("e3: a team-level language rule never outranks the project-level one it precedes", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-split-"));
     tempDirs.push(proj);
-    const birth = spawnSync(
+    const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
       { encoding: "utf-8" },
     );
-    expect(birth.status, `intent-create failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+    expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
     const memory = join(proj, "aidlc", "spaces", "default", "memory");
     const teamMd = join(memory, "team.md");

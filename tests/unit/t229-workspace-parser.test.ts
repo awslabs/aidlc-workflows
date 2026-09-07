@@ -362,7 +362,7 @@ describe("utility handlers and reservation chokepoints", () => {
     }
   });
 
-  test("engine and dispatcher switch to a verb-named intent without birthing", () => {
+  test("engine and dispatcher switch to a verb-named intent without creating", () => {
     const projectDir = scratchProject();
     try {
       seedIntent(projectDir, "birth", "260711-birth");

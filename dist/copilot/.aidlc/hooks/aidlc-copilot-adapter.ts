@@ -65,15 +65,16 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   recordCopilotHumanSequence,
+  resolveWorkflowSelection,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
+  stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -100,6 +101,9 @@ interface CopilotHookInput {
   agent_display_name?: string;
   stop_reason?: string;
   stop_hook_active?: boolean;
+  prompt?: string;
+  user_prompt?: string;
+  message?: string;
 }
 
 export async function run(
@@ -187,6 +191,15 @@ export async function run(
     semantic_search: "Grep",
     semanticSearch: "Grep",
   };
+  const NATIVE_QUESTION_PICKERS = new Set([
+    "ask_user",
+    "askUser",
+    "vscode/askQuestions",
+    "askQuestions",
+    "ask_questions",
+    "askQuestion",
+    "ask_question",
+  ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
   const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
@@ -198,6 +211,7 @@ export async function run(
     try {
       const parsed = JSON.parse(input) as Record<string, unknown>;
       parsed.tool_name = toolName;
+      if (sessionId) parsed.session_id = sessionId;
       if (nativeToolInput) parsed.tool_input = nativeToolInput;
       const result = copilot.tool_result ?? copilot.toolResult;
       if (result && typeof result === "object" && !Array.isArray(result)) {
@@ -274,6 +288,22 @@ export async function run(
         permissionDecisionReason: reason.trim() || "Blocked by an AIDLC guard hook.",
       },
     })}\n`;
+  }
+
+  function selectedWorkflowIsRunning(): boolean {
+    try {
+      const selection = resolveWorkflowSelection(
+        projectDir,
+        sessionId ? { sessionId } : {},
+      );
+      const stateContent = readFileSync(
+        stateFilePathForSelection(projectDir, selection),
+        "utf-8",
+      );
+      return stateContent.match(/^- \*\*Status\*\*:\s*(\S+)\s*$/m)?.[1] === "Running";
+    } catch {
+      return false;
+    }
   }
 
   type ParsedOrchestration =
@@ -503,7 +533,7 @@ export async function run(
     if (lines.length > 2 || lines.slice(1).some((line) => !/^<shellId:\s*[^>]*completed with exit code 0>$/.test(line.trim()))) return null;
     try {
       const value = JSON.parse(lines[0]?.trim() ?? "") as Record<string, unknown>;
-      const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"]);
+      const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"]);
       if (!kinds.has(String(value.kind))) return null;
       const directive: CopilotDirectiveMetadata = {
         kind: value.kind as CopilotDirectiveMetadata["kind"],
@@ -895,11 +925,18 @@ export async function run(
       } catch {
         return 0;
       }
-      try {
-        appendAuditEntry("HUMAN_TURN", {}, projectDir);
-      } catch {
-        // best-effort presence record — advisory
-      }
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt:
+            copilot.prompt ??
+            copilot.user_prompt ??
+            copilot.message ??
+          "",
+        }),
+      );
       if (sessionId) {
         try { recordCopilotHumanSequence(projectDir, stateContent, sessionId); }
         catch { /* bounded coordination remains best effort */ }
@@ -912,6 +949,16 @@ export async function run(
       // agent dispatches first receive the exact active-stage rule bundle.
       // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
       // directly, so no adapter-specific reshaping is needed.
+      if (
+        NATIVE_QUESTION_PICKERS.has(rawToolName) &&
+        selectedWorkflowIsRunning()
+      ) {
+        process.stdout.write(denyJson(
+          "Render this AI-DLC question as numbered prose in chat per question-rendering.md, then end the turn and wait for the user's next chat message. Native picker answers do not fire UserPromptSubmit, so they cannot record the trusted HUMAN_TURN required for answer and approval logging.",
+        ));
+        return 0;
+      }
+
       if (toolName.toLowerCase() === "agent") {
         const dispatch = runCoreWithStderr(
           "aidlc-deliver-stage-rules.ts",
@@ -992,6 +1039,14 @@ export async function run(
         );
         if (freeze.code === 2) {
           process.stdout.write(denyJson(freeze.stderr));
+          return 0;
+        }
+        const planApproval = runCoreWithStderr(
+          "aidlc-plan-approval-guard.ts",
+          canonicalInput,
+        );
+        if (planApproval.code === 2) {
+          process.stdout.write(denyJson(planApproval.stderr));
           return 0;
         }
         if (command.status === "unsupported") {
@@ -1102,6 +1157,18 @@ export async function run(
             );
             if (freeze.code === 2) {
               process.stdout.write(denyJson(freeze.stderr));
+              return 0;
+            }
+            const planApproval = runCoreWithStderr(
+              "aidlc-plan-approval-guard.ts",
+              JSON.stringify({
+                hook_event_name: "PreToolUse",
+                tool_name: call.toolName,
+                tool_input: call.toolInput,
+              }),
+            );
+            if (planApproval.code === 2) {
+              process.stdout.write(denyJson(planApproval.stderr));
               return 0;
             }
           }
@@ -1219,6 +1286,7 @@ export async function run(
         "aidlc-log-subagent.ts",
         JSON.stringify({
           hook_event_name: "SubagentStop",
+          ...(sessionId ? { session_id: sessionId } : {}),
           agent_type: subagentName || "unknown",
           agent_id: subagentId,
         }),

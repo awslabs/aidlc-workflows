@@ -22,21 +22,12 @@
 // predecessor was STILL ALIVE after the steal robbed a live holder and fails the
 // invariant. Repeated over GENERATIONS for stability.
 //
-// HONESTY (read before trusting this as a FIX-3 regression test): empirically
-// this assertion holds on BOTH the pre-fix reaper (the prior "re-read stamp then
-// rename" guard) AND a fully-NAIVE reaper (no re-check at all) — because for the
-// DEAD-lock case the renameSync of the lock dir is itself the OS-atomic arbiter:
-// only one process moves a given dir, the losers get ENOENT. The specific steal-
-// race the CAS closes (a competitor re-mkdir'ing at the SAME path between a
-// reaper's stale DECISION and its rename) is a sub-microsecond window that does
-// NOT reproduce under spawn timing — verified by stress (24 procs × 40 gens, zero
-// double-steals on the pre-fix code). So this test does NOT fail against pre-fix;
-// it is a mutual-exclusion PROPERTY guard that would catch a GROSS reaper
-// regression (e.g. dropping the mkdir/rename arbitration). The CAS fix is
-// defense-in-depth for the unobservable window, documented in reapStaleLock.
+// The current protocol serializes reapers through an owner-stamped recovery
+// gate. Every generation still carries its own token so a moved candidate can be
+// verified exactly before deletion or restoration.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts):
-//   reapStaleLock — CAS steal (rename-first, verify-moved-stamp, restore-on-miss).
+//   reapStaleLock — recoverable reap-gate election + private retire/restore.
 //   acquireAuditLock — mkdir-or-reap loop that calls it.
 //
 // FIXTURE DISCIPLINE: a per-test temp project dir + a temp driver script, both
@@ -141,7 +132,7 @@ function evidenceLockPath(): string {
 }
 
 /** Seed a DEAD-PID, OVER-AGE stale lock at the per-intent bucket. */
-function seedStaleLock(): string {
+function seedStaleLock(generation: number): string {
   const lockDir = auditLockDir(proj, INTENT, SPACE);
   rmSync(lockDir, { recursive: true, force: true });
   mkdirSync(lockDir, { recursive: true });
@@ -149,9 +140,16 @@ function seedStaleLock(): string {
   writeFileSync(evidenceStatePath(), JSON.stringify({ pid: STALE_OWNER_PID }), "utf-8");
   // pid is an unlikely-live high value (ESRCH → dead owner), startedAtMs far in
   // the past (over the tightened stale threshold the test sets via env).
+  const token = `00000000-0000-4000-8000-${String(generation).padStart(12, "0")}`;
+  mkdirSync(join(lockDir, token));
   writeFileSync(
     join(lockDir, "owner.json"),
-    JSON.stringify({ pid: STALE_OWNER_PID, startedAtMs: 0 }),
+    JSON.stringify({
+      pid: STALE_OWNER_PID,
+      startedAtMs: 0,
+      reapLiveOwnerAfterStale: true,
+      token,
+    }),
     "utf-8",
   );
   return lockDir;
@@ -220,7 +218,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       AIDLC_LOCK_UNSTAMPED_GRACE_MS: "10000",
     };
     for (let g = 0; g < GENERATIONS; g++) {
-      seedStaleLock();
+      seedStaleLock(g);
       const procs = Array.from({ length: N }, () =>
         Bun.spawn({
           cmd: [BUN, driver],

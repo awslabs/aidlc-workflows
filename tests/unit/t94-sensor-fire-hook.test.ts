@@ -90,7 +90,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -189,6 +189,42 @@ function makeProjectActive(): string {
   );
   seedAudit(proj);
   return proj;
+}
+
+function writeDispatchGraph(proj: string): string {
+  const graph = join(proj, "write-dispatch-graph.json");
+  writeFileSync(
+    graph,
+    JSON.stringify([
+      {
+        slug: "requirements-analysis",
+        number: "1.1",
+        name: "Requirements Analysis",
+        phase: "inception",
+        execution: "ALWAYS",
+        lead_agent: "aidlc-product-agent",
+        support_agents: [],
+        mode: "inline",
+        produces: [],
+        consumes: [],
+        requires_stage: [],
+        inputs: "",
+        outputs: "",
+        rules_in_context: [],
+        sensors_applicable: [
+          {
+            id: "write-sensor",
+            path: ".claude/sensors/aidlc-write-sensor.md",
+            fire_on: "write",
+            default_severity: "advisory",
+            matches: "**/aidlc-docs/**",
+          },
+        ],
+      },
+    ]),
+    "utf-8",
+  );
+  return graph;
 }
 
 /** Write a minimal aidlc-state.md into the record (the .sh's heredocs). Seeding
@@ -294,9 +330,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
 
   test("valid payload + applicable sensors fires the dispatcher [.sh case 3]", () => {
     const proj = makeProjectActive();
-    // requirements-analysis carries two md-glob sensors (required-sections,
-    // upstream-coverage) in the framework graph; an aidlc-docs/**/*.md write
-    // matches **/aidlc-docs/** for both.
+    const graph = writeDispatchGraph(proj);
     const filePath = join(
       proj,
       "aidlc-docs",
@@ -304,7 +338,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
       "requirements-analysis",
       "intent.md",
     );
-    const r = runHook(proj, filePath);
+    const r = runHook(proj, filePath, graph);
     expect(r.status).toBe(0);
     expect(existsSync(spawnLogPath(proj))).toBe(true);
     // STRONGER than the .sh's mere file-existence check: parse the recorded argv
@@ -313,15 +347,43 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const lines = readFileSync(spawnLogPath(proj), "utf-8")
       .split("\n")
       .filter(Boolean);
-    expect(lines.length).toBe(2); // both applicable md sensors fire
+    expect(lines.length).toBe(1);
     const firstArgv = JSON.parse(lines[0]) as string[];
     expect(firstArgv.slice(2)).toEqual([
       "fire",
-      "required-sections",
+      "write-sensor",
       "--stage",
       "requirements-analysis",
       "--output-path",
       filePath,
+    ]);
+  });
+
+  test("project-relative payload fires sensors with an absolute output path", () => {
+    const proj = makeProjectActive();
+    const graph = writeDispatchGraph(proj);
+    const absoluteFilePath = join(
+      proj,
+      "aidlc-docs",
+      "inception",
+      "requirements-analysis",
+      "relative-intent.md",
+    );
+    const r = runHook(proj, relative(proj, absoluteFilePath), graph);
+    expect(r.status).toBe(0);
+
+    const lines = readFileSync(spawnLogPath(proj), "utf-8")
+      .split("\n")
+      .filter(Boolean);
+    expect(lines.length).toBe(1);
+    const firstArgv = JSON.parse(lines[0]) as string[];
+    expect(firstArgv.slice(2)).toEqual([
+      "fire",
+      "write-sensor",
+      "--stage",
+      "requirements-analysis",
+      "--output-path",
+      absoluteFilePath,
     ]);
   });
 
@@ -356,7 +418,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
         "requirements-analysis",
         "intent.md",
       );
-      expect(runHook(proj, filePath).status).toBe(0);
+      expect(runHook(proj, filePath, writeDispatchGraph(proj)).status).toBe(0);
       const argv = JSON.parse(
         readFileSync(spawnLogPath(proj), "utf-8").split("\n")[0],
       ) as string[];
@@ -376,6 +438,18 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     );
     const r = runHook(proj, filePath);
     expect(r.status).toBe(0);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  test("recursion guard catches project-relative writes under the active sensor detail dir", () => {
+    const proj = makeProjectActive();
+    const filePath = relative(
+      proj,
+      join(seededRecordDir(proj), ".aidlc-sensors", "requirements-analysis", "detail.md"),
+    );
+    const r = runHook(proj, filePath);
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
@@ -556,5 +630,45 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const r = runHook(proj, inceptionMd(proj), synGraph);
     expect(r.status).toBe(0);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  test("sensors_applicable entry with fire_on=gate -> no per-write dispatch", () => {
+    const proj = makeProjectActive();
+    const synGraph = join(proj, "gate-graph.json");
+    writeFileSync(
+      synGraph,
+      JSON.stringify([
+        {
+          slug: "requirements-analysis",
+          number: "1.1",
+          name: "Requirements Analysis",
+          phase: "inception",
+          execution: "ALWAYS",
+          lead_agent: "aidlc-product-agent",
+          support_agents: [],
+          mode: "inline",
+          produces: [],
+          consumes: [],
+          requires_stage: [],
+          inputs: "",
+          outputs: "",
+          rules_in_context: [],
+          sensors_applicable: [
+            {
+              id: "gate-sensor",
+              path: ".claude/sensors/aidlc-gate-sensor.md",
+              fire_on: "gate",
+              default_severity: "blocking",
+              matches: "**/aidlc-docs/**",
+            },
+          ],
+        },
+      ]),
+      "utf-8",
+    );
+    const r = runHook(proj, inceptionMd(proj), synGraph);
+    expect(r.status).toBe(0);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(heartbeatPath(proj))).toBe(true);
   });
 });

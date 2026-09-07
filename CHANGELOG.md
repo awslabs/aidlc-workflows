@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.70] - 2026-09-07
+## [2.7.2] - 2026-09-07
 
 Commit provenance: any git commit or diff range can now be traced back to the reviewed units of work that own its changed paths, from any clone — including a bare CI checkout — with no hooks, commit trailers, or session state involved. Per-unit review evidence is now committed into the intent record, and the new `aidlc attest` tool resolves attribution and drift from committed content alone. **Upgrade:** refresh your `dist/<harness>/` shell; records reviewed before this version have no committed evidence, so their paths resolve as `unverifiable` in fresh clones until their next per-unit review dual-writes it.
 
@@ -9,7 +9,497 @@ Commit provenance: any git commit or diff range can now be traced back to the re
 * New read-only `aidlc attest resolve [<commit>] [--diff <base>..<head>]` attributes every changed path to its owning reviewed unit and classifies it as `verified`, `drifted`, `unattested`, `unverifiable`, `indeterminate`, or `excluded`, reporting JSON with per-path and per-unit detail. `--fail-on <statuses>` (comma-separated subset of the four failable statuses) exits 3 on a match — the CI-gate form. Missing or tampered evidence fails closed as `unverifiable`; ambiguous same-timestamp receipts fail closed as `indeterminate`. Multi-root workspaces select a recorded repository with `--repo <name>`.
 * New `aidlc attest anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` appends `SOURCE_COMMITTED` audit events for commits that landed reviewed claims — enrichment only, `resolve` never reads them. Anchors deduplicate per intent on (commit, repo), skip commits already bound by `SWARM_SOURCE_MERGED`, and `--reconcile` walks first-parent history bounded by `--max-commits` (default 100). `SOURCE_COMMITTED` joins the CLI-protected set: the audit CLI refuses to append it directly.
 * Anchoring runs automatically: on every real session start the framework's session-start hook sweeps the last 25 first-parent commits and anchors any that landed reviewed claims, so commits made manually between sessions gain `SOURCE_COMMITTED` rows with no command to remember. The sweep is idempotent, best-effort (it never blocks session startup, and no-ops in non-git projects), skipped on compaction resumes, and disabled by `AIDLC_SKIP_SESSION_ANCHOR=1`; the explicit `anchor` verb remains for CI checkouts and deeper backfills.
-* The audit taxonomy grows to 88 events (new Commit Provenance category); the new `docs/reference/19-commit-provenance.md` chapter documents the attribution model, evidence format, and fail-closed semantics.
+* The audit taxonomy grows to 92 events (new Commit Provenance category); the new `docs/reference/19-commit-provenance.md` chapter documents the attribution model, evidence format, and fail-closed semantics.
+## [2.7.1] - 2026-09-01
+
+Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
+
+* Answering **Approve Plan** on a solo workflow now yields a stable approval receipt, so Code Generation starts instead of refusing every developer dispatch as "not currently approved".
+* `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` and driving the workflow as team-owned are no longer needed as workarounds for this deadlock.
+
+## [2.7.0] - 2026-09-01
+
+AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.
+
+* The lifecycle now has 33 stages: Application Design became Domain Design, Contract Design was added, and the Domain, Functional, and Infrastructure Design outputs were consolidated. Consumers of the retired artifact names must use `components.md`, `contract-summary.md`, `entities.md`, `rules.md`, `functional-spec.md`, and `infrastructure-specification.md`; a merge-copy upgrade must also remove the stale `skills/aidlc-application-design/` runner.
+* Classic and Express are first-class scopes, and Classic is the implicit default. Set `AWS_AIDLC_DEFAULT_SCOPE=feature` to retain the previous full-lifecycle default.
+* Human gates, plan approval, review freezes, and source-bound reviewer receipts now use deterministic authority checks. Structured-question protocol guidance requires self-explanatory prompts and reuse of answers already recorded in the current workflow. Every custom or plugin stage that declares `reviewer:` must add `review_artifact:` naming one required Markdown output from `produces[]`; for per-Unit stages that target must cover every applicable Unit kind.
+* Construction resolves the team's affirmed Testing Posture or its documented fallback, supports bounded Build and Test loop-back, and binds review authority to Git and non-Git source state. Autonomous mode skips the remaining stage gates under its final-batch contract, while team-owned Units can converge from independent clones or sibling worktrees through a pinned human-gated merge.
+* Reverse Engineering and CodeKB require complete current-attempt evidence and support generation-checked focused rescans that merge newly analyzed areas without replacing unrelated knowledge.
+* Intent Capture and Requirements Analysis can ingest bounded project documents and existing requirements through a separate trust-marked document-input path.
+* Plugin workflows gained selection-aware composition and doctor checks plus offline create, validate, build, and compose-test tooling. Engine replacement restores the stock graph, so `/aidlc plugin sync` is required after every upgrade; automation must treat exit 1 as an incomplete plugin installation when configured roots are unusable.
+* Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode now share stronger session binding, single-use continuation, hook diagnostics, human-presence checks, and delegated-agent attribution. Any unattended driver that submits prompts without a person present must set `AIDLC_UNATTENDED=1`. Codex users must run `bun scripts/package.ts codex trust --project <absolute-project-path>`, replace existing entries for those hook paths, and start a fresh Codex session. Claude Code users must approve project hooks through `/hooks` and fully restart; a reported `disableAllHooks` setting must be removed or overridden in an editable layer, while `allowManagedHooksOnly` requires an administrator policy change.
+* Integrations that consume adaptive-composer proposals must rename `birthDescription` to `creationDescription`; scripts that consume the retired design artifact names must migrate before reading 2.7.0 outputs.
+
+## [2.6.124] - 2026-08-28
+
+Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.
+
+**Upgrade / scope:** this changes only what is written **from now on** — newly created or next-updated state records. Re-copying `dist/<harness>/` refreshes the tools but does **not** rewrite any existing `aidlc/**/aidlc-state.md` in a project; an existing state file keeps its previous absolute `Project Root` / `Worktree Path` until the engine next writes those fields in the normal course of a run. No migration is performed and none is required: both fields are re-derived at runtime (`projectRootFor` walks up to the real `aidlc/` dir; the committed `Project Root` is an unreached fallback and `Worktree Path` is a decorative breadcrumb), so a stale absolute value is inert until it is overwritten.
+
+* `Project Root` template + writer emit project-relative `.` instead of an absolute `${projectDir}`.
+* `Worktree Path` writer emits `relative(projectDir, worktreePath)` (forward-slashed), matching the audit log's existing relative form.
+* Regression coverage: `t78` pins a forked worktree's `Worktree Path` to the project-relative `.aidlc/worktrees/bolt-<slug>` (never an absolute path); `t70` and the `t152` Windows-portability guard pin `Project Root` = `.`.
+
+## [2.6.123] - 2026-08-28
+
+Cursor now preserves delegated-agent attribution and reviewer-state integrity across POSIX and Windows path dialects, shell wrappers, Git configuration surfaces, filesystem traversal, and executable lookup changes. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter, shared review-freeze parser, and version metadata replace the vulnerable hooks.
+
+* Deny delegated evaluators, general-purpose interpreters, project-local or path-qualified executables, scripts, unknown command surfaces, BusyBox/Toybox execution applets, and allowlisted command names reached through altered `PATH`, `PATHEXT`, or environment-clearing lookup state.
+* Protect every attributed delegated agent with an independent active-delegation witness and fail closed when either attribution store becomes unavailable, preserving nested-Task denial after attempted state removal.
+* Resolve bare ancestors and cross-platform path aliases for traversal and mutation commands, including `find`, PowerShell/CMD operations, `rsync`, and data-driven `xargs` mutators whose input targets cannot be inspected; read-only data-driven commands and concrete safe mutations remain available.
+* Canonicalize symlink, junction, device, trailing-dot/space, Git-Bash drive, native Windows, mixed-separator, UNC, home, wildcard, and 8.3 path forms before protected-state comparison.
+* Carry every reachable shell working directory through compound commands into Git safety inspection, retaining fail-closed behavior across failures, conditionals, pipelines, backgrounds, and subshells.
+
+## [2.6.122] - 2026-08-27
+
+Code Generation source-freshness receipts now bind supported non-Git and missing-Git workspaces without weakening per-Unit attribution or autonomous swarm Source Commits. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight `workspace_requires` reviews from earlier versions must be reviewed once more before completion because the source identity format changed.
+
+* The source boundary is one bounded filesystem identity and canonical per-path listing, so unchanged source remains stable when repository metadata or the Git executable appears or disappears. Ordinary and ignored application bytes, external source-symlink targets, workspace-roof files, and registered binary or extensionless source are covered; framework state, VCS metadata, dependency/cache paths, and unregistered generated-output directories remain excluded.
+* Real source under `build/`, `coverage/`, `dist/`, `logs/`, `target/`, or `tmp/` can be declared in root `.aidlc-source-paths.json` with schema `{"version":1,"paths":[...]}`. Invalid, unreadable, unstable, or over-budget boundaries record `unbindable` and fail closed.
+* Autonomous swarm snapshots use that exact boundary for footprint verification and immutable Source Commits. Clean-filter raw-byte rewriting is restricted to filesystem-included regular paths, commit reconstruction reads immutable tree/blob bytes without checkout filters, bound merges refuse configured smudge/process filters before target mutation, external symlink targets that a Git tree cannot represent are rejected before source authority is minted, and registered generated source still carries the reviewed raw bytes.
+* Initialized nested repositories and submodules resolve their checked-out commit directly from bounded Git metadata, so source identity remains stable when the Git executable is unavailable and malformed metadata fails closed without a process crash.
+* New-submodule recovery shares one 30-second cumulative deadline and a 32-proof cap across the full `finalize` call, while retaining the existing per-command, advertised-ref, refspec-size, recursion, and materialized-checkout bounds.
+
+## [2.6.121] - 2026-08-27
+
+Reviewer receipts now bind one explicit review artifact, every dispatched artifact byte, and workspace source before dispatch, then validate the complete reviewer-owned appendix from one stable completion snapshot. Artifact snapshots reject filesystem aliases outside the workflow record or CodeKB boundary. **Upgrade:** refresh your complete `dist/<harness>/` shell. For every custom or plugin stage declaring `reviewer:`, add `review_artifact:` selecting one required Markdown entry from `produces[]`; for per-Unit stages it must apply to every relevant Unit kind. Composition and graph compilation reject reviewer stages that are not migrated.
+
+* Reviewer-bearing stages declare `review_artifact`, a required Markdown output that remains applicable across the stage's Unit kinds; plugin-added outputs and no-DAG directory order cannot silently redefine ownership.
+* `REVIEW_REQUESTED` captures stable single-link file identities, exact artifact bytes, the append boundary, and request-time workspace source. When an old review appendix exists, it also returns a per-request challenge for the replacement review. Symlinks, hardlinks, and paths escaping the active record or CodeKB root fail closed.
+* `--retry-pending` reuses the original artifact, source binding, and request challenge instead of rebaselining current bytes. Recovery requests record whether artifact, source, or both kinds of staleness opened the scoped write suspension, so restoring that cause closes the window. Valid field-light legacy chains get one audited `Upgrade: legacy-request`; malformed request or completion rows carry no authority.
+* `REVIEW_COMPLETED` accepts only blank separators plus one terminal canonical `## Review` section whose rendered Verdict, Reviewer, Iteration, and conditional Request Challenge fields match the request. A section whose bytes already existed when `REVIEW_REQUESTED` was recorded — including one surviving an attempt reset with the same reviewer, iteration, and verdict — must be removed and replaced; neither unrelated prose nor a one-byte mutation can mint fresh reviewer authority.
+
+## [2.6.120] - 2026-08-27
+
+Focused Reverse Engineering rescans now merge their newly analyzed area into the shared CodeKB instead of replacing unrelated knowledge, with generation-checked all-artifact publication so concurrent intents cannot silently lose each other's scans or label preserved stale prose as current. Full rescans still replace all nine artifacts; stale or unverified prior coverage is preserved as prose and demoted to shallow when it cannot be reverified. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated utility, stage, and artifact guidance are installed.
+
+* A focused rescan reads the existing nine artifacts before synthesis, extends sections for the new area, and preserves prior sections outside it.
+* Verified-current focused merges record the union of prior and new analyzed paths/components; stale or unverified merges record the new verified area and demote prior analyzed paths to `shallow.paths`.
+* `codekb-snapshot` binds a scan to the exact shared-store generation and source bytes; `codekb-publish` validates a complete nine-file candidate under a space+repo lock and refuses `CODEKB_STORE_CHANGED`, `CODEKB_SOURCE_CHANGED`, or `CODEKB_CANDIDATE_STALE` instead of overwriting. Crash recovery validates every transaction and store path component from the real project root and refuses redirected ancestors before any rename or recursive cleanup.
+* The scope comparison remains the deterministic backstop: `COVERS` confirms retained verified coverage, while `NARROWER` identifies paths/components no longer claimed as verified deep coverage even though focused-merge prose was preserved.
+
+## [2.6.119] - 2026-08-27
+
+Stage definitions now carry compact Learn and Sensors compartments while their shared behavior lives once in the always-loaded stage protocol, reducing repeated prompt context without changing approval gates, learning capture, or sensor enforcement. **Upgrade:** refresh your `dist/<harness>/` shell so every generated stage and the shared protocol are updated together.
+
+* All gated stages point their Learn compartment to the §13 engine-created, output-only diary, question, and persistence contract; bootstrap initialization stages retain their no-gate exception.
+* Sensors compartments now mirror frontmatter through concise `Imports:` and `Upstream targets:` summaries while preserving stage-specific validation and intentional-omission notes.
+* `stage-protocol.md` §14 defines shared fire timing, advisory and blocking severity, failure reporting, required-section defaults, and upstream-coverage behavior, and redundant per-stage protocol reminders are removed.
+
+## [2.6.118] - 2026-08-27
+
+Zero-Unit Code Generation now uses its documented stage-level record as a first-class Plan Approval authority, and inline generation cannot bypass the approval enforced on delegated workers. Workspace aliases retain the same trusted planning operations without weakening child-symlink rejection. **Upgrade:** refresh your `dist/<harness>/` shell so the updated stage, testing-posture tool, plan-approval hook, and mutation-surface registrations are installed together.
+
+* `aidlc-testing-posture.ts fingerprint`, `verify`, and `begin` accept the stage-level Code Generation target while preserving per-Unit targets and bind approval to the active intent, directive epoch, source floor, plan, instructions, and Testing Contract.
+* Protected, gitignored challenge, response, and receipt state authorizes Code Generation; the Markdown `PLAN_APPROVAL_RECORDED` event remains provenance rather than authority.
+* Write, edit, patch, shell, interpreter, build-tool, and symlink or junction mutation paths refuse until approval, while exact installed `tools/aidlc-*.ts` invocations and writes inside the active Code Generation record remain available through aliased workspace roots.
+* Code Generation publication and resume paths preserve or rotate the source-bound authority under the active-directive and audit locks, including swarm and legacy Kiro IDE flows.
+
+## [2.6.117] - 2026-08-27
+
+Minimal workflows now avoid unrelated framework knowledge, duplicate conductor source scans, and in-context scan-body handoffs while retaining the same artifacts, reviews, sensors, learnings, and approval gates. **Upgrade:** refresh your `dist/<harness>/` shell so the depth-aware context roster and file-backed Reverse Engineering handoff are installed.
+
+* Minimal Intent Capture and Requirements Analysis load only their stage-relevant shipped knowledge; plugin-installed knowledge, Standard and Comprehensive runs, active-space rules, personas, consumes, and user/team knowledge keep the existing full context.
+* Dispatched agents return path/decision/concern summaries instead of repeating artifact, scan, source, or test-output bodies that already exist on disk.
+* Reverse Engineering keeps its developer-to-architect pipeline and all nine CodeKB artifacts, but transfers the developer scan through a durable record file, rejects symlinked handoffs when minting or verifying receipts, binds accepted receipts to the current-attempt path, write time, and content digest, and prevents a duplicate conductor source scan.
+* Isolated pipeline stage runners now record their synthetic start boundary before the first agent dispatch, require their own receipts before completion, and resume that open attempt without touching the main workflow pointer.
+* Isolated Reverse Engineering reuse now emits synthetic-workflow evidence for all-reuse and mixed-reuse runs only when the complete canonical CodeKB artifact set exists and source freshness matches; missing, redirected, invalid, or later-stale evidence cannot complete.
+* Reverse Engineering keeps every recorded repo identity qualified through its handoff filename, receipt chain, resume evidence, and CodeKB destination, including an intent with exactly one registered repo.
+* Plugin composition records exact recursive knowledge ownership and retains provenance for still-installed files removed from a later plugin version, so Minimal context retains active plugin files while deselected or removed plugin knowledge cannot become unowned context.
+## [2.6.116] - 2026-08-27
+
+The question protocol now reuses answers already captured in the current record, closing a top field-feedback gap where teams saw the same question resurface after they had answered it, sometimes after stating that the answer was final. **Upgrade:** refresh your `dist/<harness>/` shell.
+
+* Before emitting a question, the orchestrator recursively reads the record's question files and correlates scope-compatible prompts and answers across every audit shard; ambiguous cross-shard ordering requires a narrow, prior-answer-naming follow-up instead of an inferred answer or a reopened topic.
+
+## [2.6.115] - 2026-08-27
+
+Existing vision documents, PRDs, requirements briefs, and other referenced files now feed the workflow through a deterministic, trust-marked read boundary. Multiline initial requests persist outside the line-oriented state grammar, and ambiguous, missing, redirected, out-of-workspace, non-text, or oversized document references stop for clarification instead of being guessed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated utility, stage instructions, and description sidecar are installed together.
+
+* Reference one explicit project-root-relative document path in the initial request, such as `/aidlc Read ./vision.md and build what it describes`; the stage transfers it through the active record's fixed `.aidlc-document-input-path` file, so filename metacharacters never enter a shell command. Direct reads do not search by basename or follow symlinks, and the opened descriptor must match the file identity validated inside the project.
+* Direct UTF-8 text and Markdown input is emitted with the same `UNTRUSTED DATA - NOT INSTRUCTIONS` and `UNTRUSTED PATHS - NOT INSTRUCTIONS` boundary as DocumentKB. Binary and unsupported formats must use `/aidlc knowledge onboard` and `show`; oversized inputs are refused before their payload is allocated, and the one-line `.aidlc-document-input-path` transport file itself is bounded at 4096 bytes.
+* Explicitly delimited pasted documents receive the same inert-data treatment. Intent Capture uses document claims only to shape clarifying questions until confirmed through `[Q<n>]`; Requirements Analysis treats bounded content as primary data without granting it workflow authority.
+* Unmatched, nested, repeated, non-terminal, or directionless `<document>` input is refused before intent creation, so document bytes cannot escape their untrusted boundary and clarification cannot strand a partially initialized record.
+* The exact initial description is stored as one JSON string in committed `<record>/project-description.json`; downstream stages treat that marked sidecar as authoritative across resume and clone, while pre-2.6.115 records retain the legacy state-field fallback.
+
+## [2.6.114] - 2026-08-27
+
+No-DAG per-Unit review continuity now follows the current attempt's audit-observed Bolt lifecycle, lifting the 2.6.76 limitation without persisting a substitute Unit graph. **Upgrade:** refresh your `dist/<harness>/` shell so review admission, artifact fingerprints, receipt filtering, and gate coverage use the same audit window. An in-flight no-DAG stage-level review request stamped before this release, or while every Bolt was still open, may no longer match after a Bolt merges and replaces the stage-level fallback path with merged-Unit paths; re-dispatch its exact pending ordinal with `--retry-pending` before recording the verdict.
+
+* `aidlc-log.ts review --unit <unit>` remains available after that Unit's Bolt merges, including `--retry-pending` and stale-receipt recovery, while a Unit with no current-attempt Bolt history still refuses.
+* A Bolt merge is proven, not asserted: because `aidlc-bolt complete --merge` emits `BOLT_COMPLETED` before the state and audit merges run, a slug-backed (worktree) attempt counts as merged only once the matching later `AUDIT_MERGED` receipt lands on main. A crash inside that window, or a worktree completion recorded without `--merge`, leaves the Unit unmerged and its per-Unit review refused; re-run `aidlc-bolt complete --merge --slug <slug>` to land the merge and unlock the review. A name-only, non-worktree Bolt keeps `BOLT_COMPLETED` as its terminal row.
+* A slugless completion cannot close a slug-backed attempt, and a later fragment-cleanup `BOLT_FAILED` cannot erase a merge that `AUDIT_MERGED` already confirmed. An `AUDIT_MERGED` receipt carries no reviewer authority, so one landing in another audit shard within the same second cannot make a review request or verdict ambiguous.
+* A no-DAG per-Unit stage with merged Bolts may satisfy its reviewer gate with either one fresh stage-level receipt or fresh per-Unit verdicts covering every merged Unit. Failed or discarded Bolts owe no review.
+* Stage-level review fingerprints enumerate only merged Bolt Units, because open-Bolt work is not yet present in the main tree. Per-Unit receipt filtering still recognizes both open and merged Units, and forged Unit receipts outside that observed set cannot satisfy coverage.
+* Same-second cross-shard Bolt reduction preserves causal append order within each shard and applies the stricter merged result only across genuinely unordered shard heads. A tied start/completion that settles merged accepts the gate's named per-Unit review command.
+* Bolt lifecycle truth remains per attempt: a Unit may be both merged and open when an older attempt landed while a newer attempt is still active. The merged work still owes review and the open attempt remains eligible for receipt filtering.
+* `aidlc-runtime.ts compile` cannot erase this continuity because the observed Unit set is derived from audit rows and is not written to `runtime-graph.json`.
+
+## [2.6.113] - 2026-08-27
+
+Kiro CLI and Kiro IDE now preserve engine-authored routing questions instead of querying intent state and replacing them with a conductor-derived prompt. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell so the updated conductor and numbered-prose rendering contract are installed.
+
+* A typed `new-work-routing` ask is the sole route authority once emitted: its engine-authored `numbered_prose_question` carries routes 1-3 plus `4. Other`, which Kiro prints verbatim before ending the turn without an extra `intent --json` query or recommendation.
+* On Kiro CLI and IDE, unselected-intent clones with pending new prose receive the same typed routing ask plus engine-listed `available_intents`; those values are exact record-directory selectors, so duplicate labels remain switchable through `next intent <name>`. Other harnesses retain their prior picker and scope-confirm contracts.
+* Selecting `4. Other` now has a complete response route on both Kiro surfaces: a bare selection requests the missing details, while a substantive alternative is forwarded unchanged through `next` and never through `report`.
+* The compiled `aidlc` dispatcher now pins both the installed harness directory and exact harness name before loading the orchestrator, preserving Kiro routing when module paths and embedded metadata cannot identify the host.
+* Continuation and plan-reshape classification remain available before the first engine response; once an ask exists, both old and new Kiro versions use the same prose-only stop-and-wait path.
+
+## [2.6.112] - 2026-08-27
+
+Structured questions must now be self-explanatory, closing a top field-feedback gap where teams found questions too abstract and bare shorthand like `FR3`/`url1` unanswerable without asking the agent to rephrase. **Upgrade:** refresh your `dist/<harness>/` shell.
+
+* Depth-aware question generation gains a "questions must be self-explanatory" rule: expand every identifier in each question that uses it (write what it names, then tag it in parentheses), give each question one line of context when the reason is not obvious, and prefer concrete domain phrasing over the framework's internal vocabulary.
+
+## [2.6.111] - 2026-08-26
+
+Plugin composition now keeps co-located tests and fixtures out of the installed engine tools tree and reports every rejected payload. **Upgrade:** refresh your `dist/<harness>/` shell and each plugin projection, then re-compose plugins; remove any already-installed file named by the new advisory and re-run compose.
+
+* Files under a plugin's `tools/tests/`, `tools/__tests__/`, or `tools/fixtures/` directories, plus `*.test.ts` and `*.spec.ts` tool files, are skipped with an advisory drop that points authors to the top-level `tests/` convention.
+* Installed test payloads remain untouched by no-clobber composition but are audited from the destination tree even after they disappear from a corrected plugin projection; legacy files without provenance are reported without attributing them to the plugin currently composing.
+* The installed-payload audit record is per harness (`plugin-compose-installed-tool-payloads-<harness>.drops`), so a clean compose on one harness never erases the advisory another harness's stale payload still needs, and the destination scan never follows symlinks - a circular or external directory link in the installed tools tree can no longer abort composition or pull unrelated trees into the audit.
+
+## [2.6.110] - 2026-08-26
+
+Plugin composition lost to an engine reinstall is now detected and documented instead of leaving plugin stages or contributions silently absent. **Upgrade:** refresh your `dist/<harness>/` shell, then run `/aidlc plugin sync` for every installed plugin; Claude, Codex, Cursor, and Kiro IDE can also re-compose on the next session start.
+
+* `/aidlc --doctor` now fails the **Composed plugin surface** check when an enabled plugin-owned stage is absent from the compiled graph, a contribution sidecar is unreadable or malformed, its target stage is gone, or a recorded structural or prose contribution is missing or changed; consume provenance includes `artifact`, `required`, and optional `conditional_on`, while legacy artifact-only sidecars remain accepted.
+* Compose records successfully applied fragment anchor/order/hash provenance in the existing per-plugin contribution sidecar, including for prose-only plugins, so a fresh engine overlay cannot erase their only contribution undetected.
+* The **Uncompiled stage files** advisory now directs plugin-owned files to `plugin sync` while retaining `aidlc-graph.ts compile` for other authored stages.
+* The install, CLI, troubleshooting, plugin-authoring, and plugin-mechanism guides now make plugin re-composition an explicit engine upgrade step.
+
+## [2.6.109] - 2026-08-26
+
+Autonomous swarm convergence now preserves reviewed record artifacts and completes immutable application-source landing before a modern Unit can advance. **Upgrade:** refresh your `dist/<harness>/` shell so the updated referee, worktree recovery, routing guard, and swarm protocol are installed together.
+
+* `aidlc-swarm finalize` snapshots the exact declared artifact bytes and bound `source-manifest.json` that passed the Unit review, rejects symlinked source or destination paths, applies the complete per-Unit record set with rollback on failure, and only then merges state, audit, and runtime metadata.
+* Finalize result rows now include `bolt_slug`; the swarm protocol uses it to require `aidlc-worktree merge` for every converged Unit before `next`. Modern `SWARM_UNIT_CONVERGED` rows do not advance batch routing until the matching `SWARM_SOURCE_MERGED` aggregate authority exists.
+* Rerunning `aidlc-worktree merge` after source authority landed but worktree, branch, or retained-ref cleanup failed derives the exact intent/repository/source/merge authority, refuses ambiguity, and performs cleanup-only reconciliation even after stage-attempt turnover. It does not reapply source or emit duplicate merge authority.
+* Immutable reviewed source still lands from the `Source Commit`; bound merge and commit porcelain run with all repository hooks disabled, so post-merge and post-commit hooks cannot replace bytes after convergence.
+
+## [2.6.108] - 2026-08-26
+
+Unattended drivers can now explicitly withhold human-presence authority across every harness, preventing scheduled prompts from satisfying approval and interview gates. **Upgrade:** refresh your `dist/<harness>/` shell and set `AIDLC_UNATTENDED=1` on any process that submits prompts without a person present.
+
+* `AIDLC_UNATTENDED=1` suppresses the authority-bearing `HUMAN_TURN` audit event in Claude, Codex, Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode while preserving non-authority turn markers used by forwarding hooks. An unflagged driver retains the existing interactive behavior.
+* Approval, rejection, ordinary-answer, and summary-confirmation refusals now name a leaked `AIDLC_UNATTENDED=1` and instruct operators to unset it before returning to interactive mode and submitting a fresh response.
+
+## [2.6.107] - 2026-08-26
+
+Team-owned unit-major Construction can now fan out safely across clones or sibling worktrees, publish exact candidates, and converge through a pinned human-gated merge transaction with a deterministic dispatcher. Landing now refuses a stale local integration target, and its ownership-boundary regression is portable across case-sensitive and case-insensitive filesystems. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflows remain solo unless delivery planning explicitly enables team ownership.
+
+* `aidlc state set-unit-ownership <team|solo>` and `set-unit-gate-rhythm <per-stage|unit-end>` enable the mode; the engine derives Unit Progress from artifacts, current receipts, reviews, gates, claims, and `UNIT_MERGED` evidence, never hand-edited table cells.
+* `aidlc unit claim|adopt|release|participate` provides atomic git-native ownership with generation-bumping tombstones, checkout-local routing, participant picking, fresh-clone teammate handoff that preserves the bound audit shard, partial-clone-safe payload hydration, and claim-bound fork/lifecycle authority.
+* `aidlc unit publish|pin|gate|land` publishes a claim-ref candidate and converges it through an exact OID/generation, pin-transaction-bound main-shard human merge gate, candidate-exact merge, evidence-derived state fold, and final `UNIT_MERGED` receipt. Republish after rebasing onto the current integration branch to refresh the candidate base; pin, gate, and landing revalidate the live Unit contract, and landing requires the fetched integration tip to be present in the local target before Git mutation.
+* Merge and release recovery journals are isolated by space, intent UUID, and Unit. A release after the git landing step has one explicit recovery: inspect the landed commit, then run `aidlc unit land <unit> --accept-released-attempt --user-input "<human acknowledgment>"`; the exact immediate tombstone, fresh main-shard human turn, acknowledgment, journal, and main audit are bound before state folding.
+* Unscoped main renders a terminal Team Construction board with the derived grid, observed local claims, blockers, merge readiness, and exact claim/gate/land recovery commands. `/aidlc --status` renders the same read-only snapshot from main or a scoped checkout, including explicit space/intent selection.
+* The multi-intent picker annotates team claimability, parked work, and completed intents. `/aidlc --doctor` detects stale stamps, 24-hour observed-ref inactivity, missing observation baselines, and orphan local claim refs without fetching or auto-releasing.
+* Copilot retains terminal Team Construction `notice` directives, shared hook classifiers recognize `aidlc unit`, and `UNIT_MERGED` refreshes runtime state. Unit DAGs reject case-fold collisions such as `api`/`API`; intents with recorded sibling repos reject team ownership before state changes.
+* Solo, knob-absent, claim-less team, and ordinary scoped execution retain their existing behavior; team Stop-hook probes remain write-free while their steering continuation is executable by the ordinary single-use `continue` flow.
+
+## [2.6.106] - 2026-08-26
+
+Kiro CLI and Kiro IDE numbered-prose questions now visibly expose one final Other choice, including the interaction-mode prompt that previously listed only options 1-3 and mentioned Other separately. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell so the corrected question-rendering annex is installed.
+
+* The interaction-mode contract includes a canonical four-option rendering with `4. Other`, so Guide me / I'll edit the file / Chat never leave the escape path unnumbered.
+* File-backed `X. Other (please specify)` choices map to the final visible number without adding a duplicate; consolidated-summary files remain unlettered and omit a file-level Other row while chat still synthesizes one final numbered escape.
+
+## [2.6.105] - 2026-08-26
+
+Plugin authors can now create, validate, build, and compose-test an authored plugin repository offline with shipped standalone tools, without a framework checkout or mutations to the install under test. **Upgrade:** refresh your `dist/<harness>/` shell to install the authoring tools, bundled hook templates, and harness target data.
+
+* Run `bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir] [--json]` to emit a deterministic minimal plugin that validates green on arrival; CREATE refuses non-empty targets and never vendors `hooks/compose.ts`.
+* Run `bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--json]`; exit codes are `0` valid, `1` findings, and `2` usage.
+* `/aidlc plugin validate [path]` and `/aidlc plugin build <harness> [outDir] [--plugin-root <path>]` expose validation and projection through the top-level CLI while delegating to the same standalone implementations.
+* Validation covers manifest shape, canonical `aidlc.contributes` locations, stage schema, core and plugin agent references, non-empty stage bodies, artifact namespaces, contribution targets, scope and agent identity, plugin-local duplicate artifact producers across `produces` and `optional_produces`, accidental test/fixture payloads under `tools/`, vendored compose-hook drift, and linked authored content. Configurable contribution paths and `memory/` projection remain deferred, so VALIDATE, BUILD, and TEST reject those declarations instead of silently omitting content.
+* Run `bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]` to validate then emit one host-native projection; output defaults to `<plugin-root>/dist/<harness>/`.
+* BUILD refuses symlinks inside its caller-owned output boundary, including a linked `<plugin-root>/dist`, before cleanup or writes can reach the linked directory; environmental path aliases above that boundary remain supported. Every projection carries an explicit plugin-and-harness ownership marker, and an output-scoped owner-stamped lock serializes marker verification, cleanup, and emission so only the same owner may rebuild that non-empty output. Dead owners and aged unstamped crash remnants are reclaimed; live, malformed, and unreadable owners fail closed.
+* The checkout packager and standalone builder share one emitter. Harness manifests generate the bundled target table, and isolated proof tests byte-compare all seven externally built test-pro projections with committed `dist/plugins` output.
+* Run `bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> [--harness <name>] [--json]` to compose into a disposable install candidate, report drops, compile the post-compose graph, verify plugin stages/scopes, and prove a second compose is idempotent.
+* `--dist <version>` is reserved until RFC #722 milestone 2 supplies a released runtime-bundle channel; test against an existing install in this release.
+* `tests/harness/plugin-kit.ts` now delegates its overlapping content rules, compose subprocess, and drop parsing to the shipped tools while retaining checkout-aware fixture integration.
+
+## [2.6.104] - 2026-08-26
+
+Error recovery now keeps the same project-focused voice as normal workflow progress without weakening terminal errors or state-aware review recovery. **Upgrade:** refresh your `dist/<harness>/` shell so every harness receives the updated conductor rules, tools, and hooks.
+
+* Conductors translate ordinary tool, hook, and workflow-check refusals into project language, while terminal engine error directives remain verbatim, stop immediately, and are never retried.
+* Retry limits follow the same project action and target across corrected arguments and unrelated successful calls; a success for that action, a human-chosen alternative, or a relevant workflow-state change resets the count.
+* Gate, question, review, collaboration, plan-approval, reviewer-scope, and state-transition refusals now name the blocked project action and an actionable recovery without section cites, audit event names, or internal output-field vocabulary.
+* Exhausted review recovery preserves state-aware guidance for active, revising, completed, and off-plan stages instead of always directing the conductor to an approval gate.
+
+## [2.6.103] - 2026-08-26
+
+Kind-vacuous Construction units no longer deadlock summary-confirmation routing when their unit kind excludes every output of a per-unit stage. **Upgrade:** refresh your `dist/<harness>/` shell so unit-major routing and per-unit approval skip confirmation evidence that an inapplicable unit cannot produce.
+
+* Unit-major iteration now advances past kind-vacuous units to the next applicable stage and unit instead of emitting `Refusing to complete`.
+* Stage-major per-unit approval now presents the normal gate when all units are kind-vacuous, without requiring nonexistent questions or summary confirmation.
+
+## [2.6.102] - 2026-08-26
+
+Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
+
+* Add optional `status: active|deprecated|draft` and `stale_after: YYYY-MM-DD` rule frontmatter, with compile-time validation that names the invalid file and rejects blank or block-scalar lifecycle declarations.
+* `/aidlc --doctor` keeps live rule-drift output unchanged and reports deprecated or date-expired file overlaps in one passing `Rule drift: N stale-suppressed` row.
+
+## [2.6.101] - 2026-08-26
+
+Human review checkpoints now show deterministic decision context before both summary confirmation and final approval, preserve accepted or rejected finding dispositions without modifying receipt-frozen artifacts, and retain concrete invalidation paths through the required recovery review. **Upgrade:** refresh your `dist/<harness>/` shell so the new review-brief tool, gate audit fields, and protocol guidance are installed.
+
+* `aidlc-review-brief.ts summary|review|context` renders the stage, exact files, reason for the checkpoint, decision effects, hydrated finding statuses, and stale artifact/review paths across every harness.
+* Approving a reviewer-backed gate records current open findings as `Accepted risk`; Request Changes can record an explicit `Rejected: <reason>` with `--reject-finding "<review-artifact>#R-NN=<reason>"`, while ordinary revision feedback leaves findings unresolved.
+* A per-Unit stage's single final gate renders findings from every Unit covered by approval, exactly matching the findings dispositioned as accepted risk.
+* Artifact, source, and backward-jump invalidation paths survive the required recovery review and remain visible at the final gate; executable acceptance scenarios cover READY, NOT-READY, re-review, multi-artifact, stale-review, rollback, and all three summary-confirmation modes.
+
+## [2.6.100] - 2026-08-26
+
+Knowledge index recovery now selects duplicate records against the live managed source even when the project path traverses a symlink, and refuses present sources that cannot be safely read. **Upgrade:** refresh your `dist/<harness>/` shell to receive the corrected recovery behavior.
+
+* `aidlc-knowledge sync` rebuilds a missing `index.json` using digest matching through symlinked project paths, preventing a newer stale duplicate record from surviving recovery.
+* When duplicate records require a digest tie-break, a present-but-refused managed source, including a dangling symlink, now stops the rebuild with the source path and refusal reason; only a genuinely absent source retains the deterministic newest-`indexed_at` fallback.
+
+## [2.6.99] - 2026-08-26
+
+Audit and usage-ledger read-modify-write transactions now remain serialized during Windows lock handoff instead of allowing retirement or stale recovery to displace a successor. **Upgrade:** re-copy `dist/<harness>/` so all state, audit, active-directive, and usage writers receive the generation-bound lock protocol.
+
+* Stamp every acquisition with a canonical UUID owner generation plus the OS process generation when the optional platform probe is available; probe failure retains the PID/token stamp and leaves a live owner generation-unknown and fail-closed. In-process ownership/reentrancy is keyed by canonical lock identity while retaining request bindings for path materialization and active-space changes.
+* Retire only the matching generation through bounded, collision-proof private renames; persistent retirement failure retains its receipt and exit recovery handler.
+* Distinguish missing, malformed, and unreadable owner stamps. Non-canonical tokens, missing or redirected token directories, and non-regular releasable markers are invalid; malformed/unreadable and matching or generation-unknown live owners fail closed, and doctor reports them for quiescent manual recovery.
+* Serialize every canonical acquire, release, cleanup, and recovery through an owner-stamped gate whose publication and retirement are protected by an OS advisory mutex (`flock` or `LockFileEx`). POSIX loading supports glibc, macOS libSystem, standard musl loader/libc names, and discovered musl libraries instead of assuming `libc.so.6`.
+
+## [2.6.98] - 2026-08-26
+
+Isolated pipeline stage runs now resume and complete only from their own ordered receipt chain, and stage compilation rejects repeated agents whose receipt identity would be ambiguous. **Upgrade:** refresh your `dist/<harness>/` shell; existing valid stage definitions and main-workflow pipeline receipts need no migration.
+
+* `aidlc-orchestrate.ts next --stage <slug> --single` reports only `PIPELINE_LINK_COMPLETED` rows tagged for that isolated run, and `report --single` refuses completion until every isolated link receipt exists.
+* Pipeline stage frontmatter must declare a unique agent at every lead/support chain position; `aidlc-graph.ts compile` rejects duplicate support agents and a lead repeated in `support_agents`.
+
+## [2.6.97] - 2026-08-26
+
+The Stop hook now recognizes background Agent/Task work per session, so a conductor can end its turn to await a still-running worker without weakening another session's forwarding loop. **Upgrade:** refresh your `dist/<harness>/` shell so dispatch, completion, Stop, and doctor hooks share the new in-flight ledger.
+
+* Accepted background dispatches with `run_in_background: true` add a session-scoped in-flight entry only after rule delivery passes validation; rejected and oversized dispatches leave no entry.
+* Subagent completion removes one entry for its own session, preserving overlapping workers in the same session and isolating concurrent sessions.
+* A fresh matching entry lets an interactive Stop end cleanly. Autonomous Construction remains enforced, while entries older than two hours are ignored and cleaned up before pending-step enforcement resumes.
+* `/aidlc --doctor` reports fresh background-subagent entries as advisory and stale entries as failures with `rm aidlc/.aidlc-subagent-inflight` remediation.
+
+## [2.6.96] - 2026-08-26
+
+Type-check sensor incremental state now stays in the project record and uses a distinct cache per tsconfig, preventing package-local `aidlc/` trees in monorepos. **Upgrade:** refresh your `dist/<harness>/` shell and drop any user-side workaround ignore rules; legacy package-local cache directories may be removed individually after confirming they contain only sensor cache data.
+
+* Type-check keeps `--project` and the tsconfig-directory working directory while writing `.tsbuildinfo-<sha256>` files under the project record's `.aidlc-sensors/` directory, keyed by the project-relative tsconfig path.
+* Every harness now ignores the full engine-shaped sensor-cache path at any depth, covering legacy package-local trees without ignoring unrelated `.aidlc-sensors` directories.
+
+## [2.6.95] - 2026-08-25
+
+`/aidlc --doctor` now reports consumed artifacts with multiple loaded producers before runtime silently selects the first producer by graph load order. **Upgrade:** refresh your `dist/<harness>/` shell to install the new advisory check; no workflow migration is required.
+
+* The passing `Duplicate producers` advisory names every ambiguous consumed artifact and lists its producer stage slugs in runtime resolution order, with the selected producer first.
+## [2.6.94] - 2026-08-25
+
+AI-DLC now describes intent startup consistently as creation across generated harness guidance, user-facing errors, status text, documentation, and the lossless adaptive-composer contract. No command or flag changes are required. The retired `intent-birth` compatibility error still redirects old invocations, and the reserved legacy record name remains switch-reachable. **Upgrade:** refresh your `dist/<harness>/` shell; integrations that read composer proposals must rename `birthDescription` to `creationDescription`, and custom tools importing the renamed internal helpers must update their imports.
+
+* User-facing errors, generated runners, harness instructions, workflow guidance, documentation, diagnostics, comments, and test names now use `create`, `created`, and `creation` terminology.
+* Front/report composer proposals require nonblank `creationDescription` while preserving the existing lossless contract: task text stays verbatim, report-only and task-less plans derive grounded text, and the same-turn creation command retains the literal `--` delimiter plus POSIX-safe single-argument escaping.
+* Internal aidlc-lib names now use `CreatedIntent`, `resolveIntentRepoSet`, and `workflowIsCreated`; workflow behavior is unchanged.
+
+## [2.6.93] - 2026-08-25
+
+`/aidlc --doctor` now detects project hooks that never start, hooks that stop during a workflow, and Claude Code managed policy that permits only managed hooks. **Upgrade:** re-copy your `dist/<harness>/` shell into the project, approve Claude project hooks through `/hooks`, and fully restart Claude Code.
+
+* Zero hook heartbeats remain a passing first-run advisory only before workflow progress; after progress they fail with ordered hook-approval, restart, administrator-policy, and attended-session bypass guidance.
+* Existing heartbeats are compared with the newest stage or gate event and fail when workflow progress is more than five minutes newer; ledgers with stage or gate events but no `HUMAN_TURN` receipt also show a passing advisory.
+* Claude installs fail when effective managed `allowManagedHooksOnly: true` blocks `.claude/settings.json` hooks. The check shares the existing `AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows locations, managed-setting precedence, and alphabetical `managed-settings.d/` fragment resolution used by `disableAllHooks`.
+
+## [2.6.92] - 2026-08-25
+
+Filesystem descendant checks now enforce one mixed-separator boundary on every host, preventing Windows traversal and alias escapes while preserving valid in-bound drive and UNC paths. **Upgrade:** refresh your `dist/<harness>/` shell so every tool receives the strengthened shared path guard.
+
+* Relative descendants are parsed with Windows-aware structured path APIs before native joining, so `/` and `\` both delimit components; `..`, POSIX roots, drive-rooted and drive-relative paths, and UNC inputs are refused before filesystem access.
+* Symlink and junction inspection now walks each mixed-separator component before permitting an existing or not-yet-created descendant, preventing an alias from being hidden ahead of a missing leaf.
+
+## [2.6.91] - 2026-08-25
+
+Lone-repository CodeKB scope fingerprints now avoid Git's unreliable combination of positive and exclude pathspecs and reject fingerprints that contain no files, while Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. **Upgrade:** refresh your `dist/<harness>/` shell before minting or checking CodeKB scope fingerprints, and re-mint (or re-run reverse engineering for) any stored scope timestamp whose fingerprint is `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, the empty-tree value written by the pre-fix bug; in-flight Copilot workflows need no migration.
+
+* `codekbScopeFingerprint` omits exclusions outside analyzed roots, drops analyzed paths covered by exclusions, and preserves root and nested-project scope boundaries without silently rewriting malformed absolute paths.
+* Scopes that stage zero paths now mint `unknown` and report `UNVERIFIED`, never a false `CURRENT` or permanent `STALE` verdict.
+* Deterministic regression coverage verifies distinct narrow fingerprints, full-root exclusions, nested-project boundaries, malformed paths, and empty scopes.
+* The Copilot PreToolUse adapter denies native picker execution IDs such as `ask_user` and `vscode/askQuestions` only when the session-selected workflow has valid `Status: Running` state; projects with no workflow, completed workflows, and unusable state fail open.
+* Picker tool results still never count as `HUMAN_TURN`; the user's next chat message records the trusted turn used by answer and approval logging.
+
+## [2.6.90] - 2026-08-25
+
+`/aidlc --doctor` now distinguishes hook directories that have not had a chance to populate from dead hook seams after a workflow stage ran. **Upgrade:** refresh your `dist/<harness>/` shell so doctor can detect this condition.
+
+* When `.aidlc-hooks-health/` exists without any `.last` files and the active audit ledger contains `STAGE_STARTED`, doctor reports `Hook heartbeat data` and exits 1; CI jobs that gate on doctor will now fail for this broken hook state.
+* Missing, pre-created, and debug-only health directories still report the existing not-yet-fired pass row before any stage starts, while real heartbeat files continue to report their last-fired timestamps.
+
+## [2.6.89] - 2026-08-25
+
+The conductor no longer parks a workflow because context *feels* heavy. The orchestrator skill previously licensed parking when context seemed low even though the conductor cannot measure its own usage, causing unnecessary park/resume interruptions while most of the window remained free. **Upgrade:** refresh your `dist/<harness>/` shell to install the bounded parking guidance.
+
+* Parking for context now requires a usage figure surfaced by the harness at or above 80%; without one, the conductor keeps running stages.
+* User-requested parking and the rule to park instead of fabricating a `done` remain unchanged.
+* The rule applies to all manifest-discovered harness orchestrator skills.
+
+## [2.6.88] - 2026-08-25
+
+Kiro conductors now treat stage diaries as engine-created write targets instead of pre-stage inputs. Diary observations and lifecycle behavior are unchanged. **Upgrade:** refresh `dist/kiro/` or `dist/kiro-ide/` so the corrected conductor skill is installed.
+
+* Kiro CLI and Kiro IDE treat `memory.md` as output-only: ordinary, isolated, dispatched, and per-Unit wave paths insert observations directly under known canonical headings without a read, existence probe, read-back verification, or initialization step.
+* Stage definitions no longer contradict that boundary by telling the model to create or read the diary; the deterministic `aidlc-learnings surface` tool remains the only reader when candidates are surfaced before a gate.
+* Deterministic instruction-contract coverage keeps both Kiro skills and every stage definition aligned, while live ACP and TUI coverage checks diary access and the numbered-prose checkpoint flow.
+
+## [2.6.87] - 2026-08-25
+
+DocumentKB documents can now carry an LLM-authored summary and tags, revision-bound to the catalogued source revision so an agent can cite a document's gist without re-reading it. **Upgrade:** refresh your `dist/<harness>/` shell to install the new `summarize` verb and updated knowledge skill.
+
+* `aidlc-knowledge.ts` gains an eighth verb, `summarize <id> --text-file <path> --source-revision <sha256> [--tags <csv>]`, which validates, bounds, and persists an LLM-authored summary plus optional tags. Running `sync` after the original changes invalidates stale summary text; tags remain available as untrusted metadata.
+* `list` and `show` surface summary state and tags with untrusted-data framing, while tombstoning an original removes its generated summary derivative.
+* The shared onboarding, knowledge skill, and audit-event references name `summarize` alongside the existing DocumentKB verbs.
+
+## [2.6.86] - 2026-08-25
+
+Bolt terminology now preserves the sprint-like Construction iteration while matching the shipped stage-major runtime. Delivery Planning still records the intended Bolt grouping, Definition of Done, confidence hypothesis, and ownership, but runtime batching and ordering remain driven by the Unit dependency graph. **Upgrade:** refresh your `dist/<harness>/` shell so the reconciled protocol, glossary, audit reference, and stage guidance are installed.
+
+* The canonical protocol and glossary distinguish a Bolt from a Unit, worktree, swarm, and runtime batch while documenting that the default stage-major walk does not consume `bolt-plan.md` as an execution boundary.
+* Construction guidance keeps current stage-level gates, unit-major's retained gate cascade, and `org.md` → `team.md` → `project.md` walking-skeleton stance executable while labeling future Bolt-major ceremony non-executable.
+* `BOLT_STARTED` and `BOLT_COMPLETED` are documented as per-Unit/worktree events on the swarm path; `SWARM_COMPLETED` remains the event that closes the runtime batch.
+
+## [2.6.85] - 2026-08-25
+
+Kiro now relays deterministic command output through a UTF-8 plain-text hook boundary instead of the Windows shell-result transport that can append terminal debris or corrupt glyphs. **Upgrade:** re-copy `dist/kiro/` or `dist/kiro-ide/` into the project; Kiro IDE overlay installs must include the new `aidlc-terminal-command*` hook registrations.
+
+* Kiro CLI status, doctor, help, version, navigation, plugin, and knowledge output is decoded explicitly as UTF-8; OSC, CSI, and other terminal control bytes, including unterminated sequences, are removed only from the plain-text relay, preserving ordinary Unicode, paths, whitespace, and literal escape-looking text.
+* Kiro IDE runs terminal utilities at `UserPromptSubmit` when the host exposes the submitted prompt. IDE generations such as 1.0.242 that send an empty prompt fall back to the exact `execute_pwsh`/shell `PreToolUse` command, run the classified utility once, and refuse the duplicate shell call before its output enters the Windows transport.
+* Per-session, per-turn latches prevent retries from re-running side-effecting diagnostics without allowing concurrent IDE chats to reuse one another's command output. Payloads without a session identity retain one explicit legacy bucket; non-terminal commands and the existing exit-2 approval, lifecycle, reviewer, and plan guards retain their refusal behavior.
+* Kiro terminal-command argument parsing preserves unquoted drive paths, quoted Windows paths containing spaces, UNC paths, and trailing Windows separators when forwarding options such as `--doctor --output`, while retaining escaped-space values such as `reports\ 2026`.
+
+## [2.6.84] - 2026-08-25
+
+Compiled Windows executables now keep every routed command inside the native runtime instead of falling back to source-mode `bun` launches. Source installs continue to delegate through their running Bun executable. **Upgrade:** replace the executable and its adjacent `runtime/` directory, or refresh your selected `dist/<harness>/` shell for source installs.
+
+* Compiled-mode detection now recognizes a non-Bun `process.execPath` in addition to Bun's virtual-filesystem URL marker, covering native Windows path forms that do not contain the POSIX `/$bunfs/` substring.
+* Binary release gates run representative utility and doctor delegates with `PATH` empty, alongside the existing pathless routed-command matrix, and assert Windows executable classification without changing Bun source-mode classification.
+
+## [2.6.83] - 2026-08-25
+
+Summary-confirmation artifact-write receipts now remain valid when the same workflow workspace is moved or cloned to a different filesystem location, without weakening their causal ordering. **Upgrade:** refresh your `dist/<harness>/` shell so completion guards use the portable receipt matcher.
+
+* Completion no longer reports `no recorded native-tool write after the human's consolidated summary confirmation` solely because an audit row contains the artifact's absolute path from the workspace's previous location.
+* Moved or cloned workspaces no longer deadlock when the completion guard rejects the old absolute prefix and review-freeze blocks the prescribed artifact re-save; the full space/intent/phase/stage-relative artifact tail now identifies the same recorded write.
+
+## [2.6.82] - 2026-08-25
+
+`/aidlc --doctor` now catches hooks that Claude Code has globally disabled. Previously an install with `"disableAllHooks": true` could pass every check yet block at runtime because doctor verified that hook files were present and wired, but not that Claude Code would run them. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the new check.
+
+* Claude Code doctor output adds a **Hooks enabled** row that fails when the resolved `disableAllHooks` value is `true` in enterprise managed, project local, project, or user settings. The check follows Claude Code's layer precedence, names the controlling layer, and explains how to restore AI-DLC's hook-driven workflow engine.
+## [2.6.81] - 2026-08-25
+
+Agent and stage prompts now omit duplicated ownership and persona-loading prose while every delegated agent retains a mandatory shared and agent-specific knowledge preflight in its generated harness surface. **Upgrade:** re-copy your `dist/<harness>/` shell; active workflow state and project artifacts need no migration.
+
+* Core and plugin persona sources no longer repeat stage ownership, the six-step knowledge-loading list, or Task-tool warning prose already owned by stage metadata, the protocol, and harness tool policy.
+* Every Claude, Codex, Copilot, Cursor, Kiro CLI, Kiro IDE, and OpenCode delegated-agent projection carries the compact methodology/team knowledge preflight, including plugin agents.
+* The remaining Construction stages start with substantive work, with execution-mode ranges, Build and Test plugin anchors, quality-target assertions, loop-back references, and reference documentation renumbered consistently.
+* Codex ships `[agents] max_depth = 1`, matching the single-level delegation boundary documented by its orchestrator.
+
+## [2.6.80] - 2026-08-25
+
+Concurrent sessions in one checkout now keep workflow selection, usage, lifecycle events, learning candidates, and fresh-intent handoffs bound to the owning session for independent intents within the same space. **Upgrade:** refresh your `dist/<harness>/` shell; Codex users must also re-run `bun scripts/package.ts codex trust --project <absolute-project-path>` because the new Bash session-binding hook adds a trust-table entry.
+
+* Session bindings live under the existing gitignored `aidlc/.aidlc-sessions/` runtime directory and resolve before shared cursor fallbacks. Cold sessions retain an explicit null-intent binding, while intent creation and intent or space switching move the binding, UUID attribution, and lifecycle ownership together.
+* Learning surfacing, usage folding, SessionEnd, and Stop-hook fresh-intent handoffs resolve through the session binding instead of accepting a concurrently moved shared cursor.
+* Hook payload identity, `AIDLC_SESSION_OVERRIDE`, and validated PID ancestry provide one session identity for spawned tools; conflicting identities refuse before workflow writes. The Codex adapter pins its validated payload into every POSIX Bash command and core-hook child, so sandboxed macOS does not depend on `ps` ancestry.
+* Harness-native method includes remain one mutable checkout-wide surface, so concurrent sessions in different spaces can still race on ambient delivered rules. Windows and shared-process harness sessions retain shared-cursor behavior where no distinct identity is available.
+## [2.6.79] - 2026-08-25
+
+Stop-hook recovery now preserves an opaque load-steering continuation token ahead of the potentially large rule payload without changing the required apply-then-continue action order. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; active workflows need no state migration.
+
+* The recovery message prints the step-two `continue` command before `rules_content` so host-output truncation cannot discard the cursor, while explicitly refusing to run it until the current rule chunk has been applied.
+* `t121` independently pins transport order (token before payload) and execution order (apply the current chunk before invoking `continue`), preventing either property from masking a regression in the other.
+
+## [2.6.78] - 2026-08-24
+
+`aidlc plugin sync` now distinguishes a clean no-plugin setup from configured plugin roots that cannot be composed. **Upgrade:** refresh your `dist/<harness>/` shell and update automation to treat exit 1 as an incomplete plugin installation when every configured root is unusable.
+
+* **Behavior change:** when plugin-root environment variables are configured but none points to a root containing `hooks/compose.ts`, `aidlc plugin sync` exits 1 and names every unusable root.
+* Failures and mixed-root warnings distinguish a missing `hooks/compose.ts` from a root directory that does not exist.
+* With no configured plugin roots, the command retains the exact `no installed plugins; nothing to sync` exit-0 no-op; mixed sets warn for each skipped root, compose valid roots, and retain the existing success line.
+
+## [2.6.77] - 2026-08-24
+
+Stage validity now fingerprints zero-Unit Construction outputs at the same stage-level paths the engine emits, and fresh workspace births expose an inspectable CodeKB parent without changing per-repository storage semantics. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; existing workflows need no migration.
+
+* Validity receipt capture, inspection, status, and approval guards now share the effective-plan decision for per-Unit stages. Plans that skip Units Generation resolve exactly one stage-level artifact instance and ignore stale per-Unit directories, while ambiguous plan state remains a non-blocking warning.
+* Validation Basis schema 3 distinguishes the corrected effective-plan resolver; schema-2 receipts remain untracked until normal re-completion instead of falsely reporting unchanged zero-Unit artifacts as stale.
+* Zero-Unit routing, completion evidence, summary/reviewer cardinality, review fingerprints, and upstream-coverage consume filtering now ignore stale Unit DAGs consistently and bind the emitted stage-level artifact paths.
+* Intent birth now ensures the active space's `codekb/` parent exists, matching the shape created for named spaces. Per-repository `codekb/<repo>/` stores remain lazy and are still created only when Reverse Engineering writes them.
+* Source-freshness receipt tests that execute repeated CLI chains now carry explicit 60-second case timeouts for stable loaded-suite runs.
+
+## [2.6.76] - 2026-08-24
+
+Review-freeze and consolidated-summary confirmation no longer form a deadlock when unchanged answers are confirmed twice, and stale-source recovery can now replace an old Review section through a request-bound, stage/Unit-scoped freeze suspension. Reviews can no longer begin before confirmed answers or complete verifiable required outputs. Refusals now name the executable recovery for the stage's current state. **Upgrade:** refresh your `dist/<harness>/` shell so the updated logger, state checks, protocols, and review-freeze hook are installed together.
+
+* Repeating an identical, fully scoped summary confirmation keeps the earlier confirmation's authorization for an unchanged output document; changed answers still require a fresh confirmation.
+* `aidlc-log.ts review` now refuses requests until summary evidence is valid and every verifiable required output document exists. New per-Unit requests preserve base v2's strict admission: malformed Unit DAGs, a missing DAG without a matching active Bolt, and a resolved DAG that omits the named Unit refuse. `--retry-pending` re-dispatches an already accepted request without reapplying new-request membership admission, so a later resolved topology change cannot strand its verdict. Stage-level requests skip all-Unit output enumeration when the Unit set cannot resolve. Required outputs for a named Unit are still checked and rechecked when recording the result.
+* When the authoritative Unit set resolves, a stage-level review request for a per-Unit stage covers every Unit and therefore requires every Unit's applicable required outputs. The existing `AIDLC_SKIP_ARTIFACT_GUARD=1` recovery switch also bypasses this new review-time existence check.
+* A validated pending stale-receipt recovery request suspends review-freeze only for its stage/Unit while the stale condition remains in the current session. Restoring reviewed workspace source, recording the verdict, or restarting/resuming the session re-arms freeze; a same-second cross-shard session-boundary tie keeps the request retryable but fails closed with no write suspension. Restoring output-document bytes does not clear audit-recorded artifact staleness. `--retry-pending` reopens the scoped suspension without restoring budget.
+* A new Bolt attempt floors pending review recovery from the prior attempt, including same-second cross-shard boundary ties in either shard filename order.
+* Known limitation: a per-Unit stage without an authored `unit-of-work-dependency.md` requires a stage-level review receipt once its Bolts have closed. Author that document before Construction to retain per-Unit review coverage.
+* Review-freeze directs reviewer suggestions to the gate without applying them. Other recovery refusals direct active stages to Request Changes, `[R]` stages to `/aidlc --stage <slug>`, completed stages to restore reviewed source or redo the stage, and off-plan stages to a scope that includes them.
+* Cursor guard calls reuse one lightweight review-freeze command/target parse per invocation and skip the freeze subprocess only when that exact parse proves there is no write target, restoring margin below the per-tool timeout without weakening real-write enforcement.
+
+## [2.6.75] - 2026-08-24
+
+Shared write hooks now normalize project-relative file payloads before applying audit and sensor path logic, enforcing the hooks' absolute-path invariant even if an adapter boundary is bypassed. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflows require no migration.
+
+* Artifact audit logging resolves relative record paths before its path gates while preserving project-prefix redaction in the recorded `File` value.
+* Sensor dispatch resolves relative paths before its recursion guard, glob match, and `--output-path` argument while preserving gate-only sensor isolation.
+
+## [2.6.74] - 2026-08-24
+
+Defined quality targets now remain binding from Code Generation through Build and Test: every measurable target is inventoried from NFR Requirements, NFR Design, and the approved Testing Contract, then finalized with evidence before the stage can succeed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated Construction stage and protocol guidance are installed.
+
+* Code Generation treats measurable quality targets as required inputs and forbids lowering, relaxing, or disabling a target to manufacture a pass.
+* Build and Test executes every applicable generated check, permits deployed-environment deferral only to a named owning validation stage, and keeps deferred or missing evidence visibly `Unverified`.
+* The target matrix records target ID and source, expected and actual values, evidence, owning stage, and a final `Met`, `Not Met`, or `Unverified` verdict on every exit path; `N/A` is valid only when no target applies.
+* `Not Met` and `Unverified` targets now enter the same bounded Build-and-Test failure-escalation ladder as command failures, preserving the Code Generation loop-back added in 2.6.20.
+
+## [2.6.73] - 2026-08-24
+
+Scope cost previews now describe the workflow the engine will actually run, and approval gates expose how long the current gate attempt has been waiting for a person. **Upgrade:** refresh your `dist/<harness>/` shell to install the corrected preview, status, and doctor behavior; existing workflow records need no migration.
+
+* Scope confirm and intent-creation messages omit the "per unit of work" clause when `units-generation` is skipped, because those Construction stages run once without a Unit DAG.
+* Cold-start previews apply the same Greenfield reverse-engineering skip as intent creation, so their stage and approval-gate counts match the generated workflow.
+* `/aidlc --status` shows the current attempt's organic approval-gate timestamp and pending duration when the current stage is awaiting approval; resolved, recovered, revalidated, prior-attempt, and causally ambiguous cross-shard ledger rows do not create or replace a waiting timestamp.
+* `/aidlc --doctor` adds a passing advisory for current-attempt approval gates open longer than 24 hours, identifying them as waiting for a human rather than stuck and directing operators to `/aidlc --status`.
+
+## [2.6.72] - 2026-08-24
+
+Gate-bound sensors now run once against each matching final deliverable and can enforce blocking findings without accepting stale or unverified bytes. **Upgrade:** refresh your `dist/<harness>/` shell so the expanded sensor schema, compiled bindings, gate dispatcher, and audited override flow are installed.
+
+* Sensor manifests accept `fire_on: write|gate` (default `write`) and `default_severity: advisory|blocking`; compiled `sensors_applicable` entries carry firing mode, severity, category, and path filter.
+* `claim-sources`, `required-sections`, and `upstream-coverage` now run at approval boundaries, while write-fired sensors remain advisory. Gate dispatch skips deliverables outside each sensor's `matches` capability.
+* Blocking gate sensors fail closed on findings, unavailable or malformed evaluation, timeout, identity mismatch, and artifact bytes changing during or after evaluation. The gate transaction rechecks matching artifact fingerprints before opening.
+* A human-backed `Override blocking sensors` choice may override a stable blocking result in gated mode. The override is unavailable in autonomous mode, is recorded on `STAGE_AWAITING_APPROVAL`, and is consumed and audited when revalidating an already-open gate.
+
+## [2.6.71] - 2026-08-24
+
+Non-English workflows now keep the agent's human-facing conversation and structured-question prose in the resolved conversation language, including status updates and narration between tool calls from the orchestrator and delegated agents. **Upgrade:** refresh your `dist/<harness>/` shell; existing workspaces keep their own memory tree, so merge the extended `Conversation language — what to localize` rule into each `aidlc/spaces/<space>/memory/org.md` by hand and start a fresh session for it to load.
+
+* Chat messages, status updates, progress reports, and transitional narration between tool calls now follow the resolved conversation language on every turn, for orchestrators and delegated agents alike.
+* Structured-question `prompt`, `header`, `options[].description`, and free-text follow-ups are localized, while protocol-defined `options[].label` literals such as `Approve` and `X. Other (please specify)` remain unchanged English tokens.
+
+## [2.6.70] - 2026-08-24
+
+Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
+
+* The `bugfix` and `refactor` scopes now execute Deployment Pipeline and Deployment Execution, matching the deployment tail already used by `security-patch`; Environment Provisioning and the remaining Operation stages stay skipped.
+* When Deployment Pipeline is conditionally skipped because the workspace pipeline is already adequate, Deployment Execution receives its missing pipeline artifacts as expected absences and uses the existing workspace configuration instead of entering missing-artifact recovery.
+* `STAGE_SKIPPED` records now distinguish conditional runtime skips from explicit jumps, so jumping over an on-path producer no longer hides its missing required output as an expected absence.
+* Bugfix now runs 9 of 33 stages with 6 approval gates; Refactor runs 10 of 33 stages with 7 approval gates.
 
 ## [2.6.69] - 2026-08-24
 
@@ -24,7 +514,6 @@ Code-generation review receipts now attribute reviewed application source per Un
 * Autonomous swarm prepare stamps durable intent/Unit/batch/stage/floor provenance into each worktree creation and records the full DAG Unit obligation set on every `SWARM_STARTED`. Completion refuses a changed live DAG with `the Unit DAG changed during the current swarm attempt (missing attempt Units: ...; added Units: ...). Restore unit-of-work-dependency.md to the attempt-bound Unit set or restart the stage attempt.` Uniformly fieldless current-attempt `SWARM_STARTED` rows retain pre-upgrade migration behavior only while the attempt has no modern convergence or source-merge evidence; stripping the field after a modern `Source Commit`, bypass marker, or `SWARM_SOURCE_MERGED` row fails closed. A mix of fieldless and field-bearing rows also fails closed as inconsistent. Gate-opening refusals now say `Refusing to present the approval gate` instead of incorrectly saying `Refusing to complete`. Finalize attests the immutable base commit plus a content-addressed raw-aware `Base Source Listing`, validates the worktree-scoped unit fingerprint and manifest bytes, and refuses a base-to-worktree footprint outside reviewed claims before retaining the immutable reviewed-source commit. Source merge authority no longer depends on live autonomy or a readable DAG, is correlated to the selected intent and exact current lifecycle, canonicalizes filesystem aliases, recovers omitted selectors from the creating worktree, and emits `SWARM_SOURCE_MERGED` whose `Previous Source Fingerprint` uses the same opening-link domain as the chain validator: the stage-baseline listing hash for the first link or the prior accepted/current aggregate for later links. Durable `worktree-meta.json` or retained reviewed-source refs make modernity monotonic: removed creation/swarm fields now refuse as inconsistent instead of falling back to `bolt-<slug>`. Modern missing, stale-attempt, explicitly selector-mismatched, and ambiguous authority fails closed; true pre-upgrade fieldless convergence on a pre-binding worktree retains branch-merge compatibility.
 * The unauthenticated Bolt-local pending-source-merge receipt has been removed. Squash and merge strategies capture the staged Git result, commit with `--no-verify`, and prove that exactly one commit with that tree landed before comparing the live aggregate to the landed commit's raw-aware listing. Before mutation, a bound merge refuses when the main checkout's effective configuration contains any `merge.<name>.driver` command, naming complete keys (including subsection spaces) and remedies to remove that configuration or use `AIDLC_SKIP_SOURCE_FRESHNESS=1`; builtin behavior without a configured command remains allowed. Repository merge configuration is therefore inside the trusted computing base for source attribution. This changes the Git hook profile of these framework source merges: `pre-commit`, `commit-msg`, and `pre-merge-commit` no longer run, `post-merge` no longer fires on the merge strategy, and `post-commit` now fires there too. This accepts legitimate three-way shared-file integration while still refusing uncommitted post-commit writes as `post-merge source does not match landed merge commit` and refusing a hook-created replacement/additional commit as `unexpected commit or tree change landed during the source merge`. Both use the non-retryable `[merge-succeeded:<sha>] ... no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge.` recovery, which also preserves the worktree when the post-result audit append fails. Worktree audit rows now use project-relative paths and all structured audit field values redact the local project prefix. Worktree metadata stores hashed Git common-directory provenance; legacy plaintext metadata remains readable. Merge/discard refuses a different repository before mutation; discard scans every intent, requires a creation row corroborated by live repository evidence, cross-checks metadata, and fails closed when modern authority is unreadable. Ordinary non-swarm merges clean the framework-owned root `.aidlc/` shell before non-forced worktree cleanup, so runtime attestations cannot block a successful merge while application residue remains protected.
 * The source-freshness off-switch covers global binding, per-unit attribution, baselines, and swarm footprint verification. Modernity also survives whole-row audit loss when the selected intent still holds baseline/unit snapshots, source manifests, or intent-matching worktree metadata; another intent's artifacts do not affect it. Pre-upgrade fieldless receipts, missing baselines, and worktrees without durable modern evidence retain the documented migration fail-open; present but unbindable, corrupt, or bypass-marked modern evidence fails closed without the switch. Sibling-repository worktrees derive their source role from durable `repoSelector` metadata, exclude only injected worktree/record files, and retain reviewed application bytes under root `aidlc/` and `.aidlc/` through fingerprinting, footprint verification, immutable binding, merge, and cleanup.
-
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
@@ -55,7 +544,6 @@ Completed-stage artifact drift is now detected through optional audit receipts a
 * Completion tools capture report-time schema-2 structure/content fingerprints for resolved artifact instances. Capture failures still complete the stage, record a visible `Validation Warning`, and leave that completion untracked.
 * Artifact filenames and CodeKB ownership now come from one shared vocabulary, including `build-test-results` and `load-test-results` resolving to `test-results.md` and `traceability` resolving to `traceability.json`.
 * Public audit append commands refuse `STAGE_COMPLETED`; the owning single-stage report path retains its internal atomic lifecycle pair.
-
 ## [2.6.61] - 2026-08-23
 
 Plugins can now extend `/aidlc --doctor` with selection-aware, fail-loud install checks while preserving advisory findings that do not block CI. **Upgrade:** re-copy `dist/<harness>/` for the updated `aidlc-utility.ts`, then refresh and re-compose each plugin's `dist/plugins/<name>/<harness>/` projection to install its doctor script.
@@ -78,7 +566,6 @@ Kiro CLI agent-v1 hooks retain the literal selectors required by the host's cano
 
 * The existing literal `fs_write` and `fs_read` registrations continue to select the live-proven write/read alias families exactly once; the adapter normalizes create, replace, and append payloads to Write/Edit, audits each project-relative or batched target, and forwards all supported path fields to reviewer scope and review freeze.
 * Literal `subagent` registrations do not select `subagent_response`; legacy crew and defensive direct-dispatch payloads share one normalization path, and a nonblank `task` cannot be hidden by a blank higher-priority `prompt` during stage-rule delivery.
-
 ## [2.6.55] - 2026-08-22
 
 Run-stage directive emission now creates each stage diary deterministically before the agent begins work, eliminating failed read probes for a file that is expected to be absent on first entry. Internal Stop-hook probes remain write-free, and size-bounded waves create diaries only for the Unit entries actually carried by the emitted directive. **Upgrade:** refresh your `dist/<harness>/` shell so the updated engine and stage guidance are installed.
@@ -268,6 +755,7 @@ Bounded Build & Test → Code Generation failure loop-back. When Build and Test 
 * Single-stage runs (`/aidlc --stage build-and-test --single`) stop at classification because they have no main-workflow position to move; impact-estimated options appear in the isolated-run summary.
 * The stage-ritual exception is present in all seven shipped conductor SKILLs, including Cursor and GitHub Copilot, and generated distributions remain byte-aligned with their authored sources.
 * Deterministic integration coverage (`t304-loopback-review-receipt-replay`) proves the replayed Code Generation gate refuses stale per-Unit reviews after `STAGE_JUMPED` and succeeds only after fresh receipts are recorded.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
@@ -658,7 +1146,6 @@ Gives the Stop hook's conversational carve-out a second evidence source, so it s
 * Enforcement is otherwise intact: a conductor that consults the engine and then tries to end its turn without reporting is still blocked, the autonomy guard still suppresses the carve-out under `Construction Autonomy Mode: autonomous`, and both marker reads fail closed — a missing marker reads as "no evidence" rather than releasing. A marker whose write fails is now deleted instead of left stale, because a stale *engine* marker would be a persistent silent fail-open. `aidlc-orchestrate next` remains a pure read: it writes no marker before an intent is born.
 * No command, flag, or output-format changes; no breaking change for CI or scripts.
 
-
 ## [2.5.58] - 2026-08-07
 
 The `claim-sources` sensor no longer loses source tags that are written next to
@@ -1016,7 +1503,6 @@ The adaptive composer now estimates implementation entropy before composing. It 
 * In-flight recompose proposals re-estimate the entropy components from what completed stages actually resolved, name that evidence per proposed flip, and strict-validate before the gate so a starved flip is caught before approval, not after.
 * With CodeKB evidence covering the affected codebase, the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without the local RE artifact store, and the human decides at the gate. CodeKB is an optional external MCP server (see the Scopes and Depth guide for per-harness setup); without it the composer scores from the workspace scan, and on Kiro CLI / Kiro IDE the fallback is always used.
 
-
 ## [2.5.0] - 2026-07-17
 
 The three-role ensemble (North Star Goal 1): a stage's `mode` is now its communication topology - who talks to whom while the body runs - and support agents become real, independently dispatched collaborators instead of voices the conductor adopts. Two new modes join `inline` and `subagent`: `pipeline` (chain: the links collectively author the artifacts in declared order, each seeing all upstream work; the final link leaves them complete) and `mob` (mesh as bounded rounds: all support agents contribute in parallel against the lead's draft, mutually blind; unresolved objections are triaged - judgment calls surface to the human mid-stage, knowledge disputes get one confirm-or-maintain round; maintained dissent is quoted verbatim at the approval gate). `mode: subagent` is strengthened to hub-and-spoke: on a stage with `support_agents`, each support agent is dispatched as a mutually-blind spoke against the lead's draft and the lead integrates. The writing model mirrors a real working session - everyone writes their own work: each dispatched collaborator writes a contribution file (`<stage>/contributions/<agent-slug>.md`, identity-marker first line, Contribution + Positions) and the lead alone edits the stage's `produces[]` artifacts. Those files double as deterministic completion evidence: the engine refuses approving a mob (or subagent-with-supports) stage while a declared collaborator's contribution file is missing. The conductor is the bus on every topology (only it delegates), and the reviewer loop is unchanged - a NOT-READY re-invokes the lead alone. `practices-discovery` ships as the hub-and-spoke showcase on greenfield and brownfield work (Pipeline & Deploy lead draft, mutually blind Quality + Developer + DevSecOps spokes, human interview, lead integration); `user-stories` ships as the mob showcase (Product Manager lead, Design + Developer + Quality collaborators, Product Lead reviewer). The shipped topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; on Kiro CLI/IDE also re-copy `.kiro/agents/` (nine new delegation-target agent configs plus an updated conductor `trustedAgents` list).
@@ -1219,7 +1705,6 @@ Adds the **AIDLC plugin mechanism**: an optional, owned set of new stages plus a
 * New tests: `tests/integration/t188-plugin-compose.test.ts` guards the compose mechanism (builds into a temp dir, never the committed trees); each plugin's own `tests/` is now discovered by the integration tier.
 * Design consolidated into the single chapter `docs/reference/18-plugin-mechanism.md` (+ authoring guide `docs/harness-engineering/10-authoring-a-plugin.md`), with an explicit Status list of deferred surfaces (plugin `agents/`/`scopes/`/`memory/`/`knowledge/` projection, `adds.scopes`/`adds.requires_stage` merge, `when:` evaluation, marketplace/managed-settings/lockfile, and the Kiro `.kiro.hook` auto-fire + `aidlc plugin compose` CLI).
 
-
 ## [2.2.19] - 2026-07-09
 
 Hooks and the statusline no longer break when the project path contains spaces. Every `$CLAUDE_PROJECT_DIR` reference in the shipped Claude settings is now double-quoted, so the hook commands survive word-splitting shells (bash) as well as zsh. **Upgrade:** re-copy `dist/claude/.claude/settings.json` into your project (or re-copy the whole `dist/claude/` shell).
@@ -1309,7 +1794,6 @@ The architecture reviewer's read scope is now bounded to the artifacts under rev
 * The four harness orchestrator skills (`.claude/`, `.kiro/`, `.kiro-ide/`, `.codex/`) carry the same read-scope bound in their `Reviewer step (§12a)` bullet: read what was passed, spot-check only the file the current unit's design explicitly names as an integration point.
 * `aidlc-architecture-reviewer-agent` persona gains a `## Review Scope` section and the "Cross-reference everything" line is scoped to the artifacts under review and the passed contracts; the knowledge file's Functional Design checklist names the shared contracts as the verification source instead of "cross-unit contract boundaries respected?" in isolation.
 
-
 ## [2.2.15] - 2026-07-09
 
 Agent frontmatter now uses Claude Code's real `model:` key instead of the inert `modelOverride:` key, preserving the same Opus/Sonnet policy while keeping Codex and Kiro behavior stable. **Upgrade:** re-copy your dist/<harness>/ shell into the project.
@@ -1317,7 +1801,6 @@ Agent frontmatter now uses Claude Code's real `model:` key instead of the inert 
 * Claude Code now honors the shipped `model: sonnet` pins for architecture-reviewer, product-lead, delivery, pipeline-deploy, and operations; those five delegated agents run on Sonnet instead of the session model.
 * Codex TOML emission is byte-identical; it now reads the renamed `model` key before applying the same Opus/Sonnet mapping.
 * Kiro CLI and Kiro IDE agent JSON configs are untouched and unaffected; they continue to use their hand-authored `"model"` fields.
-
 
 ## [2.2.14] - 2026-07-09
 

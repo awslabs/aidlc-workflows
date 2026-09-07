@@ -19,11 +19,11 @@
 // deterministic /aidlc verb whose result we read off disk.
 //
 // The journey beats mirror the SDK + ACP legs (repos captured by sibling
-// auto-discovery on the auto-birth path — see the SDK leg's DRIFT NOTE):
-//   1. `/aidlc "build auth across both repos"` → auto-birth A spanning both repos.
+// auto-discovery on the auto-create path - see the SDK leg's DRIFT NOTE):
+//   1. `/aidlc "build auth across both repos"` → auto-create A spanning both repos.
 //   2. (cheaper variant) reverse-engineering writes per-repo codekb — no swarm.
 //   3. `/aidlc intent-create …` → a 2nd isolated intent; A untouched.
-//   4. `/aidlc space-create teamB` → `/aidlc space teamB` → birth there; no leak.
+//   4. `/aidlc space-create teamB` → `/aidlc space teamB` → create one there; no leak.
 //   5. `/aidlc space default` → A still resumable.
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
@@ -73,9 +73,9 @@ const TEAM_B_SLUG = "teamb";
 /** Prompt the conductor to run the deterministic intent-create UTILITY directly
  *  (not route via `next`). A bare `/aidlc intent-create …` is parsed as freeform
  *  and fed to `next`; with intent A active the engine advances/scope-changes A
- *  instead of birthing (a verified SDK failure rewrote A's Scope). Naming the
+ *  instead of creating (a verified SDK failure rewrote A's Scope). Naming the
  *  exact .codex/tools command hits the mints-unconditionally handler. */
-function birthToolPrompt(scope: string, args: string): string {
+function intentCreationToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the shell and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
@@ -196,9 +196,9 @@ function activeRecordDir(root: string): string | undefined {
 /** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
  *  intact. Brownfield: reverse-engineering EXECUTEs and writes a per-repo codekb
  *  store, so the codekbFiles asserts below hold. Greenfield: the engine stamps
- *  reverse-engineering SKIP at intent birth (aidlc-utility.ts records it in the
+ *  reverse-engineering SKIP at intent creation (aidlc-utility.ts records it in the
  *  Stages to Skip row), so no codekb is written and the asserts must not run (the
- *  skip is the correct behaviour, not a flake). This reads the born intent's
+ *  skip is the correct behaviour, not a flake). This reads the created intent's
  *  aidlc-state.md and returns true only for that greenfield RE-skip: Project Type is
  *  Greenfield AND the Stages to Skip row names the reverse-engineering slug. We match
  *  the bare slug, never the row's human annotation (the engine writes it with an
@@ -217,7 +217,7 @@ function greenfieldReSkip(recordDir: string): boolean {
 }
 
 /** Count WORKFLOW_STARTED events in a record's audit shards — exactly one for an
- *  intent's own birth; a SECOND means a foreign birth bled in. Per-session
+ *  intent's own creation; a SECOND means a foreign creation bled in. Per-session
  *  SessionStart/End hooks append SESSION_* events to the active intent, so raw
  *  shard bytes are not stable across spawns; this count is the stable collision
  *  signal (see the SDK leg's note). */
@@ -242,11 +242,11 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
       const journey = setupCodexJourney();
       const { root, home } = journey;
       try {
-        // --- Step 1: auto-birth A spanning both siblings ---------------------
+        // --- Step 1: auto-create A spanning both siblings ---------------------
         // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
         // scope-confirm (orchestrate Branch 8 :1148) that the ONE-SHOT codex exec
-        // spawn cannot answer (no stdin), so the run would end before birth.
-        // `--scope feature` births via Branch 9a with no gate; the repo span is
+        // spawn cannot answer (no stdin), so the run would end before creation.
+        // `--scope feature` creates via Branch 9a with no gate; the repo span is
         // still captured by sibling auto-discovery.
         const r1 = execCodex(
           root,
@@ -274,7 +274,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         // read its state-file and tell which of the two valid RE outcomes applies.
         const recordADir = join(root, "aidlc", "spaces", "default", "intents", recordA as string);
         if (greenfieldReSkip(recordADir)) {
-          // Greenfield: reverse-engineering was stamped SKIP at birth, so no per-repo
+          // Greenfield: reverse-engineering was stamped SKIP at creation, so no per-repo
           // codekb is expected. The recorded skip is the correct outcome; accept it and
           // do NOT run the codekb asserts (permissive by design).
           expect(greenfieldReSkip(recordADir)).toBe(true);
@@ -290,13 +290,13 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         // --- Step 3: a SECOND isolated intent alongside A --------------------
         // Name the intent-create tool directly (mints unconditionally) so the
         // conductor does not route via `next` and advance/scope-change A.
-        const r3 = execCodex(root, home, birthToolPrompt("poc", "build a standalone metrics dashboard"));
+        const r3 = execCodex(root, home, intentCreationToolPrompt("poc", "build a standalone metrics dashboard"));
         expect(r3.rc).toBe(0);
         const reg3 = readIntentRegistry(root);
         expect(reg3.length).toBe(2);
         expect(new Set(reg3.map((e) => e.uuid)).size).toBe(2);
         for (const e of reg3) expect(e.uuid).toMatch(UUIDV7_RE);
-        // A's workflow state untouched + B's birth did not bleed into A's shard.
+        // A's workflow state untouched + B's creation did not bleed into A's shard.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
 
@@ -320,7 +320,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(r4b.rc).toBe(0);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
-        const r4c = execCodex(root, home, birthToolPrompt("poc", "teamB onboarding flow"));
+        const r4c = execCodex(root, home, intentCreationToolPrompt("poc", "teamB onboarding flow"));
         expect(r4c.rc).toBe(0);
         expect(readIntentRegistry(root, TEAM_B_SLUG).length).toBe(1);
         expect(readIntentRegistry(root, "default").length).toBe(2);
@@ -330,7 +330,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         const r5 = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space default`);
         expect(r5.rc).toBe(0);
         expect(activeSpace(root)).toBe("default");
-        // A's workflow state survived the round trip; no foreign birth bled in.
+        // A's workflow state survived the round trip; no foreign creation bled in.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
         expect(readIntentRegistry(root, "default").length).toBe(2);

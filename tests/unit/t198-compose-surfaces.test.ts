@@ -13,7 +13,7 @@
 //     verb-intercept hook classifies every leading terminal verb and runs it
 //     off-band as an aidlc-utility subcommand + arms the roll-forward latch. A
 //     compose entry there would spawn a nonexistent subcommand and neuter the
-//     same-turn birth `next` - so classifyTerminalCommand(["compose", ...])
+//     same-turn creation `next` - so classifyTerminalCommand(["compose", ...])
 //     must stay null (the Kiro-adapter regression pin).
 //   - Branch 8 (cold-start freeform, no --scope) now routes by keyword
 //     inference instead of the static static-default confirm: a clear keyword
@@ -112,7 +112,7 @@ describe("t198 compose is NOT a terminal command (Kiro seam regression)", () => 
 
 // ===========================================================================
 // Cold start (front): compose / --new-scope / --report each reach the
-// composer-dispatch print - never the freeform confirm, never a birth.
+// composer-dispatch print - never the freeform confirm, never a creation.
 // ===========================================================================
 describe("t198 cold-start compose surfaces -> composer dispatch", () => {
   test("leading compose verb + freeform text -> print naming the composer agent", () => {
@@ -122,7 +122,7 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain("aidlc-composer-agent");
     expect(String(d.message)).toContain(
-      `birthDescription\` MUST equal the original task text verbatim: "${task}"`,
+      `creationDescription\` MUST equal the original task text verbatim: "${task}"`,
     );
     expect(String(d.message)).toContain(`next --scope <scopeName> -- '${task}'`);
     // Front mode, not in-flight: no state file exists.
@@ -137,9 +137,9 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     // The spike-F leak shape was intent text "compose sonar.json" - the path
     // must ride the report slot, not the task-text slot.
     expect(String(d.message)).not.toContain('for: "sonar.json"');
-    expect(String(d.message)).toContain("nonblank `birthDescription`");
+    expect(String(d.message)).toContain("nonblank `creationDescription`");
     expect(String(d.message)).toContain("derive it from the report's actual findings");
-    expect(String(d.message)).toContain("Never approve a proposal that would continue into a scope-only birth");
+    expect(String(d.message)).toContain("Never approve a proposal that would continue into a scope-only creation");
   });
 
   test("compose task shell metacharacters are rendered as one single-quoted argv", () => {
@@ -159,7 +159,7 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     );
   });
 
-  test("flag-like compose task text survives dispatch and continue-into-birth parsing", () => {
+  test("flag-like compose task text survives dispatch and continue-into-creation parsing", () => {
     proj = createTestProject();
     const task = "--enable SSO for admins";
     const compose = directiveOf(runNext(proj, ["compose", task]).out);
@@ -168,9 +168,9 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const birth = directiveOf(runNext(proj, ["--scope", "feature", task]).out);
-    expect(String(birth.message)).toContain(`--arguments='${task}'`);
-    expect(String(birth.message)).not.toContain("intent-create --scope feature`");
+    const creation = directiveOf(runNext(proj, ["--scope", "feature", task]).out);
+    expect(String(creation.message)).toContain(`--arguments='${task}'`);
+    expect(String(creation.message)).not.toContain("intent-create --scope feature`");
 
     const created = runUtility(proj, [
       "intent-create",
@@ -209,13 +209,13 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(positional.message)).toContain("--arguments=--enable");
   });
 
-  test("composer schema requires birthDescription for front/report proposals", () => {
+  test("composer schema requires creationDescription for front/report proposals", () => {
     const composer = readFileSync(
       join(REPO_ROOT, "core", "agents", "aidlc-composer-agent.md"),
       "utf-8",
     );
-    expect(composer).toContain('"birthDescription":');
-    expect(composer).toContain("birthDescription` is REQUIRED and nonblank");
+    expect(composer).toContain('"creationDescription":');
+    expect(composer).toContain("creationDescription` is REQUIRED and nonblank");
     expect(composer).toContain("derive a concise description from the report's actual findings");
   });
 
@@ -293,10 +293,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(d.question)).not.toContain('"feature" workflow');
   });
 
-  test("known-scope positional still births (Branch 7b untouched)", () => {
+  test("known-scope positional still creates (Branch 7b untouched)", () => {
     proj = createTestProject();
-    // The birth path needs a GENUINELY empty workspace (zero intents), else the
-    // engine asks to select the seeded record instead of birthing (t118's
+    // The creation path needs a GENUINELY empty workspace (zero intents), else the
+    // engine asks to select the seeded record instead of creating (t118's
     // pattern).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);

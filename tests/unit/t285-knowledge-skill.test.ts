@@ -249,7 +249,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       // The verb surface travels the same way the flags do: a verb absent from the
       // prose is a verb the agent never invokes.
       const text = readFileSync(CLAUDE_SKILL, "utf-8");
-      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
+      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
         expect(text, `verb "${verb}" is absent from the skill`).toContain(verb);
       }
       // `remove` is deliberately absent by design: deletion stays "delete the
@@ -458,23 +458,24 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       const p = projectWithIntents([{ slug: "live-one", status: "in-flight" }]);
       const r = knowledge(p, "help");
       expect(r.status, r.stderr).toBe(0);
-      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
+      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
         expect(r.stdout, `help omits "${verb}"`).toContain(verb);
       }
     });
 
     test("the Usage: SUMMARY LINE itself names every verb, not just the body below it", () => {
       // Measured regression: the summary line read `<onboard|list|show>` while
-      // the body correctly listed all seven -- a reader skimming only the first
+      // the body correctly listed all eight -- a reader skimming only the first
       // line (the common case for a usage string) never learns sync/associate/
-      // dissociate/rebind exist. Pinned on the literal Usage: line, not "help"
-      // output as a whole, so a future edit narrowing just that line trips this.
+      // dissociate/rebind/summarize exist. Pinned on the literal Usage: line,
+      // not "help" output as a whole, so a future edit narrowing just that
+      // line trips this.
       const p = projectWithIntents([{ slug: "live-one", status: "in-flight" }]);
       const r = knowledge(p, "help");
       expect(r.status, r.stderr).toBe(0);
       const usageLine = r.stdout.split("\n").find((l) => l.startsWith("Usage:"));
       expect(usageLine, "no Usage: line in help output").toBeDefined();
-      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
+      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
         expect(usageLine, `Usage: line omits "${verb}"`).toContain(verb);
       }
     });

@@ -3,7 +3,7 @@
 // t297 - intent association: scoping a document to an intent, and every way that
 // can be ambiguous.
 //
-// Mechanism: real filesystem + real intent births (a hand-written intents.json
+// Mechanism: real filesystem + real intent creations (a hand-written intents.json
 // would let the test agree with a fiction; `intent-create` produces the shape the
 // tool actually meets).
 //
@@ -65,7 +65,7 @@ const CHILD_ENV = { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" };
 
 let proj: string | undefined;
 
-/** A project with N real intents, birthed through the shipped tool so the
+/** A project with N real intents, created through the shipped tool so the
  *  registry has the shape this code actually meets in the field. */
 function projectWithIntents(...labels: string[]): string {
   proj = mkdtempSync(join(tmpdir(), "t297-"));
@@ -261,7 +261,7 @@ describe("t297 every ambiguity FAILS, before anything is written", () => {
     expect(err?.message).toMatch(/no intents/);
     // Both remedies, because either may be what the user meant.
     expect(err?.message).toMatch(/drop the flag/);
-    expect(err?.message).toMatch(/birth an intent/);
+    expect(err?.message).toMatch(/create an intent/);
   });
 
   test("a refused resolution writes NOTHING", () => {
@@ -415,7 +415,7 @@ describe("t297 the event lands in the SPACE shard, with the intent as a FIELD", 
 });
 
 describe("t297 I09: a space-wide document survives intent creation", () => {
-  test("indexing space-wide, then birthing an intent, leaves the row findable", () => {
+  test("indexing space-wide, then creating an intent, leaves the row findable", () => {
     // The row this story inherited: the failure mode is a row that becomes
     // unreachable once the space gains its first intent, because something
     // re-targeted by the active-intent cursor. Count totals must not move.
@@ -430,7 +430,7 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
     const id = first.indexed[0].id;
     expect(readIndex(p, SPACE).documents.length).toBe(1);
 
-    // Now birth the space's FIRST intent.
+    // Now create the space's FIRST intent.
     const r = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", "auth",

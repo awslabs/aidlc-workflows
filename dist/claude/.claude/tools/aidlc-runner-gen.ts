@@ -199,11 +199,11 @@ that flag without this skill.
 // `intent-create` move (which runs the whole initialization phase — mint the
 // intent + detect the workspace + build state — in one call). This is the
 // init-phase analogue of the per-stage runners: opt-in packaging over a path
-// the engine already names at birth. It drives `intent-create`, NOT
+// the engine already names at creation. It drives `intent-create`, NOT
 // `--stage … --single`, so the stage-runner drift guard (which keys on the
 // `--stage`+`--single` marker) never counts it. There is no user-facing
 // `/aidlc --init` (P4): the workspace shell ships in dist/ and the engine
-// auto-births the first intent — this runner just makes that explicit.
+// auto-creates the first intent - this runner just makes that explicit.
 export function renderInitRunner(): string {
   return `---
 name: ${INIT_RUNNER_DIR}
@@ -211,18 +211,18 @@ generated-by: aidlc-runner-gen
 description: >
   Start an AI-DLC workflow — run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
-  stage. The engine normally auto-births the first intent; this is opt-in
+  stage. The engine normally auto-creates the first intent; this is opt-in
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC — start a workflow (birth the first intent)
+# AI-DLC - start a workflow (create the first intent)
 
 Start a fresh AI-DLC workflow. The workspace shell ships in \`dist/\` (no setup
-command), and the engine auto-births the first intent when you describe what to
-build — this skill is opt-in packaging over that birth move. Initialization is a
+command), and the engine auto-creates the first intent when you describe what to
+build - this skill is opt-in packaging over that creation move. Initialization is a
 PHASE, not a single stage — it mints the intent, detects the workspace
 (greenfield/brownfield), and builds \`aidlc-state.md\` together, in one
 deterministic call. There is no per-init-stage runner because an init stage has
@@ -230,7 +230,7 @@ no standalone meaning.
 
 ## Steps
 
-1. Birth the intent (run the initialization phase). Parse the user's
+1. Create the intent (run the initialization phase). Parse the user's
    \`$ARGUMENTS\`: forward any recognized flags
    (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`)
    as-is, and pass any freeform description text via \`--arguments "<text>"\`
@@ -663,7 +663,7 @@ Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
 judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then \`next\`
-correctly returns \`done\` (the engine is read-only and never births alongside a
+correctly returns \`done\` (the engine is read-only and never creates alongside a
 live intent), and the loop above would simply stop. New work is NOT a
 continuation; the escape hatch is \`next --new-intent\`.
 
@@ -671,7 +671,7 @@ continuation; the escape hatch is \`next --new-intent\`.
   names a distinct feature/bug/unit unrelated to the active intent's subject
   (\`bun ${harnessDir()}/tools/aidlc-utility.ts intent --json\` gives its \`slug\` and
   \`status\`). When in doubt, continue: false-positive offers are the main risk.
-- **On genuine new-work, OFFER, never auto-birth.** Surface an
+- **On genuine new-work, OFFER, never auto-create.** Surface an
   \`AskUserQuestion\` showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
   \`${scope}\` (the new work is likely the same flavour that made the user reach for

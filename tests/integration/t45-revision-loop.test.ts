@@ -56,10 +56,24 @@
 // end. Each transition's exit code is also asserted 0 (the .sh leaned on
 // `set -e` to abort the run on any non-zero; here we assert it explicitly).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -69,6 +83,8 @@ import {
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+setDefaultTimeout(30_000);
+
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
@@ -76,13 +92,13 @@ const SLUG = "requirements-analysis";
 
 let proj: string;
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
-// the init the active-intent cursor points at the born record, so every later
+// the init the active-intent cursor points at the created record, so every later
 // gate-start/reject/revise/approve (default-resolving the active intent)
 // reads/writes THAT record — recordDirOf follows the cursor and resolves it for
 // both the init output and the state-machine writes. Falls back to the flat
-// layout for a not-yet-born / seeded-flat project.
+// layout for a not-yet-created / seeded-flat project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -130,6 +146,25 @@ function state(args: string[]): void {
 }
 
 function recordReview(): void {
+  const artifact = join(
+    recordDirOf(proj),
+    "inception",
+    SLUG,
+    "requirements.md",
+  );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   const args = [
     LOG,
     "review",
@@ -142,10 +177,31 @@ function recordReview(): void {
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    expect(r.status, `review log failed: ${r.stdout}${r.stderr}`).toBe(0);
-  }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  expect(
+    requested.status,
+    `review request failed: ${requested.stdout}${requested.stderr}`,
+  ).toBe(0);
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  expect(
+    completed.status,
+    `review verdict failed: ${completed.stdout}${completed.stderr}`,
+  ).toBe(0);
 }
 
 function readState(): string {

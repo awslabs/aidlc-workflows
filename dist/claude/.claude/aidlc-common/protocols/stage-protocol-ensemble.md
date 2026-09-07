@@ -33,7 +33,7 @@ On a harness that cannot dispatch in parallel, `subagent` spokes and `mob` round
 
 On every topology, a reviewer NOT-READY (stage-protocol-reviewer.md §12a step 3) re-invokes the LEAD alone with the findings — the ensemble convenes once; the repair loop is lead-reviewer ping-pong.
 
-**Completion evidence (deterministic).** On a `mob` or `subagent`-with-supports stage, the contribution files are the deterministic, structural completion evidence the engine checks: it refuses gate entry and completion while any declared support agent's contribution file is missing or lacks its identity-marker first line. On `pipeline`, current-attempt `PIPELINE_LINK_COMPLETED` receipts are the evidence: every scanned repo needs every declared link, while a current-attempt repo-scoped `ARTIFACT_REUSED` row with `Decision: keep` exempts that reused repo. A rejection, jump, or later stage start resets the main-workflow evidence. Isolated `--single` receipts are tagged and never satisfy the main workflow. Artifact files alone do not satisfy pipeline evidence. The shared escape hatch is `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, only for recovering a legitimately-run stage whose evidence was lost during upgrade or interruption.
+**Completion evidence (deterministic).** On a `mob` or `subagent`-with-supports stage, the contribution files are the deterministic, structural completion evidence the engine checks: it refuses gate entry and completion while any declared support agent's contribution file is missing or lacks its identity-marker first line. On `pipeline`, current-attempt `PIPELINE_LINK_COMPLETED` receipts are the evidence: every scanned repo needs every declared link, while a current-attempt repo-scoped `ARTIFACT_REUSED` row with `Decision: keep` exempts that reused repo. Isolated reuse rows and link receipts carry the same `single-stage:<slug>` workflow identity, never satisfy the main workflow, and are accepted only while the complete canonical CodeKB artifact set exists under authoritative regular-file paths and its source scope remains `CURRENT`. A rejection, jump, or later stage start resets the main-workflow evidence. Artifact files alone do not satisfy pipeline evidence. The shared escape hatch is `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, only for recovering a legitimately-run stage whose evidence was lost during upgrade or interruption.
 
 ---
 
@@ -65,6 +65,9 @@ When a subagent completes its work, it MUST return a structured summary to the o
 - The orchestrator MUST read this summary before proceeding to the next stage
 - If the "Issues / Concerns" section is non-empty, the orchestrator MUST present them to the user before continuing
 - If the "Produced" section lists fewer files than expected for the stage, the orchestrator MUST investigate before marking the stage complete
+- The files are the substantive handoff. The return summary names paths,
+  decisions, concerns, and the next action only; it does not repeat artifact,
+  contribution, scan, source, or test-output bodies that are already on disk.
 
 ### Collaborator contribution files (ensemble topologies)
 

@@ -9,7 +9,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -24,7 +29,10 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  parseBoltDag,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -258,27 +266,54 @@ function logReview(
   verdict: "READY" | "NOT-READY" = "READY",
   iteration = 1,
 ): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "functional-design",
+    artifactFilename("functional-spec"),
+  );
   const args = [
     LOG,
     "review",
     "--stage",
     "functional-design",
     "--reviewer",
-    "aidlc-architecture-reviewer-agent",
+    reviewer,
     "--unit",
     unit,
     "--iteration",
     String(iteration),
   ];
-  for (const suffix of [[], ["--verdict", verdict]]) {
-    const result = spawnSync(
-      BUN,
-      [...args, ...suffix, "--project-dir", proj],
-      { encoding: "utf-8" },
-    );
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${result.stdout}${result.stderr}`);
-    }
+  const reviewEnv = {
+    ...process.env,
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+  };
+  const request = spawnSync(BUN, [...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env: reviewEnv,
+  });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      `**Verdict:** ${verdict}\n` +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const completed = spawnSync(
+    BUN,
+    [...args, "--verdict", verdict, "--project-dir", proj],
+    { encoding: "utf-8", env: reviewEnv },
+  );
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${completed.stdout}${completed.stderr}`);
   }
 }
 
@@ -361,6 +396,8 @@ function runReport(proj: string): RunResult {
     "functional-design",
     "--result",
     "approved",
+    "--user-input",
+    "Approve",
   ]);
 }
 
@@ -473,7 +510,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("functional-design");
     expect(r.directive.message).toContain("alpha");
     expect(r.directive.message).toContain("beta");
-    expect(r.directive.message).toContain("per-unit");
+    expect(r.directive.message).toContain("work items are not complete");
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
   }, 30000);
@@ -572,4 +609,20 @@ describe("t215 bolt dag self-heal", () => {
     );
     expect(r.stderr).toBe("");
   }, 30000);
+
+  test("13: Unit names that collide after case folding are rejected", () => {
+    const parsed = parseBoltDag(`\`\`\`yaml
+units:
+  - name: api
+    depends_on: []
+  - name: API
+    depends_on: []
+\`\`\`
+`);
+    expect(parsed).toEqual({
+      ok: false,
+      reason: "malformed",
+      detail: 'case-folding unit name collision: "api" and "API"',
+    });
+  });
 });

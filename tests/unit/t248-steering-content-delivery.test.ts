@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
@@ -30,6 +30,9 @@ import {
   stageValidationAuditFields,
   type StageValidityNode,
 } from "../../core/tools/aidlc-validity.ts";
+import {
+  subagentInflightMarkerPath,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   REPO_ROOT,
@@ -89,6 +92,7 @@ function invoke(
   proj: string,
   subcommand: "next" | "continue",
   args: string[],
+  env: NodeJS.ProcessEnv = process.env,
 ): { directive: WireDirective; bytes: number } {
   cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
   cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
@@ -101,7 +105,7 @@ function invoke(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: { ...process.env } },
+    { encoding: "utf-8", env: { ...env } },
   );
   expect(res.status, res.stderr).toBe(0);
   const line = (res.stdout ?? "").trim();
@@ -147,6 +151,7 @@ function runDispatchHook(
   proj: string,
   toolName: string,
   toolInput: Record<string, unknown>,
+  sessionId?: string,
 ): { code: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
@@ -155,6 +160,7 @@ function runDispatchHook(
       cwd: proj,
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(sessionId ? { session_id: sessionId } : {}),
         tool_name: toolName,
         tool_input: toolInput,
         cwd: proj,
@@ -387,6 +393,109 @@ describe("t248 deterministic steering delivery", () => {
     expect(otherKey).not.toBe(encodedKey);
   });
 
+  test("probe steering continues normally for team and solo without publishing the marker", () => {
+    const team = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(team);
+    const teamStatePath = seededStateFile(team);
+    writeFileSync(
+      teamStatePath,
+      readFileSync(teamStatePath, "utf-8").replace(
+        "- **Revision Count**: 0",
+        "- **Revision Count**: 0\n- **Construction Iteration**: unit-major\n- **Unit Ownership**: team",
+      ),
+    );
+    const teamOrg = join(
+      team,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    appendFileSync(
+      teamOrg,
+      Array.from(
+        { length: 180 },
+        (_, i) => `\n## Probe Team ${i}\n\n${"x".repeat(320)}\n`,
+      ).join(""),
+    );
+    const teamProbe = invoke(
+      team,
+      "next",
+      [],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(teamProbe.kind).toBe("load-steering");
+    expect(
+      existsSync(
+        join(seededRecordDir(team), ".aidlc-steering-token-key"),
+      ),
+    ).toBe(false);
+    expect(
+      existsSync(
+        join(seededRecordDir(team), ".aidlc-active-directive.json"),
+      ),
+    ).toBe(false);
+    const continued = invoke(
+      team,
+      "continue",
+      [teamProbe.continue_token ?? ""],
+    ).directive;
+    expect(continued.kind).not.toBe("error");
+
+    const forgedEnvelope = JSON.parse(
+      Buffer.from(
+        teamProbe.continue_token ?? "",
+        "base64url",
+      ).toString("utf-8"),
+    ) as { p: Record<string, unknown>; m: string; probe: true };
+    forgedEnvelope.p.i = 2;
+    const probeKey = createHash("sha256")
+      .update(`aidlc-stop-probe:${resolve(team)}`, "utf-8")
+      .digest();
+    forgedEnvelope.m = createHmac("sha256", probeKey)
+      .update(JSON.stringify(forgedEnvelope.p), "utf-8")
+      .digest("base64url");
+    const forged = Buffer.from(
+      JSON.stringify(forgedEnvelope),
+      "utf-8",
+    ).toString("base64url");
+    expect(invoke(team, "continue", [forged]).directive).toMatchObject({
+      kind: "error",
+    });
+
+    const solo = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(solo);
+    const soloProbe = invoke(
+      solo,
+      "next",
+      [],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(soloProbe.kind).toBe("load-steering");
+    expect(
+      existsSync(
+        join(seededRecordDir(solo), ".aidlc-steering-token-key"),
+      ),
+    ).toBe(true);
+    // A solo probe keys its token normally, but it must NOT publish the durable
+    // marker either: publication bumps code_generation_authority_revision and
+    // resets the plan-approval runtime, which deadlocked Plan Approval (#995).
+    expect(
+      existsSync(
+        join(seededRecordDir(solo), ".aidlc-active-directive.json"),
+      ),
+    ).toBe(false);
+    expect(
+      invoke(solo, "continue", [soloProbe.continue_token ?? ""]).directive
+        .kind,
+    ).not.toBe("error");
+  });
+
   test("sessionless continuation consumes the same token exactly once", () => {
     const proj = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
     projects.push(proj);
@@ -605,6 +714,26 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.message).toContain("run `next` again");
   });
 
+  test("rejected background dispatch leaves no in-flight ledger", () => {
+    const proj = project();
+    rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
+    const result = runDispatchHook(
+      proj,
+      "Task",
+      {
+        subagent_type: "aidlc-product-agent",
+        prompt:
+          "Run .claude/aidlc-common/stages/inception/user-stories.md.",
+        run_in_background: true,
+      },
+      "session-rejected",
+    );
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("Cannot load required stage rule");
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
   test("invalid UTF-8 required rules block before stage work", () => {
     const proj = project();
     writeFileSync(
@@ -669,6 +798,183 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final.kind).toBe("run-stage");
     expect(result.final.inline_context_paths).toContain(rel);
     expect(result.final.context_warnings?.join("\n") ?? "").not.toContain(rel);
+  });
+
+  test("Minimal intent capture loads only stage-relevant shipped knowledge", () => {
+    const proj = project();
+    const result = drive(proj, [
+      "--scope",
+      "poc",
+      "--stage",
+      "intent-capture",
+    ]);
+    const paths = result.final.inline_context_paths ?? [];
+
+    for (const path of [
+      ".claude/agents/aidlc-product-agent.md",
+      ".claude/agents/aidlc-architect-agent.md",
+      ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
+      ".claude/knowledge/aidlc-shared/rules-reading.md",
+      ".claude/knowledge/aidlc-shared/verification.md",
+      ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
+      ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
+      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
+    ]) {
+      expect(paths).toContain(path);
+    }
+    for (const path of [
+      ".claude/knowledge/aidlc-shared/audit-format.md",
+      ".claude/knowledge/aidlc-shared/state-template.md",
+      ".claude/knowledge/aidlc-shared/worktree-info-schema.md",
+      ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
+      ".claude/knowledge/aidlc-product-agent/user-story-patterns.md",
+      ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+    ]) {
+      expect(paths).not.toContain(path);
+    }
+  });
+
+  test("Minimal requirements analysis keeps brownfield and requirements knowledge only", () => {
+    const proj = project();
+    const result = drive(proj, [
+      "--scope",
+      "bugfix",
+      "--stage",
+      "requirements-analysis",
+    ]);
+    const paths = result.final.inline_context_paths ?? [];
+
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-shared/brownfield.md",
+    );
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
+    );
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
+    );
+    expect(paths).not.toContain(
+      ".claude/knowledge/aidlc-shared/audit-format.md",
+    );
+    expect(paths).not.toContain(
+      ".claude/knowledge/aidlc-product-agent/functional-design-guide.md",
+    );
+  });
+
+  test("Minimal routing retains recursively composed plugin knowledge that collides by basename", () => {
+    const proj = project();
+    const pluginRoot = mkdtempSync(
+      join(tmpdir(), "aidlc-context-collision-plugin-"),
+    );
+    const pluginName = "context-collision";
+    const recursivePath = join(
+      "aidlc-product-agent",
+      "recursive",
+      "market-research-methods.md",
+    );
+    mkdirSync(join(pluginRoot, ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(pluginRoot, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: `aidlc-${pluginName}`, version: "0.1.0" })}\n`,
+      "utf-8",
+    );
+    mkdirSync(join(pluginRoot, "hooks"), { recursive: true });
+    cpSync(
+      join(
+        REPO_ROOT,
+        "scripts",
+        "plugin-hooks-template",
+        "compose.ts",
+      ),
+      join(pluginRoot, "hooks", "compose.ts"),
+    );
+    const pluginKnowledge = join(
+      pluginRoot,
+      "knowledge",
+      recursivePath,
+    );
+    mkdirSync(join(pluginKnowledge, ".."), { recursive: true });
+    writeFileSync(
+      pluginKnowledge,
+      "# Plugin Market Research\n\nRetained by exact compose provenance.\n",
+      "utf-8",
+    );
+
+    try {
+      const compose = spawnSync(
+        BUN,
+        [join(pluginRoot, "hooks", "compose.ts")],
+        {
+          cwd: proj,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_PLUGIN_ROOT: pluginRoot,
+            AIDLC_PROJECT_DIR: proj,
+            AIDLC_HARNESS_DIR: ".claude",
+            AIDLC_HARNESS_NAME: "claude",
+          },
+        },
+      );
+      expect(compose.status, `${compose.stdout}\n${compose.stderr}`).toBe(0);
+      const ownership = JSON.parse(
+        readFileSync(
+          join(
+            proj,
+            ".claude",
+            "tools",
+            "data",
+            `plugin-files-${pluginName}.json`,
+          ),
+          "utf-8",
+        ),
+      ) as {
+        schema_version: number;
+        plugin: string;
+        knowledge: string[];
+      };
+      expect(ownership).toEqual({
+        schema_version: 1,
+        plugin: pluginName,
+        knowledge: [recursivePath.replaceAll("\\", "/")],
+      });
+
+      const result = drive(proj, [
+        "--scope",
+        "poc",
+        "--stage",
+        "intent-capture",
+      ]);
+      expect(result.final.inline_context_paths).toContain(
+        `.claude/knowledge/${recursivePath.replaceAll("\\", "/")}`,
+      );
+      expect(result.final.inline_context_paths).not.toContain(
+        ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
+      );
+    } finally {
+      rmSync(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("Standard depth keeps the complete shipped knowledge roster", () => {
+    const proj = project();
+    const result = drive(proj, [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]);
+    const paths = result.final.inline_context_paths ?? [];
+
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-shared/audit-format.md",
+    );
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
+    );
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+    );
   });
 
   test("unreadable optional knowledge warns and is omitted without blocking", () => {
@@ -868,17 +1174,24 @@ describe("t248 deterministic steering delivery", () => {
       `# Organization\n\n${"x".repeat(1_190_000)}\n`,
       "utf-8",
     );
-    const result = runDispatchHook(proj, "Task", {
-      subagent_type: "aidlc-product-agent",
-      prompt:
-        "Run .claude/aidlc-common/stages/inception/user-stories.md.",
-    });
+    const result = runDispatchHook(
+      proj,
+      "Task",
+      {
+        subagent_type: "aidlc-product-agent",
+        prompt:
+          "Run .claude/aidlc-common/stages/inception/user-stories.md.",
+        run_in_background: true,
+      },
+      "session-oversized",
+    );
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("attaching them to a subagent");
     expect(result.stderr).toContain("output limit");
     expect(result.stderr).toContain("nothing partial was written");
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
   });
 
   test("dispatch stage resolution: Current Stage outranks an incidental slug mention", () => {

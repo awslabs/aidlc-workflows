@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TextDecoder } from "node:util";
+import { inflateSync } from "node:zlib";
+import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
@@ -43,6 +46,7 @@ export interface StageEntry {
   plugin?: string;
   condition?: string;
   reviewer?: string;
+  review_artifact?: string;
   reviewer_max_iterations?: number;
   review_class?: "adversarial" | "advisory";
   // Summary-confirmation policy for stages using the unified question flow.
@@ -71,6 +75,16 @@ export interface StageEntry {
   // approve/advance: a code-generation stage that wrote only its markdown
   // produces[] docs but no actual code must not pass (issue #366).
   workspace_requires?: boolean;
+  // Compile-resolved sensor bindings. Runtime dispatchers consume the detailed
+  // graph shape; user-facing directives intentionally project only sensor ids.
+  sensors_applicable?: Array<{
+    id: string;
+    path: string;
+    fire_on: "write" | "gate";
+    default_severity: "advisory" | "blocking";
+    category?: string;
+    matches?: string;
+  }>;
 }
 
 // The per-unit marker carried by the Construction stages that run once per
@@ -585,12 +599,13 @@ export function toPosix(p: string): string {
 //   intent: explicit arg > active-intent pointer > lone-intent > null.
 //
 // NULL RESOLUTION (P9 end state — no flat root). When NO intent record resolves
-// (activeIntent() → null: a fresh SEED shell before auto-birth, or a flat project
+// (activeIntent() → null: a fresh SEED shell before auto-create, or a flat project
 // still awaiting migration), the absolute path helpers resolve to the bare SPACE
 // record root (aidlc/spaces/<space>/intents/ — see spaceRecordRoot). No
 // aidlc-state.md ever lives directly there, so existence-gated consumers
-// (loadStateFileIfPresent) read "no workflow yet" and the orchestrator
-// births/errors. The ONLY surviving flat `aidlc-docs` read is the one-time
+// (loadStateFileIfPresent) read "no workflow yet" and the orchestrator either
+// creates an intent or reports an error. The ONLY surviving flat `aidlc-docs`
+// read is the one-time
 // migration's SOURCE (flatStateSource/flatMigrationSource below).
 // activeIntent() returning null IS that "no record yet" signal.
 
@@ -831,6 +846,98 @@ export function splitDoubleQuotedArgs(raw: string): string[] {
   return tokens;
 }
 
+// Kiro prompt/hook arguments are shell-like but may contain native Windows
+// paths before any shell parses them. Preserve backslashes literally unless
+// one escapes whitespace or a shell separator outside quotes, or the active
+// quote delimiter. In particular, do not collapse `C:\path`, quoted Windows
+// paths, or UNC `\\host` prefixes while still accepting `one\ argument`,
+// `one\;two`, and `\"`/`\'` literals.
+export function splitKiroCommandArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let started = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\\") {
+      const next = raw[i + 1];
+      const outputValueToken = tokens[tokens.length - 1] === "--output";
+      const windowsPathToken =
+        /^[A-Za-z]:$/.test(current) ||
+        current.includes("\\");
+      let followingToken = "";
+      if (next !== undefined && /\s/.test(next)) {
+        let start = i + 1;
+        while (start < raw.length && /\s/.test(raw[start])) start++;
+        let end = start;
+        while (end < raw.length && !/\s/.test(raw[end])) end++;
+        followingToken = raw.slice(start, end);
+      }
+      const endsOutputPathBeforeOption =
+        outputValueToken &&
+        quote === null &&
+        (followingToken === "--export" || followingToken === "--output");
+      const closesQuotedOutputPath =
+        outputValueToken &&
+        quote !== null &&
+        next === quote &&
+        (
+          raw[i + 2] === undefined ||
+          /\s/.test(raw[i + 2])
+        );
+      const escapesWhitespace =
+        quote === null &&
+        !windowsPathToken &&
+        !endsOutputPathBeforeOption &&
+        next !== undefined &&
+        /\s/.test(next);
+      const escapesShellSeparator =
+        quote === null &&
+        !windowsPathToken &&
+        next === ";";
+      const escapesQuote =
+        next !== undefined &&
+        !windowsPathToken &&
+        !closesQuotedOutputPath &&
+        (
+          (quote === null && (next === "'" || next === '"')) ||
+          (quote !== null && next === quote)
+        );
+      if (escapesWhitespace || escapesShellSeparator || escapesQuote) {
+        current += next;
+        i++;
+      } else {
+        current += "\\";
+      }
+      started = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      started = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) {
+        tokens.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
   [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
 );
@@ -876,6 +983,10 @@ export function parsePluginCommand(args: string[]): PluginCommand {
       ? "plugin-list"
       : verb === "sync"
         ? "plugin-sync"
+        : verb === "validate"
+          ? "plugin-validate"
+          : verb === "build"
+            ? "plugin-build"
         : undefined;
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
@@ -917,6 +1028,15 @@ function terminalCommandFromPluginCommand(
 // all enumerate the same surface instead of three hand-kept copies drifting.
 // `remove` is deliberately absent: deletion stays "delete your own original,
 // then sync", so the tool never holds a destructive verb over user-owned files.
+//
+// `summarize` (S3b) is a deliberate EIGHTH verb, not a flag riding on an
+// existing one. It is not the same case the design rejected for an extractor-
+// config verb (§7's option (b), which had a strictly better packager-owned
+// alternative): a summary is LLM-authored text with no other entry point into
+// the tool, so persisting it needs its own verb exactly as `associate`/
+// `dissociate` needed theirs. The tool stays deterministic -- it validates,
+// bounds, digests and persists the text a caller supplies; it never generates
+// or judges content itself (design §6's execution model).
 export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
   "onboard",
   "sync",
@@ -925,6 +1045,7 @@ export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
   "associate",
   "dissociate",
   "rebind",
+  "summarize",
 ]);
 
 export type KnowledgeCommand =
@@ -1041,7 +1162,7 @@ function terminalCommandFromWorkspaceCommand(
 
 // Classify the post-`/aidlc` argument tokens. Returns the terminal command to run
 // deterministically, or null when the input is NOT a terminal command (freeform
-// intent text, a --scope/--stage/--phase jump, a config/scope change, birth — all
+// intent text, a --scope/--stage/--phase jump, a config/scope change, creation - all
 // of which carry workflow work and MUST go through the engine + conductor). The
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
@@ -1049,7 +1170,7 @@ function terminalCommandFromWorkspaceCommand(
 export function classifyTerminalCommand(args: string[]): TerminalCommand | null {
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
-  // freeform intent text and the funnel offers to birth an intent named
+  // freeform intent text and the funnel offers to create an intent named
   // "help". Sole-token only: `help` inside a longer description stays freeform.
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { subcommand: "help", source: "read-only-flag" };
@@ -1092,6 +1213,119 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   return null;
 }
 
+// Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
+// bytes. Keep this transform narrowly scoped to adapter output that is
+// explicitly plain text: structured hook JSON and refusal payloads must retain
+// their exact bytes and exit semantics.
+export function sanitizeHarnessPlainText(value: string): string {
+  let out = "";
+  let i = 0;
+
+  const csiEnd = (start: number): number => {
+    for (let j = start; j < value.length; j++) {
+      const code = value.charCodeAt(j);
+      if (code >= 0x40 && code <= 0x7e) return j;
+    }
+    return -1;
+  };
+  const stringControlEnd = (start: number): number => {
+    for (let j = start; j < value.length; j++) {
+      const code = value.charCodeAt(j);
+      if (code === 0x07 || code === 0x9c) return j;
+      if (
+        code === 0x1b &&
+        j + 1 < value.length &&
+        value.charCodeAt(j + 1) === 0x5c
+      ) {
+        return j + 1;
+      }
+    }
+    return -1;
+  };
+
+  while (i < value.length) {
+    const code = value.charCodeAt(i);
+
+    if (code === 0x1b) {
+      const next = value.charCodeAt(i + 1);
+      if (next === 0x5b) {
+        const end = csiEnd(i + 2);
+        i = end >= 0 ? end + 1 : value.length;
+        continue;
+      }
+      if (
+        next === 0x50 ||
+        next === 0x58 ||
+        next === 0x5d ||
+        next === 0x5e ||
+        next === 0x5f
+      ) {
+        const end = stringControlEnd(i + 2);
+        i = end >= 0 ? end + 1 : value.length;
+        continue;
+      }
+      if (
+        next === 0x28 ||
+        next === 0x29 ||
+        next === 0x2a ||
+        next === 0x2b ||
+        next === 0x2d ||
+        next === 0x2e ||
+        next === 0x2f
+      ) {
+        i = Math.min(value.length, i + 3);
+        continue;
+      }
+      if (next >= 0x40 && next <= 0x5f) {
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (code === 0x9b) {
+      const end = csiEnd(i + 1);
+      i = end >= 0 ? end + 1 : value.length;
+      continue;
+    }
+    if (
+      code === 0x90 ||
+      code === 0x98 ||
+      code === 0x9d ||
+      code === 0x9e ||
+      code === 0x9f
+    ) {
+      const end = stringControlEnd(i + 1);
+      i = end >= 0 ? end + 1 : value.length;
+      continue;
+    }
+    if (
+      (code >= 0x00 && code <= 0x08) ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      (code >= 0x7f && code <= 0x9f)
+    ) {
+      i++;
+      continue;
+    }
+
+    out += value[i];
+    i++;
+  }
+
+  return out;
+}
+
+export function decodeHarnessPlainText(
+  bytes: Uint8Array | undefined,
+): string {
+  return sanitizeHarnessPlainText(
+    new TextDecoder("utf-8").decode(bytes ?? new Uint8Array()),
+  );
+}
+
 // --- Engine command detectors (hook classifier seam) ---
 //
 // These raw command-string classifiers are shared by hooks and tests. They do
@@ -1116,8 +1350,8 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
-    !/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(text) &&
-    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm)\b/.test(text)
+    !/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(text) &&
+    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(text)
   ) {
     return false;
   }
@@ -1135,7 +1369,7 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
 // Current legacy-shape engagement rules. Kept as a helper so the exported
 // classifier can preserve every old-shape result while adding the new grammar.
 function legacyEngineEngagementSegment(seg: string): boolean {
-  if (!/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg)) return false;
+  if (!/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) return false;
   // A PURE read-only query: a read-only flag present AND no mutating/advancing
   // verb in the SAME segment. `next --status` is read-only; `report --status`
   // (nonsensical, but) still has `report` so is engagement.
@@ -1153,6 +1387,9 @@ function legacyEngineEngagementSegment(seg: string): boolean {
     // The mutating / completing subcommands. (Read-only aidlc-state reads like
     // `get`/`show` are not here, so they fall through to non-engagement.)
     return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set|skip|reject|revise|resume)\b/.test(seg);
+  }
+  if (/aidlc-unit\b/.test(seg)) {
+    return !/\b(status|merge-status)\b/.test(seg);
   }
   // aidlc-jump / aidlc-bolt / aidlc-swarm: a read-only query (--help/--status)
   // is not engagement; anything else mutates (jump moves the pointer, bolt forks/
@@ -1174,13 +1411,13 @@ function legacyEngineEngagementSegment(seg: string): boolean {
 // "chat" - the conservative direction for loop integrity.
 export function isEngineEngagementSegment(seg: string): boolean {
   if (
-    /aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg) &&
+    /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)
   ) {
     return true;
   }
 
-  if (!/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm)\b/.test(seg)) {
+  if (!/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) {
     return false;
   }
 
@@ -1212,6 +1449,9 @@ export function isEngineEngagementSegment(seg: string): boolean {
   if (/\baidlc\s+(?:jump|bolt|swarm)\b/.test(seg)) {
     if (hasReadOnlyFlag) return false;
     return true;
+  }
+  if (/\baidlc\s+unit\b/.test(seg)) {
+    return !/\baidlc\s+unit\s+(?:status|merge-status)\b/.test(seg);
   }
 
   return false;
@@ -1263,7 +1503,7 @@ const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
   .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   .join("|");
 const runtimeCompileTool = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|utility)\\.ts\\b`,
+  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
 );
 const runtimeCompileReport = new RegExp(
   `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
@@ -1283,7 +1523,7 @@ export function classifyRuntimeCompileCommand(
   if (
     runtimeCompileTool.test(command) ||
     runtimeCompileReport.test(command) ||
-    /\baidlc\s+(?:state|jump|bolt)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
+    /\baidlc\s+(?:state|jump|bolt|unit)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
     /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
   ) {
     // Utility split rationale: the new grammar keeps D2 parity for the public
@@ -1300,6 +1540,15 @@ export function classifyRuntimeCompileCommand(
 // intents live under spaces/<space>/ here; the engine stays in <harness>/).
 function workspaceRoot(projectDir: string): string {
   return join(projectDir, "aidlc");
+}
+
+function canonicalPathKey(path: string): string {
+  const resolved = resolvePath(path);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 // The active space for this project. Reads the `aidlc/active-space` cursor;
@@ -1330,7 +1579,7 @@ export function intentsDir(projectDir: string, space?: string): string {
 // engine's per-agent METHODOLOGY knowledge at <harness>/knowledge/ (shipped,
 // untouched). Created lazily by ensure-exists, never by SEED.
 export function knowledgeDir(projectDir: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
 }
 
@@ -1406,15 +1655,27 @@ export function activeIntent(
 // The absolute RECORD directory for an intent:
 // `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no intent
 // resolves, signalling the bare-space-root resolution in the path helpers.
+function resolveRecordDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): { dir: string | null; space: string } {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  return {
+    dir:
+      selection.intent === null
+        ? null
+        : join(intentsDir(projectDir, selection.space), selection.intent),
+    space: selection.space,
+  };
+}
+
 export function recordDir(
   projectDir: string,
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
-  if (slug === null) return null;
-  return join(intentsDir(projectDir, sp), slug);
+  return resolveRecordDir(projectDir, intent, space).dir;
 }
 
 // Relative record-dir prefix for the engine's agent-consumed artifact/diary
@@ -1430,8 +1691,9 @@ export function relativeRecordDir(
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const sp = selection.space;
+  const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
 }
@@ -1442,7 +1704,7 @@ export function relativeRecordDir(
 // by repo and shared across every intent in the space, so it must NOT carry the
 // intents/<slug> tail. Mirrors knowledgeDir's space-aware shape.
 export function codekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "codekb", repo);
 }
 
@@ -1451,7 +1713,7 @@ export function codekbDir(projectDir: string, repo: string, space?: string): str
 // can read the active-space cursor — NOT relativeSpaceRecordPrefix, which is
 // pinned to the default space).
 export function relativeCodekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
@@ -1461,8 +1723,17 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
-export function codekbRepoName(projectDir: string, space?: string): string {
-  const repos = intentRepos(projectDir, undefined, space);
+export function codekbRepoName(
+  projectDir: string,
+  space?: string,
+  intent?: string,
+): string {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const repos = intentRepos(
+    projectDir,
+    selection.intent ?? undefined,
+    selection.space,
+  );
   return repos.length === 1 ? repos[0] : basename(projectDir);
 }
 
@@ -1618,15 +1889,42 @@ export function parseReScope(body: string): ReScopeParse {
 // rebases/squashes/amends that vaporise a recorded commit hash cannot break
 // the comparison, and reverting an edit restores the original fingerprint.
 // Ignored files stay excluded (git add semantics). Callers may exclude generated
-// paths that live inside an analyzed root, such as the codekb being fingerprinted.
+// paths that live inside an analyzed root, such as the codekb being fingerprinted;
+// exclusions outside every analyzed root are omitted before invoking git.
 // Returns null when repoDir is not a git work tree, git is unavailable, or any
-// pathspec is invalid/unmatched (callers report UNVERIFIED, never a false verdict).
+// pathspec is invalid/unmatched or stages zero paths (callers report UNVERIFIED,
+// never a false verdict or the empty-tree fingerprint).
 export function codekbScopeFingerprint(
   repoDir: string,
   paths: string[],
   excludedPaths: string[] = [],
 ): string | null {
   if (paths.length === 0) return null;
+  const normalizePath = (path: string): string => {
+    let normalized = path.replaceAll("\\", "/");
+    normalized = normalized.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+    return normalized === "." ? "" : normalized;
+  };
+  const normalizedExclusions = excludedPaths.map(normalizePath);
+  const survivingPaths = paths
+    .map((original) => ({ original, normalized: normalizePath(original) }))
+    .filter(
+      ({ normalized: positive }) =>
+        !normalizedExclusions.some(
+          (exclusion) =>
+            exclusion === positive || positive.startsWith(`${exclusion}/`),
+        ),
+    );
+  if (survivingPaths.length === 0) return null;
+  const exclusions = normalizedExclusions
+    .filter((exclusion) =>
+      survivingPaths.some(
+        ({ normalized: positive }) =>
+          positive === "" || exclusion.startsWith(`${positive}/`),
+      ),
+    )
+    .map((exclusion) => `:(exclude,literal)${exclusion}`);
+
   const inTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd: repoDir,
     encoding: "utf-8",
@@ -1635,16 +1933,22 @@ export function codekbScopeFingerprint(
   const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
-    const exclusions = excludedPaths
-      .map((p) => p.replaceAll("\\", "/").replace(/^\.?\//, "").replace(/\/+$/, ""))
-      .filter((p) => p !== "")
-      .map((p) => `:(exclude,literal)${p}`);
-    const add = spawnSync("git", ["add", "-A", "--", ...paths, ...exclusions], {
+    const add = spawnSync(
+      "git",
+      ["add", "-A", "--", ...survivingPaths.map(({ original }) => original), ...exclusions],
+      {
+        cwd: repoDir,
+        env,
+        encoding: "utf-8",
+      },
+    );
+    if (add.status !== 0) return null;
+    const staged = spawnSync("git", ["ls-files", "-z"], {
       cwd: repoDir,
       env,
       encoding: "utf-8",
     });
-    if (add.status !== 0) return null;
+    if (staged.status !== 0 || staged.stdout.length === 0) return null;
     const wt = spawnSync("git", ["write-tree"], { cwd: repoDir, env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
     const hash = wt.stdout.trim();
@@ -1656,6 +1960,149 @@ export function codekbScopeFingerprint(
       // best-effort cleanup - a leaked temp index is inert
     }
   }
+}
+
+function normalizeGenerationPath(path: string): string | null {
+  const portable = path.trim().replaceAll("\\", "/");
+  if (
+    portable === "" ||
+    portable.startsWith("/") ||
+    /^[A-Za-z]:\//.test(portable) ||
+    /[*?[\]]/.test(portable)
+  ) {
+    return null;
+  }
+  const segments = portable.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (segments.some((segment) => segment === "..")) return null;
+  return segments.length === 0 ? "." : segments.join("/");
+}
+
+function treeGeneration(
+  rootDir: string,
+  paths: string[],
+  excludedPaths: string[] = [],
+): string | null {
+  const normalizedPaths = [...new Set(paths.map(normalizeGenerationPath))];
+  if (normalizedPaths.includes(null) || normalizedPaths.length === 0) return null;
+  const normalizedExcludes = new Set(
+    [".git", ...excludedPaths]
+      .map(normalizeGenerationPath)
+      .filter((path): path is string => path !== null),
+  );
+  const root = resolvePath(rootDir);
+  const seen = new Set<string>();
+  const hash = createHash("sha256");
+  const excluded = (portable: string): boolean =>
+    [...normalizedExcludes].some(
+      (entry) => portable === entry || portable.startsWith(`${entry}/`),
+    );
+
+  const visit = (absPath: string, portable: string): boolean => {
+    if (portable !== "." && excluded(portable)) return true;
+    if (seen.has(portable)) return true;
+    seen.add(portable);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(absPath);
+    } catch {
+      return false;
+    }
+    if (stat.isSymbolicLink()) {
+      hash.update(`L\0${portable}\0${readlinkSync(absPath)}\0`, "utf-8");
+      return true;
+    }
+    if (stat.isDirectory()) {
+      hash.update(`D\0${portable}\0`, "utf-8");
+      let names: string[];
+      try {
+        names = readdirSync(absPath).sort();
+      } catch {
+        return false;
+      }
+      for (const name of names) {
+        const childPortable = portable === "." ? name : `${portable}/${name}`;
+        if (!visit(join(absPath, name), childPortable)) return false;
+      }
+      return true;
+    }
+    if (!stat.isFile()) return false;
+    hash.update(`F\0${portable}\0${stat.size}\0`, "utf-8");
+    hash.update(readFileSync(absPath));
+    hash.update("\0", "utf-8");
+    return true;
+  };
+
+  for (const portable of normalizedPaths as string[]) {
+    const absPath = portable === "." ? root : resolvePath(root, ...portable.split("/"));
+    const rel = relative(root, absPath);
+    if (rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) return null;
+    hash.update(`S\0${portable}\0`, "utf-8");
+    if (!visit(absPath, portable)) return null;
+  }
+  return hash.digest("hex");
+}
+
+// A generation token for the source paths that informed one CodeKB candidate.
+// Prefer the existing git-aware fingerprint (ignored files excluded); fall back
+// to a byte-exact tree hash so non-git workspaces still receive a real CAS token.
+export function codekbSourceFingerprint(
+  repoDir: string,
+  paths: string[],
+  excludedPaths: string[] = [],
+): string | null {
+  const git = codekbScopeFingerprint(repoDir, paths, excludedPaths);
+  if (git !== null) return `git:${git}`;
+  const tree = treeGeneration(repoDir, paths, excludedPaths);
+  return tree === null ? null : `tree:${tree}`;
+}
+
+// Hash the complete on-disk CodeKB directory, not only its timestamp. This is
+// the compare-and-swap generation for cumulative merges: any concurrent edit to
+// any artifact changes the token and makes a stale publish refuse.
+export function codekbStoreGeneration(storeDir: string): string {
+  if (!existsSync(storeDir)) return "none";
+  const generation = treeGeneration(storeDir, ["./"]);
+  if (generation === null) {
+    throw new Error(`cannot compute CodeKB store generation for ${storeDir}`);
+  }
+  return `sha256:${generation}`;
+}
+
+// True only when the durable CodeKB store for `repo` carries a valid scope
+// block whose recorded fingerprint still matches the current source tree.
+// This is the programmatic form of `codekb-scope-diff`'s CURRENT verdict, used
+// by authority-bearing reuse receipts so freshness is checked both when the
+// receipt is minted and when pipeline completion consumes it.
+export function codekbStoreIsCurrent(
+  projectDir: string,
+  requestedRepo?: string,
+  space?: string,
+): boolean {
+  const sp = space ?? activeSpace(projectDir);
+  const repo = requestedRepo ?? codekbRepoName(projectDir, sp);
+  const timestamp = join(
+    codekbDir(projectDir, repo, sp),
+    "reverse-engineering-timestamp.md",
+  );
+  if (!existsSync(timestamp)) return false;
+  let parsed: ReScopeParse;
+  try {
+    parsed = parseReScope(readFileSync(timestamp, "utf-8"));
+  } catch {
+    return false;
+  }
+  if (!parsed.ok || parsed.scope.fingerprint === null) return false;
+  const sibling = repoDir(projectDir, repo);
+  const sourceRoot =
+    existsSync(sibling) && statSync(sibling).isDirectory()
+      ? sibling
+      : projectDir;
+  const current = codekbScopeFingerprint(
+    sourceRoot,
+    parsed.scope.analyzedPaths,
+    sourceRoot === projectDir ? ["aidlc"] : [],
+  );
+  return current !== null && current === parsed.scope.fingerprint;
 }
 
 // Coverage test for the compare mode: does the incoming run's analyzed set
@@ -1670,10 +2117,11 @@ export function scopePathCovered(incoming: string[], storePath: string): boolean
 
 // The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path
 // helpers resolve here when no intent record exists (activeIntent → null) — a
-// fresh SEED shell before auto-birth, or a flat project still awaiting migration.
+// fresh SEED shell before auto-create, or a flat project still awaiting migration.
 // No aidlc-state.md ever lives directly here, so existence-gated readers
 // (loadStateFileIfPresent) see "no workflow yet" and the orchestrator
-// births/errors. This is the P9 end state — there is no flat `aidlc-docs/` root.
+// creates an intent or reports an error. This is the P9 end state; there is no
+// flat `aidlc-docs/` root.
 function spaceRecordRoot(projectDir: string, space?: string): string {
   return intentsDir(projectDir, space);
 }
@@ -1776,12 +2224,13 @@ export function intentDirNameBase(label: string, date: Date = new Date()): strin
 
 // Resolve a within-space dir clash by appending a numeric counter: `<base>`,
 // `<base>-2`, `<base>-3`, … (the date prefix has no hex tail to extend, unlike the
-// pre-spike scheme). Two intents born the same day with the same short label is
-// the only collision case; the counter keeps the readable name AND uniqueness, and
+// pre-spike scheme). Two intents created on the same day with the same short
+// label are the only collision case; the counter keeps the readable name AND
+// uniqueness, and
 // the canonical id is still the row's UUIDv7. Returns the first free name.
 //
 // Bounded by MAX_DIR_COLLISIONS: 998 same-day same-label intents is not a real
-// workflow — it is a bug or a pathological caller (e.g. a script birthing in a
+// workflow - it is a bug or a pathological caller (e.g. a script creating intents in a
 // loop with a constant label). Fail LOUD with a diagnostic rather than spin, so
 // the cause surfaces. Safe to throw here: the caller holds the workspace lock via
 // withAuditLock, which releases in its `finally` (and an on-exit net), so the
@@ -1855,7 +2304,7 @@ export function needsFlatMigration(projectDir: string): boolean {
   const flatState = flatStateSource(projectDir);
   if (!existsSync(flatState)) return false;
   // Any new-layout intent RECORD already present → migration ran (or a fresh
-  // born intent exists); do not move a second tree on top of it.
+  // created intent exists); do not move a second tree on top of it.
   if (anyIntentRecordExists(projectDir)) return false;
   return true;
 }
@@ -1882,7 +2331,7 @@ export function anyIntentRecordExists(projectDir: string): boolean {
 export interface IntentRegistryEntry {
   uuid: string;
   slug: string;
-  // The on-disk record dir name. SPIKE (date-prefix): stored verbatim at birth so
+  // The on-disk record dir name. SPIKE (date-prefix): stored verbatim at creation so
   // readers join a row to its dir DIRECTLY, never reconstructing it from slug+uuid
   // (the date-prefixed name `<YYMMDD>-<label>` is not derivable from {slug,uuid}).
   // Optional for back-compat: pre-spike rows (and hand-written fixtures) omit it,
@@ -1953,7 +2402,7 @@ export function readIntentRegistry(projectDir: string, space?: string): IntentRe
 // --- The deterministic query layer: "what exists" (one source, two modes) ----
 //
 // listSpaces()/listIntents() are the single shared readers the verb handlers,
-// the auto-birth gate, the resume-rebind, and the statusline all call (P4
+// the auto-create gate, the resume-rebind, and the statusline all call (P4
 // query-layer box). Pure reads — they never mutate. A space exists iff its dir
 // is present under aidlc/spaces/; an intent's authoritative row is the
 // registry, joined with the on-disk record presence.
@@ -1967,8 +2416,8 @@ export interface SpaceInfo {
 // active per the active-space cursor. "default" is always reported even when no
 // spaces dir exists yet (the resolver treats it as always-valid — activeSpace()
 // returns it), so the listing never claims zero spaces on a fresh shell.
-export function listSpaces(projectDir: string): SpaceInfo[] {
-  const active = activeSpace(projectDir);
+export function listSpaces(projectDir: string, activeOverride?: string): SpaceInfo[] {
+  const active = activeOverride ?? activeSpace(projectDir);
   const names = new Set<string>([DEFAULT_SPACE]);
   try {
     for (const name of readdirSync(spacesRoot(projectDir))) {
@@ -1996,12 +2445,19 @@ export interface IntentInfo {
 // suffix so a registry row resolves to its record dir even when the slug was
 // later renamed. A record dir with no registry row (a hand-created or migrated
 // orphan) is appended so the listing never hides an on-disk intent.
-export function listIntents(projectDir: string, space?: string): IntentInfo[] {
+export function listIntents(
+  projectDir: string,
+  space?: string,
+  activeIntentOverride?: string | null,
+): IntentInfo[] {
   const sp = space ?? activeSpace(projectDir);
   const registry = readIntentRegistry(projectDir, sp);
   const dirs = listIntentDirs(projectDir, sp);
   // activeIntent() returns the record DIR NAME of the active intent (or null).
-  const activeDir = activeIntent(projectDir, sp);
+  const activeDir =
+    activeIntentOverride === undefined
+      ? activeIntent(projectDir, sp)
+      : activeIntentOverride;
   const claimedDirs = new Set<string>();
   const infos: IntentInfo[] = registry.map((entry) => {
     // Match the row to its record dir via the shared join rule (stored dirName,
@@ -2102,13 +2558,1126 @@ export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
+// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
+// ids must already match the canonical safe shape; normalization-changing
+// values are rejected so distinct raw identities cannot alias one record.
+function safeSessionId(sessionId: string): string {
+  const safe = sessionId
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 180);
+  if (!safe || safe === "." || safe === "..") return "";
+  return safe;
+}
+
+export function validSessionId(sessionId: string | undefined): string | null {
+  const raw = sessionId ?? "";
+  return raw && safeSessionId(raw) === raw ? raw : null;
+}
+
+export class SessionResolutionConflictError extends Error {
+  constructor(
+    readonly overrideSessionId: string,
+    readonly ancestrySessionId: string,
+  ) {
+    super(
+      `Session override "${overrideSessionId}" conflicts with the owning conversation ` +
+        `"${ancestrySessionId}". Work from the owning conversation, or rebind this ` +
+        "session with the intent/space switch verbs.",
+    );
+    this.name = "SessionResolutionConflictError";
+  }
+}
+
+const PLAN_APPROVAL_RUNTIME_DIR = "plan-approval";
+
+export interface PlanApprovalRuntimeIdentity {
+  targetId: string;
+  intentId: string;
+  directiveEpoch: string;
+  runFloor: string;
+  fingerprint: string;
+  questionsFile: string;
+  promptSha256: string;
+  sourceFloor: string;
+  markerRevision: number;
+}
+
+export interface PlanApprovalRuntimeChallenge extends PlanApprovalRuntimeIdentity {
+  version: 1;
+  session: string;
+  challengeId: string;
+  options: [string, string];
+  requireExactOptionLabels: boolean;
+  hashedOptionLabels: boolean;
+}
+
+export interface PlanApprovalRuntimeResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve Plan" | "Request Changes";
+  responseSha256: string;
+}
+
+export interface PlanApprovalRuntimeReceipt extends PlanApprovalRuntimeIdentity {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve Plan";
+  questionsSha256: string;
+  certifiedSourceSha256: string;
+  status: "approved" | "generation";
+}
+
+export interface PlanApprovalRuntimeViolation {
+  version: 1;
+  markerRevision: number;
+  reason: string;
+  target: string;
+}
+
+export interface PlanApprovalLegacyWindow {
+  version: 1;
+  session: string;
+  toolName: string;
+  markerRevision: number;
+  targetId: string;
+  unit: string | null;
+}
+
+export interface PlanApprovalLegacyOfferCandidate {
+  session: string;
+  optionHashes: [string, string];
+}
+
+export interface PlanApprovalLegacyOffer {
+  version: 1;
+  session: string;
+  intentId: string;
+  markerRevision: number;
+  allowedUnits: Array<string | null>;
+  options: [string, string];
+}
+
+export const LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE =
+  "Recover Plan Approval";
+
+export interface PlanApprovalLegacyRecoveryChallenge {
+  version: 1;
+  session: string;
+  intentId: string;
+  markerRevision: number;
+  challengeId: string;
+}
+
+export interface PlanApprovalLegacyRecoveryResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  responseSha256: string;
+}
+
+export interface KiroIdeLegacyPlanApprovalHost {
+  version: 1;
+  session: string;
+  pid: string;
+  ipc: string;
+}
+
+function planApprovalRuntimeDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
+}
+
+function runtimeSessionSegment(session: string): string {
+  return session
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+}
+
+function planApprovalChallengePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `challenge-${segment}.json`)
+    : "";
+}
+
+function planApprovalResponsePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `response-${segment}.json`)
+    : "";
+}
+
+function planApprovalReceiptPath(
+  projectDir: string,
+  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+): string {
+  const key = createHash("sha256")
+    .update(`${identity.targetId}\n${identity.directiveEpoch}`, "utf-8")
+    .digest("hex");
+  return join(planApprovalRuntimeDir(projectDir), `receipt-${key}.json`);
+}
+
+function planApprovalViolationPath(projectDir: string): string {
+  return join(planApprovalRuntimeDir(projectDir), "violation.json");
+}
+
+function planApprovalLegacyWindowPath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `legacy-window-${segment}.json`)
+    : "";
+}
+
+function planApprovalLegacyOfferPath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `legacy-offer-${segment}.json`)
+    : "";
+}
+
+function planApprovalLegacyRecoveryChallengePath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(
+      planApprovalRuntimeDir(projectDir),
+      `legacy-recovery-${segment}.json`,
+    )
+    : "";
+}
+
+function planApprovalLegacyRecoveryResponsePath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(
+      planApprovalRuntimeDir(projectDir),
+      `legacy-recovery-response-${segment}.json`,
+    )
+    : "";
+}
+
+function ensurePlanApprovalRuntimeDir(projectDir: string): string {
+  const dir = planApprovalRuntimeDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function readPlanApprovalRuntimeJson<T>(path: string, what: string): T | null {
+  if (!path) return null;
+  try {
+    return JSON.parse(
+      readAtomicReplacedFileNoFollowOrThrow(path, what).toString("utf-8"),
+    ) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function resetPlanApprovalRuntime(projectDir: string): void {
+  try {
+    const dir = planApprovalRuntimeDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // A stale or redirected authority store is equivalent to no authority.
+  }
+}
+
+export function writePlanApprovalChallenge(
+  projectDir: string,
+  challenge: PlanApprovalRuntimeChallenge,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalChallengePath(projectDir, challenge.session);
+  if (!path) throw new Error("Plan Approval challenge requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  try {
+    unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
+  } catch {
+    // A prior response is optional and one-shot.
+  }
+}
+
+export function readPlanApprovalChallenge(
+  projectDir: string,
+  session: string,
+): PlanApprovalRuntimeChallenge | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeChallenge>(
+    planApprovalChallengePath(projectDir, session),
+    "Plan Approval challenge",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function writePlanApprovalResponse(
+  projectDir: string,
+  response: PlanApprovalRuntimeResponse,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalResponsePath(projectDir, response.session);
+  if (!path) throw new Error("Plan Approval response requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readPlanApprovalResponse(
+  projectDir: string,
+  session: string,
+): PlanApprovalRuntimeResponse | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeResponse>(
+    planApprovalResponsePath(projectDir, session),
+    "Plan Approval response",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function clearPlanApprovalChallenge(
+  projectDir: string,
+  session: string,
+): void {
+  for (const path of [
+    planApprovalChallengePath(projectDir, session),
+    planApprovalResponsePath(projectDir, session),
+  ]) {
+    if (!path) continue;
+    try {
+      unlinkSync(path);
+    } catch {
+      // Missing runtime state is already clear.
+    }
+  }
+}
+
+export function writePlanApprovalReceipt(
+  projectDir: string,
+  receipt: PlanApprovalRuntimeReceipt,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(
+    planApprovalReceiptPath(projectDir, receipt),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+  );
+}
+
+export function readPlanApprovalReceipt(
+  projectDir: string,
+  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+): PlanApprovalRuntimeReceipt | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
+    planApprovalReceiptPath(projectDir, identity),
+    "Plan Approval receipt",
+  );
+  return value?.version === 1 ? value : null;
+}
+
+export function clearPlanApprovalReceipt(
+  projectDir: string,
+  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+): void {
+  try {
+    unlinkSync(planApprovalReceiptPath(projectDir, identity));
+  } catch {
+    // Missing runtime authority is already clear.
+  }
+}
+
+export function planApprovalRuntimeHasReceiptForMarker(
+  projectDir: string,
+  marker: Pick<
+    ActiveDirectiveMarker,
+    | "revision"
+    | "active_attempt"
+    | "code_generation_source_sha256"
+    | "code_generation_authority_revision"
+  >,
+): boolean {
+  const revision =
+    marker.code_generation_authority_revision ??
+    marker.active_attempt?.result_revision ??
+    marker.revision;
+  const sourceFloor = marker.code_generation_source_sha256;
+  if (!Number.isInteger(revision) || !sourceFloor) return false;
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"));
+  } catch {
+    return false;
+  }
+  return names.some((name) => {
+    const receipt = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
+      join(planApprovalRuntimeDir(projectDir), name),
+      "Plan Approval receipt",
+    );
+    return (
+      receipt?.version === 1 &&
+      receipt.markerRevision === revision &&
+      receipt.sourceFloor === sourceFloor &&
+      receipt.status === "generation"
+    );
+  });
+}
+
+export function writePlanApprovalViolation(
+  projectDir: string,
+  violation: PlanApprovalRuntimeViolation,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(
+    planApprovalViolationPath(projectDir),
+    `${JSON.stringify(violation, null, 2)}\n`,
+  );
+}
+
+export function readPlanApprovalViolation(
+  projectDir: string,
+): PlanApprovalRuntimeViolation | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeViolation>(
+    planApprovalViolationPath(projectDir),
+    "Plan Approval violation",
+  );
+  return value?.version === 1 &&
+    Number.isInteger(value.markerRevision) &&
+    value.markerRevision >= 0 &&
+    typeof value.reason === "string" &&
+    value.reason.trim().length > 0 &&
+    typeof value.target === "string" &&
+    (
+      isAbsolute(value.target) ||
+      value.target === "(unresolved write target)"
+    )
+    ? value
+    : null;
+}
+
+export function clearPlanApprovalViolation(projectDir: string): void {
+  try {
+    unlinkSync(planApprovalViolationPath(projectDir));
+  } catch {
+    // Missing violation authority is already clear.
+  }
+}
+
+export function writePlanApprovalLegacyWindow(
+  projectDir: string,
+  window: PlanApprovalLegacyWindow,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyWindowPath(projectDir, window.session);
+  if (!path) throw new Error("legacy Plan Approval write window requires a session");
+  writeFileAtomic(
+    path,
+    `${JSON.stringify(window, null, 2)}\n`,
+  );
+}
+
+export function readPlanApprovalLegacyWindow(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyWindow | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+    planApprovalLegacyWindowPath(projectDir, session),
+    "legacy Plan Approval write window",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function readPlanApprovalLegacyWindows(
+  projectDir: string,
+): PlanApprovalLegacyWindow[] {
+  try {
+    return readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("legacy-window-") && name.endsWith(".json"))
+      .map((name) =>
+        readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+          join(planApprovalRuntimeDir(projectDir), name),
+          "legacy Plan Approval write window",
+        )
+      )
+      .filter((value): value is PlanApprovalLegacyWindow =>
+        value?.version === 1 && Boolean(value.session)
+      );
+  } catch {
+    return [];
+  }
+}
+
+export function clearPlanApprovalLegacyWindow(projectDir: string, session: string): void {
+  const path = planApprovalLegacyWindowPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing window is already clear.
+  }
+}
+
+export function writePlanApprovalLegacyOffer(
+  projectDir: string,
+  offer: PlanApprovalLegacyOffer,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyOfferPath(projectDir, offer.session);
+  if (!path) throw new Error("legacy Plan Approval offer requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(offer, null, 2)}\n`);
+}
+
+export function readPlanApprovalLegacyOffer(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyOffer | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyOffer>(
+    planApprovalLegacyOfferPath(projectDir, session),
+    "legacy Plan Approval directive offer",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function clearPlanApprovalLegacyOffer(
+  projectDir: string,
+  session: string,
+): void {
+  const path = planApprovalLegacyOfferPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing offer is already clear.
+  }
+}
+
+export function writePlanApprovalLegacyRecoveryChallenge(
+  projectDir: string,
+  challenge: PlanApprovalLegacyRecoveryChallenge,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyRecoveryChallengePath(
+    projectDir,
+    challenge.session,
+  );
+  if (!path) {
+    throw new Error("legacy Plan Approval recovery requires a nonblank session");
+  }
+  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  try {
+    unlinkSync(
+      planApprovalLegacyRecoveryResponsePath(projectDir, challenge.session),
+    );
+  } catch {
+    // A prior recovery response is optional and one-shot.
+  }
+}
+
+export function readPlanApprovalLegacyRecoveryChallenge(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyRecoveryChallenge | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyRecoveryChallenge>(
+    planApprovalLegacyRecoveryChallengePath(projectDir, session),
+    "legacy Plan Approval recovery challenge",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function writePlanApprovalLegacyRecoveryResponse(
+  projectDir: string,
+  response: PlanApprovalLegacyRecoveryResponse,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyRecoveryResponsePath(
+    projectDir,
+    response.session,
+  );
+  if (!path) {
+    throw new Error("legacy Plan Approval recovery response requires a session");
+  }
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readPlanApprovalLegacyRecoveryResponse(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyRecoveryResponse | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyRecoveryResponse>(
+    planApprovalLegacyRecoveryResponsePath(projectDir, session),
+    "legacy Plan Approval recovery response",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function clearPlanApprovalLegacyRecovery(
+  projectDir: string,
+  session: string,
+): void {
+  for (const path of [
+    planApprovalLegacyRecoveryChallengePath(projectDir, session),
+    planApprovalLegacyRecoveryResponsePath(projectDir, session),
+  ]) {
+    if (!path) continue;
+    try {
+      unlinkSync(path);
+    } catch {
+      // Missing recovery authority is already clear.
+    }
+  }
+}
+
+export function kiroIdeLegacyPlanApprovalSessionId(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const ipc = env.VSCODE_IPC_HOOK?.trim() ?? "";
+  const pid = env.VSCODE_PID?.trim() ?? "";
+  if (!ipc && !pid) return null;
+  return `kiro-ide-legacy-${
+    createHash("sha256")
+      .update(`${ipc}\n${pid}`, "utf-8")
+      .digest("hex")
+      .slice(0, 24)
+  }`;
+}
+
+function kiroIdeLegacyPlanApprovalHostPath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(
+      sessionsDir(projectDir),
+      `.kiro-ide-legacy-plan-approval-${segment}.json`,
+    )
+    : "";
+}
+
+export function markKiroIdeLegacyPlanApprovalHost(
+  projectDir: string,
+  session: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!session.trim()) {
+    throw new Error("legacy Kiro IDE host marker requires a nonblank session");
+  }
+  const dir = sessionsDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(
+    kiroIdeLegacyPlanApprovalHostPath(projectDir, session),
+    `${JSON.stringify({
+      version: 1,
+      session,
+      pid: env.VSCODE_PID?.trim() ?? "",
+      ipc: env.VSCODE_IPC_HOOK?.trim() ?? "",
+    }, null, 2)}\n`,
+  );
+}
+
+export function readKiroIdeLegacyPlanApprovalHost(
+  projectDir: string,
+  session: string,
+): KiroIdeLegacyPlanApprovalHost | null {
+  const path = kiroIdeLegacyPlanApprovalHostPath(projectDir, session);
+  if (!path) return null;
+  const value = readPlanApprovalRuntimeJson<KiroIdeLegacyPlanApprovalHost>(
+    path,
+    "legacy Kiro IDE host marker",
+  );
+  return value?.version === 1 &&
+      value.session === session &&
+      typeof value.pid === "string" &&
+      typeof value.ipc === "string"
+    ? value
+    : null;
+}
+
+export function clearKiroIdeLegacyPlanApprovalHost(
+  projectDir: string,
+  session: string,
+): void {
+  const path = kiroIdeLegacyPlanApprovalHostPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing legacy host marker is already clear.
+  }
+}
+
 // The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
 // session id is normalised to the slug shape so a host-supplied id can never
 // escape the sessions dir (path traversal / separators); an empty id yields "".
 function sessionRecordPath(projectDir: string, sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!safe) return "";
-  return join(sessionsDir(projectDir), safe);
+  const valid = validSessionId(sessionId);
+  if (!valid) return "";
+  return join(sessionsDir(projectDir), valid);
+}
+
+export interface SessionBinding {
+  space: string;
+  intent: string | null;
+  boundAt: string;
+}
+
+function sessionBindingPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.binding.json` : "";
+}
+
+function safeIntentRecordName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
+}
+
+// Read a session's pinned workflow selection. Malformed, unsafe, or stale
+// records degrade to no binding so cursor behavior remains the fallback.
+export function readSessionBinding(projectDir: string, sessionId: string): SessionBinding | null {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionBinding>;
+    if (
+      typeof candidate.space !== "string" ||
+      !SPACE_NAME_REGEX.test(candidate.space) ||
+      (candidate.intent !== null &&
+        (typeof candidate.intent !== "string" || !safeIntentRecordName(candidate.intent))) ||
+      typeof candidate.boundAt !== "string" ||
+      candidate.boundAt.length === 0
+    ) {
+      return null;
+    }
+    if (
+      candidate.intent !== null &&
+      !existsSync(join(intentsDir(projectDir, candidate.space), candidate.intent, "aidlc-state.md"))
+    ) {
+      return null;
+    }
+    return candidate as SessionBinding;
+  } catch {
+    return null;
+  }
+}
+
+// Pin a session to one space and optional intent record. This is machine-local
+// runtime state, so any write failure silently falls back to shared cursors.
+export function writeSessionBinding(
+  projectDir: string,
+  sessionId: string,
+  space: string,
+  intent: string | null,
+): void {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (
+    !path ||
+    !SPACE_NAME_REGEX.test(space) ||
+    (intent !== null && !safeIntentRecordName(intent))
+  ) {
+    return;
+  }
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const binding: SessionBinding = { space, intent, boundAt: isoTimestamp() };
+    writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.rebind-offer` : "";
+}
+
+export function readSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): string | null {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    return readFileSync(path, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+  signature: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path || !signature) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${signature}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function clearSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent runtime receipt */
+  }
+}
+
+interface SessionPidEntry {
+  sessionId: string;
+  startTime: string | null;
+}
+
+interface ProcessIdentity {
+  ppid: number;
+  startTime: string | null;
+}
+
+const SESSION_ANCESTRY_BUDGET_MS = 50;
+const SESSION_ANCESTRY_MAX_DEPTH = 64;
+const SESSION_ANCESTRY_CACHE_MS = 1000;
+const sessionAncestryCache = new Map<
+  string,
+  { sessionId: string | null; expiresAt: number }
+>();
+
+function sessionProcessPlatform(): NodeJS.Platform {
+  const testPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+  if (
+    testPlatform === "linux" ||
+    testPlatform === "darwin" ||
+    testPlatform === "win32"
+  ) {
+    return testPlatform;
+  }
+  return process.platform;
+}
+
+export function sessionPidMapDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), "pids");
+}
+
+function sessionPidEntryPath(projectDir: string, pid: number): string {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return "";
+  return join(sessionPidMapDir(projectDir), String(pid));
+}
+
+function linuxProcessIdentity(pid: number): ProcessIdentity | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    const ppid = Number.parseInt(fields[1] ?? "", 10);
+    const startTime = fields[19] ?? "";
+    if (!Number.isSafeInteger(ppid) || ppid < 0 || startTime.length === 0) return null;
+    return { ppid, startTime };
+  } catch {
+    return null;
+  }
+}
+
+function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (process.env.AIDLC_TEST_PS_DENIED === "1") return null;
+  const timeout = Math.max(1, deadlineMs - Date.now());
+  if (timeout <= 1) return null;
+  try {
+    const result = spawnSync("ps", ["-o", "ppid=,lstart=", "-p", String(pid)], {
+      encoding: "utf-8",
+      timeout,
+    });
+    if (result.status !== 0) return null;
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout ?? "");
+    if (!match) return null;
+    const ppid = Number.parseInt(match[1], 10);
+    return Number.isSafeInteger(ppid) ? { ppid, startTime: match[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
+  const platform = sessionProcessPlatform();
+  if (platform === "linux") return linuxProcessIdentity(pid);
+  if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
+  // Windows process ancestry is optional in this increment. Returning null
+  // preserves cursor behavior without paying for a PowerShell process.
+  return null;
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry | null {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionPidEntry>;
+    if (
+      typeof candidate.sessionId !== "string" ||
+      validSessionId(candidate.sessionId) === null ||
+      (candidate.startTime !== null && typeof candidate.startTime !== "string")
+    ) {
+      return null;
+    }
+    return candidate as SessionPidEntry;
+  } catch {
+    return null;
+  }
+}
+
+// Write one PID ownership record. Exported for deterministic ancestry tests;
+// production callers normally use writeSessionPidAncestry().
+export function writeSessionPidEntry(
+  projectDir: string,
+  pid: number,
+  sessionId: string,
+  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+): void {
+  sessionAncestryCache.delete(projectDir);
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (
+    Date.now() >= deadlineMs ||
+    !path ||
+    validSessionId(sessionId) === null ||
+    !processIsAlive(pid)
+  ) {
+    return;
+  }
+  const identity = processIdentity(pid, deadlineMs);
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    const entry: SessionPidEntry = {
+      sessionId,
+      startTime: identity?.startTime ?? null,
+    };
+    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (Date.now() >= deadlineMs || !/^\d+$/.test(name)) continue;
+    const pid = Number.parseInt(name, 10);
+    const entry = readSessionPidEntry(projectDir, pid);
+    const identity = processIdentity(pid, deadlineMs);
+    const stale =
+      !entry ||
+      !processIsAlive(pid) ||
+      (entry.startTime !== null &&
+        (identity?.startTime === null ||
+          identity?.startTime === undefined ||
+          identity.startTime !== entry.startTime));
+    if (!stale) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
+// Map the harness process and each ancestor to the current session. The hook
+// process itself is intentionally excluded because later tool subprocesses are
+// siblings, not descendants, of that short-lived hook.
+export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
+  sessionAncestryCache.delete(projectDir);
+  if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  gcSessionPidEntries(projectDir, deadline);
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity) break;
+    writeSessionPidEntry(projectDir, pid, sessionId, deadline);
+    pid = identity.ppid;
+  }
+}
+
+// Resolve the nearest mapped ancestor of the calling process. Every failure is
+// a silent miss so tools retain cursor behavior when process metadata is absent.
+export function resolveSessionIdFromAncestry(projectDir: string): string | null {
+  const cached = sessionAncestryCache.get(projectDir);
+  if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  if (resolved === null) {
+    sessionAncestryCache.set(projectDir, {
+      sessionId: null,
+      expiresAt: Date.now() + SESSION_ANCESTRY_CACHE_MS,
+    });
+  } else {
+    sessionAncestryCache.delete(projectDir);
+  }
+  return resolved;
+}
+
+// Build a hook-spawned child's environment from authoritative payload identity.
+// A valid divergent payload carries a private source marker so the selection
+// chokepoint can let payload identity win without weakening bare env refusal.
+export function hookChildEnv(
+  projectDir: string,
+  payloadSessionId: string | undefined,
+  extra: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...extra,
+  };
+  const payloadSession = validSessionId(payloadSessionId);
+  if (!payloadSession) return env;
+  env.AIDLC_SESSION_OVERRIDE = payloadSession;
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (ancestrySession !== null && ancestrySession !== payloadSession) {
+    env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  } else {
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  }
+  return env;
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+  if (sessionProcessPlatform() === "win32") return null;
+  if (!existsSync(sessionPidMapDir(projectDir))) return null;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) return null;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity || !processIsAlive(pid)) return null;
+    const entry = readSessionPidEntry(projectDir, pid);
+    if (
+      entry &&
+      (entry.startTime === null || entry.startTime === identity.startTime)
+    ) {
+      return entry.sessionId;
+    }
+    pid = identity.ppid;
+  }
+  return null;
+}
+
+export interface WorkflowSelection {
+  space: string;
+  intent: string | null;
+  sessionId: string | null;
+  binding: SessionBinding | null;
+}
+
+export interface WorkflowSelectionOptions {
+  space?: string;
+  intent?: string;
+  sessionId?: string;
+}
+
+// Resolve one stable workflow target for an operation. Explicit selectors win,
+// then the session binding, then the legacy cursor and lone-intent rules.
+export function resolveWorkflowSelection(
+  projectDir: string,
+  options: WorkflowSelectionOptions = {},
+): WorkflowSelection {
+  const explicitSession = validSessionId(options.sessionId);
+  let sessionId: string | null;
+  if (explicitSession) {
+    sessionId = explicitSession;
+  } else {
+    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+    // This refusal is a footgun guard against stale exported overrides, not a
+    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+    // Deliberately setting both variables is an intentional same-user act
+    // equivalent to a sanctioned session switch; no privilege boundary exists
+    // between callers that could authenticate it.
+    const payloadOverride =
+      envSession !== null &&
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+    if (
+      envSession &&
+      ancestrySession &&
+      envSession !== ancestrySession &&
+      !payloadOverride
+    ) {
+      throw new SessionResolutionConflictError(envSession, ancestrySession);
+    }
+    sessionId = envSession ?? ancestrySession;
+  }
+  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const space = options.space ?? binding?.space ?? activeSpace(projectDir);
+  let intent: string | null;
+  if (options.intent !== undefined) {
+    intent = options.intent;
+  } else if (binding && binding.space === space) {
+    intent = binding.intent;
+  } else {
+    intent = activeIntent(projectDir, space);
+  }
+  return { space, intent, sessionId, binding };
+}
+
+export function stateFilePathForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string {
+  const root =
+    selection.intent === null
+      ? intentsDir(projectDir, selection.space)
+      : join(intentsDir(projectDir, selection.space), selection.intent);
+  return join(root, "aidlc-state.md");
+}
+
+export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {
+  if (selection.intent === null) return null;
+  return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
+}
+
+export function intentUuidForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string | null {
+  if (selection.intent === null) return null;
+  return (
+    listIntents(projectDir, selection.space).find(
+      (entry) => entry.dirName === selection.intent,
+    )?.uuid ?? null
+  );
 }
 
 // Read the intent UUID this conversation last stamped, or null. Best-effort.
@@ -2263,7 +3832,7 @@ export function readCurrentSessionId(projectDir: string): string | null {
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
 // (a TTY/empty hook invocation has no session to record).
 export function writeCurrentSessionId(projectDir: string, sessionId: string): void {
-  if (!sessionId) return;
+  if (validSessionId(sessionId) === null) return;
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
     writeFileSync(currentSessionPath(projectDir), `${sessionId}\n`, "utf-8");
@@ -2304,7 +3873,7 @@ export function findIntentByUuid(
   return null;
 }
 
-// --- Intent birth: the deterministic mutation behind the engine's directive ---
+// --- Intent creation: the deterministic mutation behind the engine's directive ---
 //
 // createIntent() is the single deterministic primitive the `intent-create` tool
 // handler calls: mint a UUIDv7, create the record dir, append the registry row,
@@ -2313,10 +3882,10 @@ export function findIntentByUuid(
 // — it owns only the identity + dir + registry + cursor, the parts that must be
 // crash-safe and clash-free. The CALLER MUST already hold the WORKSPACE lock
 // (invariant 2: every intents.json mutation takes the workspace bucket); a
-// concurrent birth is serialized by that lock, so the within-space dir-clash
+// concurrent creation is serialized by that lock, so the within-space dir-clash
 // disambiguation here only ever resolves a same-uuid id8 collision, never a
 // cross-process race.
-export interface BornIntent {
+export interface CreatedIntent {
   uuid: string;
   slug: string;
   dirName: string;
@@ -2330,7 +3899,8 @@ export function createIntent(
   space: string,
   scope?: string,
   repos?: string[],
-): BornIntent {
+  sessionId?: string,
+): CreatedIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
   // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
@@ -2349,12 +3919,12 @@ export function createIntent(
   mkdirSync(recordPath, { recursive: true });
   // BIND the record so the resolvers recognize it immediately: activeIntent()
   // only treats a record dir as real once it holds an aidlc-state.md (the cursor
-  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). Birth
-  // mkdir's the dir, but the full state body is written AFTER birth by the
+  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). createIntent()
+  // creates the dir, but the full state body is written AFTER creation by the
   // caller (handleIntentCreate, via the default-resolving writeStateFile). Write
   // a header-only stub here so the cursor resolves to THIS record between mint
   // and the full write — without it, activeIntent() returns null and the
-  // post-birth state/audit writes leak to the flat fallback (a bootstrap gap).
+  // post-creation state/audit writes leak to the flat fallback (a bootstrap gap).
   const statePath = join(recordPath, "aidlc-state.md");
   if (!existsSync(statePath)) {
     writeFileSync(statePath, "# AI-DLC State Tracking\n", "utf-8");
@@ -2369,6 +3939,12 @@ export function createIntent(
     space,
   );
   setActiveIntentCursor(projectDir, dirName, space);
+  const creatingSession =
+    validSessionId(sessionId) ??
+    resolveSessionIdFromAncestry(projectDir);
+  if (creatingSession) {
+    writeSessionBinding(projectDir, creatingSession, space, dirName);
+  }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }
 
@@ -2551,9 +4127,14 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
 // SOURCE (flatStateSource/flatMigrationSource above).
 
 export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "aidlc-state.md");
-  return join(dir, "aidlc-state.md");
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "aidlc-state.md",
+    );
+  }
+  return join(resolved.dir, "aidlc-state.md");
 }
 
 // The engine's final validated run-stage is the active execution cursor. Most
@@ -2565,7 +4146,7 @@ const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
 
 export type ActiveDirectiveKind =
   | "load-steering" | "run-stage" | "ask" | "print" | "error"
-  | "done" | "parked" | "dispatch-subagent" | "invoke-swarm" | "present-gate";
+  | "done" | "parked" | "notice" | "dispatch-subagent" | "invoke-swarm" | "present-gate";
 export type ResumeAction = "resume" | "redo" | "jump" | "start-fresh";
 
 interface ActiveDirectiveAttempt {
@@ -2586,7 +4167,10 @@ interface ActiveDirectiveResume {
 
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
+  units?: string[];
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
+  code_generation_source_sha256?: string;
+  code_generation_authority_revision?: number;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
@@ -2611,7 +4195,15 @@ export interface CopilotCommandClaim {
 export type CopilotClaimResult = { allowed: true; attemptId: string } |
   { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" };
 
-export type ActiveDirectiveWriteResult = "copilot-committed" | "generic-committed" | "preserved" | "stale-attempt";
+export type ActiveDirectiveWriteResult =
+  | "copilot-committed"
+  | "generic-committed"
+  | "legacy-plan-approval-owned"
+  | "legacy-plan-approval-recovery-required"
+  | "legacy-plan-approval-reissued"
+  | "legacy-plan-approval-transport"
+  | "preserved"
+  | "stale-attempt";
 
 export type CopilotStopEvidence =
   | { status: "foreign" | "resume" | "contended" }
@@ -2633,14 +4225,367 @@ export class ActiveDirectiveLockContendedError extends Error {
   }
 }
 
+function validPlanApprovalLegacyOfferCandidate(
+  candidate: PlanApprovalLegacyOfferCandidate | undefined,
+): candidate is PlanApprovalLegacyOfferCandidate {
+  return Boolean(
+    candidate?.session.trim() &&
+      candidate.optionHashes.length === 2 &&
+      candidate.optionHashes.every((value) => /^[0-9a-f]{64}$/.test(value)),
+  );
+}
+
+type PlanApprovalLegacyOwner =
+  | { status: "none" }
+  | { status: "ambiguous" }
+  | {
+    status: "owned";
+    session: string;
+    live: boolean;
+    offer: PlanApprovalLegacyOffer | null;
+    challenge: PlanApprovalRuntimeChallenge | null;
+  };
+
+function legacyKiroHostIsLive(
+  host: KiroIdeLegacyPlanApprovalHost | null,
+): boolean {
+  if (!host) return true;
+  const pid = Number.parseInt(host.pid, 10);
+  if (Number.isInteger(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+  return host.ipc.trim() ? existsSync(host.ipc) : true;
+}
+
+function planApprovalAuthorityRevision(
+  marker: ActiveDirectiveMarker | null,
+): number | null {
+  return marker?.version === 2
+    ? marker.code_generation_authority_revision ??
+      marker.active_attempt?.result_revision ??
+      marker.revision ??
+      null
+    : null;
+}
+
+function planApprovalLegacyViolationMatches(
+  projectDir: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  const violation = readPlanApprovalViolation(projectDir);
+  return (
+    markerRevision !== null &&
+    violation?.version === 1 &&
+    violation.markerRevision === markerRevision
+  );
+}
+
+function planApprovalLegacyWindowMatches(
+  projectDir: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  let windows: PlanApprovalLegacyWindow[] = [];
+  try {
+    windows = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("legacy-window-") && name.endsWith(".json"))
+      .map((name) =>
+        readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+          join(planApprovalRuntimeDir(projectDir), name),
+          "legacy Plan Approval write window",
+        )
+      )
+      .filter((value): value is PlanApprovalLegacyWindow =>
+        value?.version === 1 && Boolean(value.session)
+      );
+  } catch {
+    return false;
+  }
+  return windows.some((window) => {
+  if (
+    marker?.version !== 2 ||
+    marker.stage !== "code-generation" ||
+    markerRevision === null ||
+    window?.version !== 1 ||
+    window.markerRevision !== markerRevision
+  ) {
+    return false;
+  }
+  if (
+    (marker.kind === "invoke-swarm" || marker.kind === "load-steering") &&
+    (marker.units?.length ?? 0) > 0
+  ) {
+    return (
+      window.unit !== null &&
+      (marker.units ?? []).includes(window.unit)
+    );
+  }
+  return window.unit === (marker.unit?.trim() || null);
+  });
+}
+
+function clearPlanApprovalLegacyWindowsForMarker(
+  projectDir: string,
+  marker: ActiveDirectiveMarker | null,
+): void {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  if (markerRevision === null) return;
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("legacy-window-") && name.endsWith(".json"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(planApprovalRuntimeDir(projectDir), name);
+    const window = readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+      path,
+      "legacy Plan Approval write window",
+    );
+    if (window?.version === 1 && window.markerRevision === markerRevision) {
+      try { unlinkSync(path); } catch { /* already clear */ }
+    }
+  }
+}
+
+function findPlanApprovalLegacyOwner(
+  projectDir: string,
+  intentId: string,
+  marker: ActiveDirectiveMarker | null,
+): PlanApprovalLegacyOwner {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  if (markerRevision === null) return { status: "none" };
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir));
+  } catch {
+    return { status: "none" };
+  }
+  const owners = new Map<
+    string,
+    {
+      offer: PlanApprovalLegacyOffer | null;
+      challenge: PlanApprovalRuntimeChallenge | null;
+    }
+  >();
+  for (const name of names) {
+    if (
+      !name.startsWith("legacy-offer-") &&
+      !name.startsWith("challenge-")
+    ) {
+      continue;
+    }
+    const path = join(planApprovalRuntimeDir(projectDir), name);
+    if (name.startsWith("legacy-offer-")) {
+      const offer = readPlanApprovalRuntimeJson<PlanApprovalLegacyOffer>(
+        path,
+        "legacy Plan Approval directive offer",
+      );
+      if (
+        offer?.version !== 1 ||
+        offer.intentId !== intentId ||
+        offer.markerRevision !== markerRevision ||
+        !offer.session
+      ) {
+        continue;
+      }
+      const owner = owners.get(offer.session) ?? {
+        offer: null,
+        challenge: null,
+      };
+      owner.offer = offer;
+      owners.set(offer.session, owner);
+      continue;
+    }
+    const challenge = readPlanApprovalRuntimeJson<PlanApprovalRuntimeChallenge>(
+      path,
+      "Plan Approval challenge",
+    );
+    if (
+      challenge?.version !== 1 ||
+      challenge.intentId !== intentId ||
+      challenge.markerRevision !== markerRevision ||
+      !challenge.session
+    ) {
+      continue;
+    }
+    const owner = owners.get(challenge.session) ?? {
+      offer: null,
+      challenge: null,
+    };
+    owner.challenge = challenge;
+    owners.set(challenge.session, owner);
+  }
+  if (owners.size === 0) return { status: "none" };
+  if (owners.size !== 1) return { status: "ambiguous" };
+  const [session, owner] = [...owners.entries()][0];
+  return {
+    status: "owned",
+    session,
+    live: legacyKiroHostIsLive(
+      readKiroIdeLegacyPlanApprovalHost(projectDir, session),
+    ),
+    ...owner,
+  };
+}
+
+function rotatePlanApprovalLegacyOwner(
+  projectDir: string,
+  candidate: PlanApprovalLegacyOfferCandidate,
+  owner: Extract<PlanApprovalLegacyOwner, { status: "owned" }>,
+): void {
+  if (owner.challenge) {
+    const challenge: PlanApprovalRuntimeChallenge = {
+      ...owner.challenge,
+      session: candidate.session,
+      options: candidate.optionHashes,
+      hashedOptionLabels: true,
+      challengeId: createHash("sha256")
+        .update(JSON.stringify({
+          previous: owner.challenge.challengeId,
+          session: candidate.session,
+          options: candidate.optionHashes,
+        }), "utf-8")
+        .digest("hex"),
+    };
+    if (owner.session !== candidate.session) {
+      clearPlanApprovalChallenge(projectDir, owner.session);
+    }
+    writePlanApprovalChallenge(projectDir, challenge);
+    return;
+  }
+  if (!owner.offer) {
+    throw new Error("legacy Plan Approval owner has no recoverable authority");
+  }
+  if (owner.session !== candidate.session) {
+    clearPlanApprovalLegacyOffer(projectDir, owner.session);
+  }
+  writePlanApprovalLegacyOffer(projectDir, {
+    ...owner.offer,
+    session: candidate.session,
+    options: candidate.optionHashes,
+  });
+}
+
+function legacyPlanApprovalRecoveryChallengeId(
+  session: string,
+  intentId: string,
+  markerRevision: number,
+): string {
+  return createHash("sha256")
+    .update(
+      `${session}\n${intentId}\n${markerRevision}\n${LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE}`,
+      "utf-8",
+    )
+    .digest("hex");
+}
+
+function planApprovalLegacyRecoverySatisfied(
+  projectDir: string,
+  session: string,
+  intentId: string,
+  markerRevision: number,
+): boolean {
+  const challenge = readPlanApprovalLegacyRecoveryChallenge(
+    projectDir,
+    session,
+  );
+  const response = readPlanApprovalLegacyRecoveryResponse(projectDir, session);
+  const challengeId = legacyPlanApprovalRecoveryChallengeId(
+    session,
+    intentId,
+    markerRevision,
+  );
+  return Boolean(
+    challenge &&
+      response &&
+      challenge.intentId === intentId &&
+      challenge.markerRevision === markerRevision &&
+      challenge.challengeId === challengeId &&
+      response.challengeId === challengeId &&
+      response.responseSha256 ===
+        createHash("sha256")
+          .update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8")
+          .digest("hex"),
+  );
+}
+
+function ensurePlanApprovalLegacyRecoveryChallenge(
+  projectDir: string,
+  session: string,
+  intentId: string,
+  markerRevision: number,
+): void {
+  const challengeId = legacyPlanApprovalRecoveryChallengeId(
+    session,
+    intentId,
+    markerRevision,
+  );
+  const existing = readPlanApprovalLegacyRecoveryChallenge(
+    projectDir,
+    session,
+  );
+  if (
+    existing?.intentId === intentId &&
+    existing.markerRevision === markerRevision &&
+    existing.challengeId === challengeId
+  ) {
+    return;
+  }
+  writePlanApprovalLegacyRecoveryChallenge(projectDir, {
+    version: 1,
+    session,
+    intentId,
+    markerRevision,
+    challengeId,
+  });
+}
+
+function installPlanApprovalLegacyOffer(
+  projectDir: string,
+  candidate: PlanApprovalLegacyOfferCandidate,
+  marker: ActiveDirectiveMarker,
+): void {
+  const intentId = marker.intent_uuid?.trim() ?? "";
+  const markerRevision = marker.code_generation_authority_revision;
+  if (!intentId || marker.stage !== "code-generation" || markerRevision === undefined) {
+    throw new Error("legacy Plan Approval offer requires active Code Generation authority");
+  }
+  const allowedUnits = marker.kind === "invoke-swarm"
+    ? [...new Set(marker.units ?? [])]
+    : [marker.unit?.trim() || null];
+  if (allowedUnits.length === 0) {
+    throw new Error("legacy Plan Approval offer requires an authoritative target");
+  }
+  writePlanApprovalLegacyOffer(projectDir, {
+    version: 1,
+    session: candidate.session,
+    intentId,
+    markerRevision,
+    allowedUnits,
+    options: candidate.optionHashes,
+  });
+}
+
 function resolveActiveDirectiveTarget(
   projectDir: string,
   intent?: string,
   space?: string,
 ): ActiveDirectiveTarget {
   const canonicalProjectDir = realpathSync(resolvePath(projectDir));
-  const resolvedSpace = space ?? activeSpace(canonicalProjectDir);
-  const recordDirName = activeIntent(canonicalProjectDir, resolvedSpace, intent);
+  const selection = resolveWorkflowSelection(canonicalProjectDir, {
+    space,
+    intent,
+  });
+  const resolvedSpace = selection.space;
+  const recordDirName = selection.intent;
   const recordsRoot = intentsDir(canonicalProjectDir, resolvedSpace);
   const root = recordDirName === null
     ? spaceRecordRoot(canonicalProjectDir, resolvedSpace)
@@ -2696,10 +4641,26 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
   const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
   const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
-  const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"];
+  const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"];
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
     (parsed.intent_uuid !== null && typeof parsed.intent_uuid !== "string") || typeof parsed.state_present !== "boolean" ||
+    ("code_generation_source_sha256" in parsed &&
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/.test(
+        String(parsed.code_generation_source_sha256 ?? ""),
+      )) ||
+    ("code_generation_authority_revision" in parsed &&
+      !integer(parsed.code_generation_authority_revision)) ||
+    ("units" in parsed &&
+      (
+        !Array.isArray(parsed.units) ||
+        parsed.units.length === 0 ||
+        parsed.units.some(
+          (unit) =>
+            typeof unit !== "string" ||
+            validateUnitName(unit.trim()) !== null,
+        )
+      )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
@@ -2787,6 +4748,20 @@ function transactActiveDirective<T>(
   return transactActiveDirectiveTarget(target, update);
 }
 
+export function withActiveDirectiveLock<T>(
+  projectDir: string,
+  operation: (
+    marker: ActiveDirectiveMarker | null,
+    target: ActiveDirectiveTarget,
+  ) => T,
+): T {
+  return transactActiveDirective(projectDir, (marker, target) => ({
+    marker,
+    result: operation(marker, target),
+    preserve: true,
+  }));
+}
+
 function transactActiveDirectiveTarget<T>(
   target: ActiveDirectiveTarget,
   update: (
@@ -2797,12 +4772,27 @@ function transactActiveDirectiveTarget<T>(
   if (ACTIVE_DIRECTIVE_TRANSACTIONS.has(target.markerPath)) {
     throw new Error(`Nested active-directive transaction for ${target.bucket}`);
   }
+  const pendingRelease = ACTIVE_DIRECTIVE_EXIT_HANDLERS.get(target.markerPath);
+  if (pendingRelease) {
+    const outcome = releaseCanonicalOwnerStampedLock(pendingRelease.receipt);
+    if (outcome === "retryable") {
+      throw new ActiveDirectiveLockContendedError(
+        "Active-directive lock release is still pending",
+      );
+    }
+    process.off("exit", pendingRelease.handler);
+    ACTIVE_DIRECTIVE_EXIT_HANDLERS.delete(target.markerPath);
+  }
   mkdirSync(dirname(target.markerPath), { recursive: true });
   const receipt = acquireActiveDirectiveLock(target.lockDir);
   if (!receipt) throw new ActiveDirectiveLockContendedError();
   ACTIVE_DIRECTIVE_TRANSACTIONS.add(target.markerPath);
-  const onExit = () => releaseOwnerStampedLock(receipt);
-  ACTIVE_DIRECTIVE_EXIT_HANDLERS.set(target.markerPath, { token: receipt.owner.token ?? "", handler: onExit });
+  const onExit = () => releaseCanonicalOwnerStampedLock(receipt);
+  ACTIVE_DIRECTIVE_EXIT_HANDLERS.set(target.markerPath, {
+    token: receipt.owner.token ?? "",
+    handler: onExit,
+    receipt,
+  });
   process.on("exit", onExit);
   try {
     const current = readActiveDirectiveMarkerRaw(target.markerPath);
@@ -2839,17 +4829,24 @@ function transactActiveDirectiveTarget<T>(
     throw error;
   } finally {
     ACTIVE_DIRECTIVE_TRANSACTIONS.delete(target.markerPath);
+    const outcome = releaseCanonicalOwnerStampedLock(receipt);
     const registered = ACTIVE_DIRECTIVE_EXIT_HANDLERS.get(target.markerPath);
-    if (registered?.token === receipt.owner.token) {
+    if (
+      outcome !== "retryable" &&
+      registered?.token === receipt.owner.token
+    ) {
       process.off("exit", registered.handler);
       ACTIVE_DIRECTIVE_EXIT_HANDLERS.delete(target.markerPath);
     }
-    releaseOwnerStampedLock(receipt);
   }
 }
 
 const ACTIVE_DIRECTIVE_TRANSACTIONS = new Set<string>();
-const ACTIVE_DIRECTIVE_EXIT_HANDLERS = new Map<string, { token: string; handler: () => void }>();
+const ACTIVE_DIRECTIVE_EXIT_HANDLERS = new Map<string, {
+  token: string;
+  handler: () => void;
+  receipt: OwnerStampedLockReceipt;
+}>();
 
 function freshActiveDirectiveMarker(
   target: ActiveDirectiveTarget,
@@ -2857,7 +4854,7 @@ function freshActiveDirectiveMarker(
   stage: string,
 ): ActiveDirectiveMarker {
   const context = activeDirectiveContext(target, stateContent);
-  const cursorHarness = installedHarnessName(target);
+  const cursorHarness = installedHarnessNameForTarget(target);
   const owner = `sessionless:${context.projectSha256.slice(0, 16)}`;
   return {
     version: 2, revision: 0, project_sha256: context.projectSha256,
@@ -2893,13 +4890,38 @@ function crossActiveDirectiveBoundary(
   };
 }
 
+function codeGenerationSourceFloorForPublication(
+  target: ActiveDirectiveTarget,
+  base: ActiveDirectiveMarker,
+  stage: string,
+  rotate: boolean,
+): string | undefined {
+  if (stage !== "code-generation") return undefined;
+  if (
+    !rotate &&
+    base.stage === "code-generation" &&
+    base.code_generation_source_sha256 !== undefined
+  ) {
+    return base.code_generation_source_sha256;
+  }
+  return workspaceSourceFingerprint(target.canonicalProjectDir) ??
+    UNBINDABLE_FINGERPRINT;
+}
+
 export function writeActiveDirectiveMarker(
   projectDir: string,
-  marker: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & { stage: string; continue_token?: string; state_sha256: string },
+  marker: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & {
+    stage: string;
+    continue_token?: string;
+    state_sha256: string;
+    units?: string[];
+  },
   invocation?: {
     attemptId?: string;
     commandKind?: CopilotCommandClaim["commandKind"];
     commandSha256?: string;
+    legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate;
+    legacyPlanApprovalSession?: string;
     resultSha256?: string;
   },
 ): ActiveDirectiveWriteResult {
@@ -2912,10 +4934,177 @@ export function writeActiveDirectiveMarker(
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
   }
-  return transactActiveDirective(projectDir, (current, target) => {
+  if (
+    invocation?.legacyPlanApprovalOffer !== undefined &&
+    !validPlanApprovalLegacyOfferCandidate(invocation.legacyPlanApprovalOffer)
+  ) {
+    throw new Error("Invalid legacy Plan Approval offer candidate");
+  }
+  if (
+    invocation?.legacyPlanApprovalSession !== undefined &&
+    !invocation.legacyPlanApprovalSession.trim()
+  ) {
+    throw new Error("Invalid legacy Plan Approval ownership session");
+  }
+  if (
+    invocation?.legacyPlanApprovalOffer &&
+    invocation.legacyPlanApprovalSession !==
+      invocation.legacyPlanApprovalOffer.session
+  ) {
+    throw new Error("Legacy Plan Approval offer/session mismatch");
+  }
+  let shouldResetRuntime = false;
+  const result = transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
-    const cursorHarness = installedHarnessName(target);
+    const legacyOffer = invocation?.legacyPlanApprovalOffer;
+    const legacySession = invocation?.legacyPlanApprovalSession;
+    if (legacySession && context.intentUuid) {
+      const owner = findPlanApprovalLegacyOwner(
+        target.canonicalProjectDir,
+        context.intentUuid,
+        current,
+      );
+      if (owner.status === "ambiguous") {
+        return {
+          marker: current,
+          result: "legacy-plan-approval-owned" as const,
+          preserve: true,
+        };
+      }
+      if (owner.status === "owned") {
+        const sameOwner = owner.session === legacySession;
+        if (!sameOwner && owner.live) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacySession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacySession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (legacyOffer) {
+          clearPlanApprovalLegacyRecovery(
+            target.canonicalProjectDir,
+            legacySession,
+          );
+          if (owner.session !== legacySession) {
+            clearPlanApprovalLegacyRecovery(
+              target.canonicalProjectDir,
+              owner.session,
+            );
+          }
+          clearPlanApprovalViolation(target.canonicalProjectDir);
+          clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+          rotatePlanApprovalLegacyOwner(
+            target.canonicalProjectDir,
+            legacyOffer,
+            owner,
+          );
+          return {
+            marker: current,
+            result: "legacy-plan-approval-reissued" as const,
+            preserve: true,
+          };
+        }
+        return {
+          marker: current,
+          result: "legacy-plan-approval-transport" as const,
+          preserve: true,
+        };
+      }
+      if (
+        owner.status === "none" &&
+        (
+          planApprovalLegacyViolationMatches(
+            target.canonicalProjectDir,
+            current,
+          ) ||
+          planApprovalLegacyWindowMatches(
+            target.canonicalProjectDir,
+            current,
+          )
+        )
+      ) {
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacySession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacySession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (!legacyOffer) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-transport" as const,
+            preserve: true,
+          };
+        }
+        clearPlanApprovalLegacyRecovery(
+          target.canonicalProjectDir,
+          legacySession,
+        );
+        clearPlanApprovalViolation(target.canonicalProjectDir);
+        clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+        if (current?.version !== 2) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        installPlanApprovalLegacyOffer(
+          target.canonicalProjectDir,
+          legacyOffer,
+          current,
+        );
+        return {
+          marker: current,
+          result: "legacy-plan-approval-reissued" as const,
+          preserve: true,
+        };
+      }
+    }
+    const cursorHarness = installedHarnessNameForTarget(target);
     const copilotOwned = exactCopilotMarker(current, target, context);
     const attempt = current?.version === 2 ? current.active_attempt : undefined;
     const matchingAttempt = copilotOwned && attempt?.status === "pending" && invocation?.attemptId !== undefined &&
@@ -2936,6 +5125,46 @@ export function writeActiveDirectiveMarker(
       : freshActiveDirectiveMarker(target, stateContent, marker.stage);
     const token = marker.continue_token;
     const nextRevision = (base.revision ?? 0) + 1;
+    const rotateCodeGenerationFloor =
+      marker.stage === "code-generation" &&
+      base.stage === "code-generation" &&
+      planApprovalRuntimeHasReceiptForMarker(
+        target.canonicalProjectDir,
+        base,
+      );
+    const codeGenerationSourceSha256 =
+      codeGenerationSourceFloorForPublication(
+        target,
+        base,
+        marker.stage,
+        rotateCodeGenerationFloor,
+      );
+    const priorAuthorityRevision =
+      base.code_generation_authority_revision ??
+      base.active_attempt?.result_revision ??
+      base.revision ??
+      nextRevision;
+    const baseSwarmPlanning =
+      (base.kind === "invoke-swarm" || base.kind === "load-steering") &&
+      (base.units?.length ?? 0) > 0;
+    const nextSwarmPlanning =
+      marker.kind === "invoke-swarm" || marker.kind === "load-steering";
+    const requestedUnits = marker.units ?? base.units ?? [];
+    const preserveCodeGenerationAuthority =
+      marker.stage === "code-generation" &&
+      base.stage === "code-generation" &&
+      baseSwarmPlanning &&
+      nextSwarmPlanning &&
+      JSON.stringify(requestedUnits) === JSON.stringify(base.units ?? []) &&
+      !rotateCodeGenerationFloor &&
+      base.code_generation_source_sha256 !== undefined;
+    const codeGenerationAuthorityRevision =
+      marker.stage === "code-generation"
+        ? preserveCodeGenerationAuthority
+          ? priorAuthorityRevision
+          : nextRevision
+        : undefined;
+    shouldResetRuntime = !preserveCodeGenerationAuthority;
     const nextAttempt = matchingAttempt && attempt
       ? {
           ...attempt,
@@ -2957,7 +5186,19 @@ export function writeActiveDirectiveMarker(
       state_sha256: marker.state_sha256,
       kind: marker.kind,
       stage: marker.stage,
+      ...(codeGenerationSourceSha256
+        ? { code_generation_source_sha256: codeGenerationSourceSha256 }
+        : { code_generation_source_sha256: undefined }),
+      ...(codeGenerationAuthorityRevision !== undefined
+        ? {
+            code_generation_authority_revision:
+              codeGenerationAuthorityRevision,
+          }
+        : { code_generation_authority_revision: undefined }),
       ...(marker.unit ? { unit: marker.unit } : { unit: undefined }),
+      ...(requestedUnits.length > 0
+        ? { units: requestedUnits }
+        : { units: undefined }),
       ...(marker.part ? { part: marker.part } : { part: undefined }),
       ...(marker.parts ? { parts: marker.parts } : { parts: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
@@ -2965,14 +5206,33 @@ export function writeActiveDirectiveMarker(
       needs_rehydrate: copilotOwned,
       ...(nextAttempt ? { active_attempt: nextAttempt } : {}),
     };
+    if (legacyOffer) {
+      if (shouldResetRuntime) {
+        resetPlanApprovalRuntime(target.canonicalProjectDir);
+        shouldResetRuntime = false;
+      }
+      installPlanApprovalLegacyOffer(
+        target.canonicalProjectDir,
+        legacyOffer,
+        next,
+      );
+    }
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
+  if (
+    (result === "generic-committed" || result === "copilot-committed") &&
+    shouldResetRuntime
+  ) {
+    resetPlanApprovalRuntime(projectDir);
+  }
+  return result;
 }
 
 export function clearActiveDirectiveMarker(projectDir: string): void {
   transactActiveDirective(projectDir, (marker) =>
     marker?.version === 2 && !marker.owner_session?.startsWith("sessionless:") && marker.active_attempt?.status === "pending"
       ? { marker, result: true, preserve: true } : { marker: null, result: true });
+  resetPlanApprovalRuntime(projectDir);
 }
 
 export function refreshActiveDirectiveMarker(
@@ -2981,7 +5241,7 @@ export function refreshActiveDirectiveMarker(
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
-  return transactActiveDirective(projectDir, (marker) => {
+  const refreshed = transactActiveDirective(projectDir, (marker) => {
     if (!marker || marker.stage !== stage || marker.state_sha256 !== stateContentSha256(previousStateContent)) {
       return { marker, result: false, preserve: true };
     }
@@ -2995,6 +5255,8 @@ export function refreshActiveDirectiveMarker(
       result: true,
     };
   });
+  if (refreshed) resetPlanApprovalRuntime(projectDir);
+  return refreshed;
 }
 
 export function readActiveDirectiveMarker(
@@ -3044,14 +5306,14 @@ function exactCopilotMarker(
   target: ActiveDirectiveTarget,
   context: ReturnType<typeof activeDirectiveContext>,
 ): marker is ActiveDirectiveMarker & { version: 2 } {
-  return installedHarnessName(target) === "copilot" && marker?.version === 2 &&
+  return installedHarnessNameForTarget(target) === "copilot" && marker?.version === 2 &&
     (marker.cursor_harness === undefined || marker.cursor_harness === "copilot") &&
     !marker.owner_session?.startsWith("sessionless:") &&
     marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid &&
     marker.state_sha256 === context.stateSha256 && marker.state_present === context.statePresent;
 }
 
-function installedHarnessName(target: ActiveDirectiveTarget): string | null {
+function installedHarnessNameForTarget(target: ActiveDirectiveTarget): string | null {
   const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
   if (explicit && /^[a-z0-9][a-z0-9._-]*$/i.test(explicit)) return explicit;
   try {
@@ -3068,6 +5330,10 @@ function installedHarnessName(target: ActiveDirectiveTarget): string | null {
   }
 }
 
+export function installedHarnessName(projectDir: string): string | null {
+  return installedHarnessNameForTarget(resolveActiveDirectiveTarget(projectDir));
+}
+
 export function inspectContinuationCursor(
   projectDir: string,
   stateContent: string | null,
@@ -3078,7 +5344,7 @@ export function inspectContinuationCursor(
     target,
     stateSha256: context.stateSha256,
     statePresent: context.statePresent,
-    cursorHarness: installedHarnessName(target),
+    cursorHarness: installedHarnessNameForTarget(target),
   };
 }
 
@@ -3086,15 +5352,43 @@ export function advanceContinuationCursor(
   snapshot: ContinuationCursorSnapshot,
   presentedToken: string,
   successor: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & {
-    stage: string; continue_token?: string; state_sha256: string;
+    stage: string;
+    continue_token?: string;
+    state_sha256: string;
+    units?: string[];
   },
   resultSha256: string,
   attemptId?: string,
-): "advanced" | "superseded" | "drift" {
+  legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate,
+  legacyPlanApprovalSession?: string,
+):
+  | "advanced"
+  | "legacy-plan-approval-owned"
+  | "legacy-plan-approval-recovery-required"
+  | "legacy-plan-approval-reissued"
+  | "legacy-plan-approval-transport"
+  | "superseded"
+  | "drift" {
   if (!/^[0-9a-f]{64}$/.test(resultSha256) || successor.state_sha256 !== snapshot.stateSha256) {
     return "drift";
   }
-  return transactActiveDirectiveTarget(snapshot.target, (current, target) => {
+  if (
+    legacyPlanApprovalOffer !== undefined &&
+    !validPlanApprovalLegacyOfferCandidate(legacyPlanApprovalOffer)
+  ) {
+    return "drift";
+  }
+  if (legacyPlanApprovalSession !== undefined && !legacyPlanApprovalSession.trim()) {
+    return "drift";
+  }
+  if (
+    legacyPlanApprovalOffer &&
+    legacyPlanApprovalSession !== legacyPlanApprovalOffer.session
+  ) {
+    return "drift";
+  }
+  let shouldResetRuntime = true;
+  const result = transactActiveDirectiveTarget(snapshot.target, (current, target) => {
     const currentTarget = resolveActiveDirectiveTarget(target.canonicalProjectDir);
     if (currentTarget.markerPath !== target.markerPath || currentTarget.intentUuid !== target.intentUuid) {
       return { marker: current, result: "drift" as const, preserve: true };
@@ -3104,7 +5398,152 @@ export function advanceContinuationCursor(
     if (context.stateSha256 !== snapshot.stateSha256 || context.statePresent !== snapshot.statePresent) {
       return { marker: current, result: "drift" as const, preserve: true };
     }
-    const cursorHarness = installedHarnessName(target);
+    if (legacyPlanApprovalSession && context.intentUuid) {
+      const owner = findPlanApprovalLegacyOwner(
+        target.canonicalProjectDir,
+        context.intentUuid,
+        current,
+      );
+      if (owner.status === "ambiguous") {
+        return {
+          marker: current,
+          result: "legacy-plan-approval-owned" as const,
+          preserve: true,
+        };
+      }
+      if (owner.status === "owned") {
+        const sameOwner = owner.session === legacyPlanApprovalSession;
+        if (!sameOwner && owner.live) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacyPlanApprovalSession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacyPlanApprovalSession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (legacyPlanApprovalOffer) {
+          clearPlanApprovalLegacyRecovery(
+            target.canonicalProjectDir,
+            legacyPlanApprovalSession,
+          );
+          if (owner.session !== legacyPlanApprovalSession) {
+            clearPlanApprovalLegacyRecovery(
+              target.canonicalProjectDir,
+              owner.session,
+            );
+          }
+          clearPlanApprovalViolation(target.canonicalProjectDir);
+          clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+          rotatePlanApprovalLegacyOwner(
+            target.canonicalProjectDir,
+            legacyPlanApprovalOffer,
+            owner,
+          );
+          return {
+            marker: current,
+            result: "legacy-plan-approval-reissued" as const,
+            preserve: true,
+          };
+        }
+        return {
+          marker: current,
+          result: "legacy-plan-approval-transport" as const,
+          preserve: true,
+        };
+      }
+      if (
+        owner.status === "none" &&
+        (
+          planApprovalLegacyViolationMatches(
+            target.canonicalProjectDir,
+            current,
+          ) ||
+          planApprovalLegacyWindowMatches(
+            target.canonicalProjectDir,
+            current,
+          )
+        )
+      ) {
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacyPlanApprovalSession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacyPlanApprovalSession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (!legacyPlanApprovalOffer) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-transport" as const,
+            preserve: true,
+          };
+        }
+        clearPlanApprovalLegacyRecovery(
+          target.canonicalProjectDir,
+          legacyPlanApprovalSession,
+        );
+        clearPlanApprovalViolation(target.canonicalProjectDir);
+        clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+        if (current?.version !== 2) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        installPlanApprovalLegacyOffer(
+          target.canonicalProjectDir,
+          legacyPlanApprovalOffer,
+          current,
+        );
+        return {
+          marker: current,
+          result: "legacy-plan-approval-reissued" as const,
+          preserve: true,
+        };
+      }
+    }
+    const cursorHarness = installedHarnessNameForTarget(target);
     if (!cursorHarness || cursorHarness !== snapshot.cursorHarness) {
       return { marker: current, result: "drift" as const, preserve: true };
     }
@@ -3127,6 +5566,36 @@ export function advanceContinuationCursor(
       pending.command_kind === "continue" && pending.cursor_input_sha256 === inputSha256 &&
       pending.owner_epoch === base.owner_epoch && pending.context_epoch === base.context_epoch;
     const token = successor.continue_token;
+    const codeGenerationSourceSha256 =
+      codeGenerationSourceFloorForPublication(
+        target,
+        base,
+        successor.stage,
+        false,
+      );
+    const requestedUnits = successor.units ?? base.units ?? [];
+    const preserveCodeGenerationAuthority =
+      successor.stage === "code-generation" &&
+      base.stage === "code-generation" &&
+      (base.kind === "load-steering" || base.kind === "invoke-swarm") &&
+      (successor.kind === "load-steering" ||
+        successor.kind === "invoke-swarm") &&
+      requestedUnits.length > 0 &&
+      base.code_generation_source_sha256 !== undefined &&
+      !planApprovalRuntimeHasReceiptForMarker(
+        target.canonicalProjectDir,
+        base,
+      );
+    const codeGenerationAuthorityRevision =
+      successor.stage === "code-generation"
+        ? preserveCodeGenerationAuthority
+          ? base.code_generation_authority_revision ??
+            base.active_attempt?.result_revision ??
+            base.revision ??
+            nextRevision
+          : nextRevision
+        : undefined;
+    shouldResetRuntime = !preserveCodeGenerationAuthority;
     const next: ActiveDirectiveMarker = {
       ...base,
       revision: nextRevision,
@@ -3135,7 +5604,19 @@ export function advanceContinuationCursor(
       state_sha256: successor.state_sha256,
       kind: successor.kind,
       stage: successor.stage,
+      ...(codeGenerationSourceSha256
+        ? { code_generation_source_sha256: codeGenerationSourceSha256 }
+        : { code_generation_source_sha256: undefined }),
+      ...(codeGenerationAuthorityRevision !== undefined
+        ? {
+            code_generation_authority_revision:
+              codeGenerationAuthorityRevision,
+          }
+        : { code_generation_authority_revision: undefined }),
       ...(successor.unit ? { unit: successor.unit } : { unit: undefined }),
+      ...(requestedUnits.length > 0
+        ? { units: requestedUnits }
+        : { units: undefined }),
       ...(successor.part ? { part: successor.part } : { part: undefined }),
       ...(successor.parts ? { parts: successor.parts } : { parts: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
@@ -3145,8 +5626,23 @@ export function advanceContinuationCursor(
         ? { ...pending, result_sha256: resultSha256, result_revision: nextRevision }
         : pending.status === "pending" ? { ...pending, status: "failed" } : pending } : {}),
     };
+    if (legacyPlanApprovalOffer) {
+      if (shouldResetRuntime) {
+        resetPlanApprovalRuntime(target.canonicalProjectDir);
+        shouldResetRuntime = false;
+      }
+      installPlanApprovalLegacyOffer(
+        target.canonicalProjectDir,
+        legacyPlanApprovalOffer,
+        next,
+      );
+    }
     return { marker: next, result: "advanced" as const };
   });
+  if (result === "advanced" && shouldResetRuntime) {
+    resetPlanApprovalRuntime(snapshot.target.canonicalProjectDir);
+  }
+  return result;
 }
 
 export function invalidateActiveDirectiveContext(
@@ -3155,7 +5651,7 @@ export function invalidateActiveDirectiveContext(
   sessionId: string,
 ): boolean {
   if (!sessionId) return false;
-  return transactActiveDirective(projectDir, (marker, target) => {
+  const invalidated = transactActiveDirective(projectDir, (marker, target) => {
     const context = activeDirectiveContext(target, stateContent);
     if (
       marker?.version !== 2 || marker.owner_session !== sessionId ||
@@ -3175,6 +5671,8 @@ export function invalidateActiveDirectiveContext(
       result: true,
     };
   });
+  if (invalidated) resetPlanApprovalRuntime(projectDir);
+  return invalidated;
 }
 
 export function recordCopilotHumanSequence(
@@ -3379,7 +5877,7 @@ export function settleCopilotCommand(
         active_attempt: { ...attempt, status: "failed" },
       }, result: "settled" as const };
     }
-    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked"].includes(directive.kind);
+    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
       (directive.kind === "load-steering" || directive.kind === "run-stage");
     const resultBound = !enginePublished ||
@@ -3603,9 +6101,15 @@ export function updateCopilotStopCount(
 // timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
 // shard lands under the bare space record root (no flat audit.md any more).
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "audit", auditShardName(projectDir));
-  return join(dir, "audit", auditShardName(projectDir));
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "audit",
+      auditShardName(projectDir),
+    );
+  }
+  return join(resolved.dir, "audit", auditShardName(projectDir));
 }
 
 // The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
@@ -3633,15 +6137,17 @@ export function cloneIdPath(projectDir: string): string {
 // harmless — readers glob `audit/*.md`). Memoized per process. Best-effort: an
 // unwritable workspace degrades to an in-memory token for this process (still
 // stable within the process, still distinct from other clones).
-let _cloneId: string | null = null;
+const CLONE_IDS = new Map<string, string>();
 function cloneId(projectDir: string): string {
-  if (_cloneId !== null) return _cloneId;
+  const key = canonicalPathKey(projectDir);
+  const cached = CLONE_IDS.get(key);
+  if (cached) return cached;
   const path = cloneIdPath(projectDir);
   try {
     const raw = readFileSync(path, "utf-8").trim();
     if (/^[a-z0-9]{1,32}$/.test(raw)) {
-      _cloneId = raw;
-      return _cloneId;
+      CLONE_IDS.set(key, raw);
+      return raw;
     }
   } catch {
     // no token yet → mint one below
@@ -3653,11 +6159,18 @@ function cloneId(projectDir: string): string {
     // Re-read so a concurrent first-run mint that landed first wins for ALL
     // processes in this clone (converge on one on-disk token).
     const settled = readFileSync(path, "utf-8").trim();
-    _cloneId = /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted;
+    CLONE_IDS.set(
+      key,
+      /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted,
+    );
   } catch {
-    _cloneId = minted; // unwritable workspace → in-memory token
+    CLONE_IDS.set(key, minted); // unwritable workspace → in-memory token
   }
-  return _cloneId;
+  return CLONE_IDS.get(key)!;
+}
+
+export function ensureCloneId(projectDir: string): string {
+  return cloneId(projectDir);
 }
 
 // --- Human presence at an approval/interview gate ---
@@ -3697,11 +6210,19 @@ function cloneId(projectDir: string): string {
 // there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
 // autonomous because that grant consumes the human turn that unlocks downstream
 // presence carve-outs.
+export const BLOCKING_SENSOR_OVERRIDE_CHOICE = "Override blocking sensors";
+export const BLOCKING_SENSOR_OVERRIDE_DECISION = "Blocking gate sensor failure";
+export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
+  "Fix findings",
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
+] as const;
+
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "PLAN_APPROVAL_RECORDED",
 ]);
 const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_INDEXED",
@@ -4546,6 +7067,13 @@ export function checkSummaryConfirmationEvidence(
   if (
     declared &&
     isPerUnitStage(stage) &&
+    !(
+      options.stateContent !== undefined &&
+      usesStageLevelPerUnitArtifacts(
+        getField(options.stateContent ?? "", "Scope"),
+        options.stateContent,
+      )
+    ) &&
     options.workflow === undefined &&
     options.unit === undefined
   ) {
@@ -4761,7 +7289,12 @@ export function checkSummaryConfirmationEvidence(
       } else if (eventWorkflow?.startsWith("single-stage:")) {
         return false;
       }
-      if ((auditBlockField(entry.block, "Unit") ?? null) !== question.unit) {
+      const eventUnit = auditBlockField(entry.block, "Unit");
+      if ((eventUnit ?? null) !== question.unit) return false;
+      if (
+        eventUnit &&
+        !eventMatchesClaimAttempt(projectDir, entry.block, eventUnit)
+      ) {
         return false;
       }
       return auditBlockField(entry.block, "Questions File") === questionRelative;
@@ -4862,6 +7395,34 @@ export function checkSummaryConfirmationEvidence(
           "reconfirmation to create a new scoped receipt. "
         : "";
     const recoveryMessage = legacyRecovery + recovery;
+    // A receipt verifies the questions file under the scope IT recorded:
+    // unscoped legacy receipts cover the whole file, scoped ones cover the
+    // confirmed content. Resolve per receipt so a duplicate-confirmation check
+    // never compares one receipt's digest against another's scope. Returns
+    // null for an unreadable file or an unknown scope, which fails closed at
+    // every call site.
+    const scopeHashes = new Map<string, string | null>();
+    const questionHashForScope = (scope: string | null): string | null => {
+      const key = scope ?? "";
+      const cached = scopeHashes.get(key);
+      if (cached !== undefined) return cached;
+      let value: string | null = null;
+      try {
+        if (scope === null) {
+          value = createHash("sha256")
+            .update(readFileSync(question.path))
+            .digest("hex");
+        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE) {
+          value = summaryConfirmationContentHash(
+            readFileSync(question.path, "utf-8"),
+          );
+        }
+      } catch {
+        value = null;
+      }
+      scopeHashes.set(key, value);
+      return value;
+    };
     let currentHash: string;
     try {
       currentHash = hashScope === null
@@ -4890,6 +7451,7 @@ export function checkSummaryConfirmationEvidence(
 
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
+      const artifactSuffix = "/" + toPosix(relative(projectDir, artifactAbs));
       const writes = events.filter((entry) => {
         if (
           entry.event !== "ARTIFACT_CREATED" &&
@@ -4898,17 +7460,56 @@ export function checkSummaryConfirmationEvidence(
           return false;
         }
         const file = auditBlockField(entry.block, "File");
-        return file !== null &&
-          resolveAuditProjectPath(projectDir, file) === artifactAbs;
+        if (file === null) return false;
+        const norm = file.replace(/\\/g, "/");
+        return (
+          resolveAuditProjectPath(projectDir, file) === artifactAbs ||
+          // #863: preserve writes across workspace moves. The leading slash
+          // and full space/intent/phase/stage tail prevent partial matches.
+          norm.endsWith(artifactSuffix)
+        );
       });
-      const writeAfterReceipt = writes.some((entry) => {
-        if (entry.shard === receipt.shard) return entry.pos > receipt.pos;
-        if (entry.timestamp !== receipt.timestamp) {
-          return entry.timestamp > receipt.timestamp;
+      const strictlyAfter = (
+        later: AuditShardEvent,
+        earlier: AuditShardEvent,
+      ): boolean => {
+        if (later.shard === earlier.shard) return later.pos > earlier.pos;
+        if (later.timestamp !== earlier.timestamp) {
+          return later.timestamp > earlier.timestamp;
         }
         return false;
-      });
-      if (!writeAfterReceipt) {
+      };
+      const writeAfterReceipt = writes.some((entry) =>
+        strictlyAfter(entry, receipt)
+      );
+      // Re-confirming the SAME answers does not revoke the authorization an
+      // earlier identical confirmation already exercised. A re-record made
+      // only to repair the prompt/turn handshake would otherwise demand that
+      // an already-reviewed document be written again, which the review freeze
+      // forbids - the deadlock this guard is not allowed to create. The
+      // candidate must sit in this attempt window, precede both the selected
+      // receipt and a real write, carry the positive choice, and cover the
+      // answers as they are NOW under its own Hash Scope.
+      const earlierIdenticalConfirmationAuthorizesWrite = !writeAfterReceipt &&
+        orderedReceipts.some((candidate) => {
+          if (candidate === receipt) return false;
+          if (!strictlyAfter(receipt, candidate)) return false;
+          if (auditBlockField(candidate.block, "Details") !== "Looks correct") {
+            return false;
+          }
+          const candidateHash = questionHashForScope(
+            auditBlockField(candidate.block, "Hash Scope"),
+          );
+          if (
+            candidateHash === null ||
+            auditBlockField(candidate.block, "Questions SHA-256") !==
+              candidateHash
+          ) {
+            return false;
+          }
+          return writes.some((entry) => strictlyAfter(entry, candidate));
+        });
+      if (!writeAfterReceipt && !earlierIdenticalConfirmationAuthorizesWrite) {
         const unorderedWrite = writes.find((entry) =>
           entry.timestamp === receipt.timestamp && entry.shard !== receipt.shard
         );
@@ -4922,10 +7523,9 @@ export function checkSummaryConfirmationEvidence(
         return {
           ok: false,
           message:
-            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
-            "recorded native-tool write after the human's consolidated summary " +
-            "confirmation. Regenerate or re-save it after confirmation, then " +
-            "report completion again.",
+            `Refusing to continue "${stage.slug}": this stage's output document ` +
+            `${artifact} was not saved after the confirmed answers. Save the ` +
+            "document after confirmation, then continue.",
         };
       }
     }
@@ -4934,9 +7534,14 @@ export function checkSummaryConfirmationEvidence(
   return { ok: true, required: true };
 }
 
-// Read a `**Field**: value` line from one audit block (tolerates an optional
-// leading `- ` so it serves both audit blocks and the state file). Mirrors the
-// per-tool private auditField readers; shared here for humanActedSinceGate.
+// Read the FIRST `**Field**: value` line from one audit block (tolerates an
+// optional leading `- ` so it serves both audit blocks and the state file).
+// IMPORTANT: a duplicated field still returns only its first value. Do not
+// build authenticate-then-re-read flows on this helper: a verifier and consumer
+// can otherwise disagree about which occurrence, and therefore which bytes,
+// they mean. Callers that require uniqueness must reject duplicates separately.
+// Mirrors the per-tool private auditField readers; shared here for
+// humanActedSinceGate.
 export function auditBlockField(block: string, fieldName: string): string | null {
   const prefix = `**${fieldName}**:`;
   for (const raw of block.split("\n")) {
@@ -4956,33 +7561,98 @@ export function hasPendingDecision(
   projectDir: string,
   stage: string,
   afterEvent?: string,
+  unit?: string,
+  workflowAttempt = false,
 ): boolean {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return false;
+  if (!workflowAttempt) {
+    const audit = readAllAuditShards(projectDir);
+    if (audit.length === 0) return false;
+    const relevant = new Set([
+      "DECISION_RECORDED",
+      "QUESTION_ANSWERED",
+      ...(afterEvent ? [afterEvent] : []),
+    ]);
+    const events = audit
+      .replace(/\r\n/g, "\n")
+      .split(/\n---\n/)
+      .map((block, position) => ({
+        event: auditBlockField(block, "Event") ?? "",
+        stage: auditBlockField(block, "Stage"),
+        workflow: auditBlockField(block, "Workflow"),
+        timestamp: auditBlockField(block, "Timestamp") ?? "",
+        position,
+      }))
+      .filter((event) => relevant.has(event.event))
+      .sort((a, b) => {
+        if (a.timestamp !== b.timestamp) {
+          return a.timestamp < b.timestamp ? -1 : 1;
+        }
+        return a.position - b.position;
+      });
+    let start = 0;
+    if (afterEvent) {
+      const boundary = events.findLastIndex(
+        (event) =>
+          event.event === afterEvent &&
+          event.stage === stage &&
+          !event.workflow?.startsWith("single-stage:"),
+      );
+      if (boundary === -1) return false;
+      start = boundary + 1;
+    }
+    let pending = false;
+    for (const event of events.slice(start)) {
+      if (event.stage !== stage) continue;
+      if (event.event === "DECISION_RECORDED") {
+        pending = true;
+      } else if (event.event === "QUESTION_ANSWERED") {
+        pending = false;
+      }
+    }
+    return pending;
+  }
 
   const relevant = new Set([
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
     ...(afterEvent ? [afterEvent] : []),
+    ...(workflowAttempt ? ["WORKFLOW_STARTED", "STAGE_JUMPED"] : []),
   ]);
-  const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      event: auditBlockField(block, "Event") ?? "",
-      stage: auditBlockField(block, "Stage"),
-      workflow: auditBlockField(block, "Workflow"),
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-      position,
+  const events = readAuditShardEvents(projectDir)
+    .filter((row) => relevant.has(row.event))
+    .map((row) => ({
+      ...row,
+      stage: auditBlockField(row.block, "Stage"),
+      unit: auditBlockField(row.block, "Unit"),
+      workflow: auditBlockField(row.block, "Workflow"),
     }))
-    .filter((event) => relevant.has(event.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      return a.position - b.position;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
     });
+  if (events.length === 0) return false;
+  const lastAtTimestamp = new Map<string, number>();
+  const shardsAtTimestamp = new Map<string, Set<string>>();
+  for (let i = 0; i < events.length; i++) {
+    lastAtTimestamp.set(events[i].timestamp, i);
+    const shards = shardsAtTimestamp.get(events[i].timestamp) ?? new Set();
+    shards.add(events[i].shard);
+    shardsAtTimestamp.set(events[i].timestamp, shards);
+  }
+  const afterBoundary = (index: number): number =>
+    (shardsAtTimestamp.get(events[index].timestamp)?.size ?? 0) > 1
+      ? (lastAtTimestamp.get(events[index].timestamp) ?? index) + 1
+      : index + 1;
 
   let start = 0;
-  if (afterEvent) {
+  if (workflowAttempt) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED",
+    );
+    if (boundary >= 0) start = afterBoundary(boundary);
+  } else if (afterEvent) {
     const boundary = events.findLastIndex(
       (event) =>
         event.event === afterEvent &&
@@ -4990,17 +7660,39 @@ export function hasPendingDecision(
         !event.workflow?.startsWith("single-stage:"),
     );
     if (boundary === -1) return false;
-    start = boundary + 1;
+    start = afterBoundary(boundary);
   }
 
   let pending = false;
-  for (const event of events.slice(start)) {
-    if (event.stage !== stage) continue;
-    if (event.event === "DECISION_RECORDED") {
-      pending = true;
-    } else if (event.event === "QUESTION_ANSWERED") {
-      pending = false;
+  for (let groupStart = start; groupStart < events.length;) {
+    let groupEnd = groupStart + 1;
+    while (
+      groupEnd < events.length &&
+      events[groupEnd].timestamp === events[groupStart].timestamp
+    ) {
+      groupEnd++;
     }
+    const matching = events
+      .slice(groupStart, groupEnd)
+      .filter(
+        (event) =>
+          event.stage === stage &&
+          (unit === undefined || event.unit === unit) &&
+          (
+            event.event === "DECISION_RECORDED" ||
+            event.event === "QUESTION_ANSWERED"
+          ),
+      );
+    const matchingShards = new Set(matching.map((event) => event.shard));
+    const matchingEvents = new Set(matching.map((event) => event.event));
+    if (matchingShards.size > 1 && matchingEvents.size > 1) {
+      pending = false;
+    } else {
+      for (const event of matching) {
+        pending = event.event === "DECISION_RECORDED";
+      }
+    }
+    groupStart = groupEnd;
   }
   return pending;
 }
@@ -5011,16 +7703,23 @@ export function hasPendingDecision(
 // distinct across clones (so concurrent clones never collide / git-conflict).
 // hostname() is a human-readable hint only; it can carry dots/uppercase, so
 // normalise it to the slug shape it never escapes the audit dir.
-let _auditShardName: string | null = null;
+const AUDIT_SHARD_NAMES = new Map<string, string>();
 export function auditShardName(projectDir: string): string {
-  if (_auditShardName !== null) return _auditShardName;
+  const key = canonicalPathKey(projectDir);
+  const scoped = applicableTeamUnitScopeStamp(projectDir);
+  if (scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)) {
+    return scoped.audit_shard;
+  }
+  const cached = AUDIT_SHARD_NAMES.get(key);
+  if (cached) return cached;
   const host = hostname()
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "host";
-  _auditShardName = `${host}-${cloneId(projectDir)}.md`;
-  return _auditShardName;
+  const name = `${host}-${cloneId(projectDir)}.md`;
+  AUDIT_SHARD_NAMES.set(key, name);
+  return name;
 }
 
 // `…/intents/<slug>-<id8>/audit/` — the shard directory, or null when no intent
@@ -5036,7 +7735,7 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
 // The deliberate `undefined intent + explicit space` form adds the space-level
 // shard before the resolved intent shards; DocumentKB recovery and doctor/export
 // use that form because space-level provenance is part of their read model.
-// PRE-BIRTH PARITY: when NO intent resolves at all, the space shard IS the
+// PRE-CREATION PARITY: when NO intent resolves at all, the space shard IS the
 // ledger — the append side's auditFilePath falls back to it, so the read side
 // must too, or a project with no intents yet reads an empty ledger where its
 // own appends just landed (that broke 10 fixture suites when this narrowing
@@ -5053,10 +7752,12 @@ export function auditShards(
   if (intent === undefined && space !== undefined) {
     dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
   }
-  const intentDir = auditShardDir(projectDir, intent, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  const intentDir =
+    resolved.dir === null ? null : join(resolved.dir, "audit");
   if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
   if (intentDir === null && dirs.length === 0) {
-    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+    dirs.push(join(spaceRecordRoot(projectDir, resolved.space), "audit"));
   }
   const paths: string[] = [];
   for (const shardDir of dirs) {
@@ -5297,6 +7998,7 @@ export function producesArtifactUnit(
 }
 
 export type ReviewVerdict = "READY" | "NOT-READY";
+export type ReviewRecoveryCause = "artifact" | "source" | "artifact+source";
 
 export function terminalReviewVerdict(
   verdict: string | null,
@@ -5320,6 +8022,9 @@ export function terminalReviewVerdict(
 export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
+  recovery: boolean;
+  suspensionActive: boolean;
+  recoveryCause?: ReviewRecoveryCause | null;
 }
 
 export interface StaleReviewProgress {
@@ -5374,39 +8079,83 @@ export interface FreshReviewReceipts {
   unitIterations: Map<string, number>;
   stagePending: PendingReviewProgress | null;
   unitPending: Map<string, PendingReviewProgress>;
+  /**
+   * Units with a merge-confirmed Bolt attempt. A name-only attempt is
+   * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
+   * confirmed only when a matching later AUDIT_MERGED proves the state and
+   * audit merge sequence landed.
+   */
+  mergedBoltUnits: Set<string>;
+  /**
+   * Units whose latest paired Bolt attempt is still open or completed but
+   * awaiting merge evidence.
+   */
+  openBoltUnits: Set<string>;
 }
 
-interface ReviewFingerprintStage {
+export interface ReviewFingerprintStage {
   slug: string;
   phase: string;
   for_each?: string;
+  reviewer?: string;
+  review_artifact?: string;
+  workspace_requires?: boolean;
   produces?: string[];
   optional_produces?: string[];
   produces_kinds?: Record<string, string[]>;
 }
 
-interface ReviewArtifactEntry {
+export interface ReviewArtifactEntry {
   logicalPath: string;
   path: string | null;
+  boundary: string;
   required: boolean;
+  reviewAppendixTarget: boolean;
 }
 
-function reviewArtifactEntries(
+export interface ReviewArtifactBytesEntry extends ReviewArtifactEntry {
+  state: "file" | "missing" | "not-file";
+  bytes?: Buffer;
+}
+
+export interface ReviewArtifactBytesSnapshot {
+  fingerprint: string;
+  entries: ReviewArtifactBytesEntry[];
+}
+
+export function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
-  boltDag?: BoltDagResolution,
+  options: {
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+    mergedBoltUnits?: ReadonlySet<string>;
+  } = {},
 ): ReviewArtifactEntry[] | null {
-  const artifactsForKind = (kind: string | null) => [
-    ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
-      (name) => ({ name, required: true }),
-    ),
-    ...filterProducesByKind(
+  const artifactsForKind = (kind: string | null) => {
+    const required = filterProducesByKind(
       stage.produces_kinds,
-      stage.optional_produces ?? [],
+      stage.produces ?? [],
       kind,
-    ).map((name) => ({ name, required: false })),
-  ];
+    );
+    return [
+      ...required.map((name) => ({
+        name,
+        required: true,
+        reviewAppendixTarget: name === stage.review_artifact,
+      })),
+      ...filterProducesByKind(
+        stage.produces_kinds,
+        stage.optional_produces ?? [],
+        kind,
+      ).map((name) => ({
+        name,
+        required: false,
+        reviewAppendixTarget: false,
+      })),
+    ];
+  };
   const allArtifacts = artifactsForKind(null);
 
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
@@ -5425,14 +8174,18 @@ function reviewArtifactEntries(
       return allArtifacts.map((artifact) => ({
         logicalPath: `codekb/*/${artifactFilename(artifact.name)}`,
         path: null,
+        boundary: root,
         required: artifact.required,
+        reviewAppendixTarget: artifact.reviewAppendixTarget,
       }));
     }
     return repos.flatMap((repo) =>
       allArtifacts.map((artifact) => ({
         logicalPath: `codekb/${repo}/${artifactFilename(artifact.name)}`,
         path: join(codekbDir(projectDir, repo), artifactFilename(artifact.name)),
+        boundary: root,
         required: artifact.required,
+        reviewAppendixTarget: artifact.reviewAppendixTarget,
       })),
     );
   }
@@ -5443,13 +8196,62 @@ function reviewArtifactEntries(
     return allArtifacts.map((artifact) => ({
       logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      boundary: record,
       required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
     }));
+  }
+
+  const stageLevelEntries = (): ReviewArtifactEntry[] =>
+    allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      boundary: record,
+      required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
+    }));
+  const stageLevelPresent = allArtifacts.some((artifact) =>
+    existsSync(
+      join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+    )
+  );
+  const construction = join(record, "construction");
+  const discoveredUnits = existsSync(construction)
+    ? readdirSync(construction).filter((name) => {
+        try {
+          return (
+            statSync(join(construction, name)).isDirectory() &&
+            existsSync(join(construction, name, stage.slug))
+          );
+        } catch {
+          return false;
+        }
+      })
+    : [];
+
+  let stateContent = options.stateContent;
+  if (stateContent === undefined) {
+    try {
+      stateContent = readStateFile(projectDir);
+    } catch {
+      stateContent = null;
+    }
+  }
+  if (
+    unit === undefined &&
+    stateContent !== null &&
+    usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    ) &&
+    (stageLevelPresent || discoveredUnits.length === 0)
+  ) {
+    return stageLevelEntries();
   }
 
   let units: string[];
   let unitKinds = new Map<string, string>();
-  const resolution = boltDag ?? resolveBoltDag(projectDir);
+  const resolution = options.boltDag ?? resolveBoltDag(projectDir);
   if (unit) {
     units = [unit];
     if (resolution.state === "ok" && resolution.unitKinds !== null) {
@@ -5459,31 +8261,475 @@ function reviewArtifactEntries(
     units = resolution.units;
     unitKinds = resolution.unitKinds ?? new Map();
   } else {
-    const construction = join(record, "construction");
-    units = existsSync(construction)
-      ? readdirSync(construction).filter((name) => {
-          try {
-            return statSync(join(construction, name)).isDirectory();
-          } catch {
-            return false;
-          }
-        })
-      : [];
+    if (
+      options.mergedBoltUnits !== undefined &&
+      options.mergedBoltUnits.size > 0
+    ) {
+      units = [...options.mergedBoltUnits].sort();
+    } else {
+      if (stageLevelPresent) return stageLevelEntries();
+      units = discoveredUnits;
+    }
   }
   if (units.length === 0) {
     return allArtifacts.map((artifact) => ({
       logicalPath: `construction/*/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: null,
+      boundary: record,
       required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
     }));
   }
   return units.flatMap((name) =>
     artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
       logicalPath: `construction/${name}/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: join(record, "construction", name, stage.slug, artifactFilename(artifact.name)),
+      boundary: record,
       required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
     })),
   );
+}
+
+type StableArtifactStat = {
+  dev: bigint;
+  ino: bigint;
+  mode: bigint;
+  nlink: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  isFile(): boolean;
+};
+
+type ReviewArtifactContent =
+  | (ReviewArtifactEntry & { state: "missing" })
+  | (ReviewArtifactEntry & {
+      state: "not-file";
+      identity: StableArtifactStat;
+    })
+  | (ReviewArtifactEntry & {
+      state: "file";
+      body: Buffer;
+      identity: StableArtifactStat;
+      fd: number;
+    });
+
+function artifactFdStat(fd: number): StableArtifactStat {
+  return fstatSync(fd, { bigint: true }) as unknown as StableArtifactStat;
+}
+
+function sameArtifactIdentity(
+  left: StableArtifactStat,
+  right: StableArtifactStat,
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function pathContainedBy(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
+}
+
+function inspectArtifactPath(
+  boundary: string,
+  path: string,
+): { state: "missing" } | { state: "present"; boundaryReal: string } | null {
+  const lexicalBoundary = resolvePath(boundary);
+  const lexicalPath = resolvePath(path);
+  if (!pathContainedBy(lexicalBoundary, lexicalPath)) return null;
+
+  let boundaryReal: string;
+  try {
+    boundaryReal = realpathSync(lexicalBoundary);
+  } catch {
+    return null;
+  }
+
+  const rel = relative(lexicalBoundary, lexicalPath);
+  let cursor = lexicalBoundary;
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    cursor = join(cursor, segment);
+    try {
+      if (lstatSync(cursor).isSymbolicLink()) return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { state: "missing" };
+      }
+      return null;
+    }
+  }
+  return { state: "present", boundaryReal };
+}
+
+function readStableReviewArtifacts(
+  entries: ReviewArtifactEntry[],
+  observer?: (event: {
+    phase: "after-read";
+    logicalPath: string;
+    path: string;
+  }) => void,
+): ReviewArtifactContent[] | null {
+  const contents: ReviewArtifactContent[] = [];
+  const opened: number[] = [];
+  try {
+    for (const entry of [...entries].sort((a, b) =>
+      a.logicalPath.localeCompare(b.logicalPath),
+    )) {
+      if (entry.path === null) {
+        contents.push({ ...entry, state: "missing" });
+        continue;
+      }
+
+      const inspected = inspectArtifactPath(entry.boundary, entry.path);
+      if (inspected === null) return null;
+      if (inspected.state === "missing") {
+        contents.push({ ...entry, state: "missing" });
+        continue;
+      }
+      const before = lstatSync(entry.path, {
+        bigint: true,
+      }) as unknown as StableArtifactStat;
+      if (!before.isFile()) {
+        contents.push({ ...entry, state: "not-file", identity: before });
+        continue;
+      }
+      if (before.nlink !== 1n) return null;
+
+      const noFollow =
+        typeof fsConstants.O_NOFOLLOW === "number"
+          ? fsConstants.O_NOFOLLOW
+          : 0;
+      const nonBlock =
+        typeof fsConstants.O_NONBLOCK === "number"
+          ? fsConstants.O_NONBLOCK
+          : 0;
+      const fd = openSync(
+        entry.path,
+        fsConstants.O_RDONLY | noFollow | nonBlock,
+      );
+      opened.push(fd);
+      const openedIdentity = artifactFdStat(fd);
+      if (
+        !openedIdentity.isFile() ||
+        openedIdentity.nlink !== 1n ||
+        !sameArtifactIdentity(before, openedIdentity)
+      ) return null;
+      const openedReal = realpathSync(entry.path);
+      if (!pathContainedBy(inspected.boundaryReal, openedReal)) return null;
+      const body = readFileSync(fd);
+      const afterReadIdentity = artifactFdStat(fd);
+      if (!sameArtifactIdentity(openedIdentity, afterReadIdentity)) return null;
+      contents.push({
+        ...entry,
+        state: "file",
+        body,
+        identity: openedIdentity,
+        fd,
+      });
+      observer?.({
+        phase: "after-read",
+        logicalPath: entry.logicalPath,
+        path: entry.path,
+      });
+    }
+
+    for (const entry of contents) {
+      if (entry.path === null) continue;
+      if (entry.state === "missing") {
+        if (inspectArtifactPath(entry.boundary, entry.path)?.state !== "missing") {
+          return null;
+        }
+        continue;
+      }
+      const inspected = inspectArtifactPath(entry.boundary, entry.path);
+      if (inspected?.state !== "present") return null;
+      const currentPath = lstatSync(entry.path, {
+        bigint: true,
+      }) as unknown as StableArtifactStat;
+      if (!sameArtifactIdentity(entry.identity, currentPath)) return null;
+      if (
+        !pathContainedBy(inspected.boundaryReal, realpathSync(entry.path))
+      ) return null;
+      if (
+        entry.state === "file" &&
+        !sameArtifactIdentity(entry.identity, artifactFdStat(entry.fd))
+      ) {
+        return null;
+      }
+    }
+    return contents;
+  } catch {
+    return null;
+  } finally {
+    for (const fd of opened) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The snapshot has already failed closed if a descriptor is unusable.
+      }
+    }
+  }
+}
+
+function reviewArtifactContentsFingerprint(
+  contents: ReviewArtifactContent[],
+  options: {
+    requireRequiredArtifacts?: boolean;
+    appendixArtifact?: string;
+    appendixOffset?: number;
+  } = {},
+): string | null {
+  const manifest: Array<[string, string]> = [];
+  let matchedAppendix = options.appendixArtifact === undefined;
+  for (const entry of contents) {
+    if (entry.state === "missing") {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "missing"]);
+      continue;
+    }
+    if (entry.state === "not-file") {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "not-file"]);
+      continue;
+    }
+
+    let fingerprintedBody = entry.body;
+    if (entry.logicalPath === options.appendixArtifact) {
+      if (
+        !entry.reviewAppendixTarget ||
+        options.appendixOffset === undefined ||
+        options.appendixOffset < 0 ||
+        options.appendixOffset > entry.body.length
+      ) {
+        return null;
+      }
+      fingerprintedBody = entry.body.subarray(0, options.appendixOffset);
+      matchedAppendix = true;
+    }
+    const digest = createHash("sha256").update(fingerprintedBody).digest("hex");
+    manifest.push([entry.logicalPath, `sha256:${digest}`]);
+  }
+  if (!matchedAppendix) return null;
+  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+}
+
+export interface ReviewArtifactSnapshot {
+  fingerprint: string;
+  requestFingerprint: string;
+  appendixArtifact: string;
+  appendixOffset: number;
+  appendix: Buffer;
+}
+
+/**
+ * Exclude permitted blank separator lines from the reviewer-owned evidence.
+ * This keeps the stale-appendix binding anchored at the canonical
+ * `## Review` heading instead of letting an extra blank line shift old
+ * authority past the request-time prefix check.
+ */
+export function reviewAppendixEvidenceBytes(appendix: Buffer): Buffer {
+  let offset = 0;
+  while (offset < appendix.length) {
+    const lineStart = offset;
+    while (appendix[offset] === 0x20 || appendix[offset] === 0x09) offset++;
+    if (appendix[offset] === 0x0d) {
+      offset++;
+      if (appendix[offset] === 0x0a) offset++;
+      continue;
+    }
+    if (appendix[offset] === 0x0a) {
+      offset++;
+      continue;
+    }
+    return appendix.subarray(lineStart);
+  }
+  return appendix.subarray(offset);
+}
+
+/**
+ * Canonical audit binding for the reviewer evidence after an appendix offset.
+ * `none` pins the verified absence of any pre-request appendix; a sha256
+ * digest pins the exact section that already existed when REVIEW_REQUESTED
+ * was recorded. Its recorded byte length lets completion reject both an
+ * unchanged section and one that merely extends those same pre-request bytes,
+ * so a `## Review` section that predates the request (for example one
+ * surviving an attempt reset) cannot be replayed as fresh reviewer evidence.
+ */
+export function reviewAppendixDigest(appendix: Buffer): string {
+  const evidence = reviewAppendixEvidenceBytes(appendix);
+  return evidence.length === 0
+    ? "none"
+    : `sha256:${createHash("sha256").update(evidence).digest("hex")}`;
+}
+
+function existingReviewAppendixOffset(body: Buffer): number | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    return null;
+  }
+  const lineStarts = [0];
+  for (let offset = 0; offset < text.length; offset++) {
+    if (text[offset] === "\r") {
+      if (text[offset + 1] === "\n") offset++;
+      lineStarts.push(offset + 1);
+    } else if (text[offset] === "\n") {
+      lineStarts.push(offset + 1);
+    }
+  }
+
+  const candidates: Array<{ start: number; end: number }> = [];
+  for (let line = 0; line < lineStarts.length; line++) {
+    const start = lineStarts[line];
+    const lineEnd = lineStarts[line + 1] ?? text.length;
+    const rawLine = text
+      .slice(start, lineEnd)
+      .replace(/(?:\r\n|\n|\r)$/, "");
+    if (/^## Review[ \t]*$/.test(rawLine)) {
+      candidates.push({ start, end: start + rawLine.length });
+    }
+  }
+  if (candidates.length === 0 || typeof Bun.markdown?.render !== "function") {
+    return null;
+  }
+
+  let marker = "AIDLCREVIEWAPPENDIXBOUNDARY";
+  while (text.includes(marker)) marker += "X";
+  let marked = text;
+  for (let index = candidates.length - 1; index >= 0; index--) {
+    const candidate = candidates[index];
+    const rawLine = marked.slice(candidate.start, candidate.end);
+    marked =
+      marked.slice(0, candidate.start) +
+      `## ${marker}${index}${rawLine.slice("## Review".length)}` +
+      marked.slice(candidate.end);
+  }
+
+  let sawRenderedH1H2 = false;
+  let terminalCandidate: number | null = null;
+  try {
+    Bun.markdown.render(marked, {
+      heading: (children, { level }) => {
+        if (level <= 2) {
+          sawRenderedH1H2 = true;
+          const match =
+            level === 2
+              ? new RegExp(`^${marker}([0-9]+)$`).exec(children)
+              : null;
+          terminalCandidate = match ? Number(match[1]) : null;
+        }
+        return "";
+      },
+      html: (children) => {
+        if (renderedHtmlCarriesH1H2(children)) {
+          sawRenderedH1H2 = true;
+          terminalCandidate = null;
+        }
+        return "";
+      },
+    });
+  } catch {
+    return null;
+  }
+  if (!sawRenderedH1H2 || terminalCandidate === null) return null;
+
+  const headingStart = candidates[terminalCandidate]?.start;
+  if (headingStart === undefined) return null;
+
+  const prefix = text.slice(0, headingStart);
+  const trailing = /\s+$/.exec(prefix);
+  if (!trailing) return Buffer.byteLength(prefix, "utf-8");
+  const contentEnd = prefix.length - trailing[0].length;
+  const retainedLineEnd = /^[ \t]*(?:\r\n|\n|\r)/.exec(
+    prefix.slice(contentEnd),
+  );
+  const offset =
+    contentEnd + (retainedLineEnd?.[0].length ?? 0);
+  return Buffer.byteLength(text.slice(0, offset), "utf-8");
+}
+
+/**
+ * Snapshot the exact review input and the explicit review_artifact byte
+ * boundary after which the reviewer may append `## Review`.
+ */
+export function reviewArtifactSnapshot(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    mergedBoltUnits?: ReadonlySet<string>;
+    appendixBinding?: {
+      artifact: string;
+      offset: number;
+    };
+    snapshotObserver?: (event: {
+      phase: "after-read";
+      logicalPath: string;
+      path: string;
+    }) => void;
+  } = {},
+): ReviewArtifactSnapshot | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      mergedBoltUnits: options.mergedBoltUnits,
+    });
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+  const contents = readStableReviewArtifacts(entries, options.snapshotObserver);
+  if (contents === null) return null;
+  const fingerprint = reviewArtifactContentsFingerprint(contents, options);
+  if (fingerprint === null) return null;
+
+  const target = contents
+    .filter((entry) => entry.reviewAppendixTarget)
+    .sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))[0];
+  if (target?.state !== "file") return null;
+
+  const binding = options.appendixBinding ?? {
+    artifact: target.logicalPath,
+    offset: existingReviewAppendixOffset(target.body) ?? target.body.length,
+  };
+  if (
+    binding.artifact !== target.logicalPath ||
+    !Number.isSafeInteger(binding.offset) ||
+    binding.offset < 0 ||
+    binding.offset > target.body.length
+  ) {
+    return null;
+  }
+  const requestFingerprint = reviewArtifactContentsFingerprint(contents, {
+    ...options,
+    appendixArtifact: binding.artifact,
+    appendixOffset: binding.offset,
+  });
+  if (requestFingerprint === null) return null;
+  return {
+    fingerprint,
+    requestFingerprint,
+    appendixArtifact: binding.artifact,
+    appendixOffset: binding.offset,
+    appendix: target.body.subarray(binding.offset),
+  };
 }
 
 /**
@@ -5499,38 +8745,525 @@ export function reviewArtifactFingerprint(
   options: {
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+    mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): string | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, options.boltDag);
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      stateContent: options.stateContent,
+      mergedBoltUnits: options.mergedBoltUnits,
+    });
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+  const contents = readStableReviewArtifacts(entries);
+  if (contents === null) return null;
+  return reviewArtifactContentsFingerprint(contents, options);
+}
+
+export function validateReviewAppendix(
+  appendix: Buffer,
+  expected: {
+    verdict: ReviewVerdict;
+    reviewer: string;
+    iteration: number;
+    reviewChallenge: string | null;
+  },
+): { valid: true } | { valid: false; reason: string } {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(appendix);
+  } catch {
+    return { valid: false, reason: "the reviewer appendix is not valid UTF-8" };
+  }
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const opening = /^(?:[ \t]*\n)*## Review[ \t]*\n/.exec(normalized);
+  if (!opening) {
+    return {
+      valid: false,
+      reason:
+        "the appended bytes must begin with only blank lines followed by an exact `## Review` heading",
+    };
+  }
+  const section = normalized.slice(opening[0].length);
+  const authority = renderReviewMarkdownAuthority(section);
+  if (authority === null) {
+    return {
+      valid: false,
+      reason: "the reviewer appendix could not be parsed as Markdown",
+    };
+  }
+  if (authority.markdownH1H2) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must be terminal and contain no later rendered H1 or H2 heading",
+    };
+  }
+  if (authority.htmlH1H2) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must be terminal and contain no rendered HTML H1 or H2 heading",
+    };
+  }
+
+  if (
+    authority.verdicts.length !== 1 ||
+    authority.verdicts[0] !== expected.verdict
+  ) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must contain exactly one canonical verdict line matching --verdict",
+    };
+  }
+  if (
+    authority.reviewers.length !== 1 ||
+    authority.reviewers[0] !== expected.reviewer
+  ) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must contain exactly one Reviewer line matching the requested reviewer",
+    };
+  }
+  if (
+    authority.iterations.length !== 1 ||
+    authority.iterations[0] !== String(expected.iteration)
+  ) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must contain exactly one Iteration line matching the request",
+    };
+  }
+  if (
+    expected.reviewChallenge === null
+      ? authority.requestChallenges.length !== 0
+      : authority.requestChallenges.length !== 1 ||
+        authority.requestChallenges[0] !== expected.reviewChallenge
+  ) {
+    return {
+      valid: false,
+      reason:
+        expected.reviewChallenge === null
+          ? "the reviewer appendix must omit Request Challenge when the request did not issue one"
+          : "the reviewer appendix must contain exactly one Request Challenge line matching the request",
+    };
+  }
+  return { valid: true };
+}
+
+type RenderedReviewAuthority = {
+  markdownH1H2: boolean;
+  htmlH1H2: boolean;
+  verdicts: string[];
+  reviewers: string[];
+  iterations: string[];
+  requestChallenges: string[];
+};
+
+const REVIEW_MARK_OPEN = "\u0001";
+const REVIEW_MARK_CLOSE = "\u0002";
+const REVIEW_NON_AUTHORITY = "\u0003";
+
+function renderedReviewFields(rendered: string, label: string): string[] {
+  const pattern = new RegExp(
+    `^${REVIEW_MARK_OPEN}${label}:${REVIEW_MARK_CLOSE}[ \\t]+(.+?)[ \\t]*$`,
+    "gm",
+  );
+  return [...rendered.matchAll(pattern)].map((match) => match[1]);
+}
+
+function renderedHtmlCarriesH1H2(html: string): boolean {
+  const visible = html
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(
+      /<(script|style|textarea|title|xmp|iframe|noembed|noframes|plaintext|template)\b[\s\S]*?(?:<\/\1\s*>|$)/gi,
+      "",
+    );
+  return /<h[12](?=[\s/>]|$)/i.test(visible);
+}
+
+function escapeReviewRendererText(text: string): string {
+  let escaped = "";
+  for (const character of text) {
+    const code = character.charCodeAt(0);
+    escaped +=
+      code >= 1 && code <= 3
+        ? `\\u${code.toString(16).padStart(4, "0")}`
+        : character;
+  }
+  return escaped;
+}
+
+function renderReviewMarkdownAuthority(
+  section: string,
+): RenderedReviewAuthority | null {
+  if (typeof Bun.markdown?.render !== "function") return null;
+  let markdownH1H2 = false;
+  let htmlH1H2 = false;
+  let rendered: string;
+  try {
+    rendered = Bun.markdown.render(section, {
+      heading: (_children, { level }) => {
+        if (level <= 2) markdownH1H2 = true;
+        return `${REVIEW_NON_AUTHORITY}\n`;
+      },
+      html: (children) => {
+        if (renderedHtmlCarriesH1H2(children)) htmlH1H2 = true;
+        return children.endsWith("\n")
+          ? `${REVIEW_NON_AUTHORITY}\n`
+          : REVIEW_NON_AUTHORITY;
+      },
+      code: () => `${REVIEW_NON_AUTHORITY}\n`,
+      codespan: () => REVIEW_NON_AUTHORITY,
+      text: escapeReviewRendererText,
+      strong: (children) =>
+        `${REVIEW_MARK_OPEN}${children}${REVIEW_MARK_CLOSE}`,
+      paragraph: (children) => `${children}\n`,
+      blockquote: () => "",
+      list: () => "",
+      table: () => "",
+      emphasis: (children) =>
+        `${REVIEW_NON_AUTHORITY}${children}${REVIEW_NON_AUTHORITY}`,
+      strikethrough: (children) =>
+        `${REVIEW_NON_AUTHORITY}${children}${REVIEW_NON_AUTHORITY}`,
+      link: (children) =>
+        `${REVIEW_NON_AUTHORITY}${children}${REVIEW_NON_AUTHORITY}`,
+      image: () => REVIEW_NON_AUTHORITY,
+      hr: () => `${REVIEW_NON_AUTHORITY}\n`,
+    });
+  } catch {
+    return null;
+  }
+  return {
+    markdownH1H2,
+    htmlH1H2,
+    verdicts: renderedReviewFields(rendered, "Verdict"),
+    reviewers: renderedReviewFields(rendered, "Reviewer"),
+    iterations: renderedReviewFields(rendered, "Iteration"),
+    requestChallenges: renderedReviewFields(rendered, "Request Challenge"),
+  };
+}
+
+const REVIEW_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
+const REVIEW_APPENDIX_DIGEST_RE = /^(?:none|sha256:[0-9a-f]{64})$/;
+const REVIEW_CHALLENGE_RE = /^review:[0-9a-f]{32}$/;
+const SOURCE_FINGERPRINT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/;
+const UNIT_SOURCE_FINGERPRINT_RE = /^(?:sha256:[0-9a-f]{64}|unbindable)$/;
+
+export interface ReviewRequestBinding {
+  artifactFingerprint: string;
+  appendixArtifact: string | null;
+  appendixOffset: number | null;
+  priorAppendixDigest: string | null;
+  priorAppendixLength: number | null;
+  reviewChallenge: string | null;
+  sourceFingerprint: string | null;
+  unitSourceFingerprint: string | null;
+  recoveryCause: ReviewRecoveryCause | null;
+}
+
+export function reviewRequestBindingFromBlock(
+  block: string,
+): ReviewRequestBinding | null {
+  const artifactFingerprint = auditBlockField(block, "Artifact Fingerprint");
+  if (
+    artifactFingerprint === null ||
+    !REVIEW_FINGERPRINT_RE.test(artifactFingerprint)
+  ) {
+    return null;
+  }
+  const appendixArtifact = auditBlockField(
+    block,
+    "Review Appendix Artifact",
+  );
+  const rawOffset = auditBlockField(block, "Review Appendix Offset");
+  if ((appendixArtifact === null) !== (rawOffset === null)) return null;
+  let appendixOffset: number | null = null;
+  if (rawOffset !== null) {
+    if (!/^[0-9]+$/.test(rawOffset)) return null;
+    appendixOffset = Number(rawOffset);
+    if (!Number.isSafeInteger(appendixOffset)) return null;
+  }
+  const priorAppendixDigest = auditBlockField(
+    block,
+    "Review Appendix Prior Digest",
+  );
+  if (
+    priorAppendixDigest !== null &&
+    (appendixArtifact === null ||
+      !REVIEW_APPENDIX_DIGEST_RE.test(priorAppendixDigest))
+  ) {
+    return null;
+  }
+  const rawPriorAppendixLength = auditBlockField(
+    block,
+    "Review Appendix Prior Length",
+  );
+  let priorAppendixLength: number | null = null;
+  if (rawPriorAppendixLength !== null) {
+    if (!/^[0-9]+$/.test(rawPriorAppendixLength)) return null;
+    priorAppendixLength = Number(rawPriorAppendixLength);
+    if (!Number.isSafeInteger(priorAppendixLength)) return null;
+    if (
+      appendixArtifact === null ||
+      priorAppendixDigest === null ||
+      (priorAppendixDigest === "none") !== (priorAppendixLength === 0)
+    ) {
+      return null;
+    }
+  }
+  const reviewChallenge = auditBlockField(block, "Review Challenge");
+  if (
+    reviewChallenge !== null &&
+    (!REVIEW_CHALLENGE_RE.test(reviewChallenge) ||
+      priorAppendixLength === null ||
+      priorAppendixLength === 0)
+  ) {
+    return null;
+  }
+  const sourceFingerprint = auditBlockField(block, "Source Fingerprint");
+  if (
+    sourceFingerprint !== null &&
+    !SOURCE_FINGERPRINT_RE.test(sourceFingerprint)
+  ) {
+    return null;
+  }
+  const unitSourceFingerprint = auditBlockField(
+    block,
+    "Unit Source Fingerprint",
+  );
+  if (
+    unitSourceFingerprint !== null &&
+    !UNIT_SOURCE_FINGERPRINT_RE.test(unitSourceFingerprint)
+  ) {
+    return null;
+  }
+  const rawRecoveryCause = auditBlockField(block, "Recovery Cause");
+  const recoveryCause =
+    rawRecoveryCause === "artifact" ||
+      rawRecoveryCause === "source" ||
+      rawRecoveryCause === "artifact+source"
+      ? rawRecoveryCause
+      : null;
+  if (rawRecoveryCause !== null && recoveryCause === null) return null;
+  return {
+    artifactFingerprint,
+    appendixArtifact,
+    appendixOffset,
+    priorAppendixDigest,
+    priorAppendixLength,
+    reviewChallenge,
+    sourceFingerprint,
+    unitSourceFingerprint,
+    recoveryCause,
+  };
+}
+
+export function reviewCompletionMatchesRequest(
+  request: ReviewRequestBinding,
+  completionBlock: string,
+): boolean {
+  const verdict = auditBlockField(completionBlock, "Verdict");
+  if (verdict !== "READY" && verdict !== "NOT-READY") return false;
+  const recordedFingerprint = auditBlockField(
+    completionBlock,
+    "Artifact Fingerprint",
+  );
+  if (
+    recordedFingerprint === null ||
+    !REVIEW_FINGERPRINT_RE.test(recordedFingerprint)
+  ) {
+    return false;
+  }
+  const completedRequestFingerprint =
+    auditBlockField(completionBlock, "Request Fingerprint") ??
+    recordedFingerprint;
+  if (completedRequestFingerprint !== request.artifactFingerprint) return false;
+
+  const completionAppendixArtifact = auditBlockField(
+    completionBlock,
+    "Review Appendix Artifact",
+  );
+  const completionAppendixOffset = auditBlockField(
+    completionBlock,
+    "Review Appendix Offset",
+  );
+  if (
+    completionAppendixArtifact !== request.appendixArtifact ||
+    (completionAppendixOffset === null
+      ? request.appendixOffset !== null
+      : !/^[0-9]+$/.test(completionAppendixOffset) ||
+        Number(completionAppendixOffset) !== request.appendixOffset)
+  ) {
+    return false;
+  }
+
+  if (
+    request.priorAppendixDigest !== null &&
+    auditBlockField(completionBlock, "Review Appendix Prior Digest") !==
+      request.priorAppendixDigest
+  ) {
+    return false;
+  }
+  if (
+    request.priorAppendixDigest !== null &&
+    request.priorAppendixLength === null
+  ) {
+    return false;
+  }
+  if (request.priorAppendixLength !== null) {
+    const completionPriorLength = auditBlockField(
+      completionBlock,
+      "Review Appendix Prior Length",
+    );
+    if (
+      completionPriorLength === null ||
+      !/^[0-9]+$/.test(completionPriorLength) ||
+      Number(completionPriorLength) !== request.priorAppendixLength
+    ) {
+      return false;
+    }
+  }
+  if (
+    auditBlockField(completionBlock, "Review Challenge") !==
+    request.reviewChallenge
+  ) {
+    return false;
+  }
+
+  if (request.sourceFingerprint !== null) {
+    const requestSource = auditBlockField(
+      completionBlock,
+      "Request Source Fingerprint",
+    );
+    const completedSource = auditBlockField(
+      completionBlock,
+      "Source Fingerprint",
+    );
+    if (
+      requestSource !== request.sourceFingerprint ||
+      completedSource !== request.sourceFingerprint
+    ) {
+      return false;
+    }
+  }
+  if (
+    request.unitSourceFingerprint !== null &&
+    auditBlockField(completionBlock, "Unit Source Fingerprint") !==
+      request.unitSourceFingerprint
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Byte-capture snapshot of the declared artifact set, sharing the sorted
+ * logical-path manifest fingerprint scheme review receipts record. Swarm
+ * finalize reads converged Bolt worktree records through it and merges the
+ * exact reviewed bytes into main.
+ */
+export function reviewArtifactBytesSnapshot(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+    captureBytes?: boolean;
+    mergedBoltUnits?: ReadonlySet<string>;
+  } = {},
+): ReviewArtifactBytesSnapshot | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      stateContent: options.stateContent,
+      mergedBoltUnits: options.mergedBoltUnits,
+    });
   } catch {
     return null;
   }
   if (entries === null) return null;
 
   const manifest: Array<[string, string]> = [];
+  const snapshot: ReviewArtifactBytesEntry[] = [];
+  let anchorReal: string;
+  try {
+    anchorReal = realpathSync(projectDir);
+  } catch {
+    return null;
+  }
   for (const entry of entries.sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))) {
-    if (entry.path === null || !existsSync(entry.path)) {
+    if (entry.path === null) {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "missing"]);
+      snapshot.push({ ...entry, state: "missing" });
       continue;
     }
     try {
-      const stat = statSync(entry.path);
-      if (!stat.isFile()) {
+      const safePath = assertNoSymlinkInChainOrThrow(
+        anchorReal,
+        relative(projectDir, entry.path),
+      );
+      const bytes = readRegularFileNoFollowOrThrow(
+        safePath,
+        `review artifact ${entry.logicalPath}`,
+      );
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+      snapshot.push({
+        ...entry,
+        state: "file",
+        ...(options.captureBytes === true ? { bytes } : {}),
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         if (entry.required && options.requireRequiredArtifacts === true) return null;
-        manifest.push([entry.logicalPath, "not-file"]);
+        manifest.push([entry.logicalPath, "missing"]);
+        snapshot.push({ ...entry, state: "missing" });
         continue;
       }
-      const digest = createHash("sha256").update(readFileSync(entry.path)).digest("hex");
-      manifest.push([entry.logicalPath, `sha256:${digest}`]);
-    } catch {
-      return null;
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "not-file"]);
+      snapshot.push({ ...entry, state: "not-file" });
     }
   }
-  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+  return {
+    fingerprint: `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`,
+    entries: snapshot,
+  };
 }
+
+type SwarmConvergenceSourceKind = "legacy" | "bypass" | "bound" | "invalid";
+
+function swarmConvergenceSourceKind(block: string): SwarmConvergenceSourceKind {
+  const fingerprint = auditBlockField(block, "Source Fingerprint");
+  const commit = auditBlockField(block, "Source Commit");
+  const bypass = auditBlockField(block, "Source Freshness Bypass");
+  if (fingerprint === null && commit === null && bypass === null) return "legacy";
+  if (fingerprint === null && commit === null && bypass === "true") return "bypass";
+  if (
+    bypass === null &&
+    fingerprint !== null &&
+    commit !== null &&
+    /^[0-9a-f]{40,64}$/.test(fingerprint) &&
+    /^[0-9a-f]{40,64}$/.test(commit)
+  ) {
+    return "bound";
+  }
+  return "invalid";
+}
+
 
 // Collect the fresh terminal review receipts for a stage from the audit
 // ledger. Builds ONE position-tiebroken event stream (the same interleave
@@ -5702,6 +9435,266 @@ function auditEventIsCrossShardTied<
   );
 }
 
+const REVIEW_RECEIPT_EVENTS = new Set([
+  "WORKFLOW_STARTED",
+  "STAGE_STARTED",
+  "STAGE_JUMPED",
+  "GATE_REJECTED",
+  "SESSION_STARTED",
+  "SESSION_RESUMED",
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "AUDIT_MERGED",
+  "ARTIFACT_CREATED",
+  "ARTIFACT_UPDATED",
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
+]);
+
+export interface ReviewAttemptWindow {
+  allEvents: AuditShardEvent[];
+  events: AuditShardEvent[];
+  floorIdx: number;
+  mergedBoltUnits: Set<string>;
+  openBoltUnits: Set<string>;
+}
+
+function boltEventUnits(event: AuditShardEvent): string[] {
+  const field =
+    event.event === "BOLT_FAILED"
+      ? auditBlockField(event.block, "Failed Bolt")
+      : auditBlockField(event.block, "Bolt names");
+  return (field ?? "")
+    .split(",")
+    .map((unit) => unit.trim())
+    .filter((unit) => unit.length > 0);
+}
+
+/**
+ * One audit snapshot supplies review freshness, no-DAG artifact enumeration,
+ * request admission, and gate coverage. Bolt terminal rows pair by slug when
+ * both rows carry one, and otherwise by Unit name. BOLT_COMPLETED alone is
+ * terminal only for a name-only, non-worktree attempt; a completion that
+ * involves a slug on either row is completion-pending-merge and becomes
+ * merged only when a matching later AUDIT_MERGED proves the state and audit
+ * merge sequence landed on main.
+ */
+export function reviewAttemptWindow(
+  projectDir: string,
+  stateContent: string,
+  stage: { slug: string; for_each?: string },
+): ReviewAttemptWindow {
+  const allEvents = readAuditShardEvents(projectDir);
+  const events = allEvents
+    .filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shardIndex - b.shardIndex;
+    });
+  const perUnit = stage.for_each === "unit-of-work";
+  const artifactPerUnit =
+    perUnit &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
+  const unitMajor =
+    artifactPerUnit &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership = artifactPerUnit && isTeamUnitOwnership(stateContent);
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    let boundary =
+      event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED";
+    if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
+      boundary =
+        (event.event === "GATE_REJECTED" &&
+          !(teamOwnership && auditBlockField(event.block, "Unit"))) ||
+        (event.event === "STAGE_STARTED" &&
+          !unitMajor &&
+          !auditBlockField(event.block, "Workflow")?.startsWith(
+            "single-stage:",
+          ));
+    }
+    if (!boundary) continue;
+    const tiedCrossShard = events.some(
+      (candidate, index) =>
+        index !== i &&
+        candidate.timestamp === event.timestamp &&
+        candidate.shard !== event.shard,
+    );
+    // Team-owned attempts fail closed across a same-second cross-shard
+    // boundary by flooring the entire unordered timestamp group. Solo mode
+    // retains its legacy merged-shard ordering for compatibility.
+    if (tiedCrossShard && teamOwnership) {
+      let end = i;
+      while (
+        end + 1 < events.length &&
+        events[end + 1].timestamp === event.timestamp
+      ) {
+        end++;
+      }
+      floorIdx = end;
+      i = end;
+    } else {
+      floorIdx = i;
+    }
+  }
+
+  const attempts: Array<{
+    unit: string;
+    slug: string | null;
+    state: "open" | "completed" | "merged" | "failed";
+  }> = [];
+  const applyBoltEvent = (event: AuditShardEvent): void => {
+    if (event.event === "AUDIT_MERGED") {
+      // Merge evidence: audit-merge emits AUDIT_MERGED only after the state
+      // merge succeeded and the worktree delta landed on main. It confirms
+      // the newest completion-pending attempt for its slug; it cannot
+      // resurrect a failed attempt or invent one that never completed.
+      const slug = auditBlockField(event.block, "Bolt slug");
+      if (slug === null) return;
+      const attemptIndex = attempts.findLastIndex(
+        (attempt) =>
+          attempt.slug === slug && attempt.state === "completed",
+      );
+      if (attemptIndex !== -1) attempts[attemptIndex].state = "merged";
+      return;
+    }
+    const units = boltEventUnits(event);
+    const slug = auditBlockField(event.block, "Bolt slug");
+    if (event.event === "BOLT_STARTED") {
+      for (const unit of units) {
+        attempts.push({ unit, slug, state: "open" });
+      }
+      return;
+    }
+    const completion = event.event === "BOLT_COMPLETED";
+    for (const unit of units) {
+      let attemptIndex = -1;
+      if (slug !== null) {
+        attemptIndex = attempts.findIndex(
+          (attempt) =>
+            attempt.state === "open" && attempt.slug === slug,
+        );
+        if (attemptIndex === -1) {
+          // A confirmed merge is final for its attempt: a duplicate
+          // completion replay must not demote it back to pending, and a
+          // later fragment-cleanup BOLT_FAILED must not erase it.
+          attemptIndex = attempts.findLastIndex(
+            (attempt) =>
+              attempt.slug === slug && attempt.state !== "merged",
+          );
+        }
+      }
+      if (attemptIndex === -1) {
+        // A slugless completion pairs only name-only attempts: it must not
+        // close a slug-backed (worktree) attempt whose merge sequence never
+        // ran. A slugless failure still closes the newest open attempt,
+        // covering discard/abort rows emitted with --name only.
+        attemptIndex = attempts.findIndex(
+          (attempt) =>
+            attempt.state === "open" &&
+            attempt.unit === unit &&
+            ((slug === null && !completion) || attempt.slug === null),
+        );
+      }
+      if (attemptIndex === -1 && slug === null) {
+        attemptIndex = attempts.findLastIndex(
+          (attempt) =>
+            attempt.unit === unit &&
+            attempt.state !== "merged" &&
+            (!completion || attempt.slug === null),
+        );
+      }
+      if (attemptIndex === -1) continue;
+      const attempt = attempts[attemptIndex];
+      if (!completion) {
+        attempt.state = "failed";
+        continue;
+      }
+      if (attempt.slug === null && slug !== null) {
+        // A slug-carrying completion of a name-only start binds the merge
+        // slug to the attempt so the later AUDIT_MERGED can confirm it.
+        attempt.slug = slug;
+      }
+      attempt.state = attempt.slug !== null ? "completed" : "merged";
+    }
+  };
+  if (perUnit) {
+    for (let start = floorIdx + 1; start < events.length;) {
+      let end = start + 1;
+      while (
+        end < events.length &&
+        events[end].timestamp === events[start].timestamp
+      ) {
+        end++;
+      }
+      const group = events.slice(start, end);
+      const boltEvents = group.filter(
+        (event) =>
+          event.event === "BOLT_STARTED" ||
+          event.event === "BOLT_COMPLETED" ||
+          event.event === "BOLT_FAILED" ||
+          event.event === "AUDIT_MERGED",
+      );
+      const byShard = new Map<string, AuditShardEvent[]>();
+      for (const event of boltEvents) {
+        const rows = byShard.get(event.shard) ?? [];
+        rows.push(event);
+        byShard.set(event.shard, rows);
+      }
+      const queues = [...byShard.values()];
+      const eventPriority = (event: AuditShardEvent): number =>
+        event.event === "BOLT_STARTED"
+          ? 0
+          : event.event === "BOLT_FAILED"
+            ? 1
+            : event.event === "BOLT_COMPLETED"
+              ? 2
+              : 3;
+      while (queues.length > 0) {
+        let selected = 0;
+        for (let index = 1; index < queues.length; index++) {
+          const priority =
+            eventPriority(queues[index][0]) -
+            eventPriority(queues[selected][0]);
+          if (
+            priority < 0 ||
+            (priority === 0 &&
+              queues[index][0].shardIndex <
+                queues[selected][0].shardIndex)
+          ) {
+            selected = index;
+          }
+        }
+        applyBoltEvent(queues[selected].shift()!);
+        if (queues[selected].length === 0) queues.splice(selected, 1);
+      }
+      start = end;
+    }
+  }
+
+  const mergedBoltUnits = new Set<string>();
+  const openBoltUnits = new Set<string>();
+  for (const attempt of attempts) {
+    if (attempt.state === "merged") mergedBoltUnits.add(attempt.unit);
+    else if (attempt.state === "open" || attempt.state === "completed") {
+      openBoltUnits.add(attempt.unit);
+    }
+  }
+  return {
+    allEvents,
+    events,
+    floorIdx,
+    mergedBoltUnits,
+    openBoltUnits,
+  };
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -5710,6 +9703,7 @@ export function freshReviewReceipts(
     phase: string;
     for_each?: string;
     reviewer?: string;
+    review_artifact?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
     workspace_requires?: boolean;
@@ -5720,6 +9714,7 @@ export function freshReviewReceipts(
   options: {
     boltDag?: BoltDagResolution;
     reviewClass?: ReviewClass;
+    attemptWindow?: ReviewAttemptWindow;
   } = {},
 ): FreshReviewReceipts {
   const empty: FreshReviewReceipts = {
@@ -5741,6 +9736,8 @@ export function freshReviewReceipts(
     unitIterations: new Map(),
     stagePending: null,
     unitPending: new Map(),
+    mergedBoltUnits: new Set(),
+    openBoltUnits: new Set(),
   };
   const reviewer = stage.reviewer;
   if (!reviewer) return empty;
@@ -5748,29 +9745,24 @@ export function freshReviewReceipts(
   if (reviewClass === "none") return empty;
   const maxIterations =
     reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
-  const RELEVANT = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_JUMPED",
-    "GATE_REJECTED",
-    "ARTIFACT_CREATED",
-    "ARTIFACT_UPDATED",
-    "REVIEW_REQUESTED",
-    "REVIEW_COMPLETED",
-  ]);
-  const allEvents = readAuditShardEvents(projectDir);
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
+  const unitMajor =
+    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership = perUnit && isTeamUnitOwnership(stateContent);
+  const attemptWindow =
+    options.attemptWindow ??
+    reviewAttemptWindow(projectDir, stateContent, stage);
+  const { allEvents, events, floorIdx, mergedBoltUnits, openBoltUnits } =
+    attemptWindow;
+  empty.mergedBoltUnits = mergedBoltUnits;
+  empty.openBoltUnits = openBoltUnits;
   const modernSourceBindingEvidence =
     hasModernSourceBindingEvidence(projectDir, allEvents);
-  const events = allEvents
-    .filter((row) => RELEVANT.has(row.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      // Same-shard ties have real append order. Cross-shard ties remain
-      // adjacent but causally unordered; authority-sensitive consumers below
-      // fail closed instead of trusting shard filename order.
-      if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shardIndex - b.shardIndex;
-    });
   if (events.length === 0) {
     if (stage.workspace_requires === true && modernSourceBindingEvidence) {
       empty.sourceBaseline = { state: "invalid" };
@@ -5778,14 +9770,52 @@ export function freshReviewReceipts(
     return empty;
   }
   const eventIsCrossShardTied = (index: number): boolean => {
-    return auditEventIsCrossShardTied(events, index);
+    // AUDIT_MERGED is referee merge plumbing (main-emitted, merge-protected)
+    // with no reviewer authority: a same-second row in another shard must
+    // not make a receipt, request, or boundary in this window ambiguous.
+    const event = events[index];
+    return events.some(
+      (candidate, other) =>
+        other !== index &&
+        candidate.event !== "AUDIT_MERGED" &&
+        candidate.timestamp === event.timestamp &&
+        candidate.shard !== event.shard,
+    );
+  };
+  const requestTieIsSessionBoundaryOnly = (index: number): boolean => {
+    const event = events[index];
+    let sawSessionBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== event.timestamp ||
+        events[other].shard === event.shard ||
+        events[other].event === "AUDIT_MERGED"
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "SESSION_STARTED" &&
+        events[other].event !== "SESSION_RESUMED"
+      ) {
+        return false;
+      }
+      sawSessionBoundary = true;
+    }
+    return sawSessionBoundary;
   };
 
-  const perUnit = stage.for_each === "unit-of-work";
-  const unitMajor =
-    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
-  const applicableUnits: Set<string> | null = dag?.state === "ok" ? new Set() : null;
+  const observedBoltUnits = new Set([
+    ...mergedBoltUnits,
+    ...openBoltUnits,
+  ]);
+  const applicableUnits: Set<string> | null =
+    dag?.state === "ok"
+      ? new Set()
+      : dag?.state === "none" && observedBoltUnits.size > 0
+        ? observedBoltUnits
+        : null;
   if (dag?.state === "ok" && applicableUnits !== null) {
     for (const unit of dag.units) {
       if (
@@ -5795,38 +9825,6 @@ export function freshReviewReceipts(
           dag.unitKinds?.get(unit) ?? null,
         ).length > 0
       ) applicableUnits.add(unit);
-    }
-  }
-
-  let floorIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    let boundary = e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED";
-    if (!boundary && auditBlockField(e.block, "Stage") === stage.slug) {
-      boundary = e.event === "GATE_REJECTED" || (
-        e.event === "STAGE_STARTED" &&
-        !unitMajor &&
-        !auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")
-      );
-    }
-    if (!boundary) continue;
-    const tiedCrossShard = events.some(
-      (candidate, index) =>
-        index !== i &&
-        candidate.timestamp === e.timestamp &&
-        candidate.shard !== e.shard,
-    );
-    // A boundary involved in a cross-shard same-second tie floors the entire
-    // timestamp group. No receipt or artifact row in that unordered group may
-    // survive based on shard filename order. A later unambiguous boundary
-    // restores ordinary accounting.
-    if (tiedCrossShard) {
-      let end = i;
-      while (end + 1 < events.length && events[end + 1].timestamp === e.timestamp) end++;
-      floorIdx = end;
-      i = end;
-    } else {
-      floorIdx = i;
     }
   }
 
@@ -5847,9 +9845,10 @@ export function freshReviewReceipts(
       unit: string | undefined;
       iteration: number;
       recovery: boolean;
-      fingerprint: string | null;
+      binding: ReviewRequestBinding | null;
       timestamp: string;
       shard: string;
+      suspensionActive: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -5874,8 +9873,108 @@ export function freshReviewReceipts(
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
+  const resetUnitReviewState = (unit: string): void => {
+    for (const [key, request] of pendingRequests) {
+      if (request.unit === unit) pendingRequests.delete(key);
+    }
+    unitVerdicts.delete(unit);
+    unitStale.delete(unit);
+    unitStaleProgress.delete(unit);
+    unitIterations.delete(unit);
+    unitReceiptRecovery.delete(unit);
+    unitPending.delete(unit);
+    if (newestSourceUnit === unit) {
+      newestSourceFingerprint = null;
+      newestSourceUnit = null;
+      newestSourceProgress = null;
+      sourceRecoverySpent = false;
+    }
+  };
+  let groupTimestamp: string | null = null;
+  let deferredSessionBoundary = false;
+  const deferredBoltUnits = new Set<string>();
+  const applyDeferredBoundaries = (): void => {
+    if (deferredSessionBoundary) {
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+    }
+    for (const unit of deferredBoltUnits) resetUnitReviewState(unit);
+    deferredSessionBoundary = false;
+    deferredBoltUnits.clear();
+  };
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
+    if (groupTimestamp !== null && e.timestamp !== groupTimestamp) {
+      applyDeferredBoundaries();
+    }
+    groupTimestamp = e.timestamp;
+    const eventUnit = auditBlockField(e.block, "Unit");
+    if (
+      eventUnit &&
+      !eventMatchesClaimAttempt(projectDir, e.block, eventUnit)
+    ) {
+      continue;
+    }
+    if (
+      teamOwnership &&
+      eventUnit &&
+      (e.event === "REVIEW_REQUESTED" || e.event === "REVIEW_COMPLETED") &&
+      events.some(
+        (candidate) =>
+          candidate.event === "GATE_REJECTED" &&
+          candidate.timestamp === e.timestamp &&
+          candidate.shard !== e.shard &&
+          auditBlockField(candidate.block, "Unit") === eventUnit &&
+          gateStagesFromBlock(candidate.block).includes(stage.slug),
+      )
+    ) {
+      continue;
+    }
+    if (teamOwnership && e.event === "GATE_REJECTED") {
+      const rejectedUnit = auditBlockField(e.block, "Unit");
+      if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
+        continue;
+      }
+      if (unitVerdicts.delete(rejectedUnit)) {
+        unitStale.add(rejectedUnit);
+        unitStaleProgress.set(rejectedUnit, {
+          nextIteration: (unitIterations.get(rejectedUnit) ?? 0) + 1,
+          recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
+        });
+      }
+      unitIterations.delete(rejectedUnit);
+      unitReceiptRecovery.delete(rejectedUnit);
+      unitPending.delete(rejectedUnit);
+      for (const [key, request] of pendingRequests) {
+        if (request.unit === rejectedUnit) pendingRequests.delete(key);
+      }
+      continue;
+    }
+    if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
+      if (eventIsCrossShardTied(i)) {
+        deferredSessionBoundary = true;
+        continue;
+      }
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+      continue;
+    }
+    if (e.event === "BOLT_STARTED" && perUnit) {
+      const units = (auditBlockField(e.block, "Bolt names") ?? "")
+        .split(",")
+        .map((unit) => unit.trim())
+        .filter((unit) => unit.length > 0);
+      if (eventIsCrossShardTied(i)) {
+        for (const unit of units) deferredBoltUnits.add(unit);
+        continue;
+      }
+      for (const unit of units) {
+        resetUnitReviewState(unit);
+      }
+      continue;
+    }
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
@@ -5933,12 +10032,28 @@ export function freshReviewReceipts(
     const unit = auditBlockField(e.block, "Unit") || undefined;
     if (
       perUnit &&
+      dag?.state === "ok" &&
+      (unit === undefined || applicableUnits === null || !applicableUnits.has(unit))
+    ) continue;
+    if (
+      perUnit &&
+      dag?.state === "none" &&
       applicableUnits !== null &&
-      (unit === undefined || !applicableUnits.has(unit))
+      unit !== undefined &&
+      !applicableUnits.has(unit)
     ) continue;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
-      if (eventIsCrossShardTied(i)) continue;
+      const tiedAcrossShards = eventIsCrossShardTied(i);
+      const sessionBoundaryOnlyTie =
+        tiedAcrossShards && requestTieIsSessionBoundaryOnly(i);
+      if (
+        tiedAcrossShards &&
+        !sessionBoundaryOnlyTie &&
+        teamOwnership
+      ) continue;
+      const binding = reviewRequestBindingFromBlock(e.block);
+      if (binding === null) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -5948,15 +10063,19 @@ export function freshReviewReceipts(
         unit,
         iteration,
         recovery,
-        fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
+        binding,
         timestamp: e.timestamp,
         shard: e.shard,
+        suspensionActive:
+          recovery &&
+          !sessionBoundaryOnlyTie &&
+          /^sha256:[0-9a-f]{64}$/.test(binding.artifactFingerprint),
       });
       continue;
     }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    if (eventIsCrossShardTied(i)) {
+    if (teamOwnership && eventIsCrossShardTied(i)) {
       pendingRequests.delete(requestKey);
       continue;
     }
@@ -5964,26 +10083,28 @@ export function freshReviewReceipts(
     if (
       !request ||
       (request.timestamp === e.timestamp && request.shard !== e.shard) ||
-      !pendingRequests.delete(requestKey)
-    ) continue;
+      !request.binding ||
+      !reviewCompletionMatchesRequest(request.binding, e.block)
+    ) {
+      continue;
+    }
+    pendingRequests.delete(requestKey);
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
-    const requestedFingerprint = request.fingerprint;
-    const artifactFingerprintUsable =
-      requestedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(requestedFingerprint) &&
-      recordedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
-      recordedFingerprint === requestedFingerprint;
+    const artifactFingerprintUsable = recordedFingerprint !== null;
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
       stage,
       unit,
-      { boltDag: options.boltDag },
+      {
+        boltDag: options.boltDag,
+        stateContent,
+        mergedBoltUnits,
+      },
     );
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
-      fingerprintUsable && requestedFingerprint === currentFingerprint;
+      fingerprintUsable && recordedFingerprint === currentFingerprint;
     const terminalVerdict = request.recovery
       ? verdict
       : terminalReviewVerdict(
@@ -6010,8 +10131,20 @@ export function freshReviewReceipts(
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
-        ? { state: "repair-required", iteration }
-        : { state: "outstanding", iteration: iteration + 1 };
+        ? {
+            state: "repair-required",
+            iteration,
+            recovery: request.recovery,
+            suspensionActive: false,
+            recoveryCause: request.binding?.recoveryCause ?? null,
+          }
+        : {
+            state: "outstanding",
+            iteration: iteration + 1,
+            recovery: request.recovery,
+            suspensionActive: false,
+            recoveryCause: request.binding?.recoveryCause ?? null,
+          };
       if (unit) {
         unitVerdicts.delete(unit);
         unitIterations.delete(unit);
@@ -6066,18 +10199,22 @@ export function freshReviewReceipts(
       stageStaleProgress = null;
     }
   }
+  applyDeferredBoundaries();
 
   for (const request of pendingRequests.values()) {
     const pending: PendingReviewProgress = {
       state: "retry-required",
       iteration: request.iteration,
+      recovery: request.recovery,
+      suspensionActive: request.suspensionActive,
+      recoveryCause: request.binding?.recoveryCause ?? null,
     };
     if (request.unit) {
-      unitVerdicts.delete(request.unit);
+      if (!request.recovery) unitVerdicts.delete(request.unit);
       unitIterations.delete(request.unit);
       unitPending.set(request.unit, pending);
     } else {
-      stageVerdict = null;
+      if (!request.recovery) stageVerdict = null;
       stageIteration = null;
       stagePending = pending;
     }
@@ -6307,6 +10444,8 @@ export function freshReviewReceipts(
     unitIterations,
     stagePending,
     unitPending,
+    mergedBoltUnits,
+    openBoltUnits,
   };
 }
 
@@ -6354,20 +10493,24 @@ export function repoDir(projectDir: string, repoName: string): string {
 // bound to the SOURCE STATE the reviewer actually inspected: workspace writes
 // deliberately emit no audit events (aidlc-audit-logger.ts excludes them), so
 // without a binding a post-review source edit leaves the receipt satisfying the
-// completion guard for code nobody re-reviewed. The binding is a git-native
-// content fingerprint: per repo, a `git write-tree` over a TEMPORARY index
-// seeded from HEAD with `git add -A` applied — the exact tracked + untracked
-// (gitignore-respecting) content state, computed without touching the real
-// index or worktree. Reverting an edit restores the original fingerprint
+// completion guard for code nobody re-reviewed. The binding is one canonical,
+// bounded filesystem identity, independent of repository metadata and Git
+// executable availability. It makes supported non-Git and missing-Git
+// workspaces bindable, includes ignored application bytes, and excludes only
+// explicit framework/dependency/cache and generated-output boundaries.
+// Reverting an edit restores the original fingerprint
 // (content-addressed), so an undone change does not strand a receipt.
 //
 // Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
 // repoDir(); no recorded repos = the legacy single-repo default (projectDir).
-// An unchanged no-Git greenfield whose only paths are the excluded AIDLC shell
-// binds to the canonical empty listing. Returns null when any application path
-// exists without Git, or when any recorded repo is not a usable checkout. New
-// receipts record null explicitly as `unbindable` and completion fails closed;
-// only a legacy receipt with no fingerprint field keeps the migration fail-open.
+// The workspace roof is a separate source boundary: top-level files such as
+// compose manifests remain covered, while top-level directories stay outside
+// unless .aidlc-source-paths.json explicitly re-includes one. That stable
+// partition prevents unrelated siblings from entering when their `.git`
+// metadata disappears. Missing registered repos carry a stable marker and
+// change the identity when they appear. Null now means the bounded scan itself
+// was unreadable, unstable, over budget, or misconfigured, not merely that Git
+// or a repository is absent.
 
 // The record tree and the CLI/IDE workspace shell are anchored at the top level
 // of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
@@ -6375,15 +10518,17 @@ export function repoDir(projectDir: string, repoName: string): string {
 // SIBLING of the repo dirs (resolveConstructionRepo / repoDir) and
 // `.aidlc/worktrees/` (worktreePath) hangs off the roof - neither is ever
 // legitimately inside a fingerprinted repo or submodule, where a directory of
-// those names is application source (#646 review). The trailing slash keeps the
-// pathspec a directory match, so a root FILE named `aidlc` stays in the walk.
-const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
+// those names is application source (#646 review). Files with these names stay
+// source; the walker and Git snapshot shape exclude only directory/symlink
+// entries at the shell-carrying root.
+const AIDLC_SHELL_PATHS = ["aidlc", ".aidlc"];
 
-// The sensor cache is the one member of the family that is NOT root-anchored:
-// the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
-// dir (core/tools/aidlc-sensor-type-check.ts's `sensorsDir`), which a
-// monorepo's per-package tsconfig can put anywhere under repoDir. So this one
-// needs a depth-tolerant pathspec while the shell names stay root-anchored.
+// The sensor-cache exclusion remains depth-tolerant for legacy and worktree
+// paths. Before 2.6.94, the type-check sensor anchored
+// `.aidlc-sensors/.tsbuildinfo` at the nearest tsconfig directory, so monorepo
+// package caches could appear anywhere under repoDir. Those stray trees persist
+// in upgraded repositories, and Bolt worktree record mirrors can also sit below
+// the workspace roof, while the shell names stay root-anchored.
 //
 // #646 review - the shell/any-depth split is deliberate, not an oversight: an
 // earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
@@ -6403,10 +10548,10 @@ const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
 // engine actually writes instead of by its leaf. Every writer resolves through
 // `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
 // cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
-// .aidlc-sensors/` - the `<anchor>` is what varies (roof, Bolt worktree, or a
-// monorepo package's tsconfig dir), which is exactly what the leading `**/`
-// absorbs. The inner `/**/` also matches zero directories, covering the flat
-// (no active record) form the type-check anchor produces.
+// .aidlc-sensors/`. The `<anchor>` can be the roof, a Bolt worktree, or a
+// legacy pre-2.6.94 monorepo package tsconfig directory, which is exactly what
+// the leading `**/` absorbs. The inner `/**/` also matches zero directories,
+// covering the flat (no active record) form.
 const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
@@ -6472,7 +10617,9 @@ function sourceGitExclusionPathspecs(
     }
   }
   return [
-    ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+    ...(carriesWorkspaceShell
+      ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+      : []),
     ...exactPaths.map((path) => `:(top)${path}`),
     ...AIDLC_SENSOR_CACHE_GLOBS,
   ];
@@ -6490,13 +10637,59 @@ export function workspaceSourceExclusionPathspecs(
       );
 }
 
-// Git runs a configured `clean` filter as content enters the index, so the tree
-// written below hashes the FILTERED bytes - not the bytes sitting in the
-// worktree. A lossy filter therefore maps two different worktrees onto one
-// fingerprint (#646 review, reproduced: two `app.ts` contents, one tree), and
-// the stage executes against the bytes the reviewer read, so those are what the
-// receipt has to bind. Fold a raw (`--no-filters`) hash of exactly the paths a
-// clean driver touches into the fingerprint.
+// Dependency and machine-local cache trees are never application source. These
+// names are excluded at every depth in both Git and filesystem modes so a
+// missing Git executable cannot turn a normal dependency install into a
+// multi-gigabyte freshness walk.
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
+  ".cache",
+  ".git",
+  ".gradle",
+  ".mypy_cache",
+  ".next",
+  ".nuxt",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tox",
+  ".venv",
+  "node_modules",
+  "venv",
+] as const;
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set<string>(
+  SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES,
+);
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
+  SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES.map(
+    (name) => `:(glob)**/${name}/**`,
+  );
+
+// These names commonly hold generated output, but can also hold real source.
+// They are always outside the default identity so repository/Git availability
+// cannot change the boundary. Real source beneath them must be named explicitly
+// in .aidlc-source-paths.json; registered paths are content-bound regardless of
+// extension or binary/text encoding.
+const SOURCE_FINGERPRINT_CONDITIONAL_NAMES = [
+  "build",
+  "coverage",
+  "dist",
+  "logs",
+  "target",
+  "tmp",
+] as const;
+const SOURCE_FINGERPRINT_CONDITIONAL_DIRS = new Set<string>(
+  SOURCE_FINGERPRINT_CONDITIONAL_NAMES,
+);
+const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
+  SOURCE_FINGERPRINT_CONDITIONAL_NAMES.map(
+    (name) => `:(glob)**/${name}/**`,
+  );
+const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
+
+// Git runs a configured `clean` filter as content enters a swarm snapshot index.
+// The canonical fingerprint already hashes the raw filesystem bytes, so the
+// immutable Source Commit must replace filtered index blobs with those same raw
+// bytes. A lossy filter must not make the later merge differ from the source the
+// reviewer inspected.
 //
 // Scoped by attribute AND configured driver, because both are required for a
 // filter to run at all: a `.gitattributes` naming `filter=tidy` is inert unless
@@ -6623,6 +10816,7 @@ function cleanFilteredRawLines(
 export function filteredRawIndexEntries(
   repoDir: string,
   indexFile: string,
+  includedRegularPaths: ReadonlySet<string>,
 ): { path: string; sha: string }[] | null {
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
@@ -6640,124 +10834,362 @@ export function filteredRawIndexEntries(
     // Leave symlinks (and gitlinks) exactly as `git add -A` staged them.
     if (tab === -1 || !/^100(?:644|755) /.test(record)) continue;
     const path = record.slice(tab + 1);
-    if (path) paths.push(path);
+    if (path && includedRegularPaths.has(path)) paths.push(path);
   }
   return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
 }
 
+const GIT_OBJECT_ID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const GIT_OBJECT_ID_CASE_INSENSITIVE_RE =
+  /^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/;
+
+function normalizeGitObjectId(value: string): string | null {
+  return GIT_OBJECT_ID_CASE_INSENSITIVE_RE.test(value)
+    ? value.toLowerCase()
+    : null;
+}
+
 function sourceListingEntry(mode: string, oid: string): string | null {
-  if (!/^\d{6}$/.test(mode) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+  if (!/^\d{6}$/.test(mode) || !GIT_OBJECT_ID_RE.test(oid)) return null;
   return `${mode} ${oid}`;
 }
 
-function replaceSourceListingEntryOid(entry: string | undefined, oid: string): string | null {
-  const parsed = entry ? /^(\d{6}) [0-9a-f]{40,64}$/.exec(entry) : null;
-  return parsed === null ? null : sourceListingEntry(parsed[1], oid);
+export type WorkspaceSourceListing = Map<string, string>;
+
+export interface WorkspaceSourceState {
+  fingerprint: string;
+  listing: WorkspaceSourceListing;
+}
+
+function prefixedSourceListing(
+  listing: ReadonlyMap<string, string>,
+  repo = "",
+): WorkspaceSourceListing {
+  return new Map(
+    [...listing].map(([path, entry]) => [`${repo}\0${path}`, entry]),
+  );
+}
+
+interface GitTreeLeafEntry {
+  mode: "100644" | "100755" | "120000" | "160000";
+  oid: string;
+  path: string;
+}
+
+interface SyncBufferedReader {
+  buffer: Buffer;
+  end: number;
+  fd: number;
+  offset: number;
+  position: number;
+}
+
+function refillSyncBufferedReader(reader: SyncBufferedReader): boolean {
+  const count = readSync(
+    reader.fd,
+    reader.buffer,
+    0,
+    reader.buffer.length,
+    reader.position,
+  );
+  reader.offset = 0;
+  reader.end = count;
+  reader.position += count;
+  return count > 0;
+}
+
+function readSyncBufferedLine(
+  reader: SyncBufferedReader,
+  maxBytes: number,
+): Buffer | null {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    if (
+      reader.offset >= reader.end &&
+      !refillSyncBufferedReader(reader)
+    ) {
+      return null;
+    }
+    const newline = reader.buffer.indexOf(0x0a, reader.offset);
+    if (newline !== -1 && newline < reader.end) {
+      const chunk = reader.buffer.subarray(reader.offset, newline);
+      chunks.push(chunk);
+      total += chunk.length;
+      reader.offset = newline + 1;
+      if (total > maxBytes) return null;
+      return chunks.length === 1
+        ? Buffer.from(chunks[0])
+        : Buffer.concat(chunks, total);
+    }
+    const chunk = reader.buffer.subarray(reader.offset, reader.end);
+    chunks.push(chunk);
+    total += chunk.length;
+    reader.offset = reader.end;
+    if (total > maxBytes) return null;
+  }
+}
+
+function copySyncBufferedBytes(
+  reader: SyncBufferedReader,
+  size: number,
+  outputFd: number,
+): boolean {
+  let remaining = size;
+  while (remaining > 0) {
+    if (
+      reader.offset >= reader.end &&
+      !refillSyncBufferedReader(reader)
+    ) {
+      return false;
+    }
+    const count = Math.min(remaining, reader.end - reader.offset);
+    if (
+      writeSync(
+        outputFd,
+        reader.buffer,
+        reader.offset,
+        count,
+      ) !== count
+    ) {
+      return false;
+    }
+    reader.offset += count;
+    remaining -= count;
+  }
+  if (
+    reader.offset >= reader.end &&
+    !refillSyncBufferedReader(reader)
+  ) {
+    return false;
+  }
+  if (reader.buffer[reader.offset] !== 0x0a) return false;
+  reader.offset += 1;
+  return true;
+}
+
+function readSyncBufferedBytes(
+  reader: SyncBufferedReader,
+  size: number,
+  maxBytes: number,
+): Buffer | null {
+  if (size > maxBytes) return null;
+  const bytes = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    if (
+      reader.offset >= reader.end &&
+      !refillSyncBufferedReader(reader)
+    ) {
+      return null;
+    }
+    const count = Math.min(size - offset, reader.end - reader.offset);
+    reader.buffer.copy(bytes, offset, reader.offset, reader.offset + count);
+    reader.offset += count;
+    offset += count;
+  }
+  if (
+    reader.offset >= reader.end &&
+    !refillSyncBufferedReader(reader)
+  ) {
+    return null;
+  }
+  if (reader.buffer[reader.offset] !== 0x0a) return null;
+  reader.offset += 1;
+  return bytes;
+}
+
+function gitTreeLeafEntries(
+  repoDir: string,
+  commit: string,
+): GitTreeLeafEntry[] | null {
+  const objectType = spawnSync(
+    "git",
+    ["-C", repoDir, "cat-file", "-t", commit],
+    { encoding: "utf-8", maxBuffer: 1024 * 1024 },
+  );
+  if (objectType.status !== 0 || objectType.stdout.trim() !== "commit") {
+    return null;
+  }
+  const listed = spawnSync(
+    "git",
+    ["-C", repoDir, "ls-tree", "-r", "-z", "--full-tree", commit],
+    { maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) return null;
+  const maxEntries = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_ENTRIES",
+    250_000,
+  );
+  const entries: GitTreeLeafEntry[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  while (offset < listed.stdout.length) {
+    const nul = listed.stdout.indexOf(0, offset);
+    if (nul === -1) return null;
+    if (nul === offset) {
+      offset += 1;
+      continue;
+    }
+    const record = listed.stdout.subarray(offset, nul);
+    offset = nul + 1;
+    const tab = record.indexOf(0x09);
+    if (tab === -1) return null;
+    const header = record.subarray(0, tab).toString("ascii");
+    const match =
+      /^(100644|100755|120000|160000) (blob|commit) ([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/
+        .exec(header);
+    if (match === null) return null;
+    const mode = match[1] as GitTreeLeafEntry["mode"];
+    if (
+      (mode === "160000" && match[2] !== "commit") ||
+      (mode !== "160000" && match[2] !== "blob")
+    ) {
+      return null;
+    }
+    const pathBytes = record.subarray(tab + 1);
+    const path = pathBytes.toString("utf-8");
+    if (
+      path.length === 0 ||
+      !Buffer.from(path, "utf-8").equals(pathBytes) ||
+      isAbsolute(path) ||
+      /^[A-Za-z]:\//.test(path) ||
+      path.startsWith("//") ||
+      path
+        .split("/")
+        .some((part) => part.length === 0 || part === "." || part === "..") ||
+      seen.has(path)
+    ) {
+      return null;
+    }
+    const oid = normalizeGitObjectId(match[3]);
+    if (oid === null) return null;
+    seen.add(path);
+    entries.push({ mode, oid, path });
+    if (entries.length > maxEntries) return null;
+  }
+  return entries;
+}
+
+function materializeRawGitTree(
+  repoDir: string,
+  root: string,
+  entries: readonly GitTreeLeafEntry[],
+): boolean {
+  const blobs = entries.filter((entry) => entry.mode !== "160000");
+  const batchPath = join(dirname(root), "cat-file.batch");
+  let batchFd: number | undefined;
+  try {
+    batchFd = openSync(batchPath, "w+");
+    const batch = spawnSync(
+      "git",
+      ["-C", repoDir, "cat-file", "--batch"],
+      {
+        input: Buffer.from(
+          blobs.map((entry) => entry.oid).join("\n") +
+            (blobs.length > 0 ? "\n" : ""),
+        ),
+        stdio: ["pipe", batchFd, "pipe"],
+        encoding: "utf-8",
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    if (batch.status !== 0) return false;
+    const reader: SyncBufferedReader = {
+      buffer: Buffer.allocUnsafe(64 * 1024),
+      end: 0,
+      fd: batchFd,
+      offset: 0,
+      position: 0,
+    };
+    for (const entry of blobs) {
+      const header = readSyncBufferedLine(reader, 8192);
+      if (header === null) return false;
+      const parsed =
+        /^([0-9a-fA-F]{40}|[0-9a-fA-F]{64}) blob ([0-9]+)$/
+          .exec(header.toString("ascii"));
+      const size =
+        parsed === null || parsed[2].length > 16
+          ? Number.NaN
+          : Number(parsed[2]);
+      if (
+        parsed === null ||
+        normalizeGitObjectId(parsed[1]) !== entry.oid ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > 4 * 1024 * 1024 * 1024
+      ) {
+        return false;
+      }
+      const target = join(root, entry.path);
+      mkdirSync(dirname(target), { recursive: true });
+      if (entry.mode === "120000") {
+        const linkBytes = readSyncBufferedBytes(reader, size, 64 * 1024);
+        if (linkBytes === null) return false;
+        const linkText = linkBytes.toString("utf-8");
+        if (!Buffer.from(linkText, "utf-8").equals(linkBytes)) return false;
+        symlinkSync(linkText, target);
+        continue;
+      }
+      let outputFd: number | undefined;
+      try {
+        outputFd = openSync(
+          target,
+          "wx",
+          entry.mode === "100755" ? 0o755 : 0o644,
+        );
+        if (!copySyncBufferedBytes(reader, size, outputFd)) return false;
+      } finally {
+        if (outputFd !== undefined) closeSync(outputFd);
+      }
+      chmodSync(target, entry.mode === "100755" ? 0o755 : 0o644);
+    }
+    for (const entry of entries) {
+      if (entry.mode !== "160000") continue;
+      mkdirSync(join(root, entry.path), { recursive: true });
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (batchFd !== undefined) closeSync(batchFd);
+  }
 }
 
 /**
- * Reconstruct the exact checked-out source listing for an immutable commit
- * without registering a Git worktree or touching the caller's index/worktree.
- * A temporary index is seeded from the commit and checkout-index populates an
- * ordinary directory, so clean/process/ident raw-byte folding sees the same
- * files and repository-local configuration as a real worktree checkout.
- * `carriesWorkspaceShell` is required for the same reason as gitTreeSourceState:
- * sibling repositories keep top-level aidlc/ and .aidlc/ as application source.
+ * Reconstruct a source listing from immutable tree/blob bytes without
+ * registering a Git worktree or touching the caller's index/worktree. Raw
+ * materialization deliberately avoids checkout filters, EOL conversion, and
+ * working-tree encodings. The opt-in live-target mode is used only for the
+ * one-time worktree base snapshot.
  */
 export function gitCommitSourceListing(
   repoDir: string,
   commit: string,
   carriesWorkspaceShell: boolean,
+  followExternalTargets = false,
 ): WorkspaceSourceListing | null {
-  if (!isGitRepoDir(repoDir) || !/^[0-9a-f]{40,64}$/.test(commit)) return null;
+  if (!isGitRepoDir(repoDir) || !GIT_OBJECT_ID_RE.test(commit)) return null;
   const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
-  const indexFile = join(root, "index");
   const checkoutDir = join(root, "checkout");
-  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
     mkdirSync(checkoutDir, { recursive: true });
-    const readTree = spawnSync("git", ["-C", repoDir, "read-tree", commit], {
-      env,
-      encoding: "utf-8",
-      maxBuffer: 512 * 1024 * 1024,
-    });
-    if (readTree.status !== 0) return null;
-    const checkout = spawnSync(
-      "git",
-      ["-C", repoDir, "checkout-index", "-a", "-f", `--prefix=${checkoutDir}${sep}`],
-      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    const entries = gitTreeLeafEntries(repoDir, commit);
+    if (entries === null) return null;
+    if (!materializeRawGitTree(repoDir, checkoutDir, entries)) return null;
+    const source = filesystemSourceIdentity(
+      checkoutDir,
+      carriesWorkspaceShell,
+      new Set(),
+      followExternalTargets ? "follow" : "tree-only",
+      false,
     );
-    if (checkout.status !== 0) return null;
-
-    const shellPatterns =
-      sourceGitExclusionPathspecs(carriesWorkspaceShell, repoDir);
-    const excluded = spawnSync(
-      "git",
-      [
-        "-C",
-        repoDir,
-        "rm",
-        "-r",
-        "-q",
-        "-f",
-        "--cached",
-        "--ignore-unmatch",
-        "--",
-        ...shellPatterns,
-      ],
-      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-    );
-    if (excluded.status !== 0) return null;
-
-    const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
-      env,
-      encoding: "utf-8",
-      maxBuffer: 512 * 1024 * 1024,
-    });
-    if (listed.status !== 0) return null;
-    const listing: WorkspaceSourceListing = new Map();
-    const regularPaths: string[] = [];
-    for (const record of listed.stdout.split("\0")) {
-      if (!record) continue;
-      const tab = record.indexOf("\t");
-      if (tab === -1) return null;
-      const match = /^(\d{6}) ([0-9a-f]{40,64}) \d+$/.exec(record.slice(0, tab));
-      const path = record.slice(tab + 1);
-      if (match === null || !path) return null;
-      const entry = sourceListingEntry(match[1], match[2]);
-      if (entry === null) return null;
-      listing.set(`\0${path}`, entry);
-      if (match[1] === "100644" || match[1] === "100755") regularPaths.push(path);
-    }
-
-    // Query attributes/config through the owning repository while pointing Git
-    // at the ordinary reconstructed checkout. The worktree bytes hashed here
-    // therefore match a real checkout without registering one.
-    const gitDir = spawnSync("git", ["-C", repoDir, "rev-parse", "--absolute-git-dir"], {
-      encoding: "utf-8",
-      maxBuffer: 512 * 1024 * 1024,
-    });
-    if (gitDir.status !== 0 || !gitDir.stdout.trim()) return null;
-    const checkoutEnv = {
-      ...env,
-      GIT_DIR: gitDir.stdout.trim(),
-      GIT_WORK_TREE: checkoutDir,
-    };
-    const raw = cleanFilteredRawLines(checkoutDir, checkoutEnv, regularPaths);
-    if (raw === null) return null;
-    for (const entry of raw.entries) {
-      const key = `\0${entry.path}`;
-      const replacement = replaceSourceListingEntryOid(listing.get(key), entry.sha);
-      if (replacement === null) return null;
-      listing.set(key, replacement);
-    }
-    return listing;
+    if (source === null) return null;
+    return prefixedSourceListing(source.listing);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
-
-export type WorkspaceSourceListing = Map<string, string>;
 
 /**
  * New listings bind mode/type plus OID. Three-column snapshots from the
@@ -6770,170 +11202,159 @@ export function sourceListingEntriesEqual(
 ): boolean {
   if (left === right) return true;
   if (left === undefined || right === undefined) return false;
-  const leftModern = /^\d{6} ([0-9a-f]{40,64})$/.exec(left);
-  const rightModern = /^\d{6} ([0-9a-f]{40,64})$/.exec(right);
+  const leftModern =
+    /^\d{6} ((?:[0-9a-f]{40}|[0-9a-f]{64}))$/.exec(left);
+  const rightModern =
+    /^\d{6} ((?:[0-9a-f]{40}|[0-9a-f]{64}))$/.exec(right);
   if (leftModern !== null && rightModern !== null) return false;
-  const leftOid = leftModern?.[1] ?? (/^[0-9a-f]{40,64}$/.test(left) ? left : null);
+  const leftOid = leftModern?.[1] ?? (GIT_OBJECT_ID_RE.test(left) ? left : null);
   const rightOid =
-    rightModern?.[1] ?? (/^[0-9a-f]{40,64}$/.test(right) ? right : null);
+    rightModern?.[1] ?? (GIT_OBJECT_ID_RE.test(right) ? right : null);
   return leftOid !== null && leftOid === rightOid;
 }
 
-export interface WorkspaceSourceState {
-  fingerprint: string;
-  listing: WorkspaceSourceListing;
+function sourceSnapshotPathBatches(
+  repoDir: string,
+  paths: string[],
+): string[][] | null {
+  // CreateProcess accepts at most 32,767 UTF-16 command-line code units.
+  // Reserve ample room for the executable, `-C <repo> add -f -A --`, quoting,
+  // and Bun/Node launcher behavior. The 256-path cap also bounds POSIX argv.
+  const maxEstimatedUnits = 20_000;
+  const maxPaths = 256;
+  const baseUnits = 512 + repoDir.length * 2;
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let units = baseUnits;
+  for (const path of paths) {
+    // Windows quoting can double backslashes before a quote. Doubling every
+    // code unit is deliberately conservative and keeps one path independently
+    // bounded before it reaches spawnSync.
+    const pathUnits = path.length * 2 + 4;
+    if (baseUnits + pathUnits > maxEstimatedUnits) return null;
+    if (
+      batch.length > 0 &&
+      (batch.length >= maxPaths || units + pathUnits > maxEstimatedUnits)
+    ) {
+      batches.push(batch);
+      batch = [];
+      units = baseUnits;
+    }
+    batch.push(path);
+    units += pathUnits;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
 }
 
-function emptyNoGitWorkspaceSourceState(
-  projectDir: string,
-): WorkspaceSourceState | null {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(projectDir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  for (const entry of entries) {
-    const path = `${entry.name}${entry.isDirectory() ? "/" : ""}`;
-    if (!sourcePathIsExcluded(path, true)) return null;
-  }
-  const serialized = serializeSourceListing(new Map());
-  return {
-    fingerprint: sourceListingSha256(serialized),
-    listing: new Map(),
-  };
+// Shape a caller-owned temporary index to the same source boundary used by the
+// fingerprint. The caller seeds and overlays the index first; this helper then
+// restores framework/dependency/cache/generated paths to HEAD and force-adds
+// ignored source candidates plus every explicitly registered path (including
+// binary source). Swarm uses the same helper before writing its immutable
+// Source Commit.
+export interface SourceSnapshotIndexShape {
+  externalSymlinkPaths: string[];
+  includedRegularPaths: Set<string>;
 }
 
-interface GitTreeSourceState extends WorkspaceSourceState {}
-
-// `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
-// decide, so the shell exclusion cannot leak into a derived dir by omission.
-// The fingerprint and per-path listing deliberately come from this SAME temp
-// index pass. A caller that needs both must use workspaceSourceState(), rather
-// than independently invoking the compatibility fingerprint/listing wrappers.
-function gitTreeSourceState(repoDir: string, carriesWorkspaceShell: boolean): GitTreeSourceState | null {
-  if (!isGitRepoDir(repoDir)) return null;
-  const idx = join(
-    tmpdir(),
-    `aidlc-src-fp-${process.pid}-${randomUUID().slice(0, 8)}`,
+export function shapeSourceSnapshotIndex(
+  repoDir: string,
+  indexFile: string,
+  carriesWorkspaceShell: boolean,
+): SourceSnapshotIndexShape | null {
+  const hasWorktreeContext = existsSync(
+    join(repoDir, ".aidlc", "worktree-meta.json"),
   );
-  const env = { ...process.env, GIT_INDEX_FILE: idx };
-  try {
-    // Seed from HEAD so deletions of tracked files change the tree. An unborn
-    // HEAD (fresh init) fails read-tree; the empty temp index is then correct.
-    spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
-    const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
-    if (add.status !== 0) return null;
-    // Drop the aidlc workspace family from the fingerprint and listing. The
-    // root shell names apply only where the workspace shell lives; the sensor
-    // cache glob remains depth-tolerant exactly as documented above.
-    const excluded = sourceGitExclusionPathspecs(
-      carriesWorkspaceShell,
+  const worktreeContext = hasWorktreeContext
+    ? worktreeSourceExclusionContext(repoDir)
+    : null;
+  if (hasWorktreeContext && worktreeContext === null) return null;
+  const effectiveCarriesWorkspaceShell =
+    worktreeContext?.carriesWorkspaceShell ?? carriesWorkspaceShell;
+  const sourceIdentity = filesystemSourceIdentity(
+    repoDir,
+    effectiveCarriesWorkspaceShell,
+  );
+  if (sourceIdentity === null) return null;
+  const harnessShellDirs = new Set(sourceIdentity.harnessShellDirs);
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  const staticExcluded = [
+    ...sourceGitExclusionPathspecs(
+      effectiveCarriesWorkspaceShell,
       repoDir,
+    ),
+    ...[...harnessShellDirs].sort().map((path) => `${path}/`),
+    ...SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS,
+    ...SOURCE_FINGERPRINT_CONDITIONAL_GLOBS,
+  ];
+  if (staticExcluded.length > 0) {
+    const restored = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "reset",
+        "-q",
+        "HEAD",
+        "--",
+        ...staticExcluded,
+      ],
+      { env, encoding: "utf-8" },
     );
-    if (excluded.length > 0) {
-      const removed = spawnSync(
-        "git",
-        [
-          "-C",
-          repoDir,
-          "rm",
-          "-r",
-          "-q",
-          "-f",
-          "--cached",
-          "--ignore-unmatch",
-          "--",
-          ...excluded,
-        ],
-        { env, encoding: "utf-8" },
-      );
-      if (removed.status !== 0) return null;
-    }
-    const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
-    if (wt.status !== 0) return null;
-    const treeSha = wt.stdout.trim();
-    if (treeSha.length === 0) return null;
-
-    // One NUL-terminated index enumeration supplies all three consumers:
-    // ordinary per-path oids, initialized-submodule recursion, and the clean-
-    // filter raw-byte scan. Keeping this walk shared preserves Git path bytes
-    // (including tabs/newlines/non-ASCII) and avoids a second index traversal.
-    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
-      env,
-      encoding: "utf-8",
-      maxBuffer: 512 * 1024 * 1024,
-    });
-    if (lsFiles.status !== 0) return null;
-
-    const listing: WorkspaceSourceListing = new Map();
-    const submodules: string[] = [];
-    const blobPaths: string[] = [];
-    for (const record of lsFiles.stdout.split("\0")) {
-      if (record.length === 0) continue;
-      const tabIdx = record.indexOf("\t");
-      if (tabIdx === -1) return null;
-      const metadata = record.slice(0, tabIdx);
-      const entryPath = record.slice(tabIdx + 1);
-      const parsed = /^(\d{6}) ([0-9a-f]{40,64}) (\d+)$/.exec(metadata);
-      if (parsed === null || entryPath.length === 0) return null;
-      const mode = parsed[1];
-      const oid = parsed[2];
-      const entry = sourceListingEntry(mode, oid);
-      if (entry === null) return null;
-      listing.set(entryPath, entry);
-      if (mode === "160000") {
-        submodules.push(entryPath);
-      } else if (mode === "100644" || mode === "100755") {
-        // Attribute filters apply only to regular blobs, never symlinks/gitlinks.
-        blobPaths.push(entryPath);
-      }
-    }
-
-    const subLines: string[] = [];
-    for (const entryPath of submodules) {
-      const subDir = join(repoDir, entryPath);
-      // An uninitialized submodule has no materialized source beyond its gitlink.
-      if (!isGitRepoDir(subDir)) continue;
-      // A submodule's own `aidlc/` is application source, not the parent shell.
-      const subState = gitTreeSourceState(subDir, false);
-      if (subState === null) return null;
-      subLines.push(`${entryPath}=${subState.fingerprint}`);
-      for (const [path, oid] of subState.listing) {
-        listing.set(`${entryPath}/${path}`, oid);
-      }
-    }
-
-    const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
-    if (raw === null) return null;
-    // A lossy clean/process/ident transform must not hide the worktree bytes.
-    // Replace the indexed oid for each affected path with its raw no-filter oid
-    // while retaining the index mode/type in the canonical listing.
-    for (const entry of raw.entries) {
-      const replacement = replaceSourceListingEntryOid(
-        listing.get(entry.path),
-        entry.sha,
-      );
-      if (replacement === null) return null;
-      listing.set(entry.path, replacement);
-    }
-
-    const rawLines = raw.lines;
-    let fingerprint = treeSha;
-    // Preserve the pre-listing fingerprint VALUE byte-for-byte: the common case
-    // remains the bare tree oid; only initialized submodules/raw-filter paths
-    // fold into the existing sha256 composite, with the same sorted line form.
-    if (subLines.length > 0 || rawLines.length > 0) {
-      subLines.sort();
-      rawLines.sort();
-      fingerprint = createHash("sha256")
-        .update([treeSha, ...subLines, ...rawLines].join("\n"))
-        .digest("hex");
-    }
-    return { fingerprint, listing };
-  } finally {
-    rmSync(idx, { force: true });
+    if (restored.status !== 0) return null;
   }
+  const symlinkBatches = sourceSnapshotPathBatches(
+    repoDir,
+    sourceIdentity.excludedSymlinkPathspecs,
+  );
+  if (symlinkBatches === null) return null;
+  for (const batch of symlinkBatches) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", "HEAD", "--", ...batch],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (restored.status !== 0) return null;
+  }
+
+  const forcePaths = new Set(sourceIdentity.snapshotPaths);
+  for (const path of sourceIdentity.registeredSnapshotPaths) {
+    if (existsSync(join(repoDir, path))) {
+      forcePaths.add(path);
+      continue;
+    }
+    const tracked = spawnSync(
+      "git",
+      ["-C", repoDir, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", path],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (tracked.status !== 0) return null;
+    if (tracked.stdout.length > 0) forcePaths.add(path);
+  }
+  const sortedForcePaths = [...forcePaths].sort();
+  const forceBatches = sourceSnapshotPathBatches(repoDir, sortedForcePaths);
+  if (forceBatches === null) return null;
+  for (const batch of forceBatches) {
+    const restored = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "add",
+        "-f",
+        "-A",
+        "--",
+        ...batch,
+      ],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (restored.status !== 0) return null;
+  }
+  return {
+    externalSymlinkPaths: sourceIdentity.externalSymlinkPaths,
+    includedRegularPaths: new Set(sourceIdentity.includedRegularPaths),
+  };
 }
 
 // Recorded in place of a fingerprint when one cannot be computed, so a receipt
@@ -6941,44 +11362,1740 @@ function gitTreeSourceState(repoDir: string, carriesWorkspaceShell: boolean): Gi
 // pre-#629 receipt that carries no field at all (#646 review).
 export const UNBINDABLE_FINGERPRINT = "unbindable";
 
+function sourceIdentityBudget(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw && /^[1-9][0-9]*$/.test(raw)) return Number(raw);
+  return fallback;
+}
+
+function isSourceHarnessShellDir(root: string, name: string): boolean {
+  if (!isHarnessDirName(name)) return false;
+  try {
+    const manifestPath = join(root, name, "tools", "data", "harness.json");
+    const stat = lstatSync(manifestPath);
+    if (!stat.isFile() || stat.size > 64 * 1024) return false;
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      name?: unknown;
+    };
+    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function sourceHarnessShellDirs(root: string): Set<string> | null {
+  const dirs = new Set<string>();
+  const maxEntries = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_ENTRIES",
+    250_000,
+  );
+  let handle: ReturnType<typeof opendirSync> | undefined;
+  try {
+    handle = opendirSync(root);
+    let entriesSeen = 0;
+    while (true) {
+      const entry = handle.readSync();
+      if (entry === null) break;
+      entriesSeen += 1;
+      if (entriesSeen > maxEntries) return null;
+      if (
+        (entry.isDirectory() || entry.isSymbolicLink()) &&
+        isSourceHarnessShellDir(root, entry.name)
+      ) {
+        dirs.add(entry.name);
+      }
+    }
+    return dirs;
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) {
+      try {
+        handle.closeSync();
+      } catch {
+        // The bounded scan already fails closed on earlier read errors.
+      }
+    }
+  }
+}
+
+function sourceFingerprintRegistryPaths(
+  root: string,
+  carriesWorkspaceShell: boolean,
+  suppliedHarnessShellDirs?: ReadonlySet<string>,
+): Set<string> | null {
+  const harnessShellDirs = suppliedHarnessShellDirs ??
+    (
+      carriesWorkspaceShell
+        ? sourceHarnessShellDirs(root)
+        : new Set<string>()
+    );
+  if (harnessShellDirs === null) return null;
+  const registryPath = join(root, SOURCE_FINGERPRINT_REGISTRY);
+  let registryLinkStat: ReturnType<typeof lstatSync>;
+  try {
+    registryLinkStat = lstatSync(registryPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    return null;
+  }
+  try {
+    if (
+      registryLinkStat.isSymbolicLink() ||
+      !registryLinkStat.isFile() ||
+      registryLinkStat.size > 1024 * 1024
+    ) return null;
+    const parsed = JSON.parse(readFileSync(registryPath, "utf-8")) as {
+      version?: unknown;
+      paths?: unknown;
+    };
+    if (
+      parsed.version !== 1 ||
+      !Array.isArray(parsed.paths) ||
+      parsed.paths.length > 10_000 ||
+      parsed.paths.some((path) => typeof path !== "string")
+    ) {
+      return null;
+    }
+    const paths = new Set<string>();
+    for (const raw of parsed.paths) {
+      const path = String(raw)
+        .replace(/\\/g, "/")
+        .replace(/^\.\/+/, "")
+        .replace(/\/+$/, "");
+      if (
+        path.length === 0 ||
+        path.length > 4096 ||
+        path === "." ||
+        path.includes("\0") ||
+        isAbsolute(path) ||
+        /^[A-Za-z]:\//.test(path) ||
+        path.startsWith("//") ||
+        path
+          .split("/")
+          .some((part) => part.length === 0 || part === "." || part === "..")
+      ) {
+        return null;
+      }
+      const parts = path.split("/");
+      if (
+        (
+          carriesWorkspaceShell &&
+          (
+            parts[0] === "aidlc" ||
+            parts[0] === ".aidlc" ||
+            (KNOWN_HARNESS_DIRS as readonly string[]).includes(parts[0]) ||
+            harnessShellDirs.has(parts[0])
+          )
+        ) ||
+        parts.some((part) => SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(part)) ||
+        isAidlcSensorCachePath(path)
+      ) {
+        return null;
+      }
+      paths.add(path);
+    }
+    return paths;
+  } catch {
+    return null;
+  }
+}
+
+function sourcePathPhysicallyExcluded(
+  path: string,
+  carriesWorkspaceShell: boolean,
+  harnessShellDirs: ReadonlySet<string>,
+): boolean {
+  const parts = path.split("/");
+  return (
+    (
+      carriesWorkspaceShell &&
+      (
+        parts[0] === "aidlc" ||
+        parts[0] === ".aidlc" ||
+        (KNOWN_HARNESS_DIRS as readonly string[]).includes(parts[0]) ||
+        harnessShellDirs.has(parts[0])
+      )
+    ) ||
+    parts.some((part) => SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(part)) ||
+    isAidlcSensorCachePath(path)
+  );
+}
+
+function pathIsWithinRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return (
+    rel === "" ||
+    (
+      !isAbsolute(rel) &&
+      rel !== ".." &&
+      !rel.startsWith(`..${sep}`)
+    )
+  );
+}
+
+interface SourceSymlinkResolution {
+  externalHop: boolean;
+  target: string | null;
+}
+
+function resolveSourceSymlinkTarget(
+  rootReal: string,
+  linkPath: string,
+  stopOnExternalHop = false,
+): SourceSymlinkResolution | null {
+  let current = linkPath;
+  let externalHop = false;
+  const visited = new Set<string>();
+  for (let hop = 0; hop < 40; hop++) {
+    const key = resolvePath(current);
+    if (visited.has(key)) return null;
+    visited.add(key);
+
+    let currentDir: string;
+    try {
+      currentDir = realpathSync(dirname(current));
+    } catch {
+      return null;
+    }
+    if (!pathIsWithinRoot(rootReal, currentDir)) {
+      externalHop = true;
+      if (stopOnExternalHop) return { externalHop, target: null };
+    }
+    let linkText: string;
+    try {
+      linkText = readlinkSync(current);
+    } catch {
+      return null;
+    }
+    const next = isAbsolute(linkText)
+      ? resolvePath(linkText)
+      : resolvePath(currentDir, linkText);
+    if (!pathIsWithinRoot(rootReal, next)) {
+      externalHop = true;
+      if (stopOnExternalHop) return { externalHop, target: null };
+    }
+
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(next);
+    } catch {
+      return { externalHop, target: null };
+    }
+    if (stat.isSymbolicLink()) {
+      current = next;
+      continue;
+    }
+    let target: string;
+    try {
+      target = realpathSync(next);
+    } catch {
+      return { externalHop, target: null };
+    }
+    if (!pathIsWithinRoot(rootReal, target)) externalHop = true;
+    return { externalHop, target };
+  }
+  return null;
+}
+
+interface RegisteredPhysicalSourceResolution {
+  externalHop: boolean;
+  path: string | null;
+}
+
+function registeredPhysicalSourcePath(
+  rootReal: string,
+  logicalPath: string,
+  stopOnExternalHop: boolean,
+): RegisteredPhysicalSourceResolution | null {
+  const parts = logicalPath.split("/");
+  let current = rootReal;
+  let externalHop = false;
+  for (let index = 0; index < parts.length; index++) {
+    const candidate = join(current, parts[index]);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+      const unresolved = join(current, ...parts.slice(index));
+      return {
+        externalHop:
+          externalHop || !pathIsWithinRoot(rootReal, unresolved),
+        path: unresolved,
+      };
+    }
+    if (stat.isSymbolicLink()) {
+      const resolution = resolveSourceSymlinkTarget(
+        rootReal,
+        candidate,
+        stopOnExternalHop,
+      );
+      if (resolution === null) return null;
+      externalHop = externalHop || resolution.externalHop;
+      if (resolution.target === null) {
+        return { externalHop, path: null };
+      }
+      current = resolution.target;
+    } else {
+      current = candidate;
+    }
+    if (!pathIsWithinRoot(rootReal, current)) externalHop = true;
+  }
+  return { externalHop, path: current };
+}
+
+function isAidlcSensorCachePath(path: string): boolean {
+  const parts = path.split("/");
+  for (let i = 0; i + 4 < parts.length; i++) {
+    if (
+      parts[i] === "aidlc" &&
+      parts[i + 1] === "spaces" &&
+      parts[i + 3] === "intents" &&
+      parts.slice(i + 4).includes(".aidlc-sensors")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stableFileSha256(path: string): string | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const before = fstatSync(fd);
+    if (!before.isFile()) return null;
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (true) {
+      const count = readSync(fd, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      hash.update(buffer.subarray(0, count));
+      position += count;
+    }
+    const after = fstatSync(fd);
+    if (
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      position !== after.size
+    ) {
+      return null;
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The fingerprint already fails closed on any earlier read error.
+      }
+    }
+  }
+}
+
+interface FilesystemSourceIdentity {
+  embeddedGitPaths: string[];
+  excludedSymlinkPathspecs: string[];
+  externalSymlinkPaths: string[];
+  fingerprint: string;
+  harnessShellDirs: string[];
+  includedRegularPaths: string[];
+  listing: WorkspaceSourceListing;
+  registeredSnapshotPaths: string[];
+  snapshotPaths: string[];
+}
+
+type SourceSymlinkTargetMode = "follow" | "tree-only";
+
+function boundedGitMetadataText(path: string, maxBytes: number): string | null {
+  let fd: number | undefined;
+  try {
+    const pathStat = lstatSync(path);
+    if (!pathStat.isFile() || pathStat.size > maxBytes) return null;
+    fd = openSync(path, "r");
+    const before = fstatSync(fd);
+    if (!before.isFile() || before.size > maxBytes) return null;
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(
+        fd,
+        bytes,
+        offset,
+        bytes.length - offset,
+        offset,
+      );
+      if (count === 0) return null;
+      offset += count;
+    }
+    const after = fstatSync(fd);
+    if (
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      return null;
+    }
+    return bytes.toString("utf-8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The metadata read already fails closed on any earlier error.
+      }
+    }
+  }
+}
+
+function singleGitMetadataLine(raw: string): string | null {
+  const line = raw.replace(/\r?\n$/, "");
+  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
+    return null;
+  }
+  return line;
+}
+
+function gitMetadataDirectory(worktreeDir: string): string | null {
+  const marker = join(worktreeDir, ".git");
+  try {
+    const markerStat = lstatSync(marker);
+    if (markerStat.isDirectory()) return realpathSync(marker);
+    if (!markerStat.isFile()) return null;
+  } catch {
+    return null;
+  }
+  const pointerRaw = boundedGitMetadataText(marker, 8192);
+  const pointerLine =
+    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
+  if (pointerLine === null || !pointerLine.startsWith("gitdir: ")) {
+    return null;
+  }
+  const pointer = pointerLine.slice("gitdir: ".length);
+  if (pointer.length === 0 || pointer.includes("\0")) return null;
+  const target = isAbsolute(pointer)
+    ? pointer
+    : resolvePath(worktreeDir, pointer);
+  try {
+    if (!lstatSync(target).isDirectory()) return null;
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+function gitCommonDirectory(gitDir: string): string | null {
+  const marker = join(gitDir, "commondir");
+  try {
+    if (!lstatSync(marker).isFile()) return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
+    return null;
+  }
+  const pointerRaw = boundedGitMetadataText(marker, 8192);
+  const pointerLine =
+    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
+  if (
+    pointerLine === null ||
+    pointerLine.length === 0 ||
+    pointerLine.includes("\0")
+  ) {
+    return null;
+  }
+  const target = isAbsolute(pointerLine)
+    ? pointerLine
+    : resolvePath(gitDir, pointerLine);
+  try {
+    if (!lstatSync(target).isDirectory()) return null;
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+type GitObjectType = "commit" | "other";
+
+function gitObjectDirectories(
+  _gitDir: string,
+  commonDir: string,
+): string[] | null {
+  const queue = [join(commonDir, "objects")];
+  const directories: string[] = [];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    if (directories.length >= 64) return null;
+    const candidate = queue.shift()!;
+    let objectDir: string;
+    try {
+      if (!lstatSync(candidate).isDirectory()) return null;
+      objectDir = realpathSync(candidate);
+    } catch {
+      return null;
+    }
+    if (seen.has(objectDir)) continue;
+    seen.add(objectDir);
+    directories.push(objectDir);
+
+    const alternatesPath = join(objectDir, "info", "alternates");
+    try {
+      const alternatesStat = lstatSync(alternatesPath);
+      if (!alternatesStat.isFile()) return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      return null;
+    }
+    const alternates = boundedGitMetadataText(
+      alternatesPath,
+      1024 * 1024,
+    );
+    if (alternates === null) return null;
+    const lines = alternates.split(/\r?\n/).filter(Boolean);
+    if (lines.length > 64) return null;
+    for (const line of lines) {
+      if (
+        line.length > 4096 ||
+        line.includes("\0") ||
+        line.startsWith("#")
+      ) {
+        return null;
+      }
+      queue.push(
+        isAbsolute(line) ? resolvePath(line) : resolvePath(objectDir, line),
+      );
+    }
+  }
+  return directories;
+}
+
+function looseGitObjectType(
+  objectDir: string,
+  oid: string,
+): GitObjectType | null {
+  const path = join(objectDir, oid.slice(0, 2), oid.slice(2));
+  let compressed: Buffer;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > 16 * 1024 * 1024) return null;
+    compressed = readFileSync(path);
+  } catch {
+    return null;
+  }
+  let inflated: Buffer;
+  try {
+    inflated = inflateSync(compressed, {
+      maxOutputLength: 64 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
+  const separator = inflated.indexOf(0);
+  if (separator <= 0 || separator > 128) return null;
+  const header = inflated.subarray(0, separator).toString("ascii");
+  const match = /^(commit|tree|blob|tag) ([0-9]+)$/.exec(header);
+  if (match === null) return null;
+  const declaredSize = Number(match[2]);
+  if (
+    !Number.isSafeInteger(declaredSize) ||
+    declaredSize !== inflated.length - separator - 1
+  ) {
+    return null;
+  }
+  return match[1] === "commit" ? "commit" : "other";
+}
+
+interface PackedGitObjectLocation {
+  offset: number;
+  packPath: string;
+}
+
+function packedGitObjectLocation(
+  objectDir: string,
+  oid: string,
+): PackedGitObjectLocation | null {
+  const packDir = join(objectDir, "pack");
+  let indexes: string[];
+  try {
+    indexes = readdirSync(packDir)
+      .filter((name) => /^pack-[0-9a-f]+\.idx$/.test(name))
+      .sort();
+  } catch {
+    return null;
+  }
+  if (indexes.length > 256) return null;
+  const oidBytes = Buffer.from(oid, "hex");
+  let totalIndexBytes = 0;
+  for (const indexName of indexes) {
+    const indexPath = join(packDir, indexName);
+    let index: Buffer;
+    try {
+      const stat = lstatSync(indexPath);
+      if (!stat.isFile() || stat.size > 128 * 1024 * 1024) return null;
+      totalIndexBytes += stat.size;
+      if (totalIndexBytes > 256 * 1024 * 1024) return null;
+      index = readFileSync(indexPath);
+    } catch {
+      return null;
+    }
+    if (index.length < 1024) {
+      return null;
+    }
+    const versionTwo = index.readUInt32BE(0) === 0xff744f63;
+    if (!versionTwo) {
+      const count = index.readUInt32BE(255 * 4);
+      const table = 256 * 4;
+      const entrySize = 4 + oidBytes.length;
+      if (
+        table + count * entrySize + oidBytes.length * 2 > index.length
+      ) {
+        return null;
+      }
+      let low = 0;
+      let high = count;
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        const start = table + mid * entrySize + 4;
+        const comparison = Buffer.compare(
+          index.subarray(start, start + oidBytes.length),
+          oidBytes,
+        );
+        if (comparison < 0) low = mid + 1;
+        else high = mid;
+      }
+      if (low >= count) continue;
+      const entry = table + low * entrySize;
+      if (
+        !index
+          .subarray(entry + 4, entry + 4 + oidBytes.length)
+          .equals(oidBytes)
+      ) {
+        continue;
+      }
+      const packPath = join(
+        packDir,
+        `${indexName.slice(0, -".idx".length)}.pack`,
+      );
+      try {
+        if (!lstatSync(packPath).isFile()) return null;
+      } catch {
+        return null;
+      }
+      return { offset: index.readUInt32BE(entry), packPath };
+    }
+    if (index.length < 1032 || index.readUInt32BE(4) !== 2) return null;
+    const count = index.readUInt32BE(8 + 255 * 4);
+    const oidTable = 8 + 256 * 4;
+    const crcTable = oidTable + count * oidBytes.length;
+    const offsetTable = crcTable + count * 4;
+    if (
+      !Number.isSafeInteger(offsetTable) ||
+      offsetTable + count * 4 > index.length
+    ) {
+      return null;
+    }
+    let low = 0;
+    let high = count;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const start = oidTable + mid * oidBytes.length;
+      const comparison = Buffer.compare(
+        index.subarray(start, start + oidBytes.length),
+        oidBytes,
+      );
+      if (comparison < 0) low = mid + 1;
+      else high = mid;
+    }
+    if (low >= count) continue;
+    const foundStart = oidTable + low * oidBytes.length;
+    if (
+      !index
+        .subarray(foundStart, foundStart + oidBytes.length)
+        .equals(oidBytes)
+    ) {
+      continue;
+    }
+    const rawOffset = index.readUInt32BE(offsetTable + low * 4);
+    let offset: number;
+    if ((rawOffset & 0x80000000) === 0) {
+      offset = rawOffset;
+    } else {
+      const largeOffset =
+        offsetTable + count * 4 + (rawOffset & 0x7fffffff) * 8;
+      if (largeOffset + 8 > index.length) return null;
+      const value = index.readBigUInt64BE(largeOffset);
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+      offset = Number(value);
+    }
+    const packPath = join(
+      packDir,
+      `${indexName.slice(0, -".idx".length)}.pack`,
+    );
+    try {
+      if (!lstatSync(packPath).isFile()) return null;
+    } catch {
+      return null;
+    }
+    return { offset, packPath };
+  }
+  return null;
+}
+
+function packedGitObjectType(
+  location: PackedGitObjectLocation,
+  objectDirs: readonly string[],
+  oidLength: number,
+  seen: Set<string>,
+  depth: number,
+): GitObjectType | null {
+  if (depth > 64) return null;
+  const visitKey = `${location.packPath}\0${location.offset}`;
+  if (seen.has(visitKey)) return null;
+  seen.add(visitKey);
+
+  let fd: number | undefined;
+  try {
+    fd = openSync(location.packPath, "r");
+    const stat = fstatSync(fd);
+    if (
+      !stat.isFile() ||
+      location.offset < 12 ||
+      location.offset >= stat.size
+    ) {
+      return null;
+    }
+    const packHeader = Buffer.alloc(12);
+    if (readSync(fd, packHeader, 0, 12, 0) !== 12) return null;
+    if (
+      packHeader.subarray(0, 4).toString("ascii") !== "PACK" ||
+      ![2, 3].includes(packHeader.readUInt32BE(4))
+    ) {
+      return null;
+    }
+    const available = Math.min(96, stat.size - location.offset);
+    const header = Buffer.alloc(available);
+    if (
+      readSync(
+        fd,
+        header,
+        0,
+        available,
+        location.offset,
+      ) !== available
+    ) {
+      return null;
+    }
+    let cursor = 0;
+    let byte = header[cursor++];
+    const packedType = (byte >> 4) & 0x07;
+    while ((byte & 0x80) !== 0) {
+      if (cursor >= header.length) return null;
+      byte = header[cursor++];
+    }
+    if (packedType === 1) return "commit";
+    if ([2, 3, 4].includes(packedType)) return "other";
+    if (packedType === 6) {
+      if (cursor >= header.length) return null;
+      let offsetByte = header[cursor++];
+      let distance = offsetByte & 0x7f;
+      while ((offsetByte & 0x80) !== 0) {
+        if (cursor >= header.length) return null;
+        offsetByte = header[cursor++];
+        distance = ((distance + 1) * 128) + (offsetByte & 0x7f);
+        if (!Number.isSafeInteger(distance)) return null;
+      }
+      const baseOffset = location.offset - distance;
+      if (baseOffset < 12) return null;
+      return packedGitObjectType(
+        { offset: baseOffset, packPath: location.packPath },
+        objectDirs,
+        oidLength,
+        seen,
+        depth + 1,
+      );
+    }
+    if (packedType === 7) {
+      if (cursor + oidLength > header.length) return null;
+      const baseOid = header
+        .subarray(cursor, cursor + oidLength)
+        .toString("hex");
+      return gitObjectTypeByOid(
+        objectDirs,
+        baseOid,
+        seen,
+        depth + 1,
+      );
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The object proof already fails closed on any earlier read error.
+      }
+    }
+  }
+}
+
+function gitObjectTypeByOid(
+  objectDirs: readonly string[],
+  oid: string,
+  seen: Set<string>,
+  depth = 0,
+): GitObjectType | null {
+  if (depth > 64 || !GIT_OBJECT_ID_RE.test(oid)) return null;
+  const oidKey = `oid\0${oid}`;
+  if (seen.has(oidKey)) return null;
+  seen.add(oidKey);
+  for (const objectDir of objectDirs) {
+    const loosePath = join(objectDir, oid.slice(0, 2), oid.slice(2));
+    if (existsSync(loosePath)) {
+      return looseGitObjectType(objectDir, oid);
+    }
+  }
+  for (const objectDir of objectDirs) {
+    const packed = packedGitObjectLocation(objectDir, oid);
+    if (packed === null) continue;
+    return packedGitObjectType(
+      packed,
+      objectDirs,
+      oid.length / 2,
+      seen,
+      depth + 1,
+    );
+  }
+  return null;
+}
+
+function validGitRefName(ref: string): boolean {
+  const forbiddenCharacter = [...ref].some((character) => {
+    const code = character.charCodeAt(0);
+    return (
+      code <= 0x20 ||
+      code === 0x7f ||
+      "~^:?*[\\]".includes(character)
+    );
+  });
+  if (
+    !ref.startsWith("refs/") ||
+    ref.endsWith("/") ||
+    ref.includes("//") ||
+    ref.includes("..") ||
+    ref.includes("@{") ||
+    forbiddenCharacter
+  ) {
+    return false;
+  }
+  return ref
+    .split("/")
+    .every((part) =>
+      part.length > 0 &&
+      part !== "." &&
+      part !== ".." &&
+      !part.startsWith(".") &&
+      !part.endsWith(".") &&
+      !part.endsWith(".lock")
+    );
+}
+
+function gitRepositoryObjectIdLength(commonDir: string): 40 | 64 | null {
+  const raw = boundedGitMetadataText(join(commonDir, "config"), 1024 * 1024);
+  if (raw === null) return null;
+  let section = "";
+  let hasSubsection = false;
+  let repositoryFormatVersion = 0;
+  let repositoryFormatVersionSet = false;
+  let objectFormat: 40 | 64 = 40;
+  let explicitlySet = false;
+  let sawExtension = false;
+  const supportedExtensions = new Set([
+    "compatobjectformat",
+    "noop",
+    "objectformat",
+    "partialclone",
+    "preciousobjects",
+    "relativeworktrees",
+    "refstorage",
+    "worktreeconfig",
+  ]);
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith("#") || line.startsWith(";")) {
+      continue;
+    }
+    const sectionMatch =
+      /^\[\s*([A-Za-z0-9.-]+)(?:\s+"(?:[^"\\]|\\.)*")?\s*\]$/.exec(line);
+    if (sectionMatch !== null) {
+      section = sectionMatch[1].toLowerCase();
+      hasSubsection = /\s+"/.test(line);
+      continue;
+    }
+    if (hasSubsection || (section !== "core" && section !== "extensions")) {
+      continue;
+    }
+    const keyValue = /^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (keyValue === null) return null;
+    const key = keyValue[1].toLowerCase();
+    const value = keyValue[2].replace(/^"(.*)"$/, "$1").toLowerCase();
+    if (section === "core") {
+      if (key !== "repositoryformatversion") continue;
+      if (!/^[0-9]+$/.test(value)) return null;
+      const parsed = Number(value);
+      if (
+        !Number.isSafeInteger(parsed) ||
+        ![0, 1].includes(parsed) ||
+        (repositoryFormatVersionSet && parsed !== repositoryFormatVersion)
+      ) {
+        return null;
+      }
+      repositoryFormatVersion = parsed;
+      repositoryFormatVersionSet = true;
+      continue;
+    }
+    sawExtension = true;
+    if (!supportedExtensions.has(key)) return null;
+    if (key === "refstorage" && value !== "files") return null;
+    if (key !== "objectformat") continue;
+    const parsed = value === "sha1" ? 40 : value === "sha256" ? 64 : null;
+    if (parsed === null || (explicitlySet && parsed !== objectFormat)) {
+      return null;
+    }
+    objectFormat = parsed;
+    explicitlySet = true;
+  }
+  if (sawExtension && repositoryFormatVersion !== 1) return null;
+  if (objectFormat === 64 && repositoryFormatVersion !== 1) return null;
+  return objectFormat;
+}
+
+function gitOidFromRef(
+  gitDir: string,
+  commonDir: string,
+  ref: string,
+  seen: Set<string>,
+  depth: number,
+): string | null {
+  if (depth > 8 || !validGitRefName(ref) || seen.has(ref)) return null;
+  seen.add(ref);
+  const looseCandidates = [...new Set([
+    ...(
+      ref.startsWith("refs/bisect/") ||
+        ref.startsWith("refs/worktree/") ||
+        ref.startsWith("refs/rewritten/")
+        ? [join(gitDir, ...ref.split("/"))]
+        : [join(commonDir, ...ref.split("/"))]
+    ),
+  ])];
+  for (const candidate of looseCandidates) {
+    if (!existsSync(candidate)) continue;
+    const raw = boundedGitMetadataText(candidate, 8192);
+    const line = raw === null ? null : singleGitMetadataLine(raw);
+    if (line === null) return null;
+    const oid = normalizeGitObjectId(line);
+    if (oid !== null) return oid;
+    if (!line.startsWith("ref: ")) return null;
+    return gitOidFromRef(
+      gitDir,
+      commonDir,
+      line.slice("ref: ".length),
+      seen,
+      depth + 1,
+    );
+  }
+
+  const packedPath = join(commonDir, "packed-refs");
+  if (!existsSync(packedPath)) return null;
+  const packed = boundedGitMetadataText(packedPath, 16 * 1024 * 1024);
+  if (packed === null) return null;
+  for (const line of packed.split(/\r?\n/)) {
+    if (line.length === 0 || line.startsWith("#") || line.startsWith("^")) {
+      continue;
+    }
+    const separator = line.indexOf(" ");
+    if (separator === -1 || line.slice(separator + 1) !== ref) continue;
+    const oid = line.slice(0, separator);
+    return normalizeGitObjectId(oid);
+  }
+  return null;
+}
+
+function gitHeadOid(worktreeDir: string): string | null {
+  const gitDir = gitMetadataDirectory(worktreeDir);
+  if (gitDir === null) return null;
+  const commonDir = gitCommonDirectory(gitDir);
+  if (commonDir === null) return null;
+  const objectIdLength = gitRepositoryObjectIdLength(commonDir);
+  if (objectIdLength === null) return null;
+  const raw = boundedGitMetadataText(join(gitDir, "HEAD"), 8192);
+  const line = raw === null ? null : singleGitMetadataLine(raw);
+  if (line === null) return null;
+  const detached = normalizeGitObjectId(line);
+  const oid = detached ?? (
+    line.startsWith("ref: ")
+      ? gitOidFromRef(
+          gitDir,
+          commonDir,
+          line.slice("ref: ".length),
+          new Set(),
+          0,
+        )
+      : null
+  );
+  if (oid === null || oid.length !== objectIdLength) return null;
+  const objectDirs = gitObjectDirectories(gitDir, commonDir);
+  if (objectDirs === null) return null;
+  return gitObjectTypeByOid(objectDirs, oid, new Set()) === "commit"
+    ? oid
+    : null;
+}
+
+function filesystemSourceIdentity(
+  root: string,
+  carriesWorkspaceShell: boolean,
+  excludedTopLevel: ReadonlySet<string> = new Set(),
+  symlinkTargetMode: SourceSymlinkTargetMode = "follow",
+  useWorktreeContext = true,
+): FilesystemSourceIdentity | null {
+  const maxEntries = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_ENTRIES",
+    250_000,
+  );
+  const maxDirectories = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_DIRECTORIES",
+    100_000,
+  );
+  const maxSymlinks = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_SYMLINKS",
+    100_000,
+  );
+  const maxFiles = 250_000;
+  const maxBytes = 4 * 1024 * 1024 * 1024;
+  const sourceOnlyMaxFiles = 10_000;
+  const sourceOnlyMaxBytes = 64 * 1024 * 1024;
+  const sourceExtension =
+    /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  const sourceBasename =
+    /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
+  const lines: string[] = [];
+  const embeddedGitPaths = new Set<string>();
+  const excludedSymlinkPathspecs = new Set<string>();
+  const externalSymlinkPaths = new Set<string>();
+  const includedRegularPaths = new Set<string>();
+  const listing: WorkspaceSourceListing = new Map();
+  const registeredSnapshotPaths = new Set<string>();
+  const snapshotPaths = new Set<string>();
+  const visited = new Map<string, boolean>();
+  const active = new Set<string>();
+  let entriesSeen = 0;
+  let directoriesSeen = 0;
+  let symlinksSeen = 0;
+  let totalFiles = 0;
+  let totalBytes = 0;
+  let sourceOnlyFiles = 0;
+  let sourceOnlyBytes = 0;
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return null;
+  }
+  const hasWorktreeContext =
+    useWorktreeContext &&
+    existsSync(join(rootReal, ".aidlc", "worktree-meta.json"));
+  const worktreeContext = hasWorktreeContext
+    ? worktreeSourceExclusionContext(rootReal)
+    : null;
+  if (hasWorktreeContext && worktreeContext === null) {
+    return null;
+  }
+  const harnessShellDirs = carriesWorkspaceShell
+    ? sourceHarnessShellDirs(rootReal)
+    : new Set<string>();
+  if (harnessShellDirs === null) return null;
+  const exactExcludedPaths =
+    worktreeContext !== null && !worktreeContext.carriesWorkspaceShell
+      ? worktreeContext.exactPaths
+      : [];
+  const exactPathExcluded = (path: string): boolean => {
+    const normalizedPath = path.replace(/\/+$/, "");
+    return exactExcludedPaths.some((excluded) => {
+      const normalizedExcluded = excluded.replace(/\/+$/, "");
+      return normalizedPath === normalizedExcluded ||
+        (
+          excluded.endsWith("/") &&
+          normalizedPath.startsWith(`${normalizedExcluded}/`)
+        );
+    });
+  };
+  const registeredSources = sourceFingerprintRegistryPaths(
+    rootReal,
+    carriesWorkspaceShell,
+    harnessShellDirs,
+  );
+  if (registeredSources === null) return null;
+  const effectiveRegisteredSources = new Set(registeredSources);
+  for (const logicalPath of registeredSources) {
+    if (exactPathExcluded(logicalPath)) return null;
+    const physical = registeredPhysicalSourcePath(
+      rootReal,
+      logicalPath,
+      symlinkTargetMode === "tree-only",
+    );
+    if (physical === null) return null;
+    if (
+      physical.externalHop &&
+      symlinkTargetMode === "tree-only"
+    ) {
+      continue;
+    }
+    if (physical.path === null) return null;
+    const physicalPath = physical.path;
+    const physicalInside = pathIsWithinRoot(rootReal, physicalPath);
+    if (physical.externalHop && physicalInside) return null;
+    if (!physicalInside) continue;
+    const physicalRel = relative(rootReal, physicalPath);
+    if (physicalRel !== "") {
+      const physicalPosix = physicalRel.split(sep).join("/");
+      if (
+        sourcePathPhysicallyExcluded(
+          physicalPosix,
+          carriesWorkspaceShell,
+          harnessShellDirs,
+        )
+      ) {
+        return null;
+      }
+      registeredSnapshotPaths.add(physicalPosix);
+      effectiveRegisteredSources.add(physicalPosix);
+    }
+  }
+  const registeredList = [...effectiveRegisteredSources].sort();
+  const registeredPathIncludes = (rel: string): boolean => {
+    if (effectiveRegisteredSources.has(rel)) return true;
+    let slash = rel.lastIndexOf("/");
+    while (slash !== -1) {
+      if (effectiveRegisteredSources.has(rel.slice(0, slash))) return true;
+      slash = rel.lastIndexOf("/", slash - 1);
+    }
+    return false;
+  };
+  const registeredDescendantExists = (rel: string): boolean => {
+    const prefix = `${rel}/`;
+    let low = 0;
+    let high = registeredList.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (registeredList[mid] < prefix) low = mid + 1;
+      else high = mid;
+    }
+    return registeredList[low]?.startsWith(prefix) ?? false;
+  };
+  const registeredPathRelevant = (rel: string): boolean =>
+    registeredPathIncludes(rel) || registeredDescendantExists(rel);
+  const textLike = (path: string, size: number): boolean => {
+    if (size === 0) return true;
+    let fd: number | undefined;
+    try {
+      fd = openSync(path, "r");
+      const sample = Buffer.alloc(Math.min(size, 8192));
+      const count = readSync(fd, sample, 0, sample.byteLength, 0);
+      return !sample.subarray(0, count).includes(0);
+    } catch {
+      return false;
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // The later full read remains fail-closed.
+        }
+      }
+    }
+  };
+  const hasShebang = (path: string, size: number): boolean => {
+    if (size < 2) return false;
+    let fd: number | undefined;
+    try {
+      fd = openSync(path, "r");
+      const sample = Buffer.alloc(2);
+      return readSync(fd, sample, 0, 2, 0) === 2 &&
+        sample[0] === 0x23 &&
+        sample[1] === 0x21;
+    } catch {
+      return false;
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // The later full read remains fail-closed.
+        }
+      }
+    }
+  };
+  const snapshotCandidate = (
+    path: string,
+    rel: string,
+    name: string,
+    size: number,
+  ): boolean =>
+    registeredPathIncludes(rel) ||
+    sourceExtension.test(name) ||
+    sourceBasename.test(name) ||
+    hasShebang(path, size);
+  const recordFile = (
+    path: string,
+    rel: string,
+    size: number,
+    executable: boolean,
+    sourceOnly: boolean,
+    listingPath = rel,
+  ): boolean => {
+    totalFiles += 1;
+    totalBytes += size;
+    if (totalFiles > maxFiles || totalBytes > maxBytes) return false;
+    if (sourceOnly) {
+      sourceOnlyFiles += 1;
+      sourceOnlyBytes += size;
+      if (
+        sourceOnlyFiles > sourceOnlyMaxFiles ||
+        sourceOnlyBytes > sourceOnlyMaxBytes
+      ) {
+        return false;
+      }
+    }
+    const sha = stableFileSha256(path);
+    if (sha === null) return false;
+    lines.push(`file:${rel}:${executable ? "x" : "-"}=${sha}`);
+    const entry = sourceListingEntry(executable ? "100755" : "100644", sha);
+    if (entry === null) return false;
+    listing.set(listingPath, entry);
+    return true;
+  };
+  const walk = (
+    dir: string,
+    rel = "",
+    sourceOnly = false,
+    registeredOnly = false,
+    snapshotEligible = true,
+    registryRel = rel,
+    snapshotRel = rel,
+    listingRel = rel,
+  ): boolean => {
+    let real: string;
+    try {
+      real = realpathSync(dir);
+    } catch {
+      return false;
+    }
+    if (active.has(real)) return true;
+    const identityMode = registeredOnly
+      ? `registered:${registryRel}`
+      : sourceOnly
+        ? "source-only"
+        : "full";
+    const visitKey = `${real}\0${identityMode}`;
+    const priorSnapshotEligibility = visited.get(visitKey);
+    if (
+      priorSnapshotEligibility === true ||
+      (priorSnapshotEligibility === false && !snapshotEligible)
+    ) {
+      return true;
+    }
+    const recordIdentity = priorSnapshotEligibility === undefined;
+    visited.set(
+      visitKey,
+      (priorSnapshotEligibility ?? false) || snapshotEligible,
+    );
+    active.add(real);
+    try {
+      directoriesSeen += 1;
+      if (directoriesSeen > maxDirectories) return false;
+      const entries: import("node:fs").Dirent[] = [];
+      let handle: ReturnType<typeof opendirSync> | undefined;
+      try {
+        handle = opendirSync(dir);
+        while (true) {
+          const entry = handle.readSync();
+          if (entry === null) break;
+          entriesSeen += 1;
+          if (entriesSeen > maxEntries) return false;
+          entries.push(entry);
+        }
+      } catch {
+        return false;
+      } finally {
+        if (handle !== undefined) {
+          try {
+            handle.closeSync();
+          } catch {
+            // The read path already fails closed.
+          }
+        }
+      }
+      entries.sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
+      for (const entry of entries) {
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+        const childRegistryRel = registryRel
+          ? `${registryRel}/${entry.name}`
+          : entry.name;
+        const childSnapshotRel = snapshotRel
+          ? `${snapshotRel}/${entry.name}`
+          : entry.name;
+        const childListingRel = listingRel
+          ? `${listingRel}/${entry.name}`
+          : entry.name;
+        if (entry.isSymbolicLink()) {
+          symlinksSeen += 1;
+          if (symlinksSeen > maxSymlinks) return false;
+        }
+        if (
+          registeredOnly &&
+          !registeredPathRelevant(childRegistryRel)
+        ) {
+          continue;
+        }
+        if (exactPathExcluded(childRel)) continue;
+        if (
+          rel === "" &&
+          excludedTopLevel.has(entry.name) &&
+          !registeredPathRelevant(childRegistryRel)
+        ) {
+          continue;
+        }
+        if (entry.name === ".git") {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        if (
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(entry.name)
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        if (
+          rel === "" &&
+          carriesWorkspaceShell &&
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          (
+            entry.name === "aidlc" ||
+            entry.name === ".aidlc" ||
+            harnessShellDirs.has(entry.name)
+          )
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        if (
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          isAidlcSensorCachePath(childRel)
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        const conditionalBoundary =
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name);
+        if (
+          conditionalBoundary &&
+          !registeredPathRelevant(childRegistryRel)
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        const childRegisteredOnly =
+          registeredOnly || conditionalBoundary;
+        const child = join(dir, entry.name);
+        let stat: ReturnType<typeof lstatSync>;
+        try {
+          stat = lstatSync(child);
+        } catch {
+          return false;
+        }
+        if (stat.isSymbolicLink()) {
+          let linkText: string;
+          try {
+            linkText = readlinkSync(child);
+          } catch {
+            return false;
+          }
+          if (recordIdentity) lines.push(`link:${childRel}=${linkText}`);
+          if (recordIdentity) {
+            const linkSha = createHash("sha256")
+              .update(linkText, "utf-8")
+              .digest("hex");
+            const linkEntry = sourceListingEntry("120000", linkSha);
+            if (linkEntry === null) return false;
+            listing.set(childListingRel, linkEntry);
+          }
+          if (snapshotEligible) snapshotPaths.add(childSnapshotRel);
+          if (symlinkTargetMode === "tree-only") continue;
+          const resolution = resolveSourceSymlinkTarget(rootReal, child);
+          if (resolution === null) return false;
+          if (resolution.externalHop) {
+            externalSymlinkPaths.add(childSnapshotRel);
+          }
+          if (resolution.target === null) {
+            if (recordIdentity) {
+              lines.push(`link-target:${childRel}=missing`);
+              const missingEntry = sourceListingEntry(
+                "000000",
+                createHash("sha256").update("missing").digest("hex"),
+              );
+              if (missingEntry === null) return false;
+              listing.set(`${childListingRel}@target`, missingEntry);
+            }
+            continue;
+          }
+          const target = resolution.target;
+          const targetRelNative = relative(rootReal, target);
+          const internal = pathIsWithinRoot(rootReal, target);
+          let targetStat: ReturnType<typeof statSync>;
+          try {
+            targetStat = statSync(target);
+          } catch {
+            return false;
+          }
+          if (targetStat.isFile()) {
+            if (
+              childRegisteredOnly &&
+              !registeredPathIncludes(childRegistryRel)
+            ) {
+              continue;
+            }
+            if (
+              sourceOnly &&
+              !childRegisteredOnly &&
+              !sourceExtension.test(entry.name) &&
+              !sourceBasename.test(entry.name) &&
+              !textLike(target, targetStat.size)
+            ) {
+              continue;
+            }
+            const targetListingRel = internal
+              ? targetRelNative.split(sep).join("/")
+              : `${childListingRel}@target`;
+            if (
+              recordIdentity &&
+              !recordFile(
+                target,
+                `${childRel}@target`,
+                targetStat.size,
+                (targetStat.mode & 0o111) !== 0,
+                sourceOnly,
+                targetListingRel,
+              )
+            ) {
+              return false;
+            }
+          } else if (targetStat.isDirectory()) {
+            const targetSnapshotRel = internal
+              ? targetRelNative.split(sep).join("/")
+              : childSnapshotRel;
+            const targetSnapshotEligible =
+              snapshotEligible &&
+              internal &&
+              !existsSync(join(target, ".git"));
+            const targetListingRel = internal
+              ? targetSnapshotRel
+              : `${childListingRel}@target`;
+            if (
+              !walk(
+                target,
+                `${childRel}@target`,
+                sourceOnly || !internal,
+                childRegisteredOnly,
+                targetSnapshotEligible,
+                childRegistryRel,
+                targetSnapshotRel,
+                targetListingRel,
+              )
+            ) {
+              return false;
+            }
+          } else if (recordIdentity) {
+            const special = `special:${targetStat.mode}`;
+            lines.push(`link-target:${childRel}=${special}`);
+            const specialEntry = sourceListingEntry(
+              "000000",
+              createHash("sha256").update(special).digest("hex"),
+            );
+            if (specialEntry === null) return false;
+            listing.set(`${childListingRel}@target`, specialEntry);
+          }
+          continue;
+        }
+        if (stat.isDirectory()) {
+          if (conditionalBoundary) {
+            if (
+              !walk(
+                child,
+                childRel,
+                false,
+                true,
+                snapshotEligible,
+                childRegistryRel,
+                childSnapshotRel,
+                childListingRel,
+              )
+            ) {
+              return false;
+            }
+            continue;
+        }
+        const nestedGitRepo = existsSync(join(child, ".git"));
+        if (nestedGitRepo && snapshotEligible) {
+          embeddedGitPaths.add(childSnapshotRel);
+          snapshotPaths.add(childSnapshotRel);
+          const oid = gitHeadOid(child);
+          if (oid === null) return false;
+          const gitlinkEntry = sourceListingEntry("160000", oid);
+          if (gitlinkEntry === null) return false;
+          listing.set(childListingRel, gitlinkEntry);
+        }
+        if (
+          !walk(
+              child,
+              childRel,
+              sourceOnly,
+              registeredOnly,
+              snapshotEligible && !nestedGitRepo,
+              childRegistryRel,
+              childSnapshotRel,
+              childListingRel,
+            )
+          ) {
+            return false;
+          }
+          continue;
+        }
+        if (stat.isFile()) {
+          if (
+            sourceOnly &&
+            !childRegisteredOnly &&
+            !sourceExtension.test(entry.name) &&
+            !sourceBasename.test(entry.name) &&
+            !textLike(child, stat.size)
+          ) {
+            continue;
+          }
+          if (
+            childRegisteredOnly &&
+            !registeredPathIncludes(childRegistryRel)
+          ) {
+            continue;
+          }
+          if (snapshotEligible) {
+            includedRegularPaths.add(childSnapshotRel);
+          }
+          if (
+            recordIdentity &&
+            !recordFile(
+              child,
+              childRel,
+              stat.size,
+              (stat.mode & 0o111) !== 0,
+              sourceOnly,
+              childListingRel,
+            )
+          ) {
+            return false;
+          }
+          if (
+            snapshotEligible &&
+            snapshotCandidate(
+              child,
+              childRegistryRel,
+              entry.name,
+              stat.size,
+            )
+          ) {
+            snapshotPaths.add(childSnapshotRel);
+          }
+          continue;
+        }
+        if (recordIdentity) {
+          const special = `special:${stat.mode}`;
+          lines.push(`${special}:${childRel}`);
+          const specialEntry = sourceListingEntry(
+            "000000",
+            createHash("sha256").update(special).digest("hex"),
+          );
+          if (specialEntry === null) return false;
+          listing.set(childListingRel, specialEntry);
+        }
+      }
+      return true;
+    } finally {
+      active.delete(real);
+    }
+  };
+  if (!walk(rootReal)) return null;
+  return {
+    embeddedGitPaths: [...embeddedGitPaths].sort(),
+    excludedSymlinkPathspecs: [...excludedSymlinkPathspecs].sort(),
+    externalSymlinkPaths: [...externalSymlinkPaths].sort(),
+    fingerprint: createHash("sha256")
+      .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
+      .digest("hex"),
+    harnessShellDirs: [...harnessShellDirs].sort(),
+    includedRegularPaths: [...includedRegularPaths].sort(),
+    listing,
+    registeredSnapshotPaths: [...registeredSnapshotPaths].sort(),
+    snapshotPaths: [...snapshotPaths].sort(),
+  };
+}
+
+function multiRepoRoofExcludedTopLevel(
+  projectDir: string,
+  repos: readonly string[],
+): Set<string> | null {
+  const excluded = new Set(repos);
+  const maxEntries = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_ENTRIES",
+    250_000,
+  );
+  let handle: ReturnType<typeof opendirSync> | undefined;
+  try {
+    handle = opendirSync(projectDir);
+    let entriesSeen = 0;
+    while (true) {
+      const entry = handle.readSync();
+      if (entry === null) break;
+      entriesSeen += 1;
+      if (entriesSeen > maxEntries) return null;
+      if (entry.isDirectory()) {
+        excluded.add(entry.name);
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      try {
+        if (statSync(join(projectDir, entry.name)).isDirectory()) {
+          excluded.add(entry.name);
+        }
+      } catch {
+        // A broken roof symlink is fingerprinted as a roof file unless the
+        // source registry or another explicit boundary says otherwise.
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) {
+      try {
+        handle.closeSync();
+      } catch {
+        // The bounded read path already fails closed.
+      }
+    }
+  }
+  return excluded;
+}
+
+export function workspaceSourceSnapshotPaths(
+  projectDir: string,
+  carriesWorkspaceShell = false,
+): string[] | null {
+  return (
+    filesystemSourceIdentity(projectDir, carriesWorkspaceShell)
+      ?.snapshotPaths ?? null
+  );
+}
+
+export function workspaceSourceEmbeddedGitPaths(
+  projectDir: string,
+  carriesWorkspaceShell = false,
+): string[] | null {
+  return (
+    filesystemSourceIdentity(projectDir, carriesWorkspaceShell)
+      ?.embeddedGitPaths ?? null
+  );
+}
+
 // Compute the opaque #629 source fingerprint and the #662 canonical per-path
-// listing in one temporary-index pass per repo. Keys are `<repo>\0<path>`;
+// listing in the same bounded filesystem pass. Keys are `<repo>\0<path>`;
 // single-repo/Bolt worktrees use an empty repo component.
 export function workspaceSourceState(
   projectDir: string,
   intent?: string,
   space?: string,
 ): WorkspaceSourceState | null {
-  const repos = intentRepos(projectDir, intent ?? null, space);
+  const repos = intentRepos(projectDir, intent, space);
   if (repos.length === 0) {
-    if (!isGitRepoDir(projectDir)) {
-      return emptyNoGitWorkspaceSourceState(projectDir);
-    }
-    const context = worktreeSourceExclusionContext(projectDir);
-    if (context === null) return null;
-    const state = gitTreeSourceState(
-      projectDir,
-      context.carriesWorkspaceShell,
+    const hasWorktreeContext = existsSync(
+      join(projectDir, ".aidlc", "worktree-meta.json"),
     );
-    if (state === null) return null;
+    const worktreeContext = hasWorktreeContext
+      ? worktreeSourceExclusionContext(projectDir)
+      : null;
+    if (hasWorktreeContext && worktreeContext === null) return null;
+    const source = filesystemSourceIdentity(
+      projectDir,
+      worktreeContext?.carriesWorkspaceShell ?? true,
+    );
+    if (source === null) return null;
     return {
-      fingerprint: state.fingerprint,
-      listing: new Map([...state.listing].map(([path, oid]) => [`\0${path}`, oid])),
+      fingerprint: createHash("sha256")
+        .update(
+          [
+            "aidlc-workspace-source-v2",
+            `filesystem=${source.fingerprint}`,
+          ].join("\n"),
+        )
+        .digest("hex"),
+      listing: prefixedSourceListing(source.listing),
     };
   }
-
   const lines: string[] = [];
   const listing: WorkspaceSourceListing = new Map();
+  const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
+  if (roofExcluded === null) return null;
+  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded);
+  if (roof === null) return null;
+  lines.push(`roof=filesystem:${roof.fingerprint}`);
+  for (const [key, entry] of prefixedSourceListing(roof.listing)) {
+    listing.set(key, entry);
+  }
   for (const name of [...repos].sort()) {
     // A sibling repo is a child of the roof; the shell is its SIBLING, never
     // nested inside it, so nothing there belongs to the framework.
-    const state = gitTreeSourceState(repoDir(projectDir, name), false);
-    if (state === null) return null;
-    lines.push(`${name}=${state.fingerprint}`);
-    for (const [path, oid] of state.listing) listing.set(`${name}\0${path}`, oid);
+    const dir = repoDir(projectDir, name);
+    if (!existsSync(dir)) {
+      lines.push(`${name}=missing`);
+      continue;
+    }
+    const source = filesystemSourceIdentity(dir, false);
+    if (source === null) return null;
+    lines.push(`${name}=filesystem:${source.fingerprint}`);
+    for (const [key, entry] of prefixedSourceListing(source.listing, name)) {
+      listing.set(key, entry);
+    }
   }
   return {
-    fingerprint: createHash("sha256").update(lines.join("\n")).digest("hex"),
+    fingerprint: createHash("sha256")
+      .update(["aidlc-workspace-source-v2", ...lines].join("\n"))
+      .digest("hex"),
     listing,
   };
 }
@@ -7080,8 +13197,9 @@ export function serializeSourceListing(listing: ReadonlyMap<string, string>): st
   for (const [key, entry] of listing) {
     const parsed = splitSourcePathKey(key);
     if (parsed === null) throw new Error("Invalid canonical source-listing path key");
-    const modern = /^(\d{6}) ([0-9a-f]{40,64})$/.exec(entry);
-    const legacy = /^[0-9a-f]{40,64}$/.test(entry);
+    const modern =
+      /^(\d{6}) ((?:[0-9a-f]{40}|[0-9a-f]{64}))$/.exec(entry);
+    const legacy = GIT_OBJECT_ID_RE.test(entry);
     if (modern === null && !legacy) {
       throw new Error(`Invalid source-listing entry for ${JSON.stringify(parsed.path)}`);
     }
@@ -7112,7 +13230,7 @@ export function parseSourceListing(serialized: string): WorkspaceSourceListing |
       path.length === 0 ||
       (repo.length > 0 && !isValidRepoName(repo)) ||
       (mode !== null && !/^\d{6}$/.test(mode)) ||
-      !/^[0-9a-f]{40,64}$/.test(oid)
+      !GIT_OBJECT_ID_RE.test(oid)
     ) return null;
     const key = sourcePathKey(repo, path);
     if (listing.has(key)) return null;
@@ -7147,9 +13265,19 @@ export function sourcePathIsExcluded(
   projectDir?: string,
 ): boolean {
   const withoutTrailingSlash = path.replace(/\/+$/, "");
+  const segments = withoutTrailingSlash.split("/");
   if (
     carriesWorkspaceShell &&
-    (path === "aidlc/" || path === ".aidlc/" || path.startsWith("aidlc/") || path.startsWith(".aidlc/"))
+    (
+      path === "aidlc/" ||
+      path === ".aidlc/" ||
+      path.startsWith("aidlc/") ||
+      path.startsWith(".aidlc/") ||
+      (
+        projectDir !== undefined &&
+        isSourceHarnessShellDir(projectDir, segments[0])
+      )
+    )
   ) return true;
 
   if (!carriesWorkspaceShell && projectDir !== undefined) {
@@ -7168,7 +13296,6 @@ export function sourcePathIsExcluded(
     }
   }
 
-  const segments = withoutTrailingSlash.split("/");
   for (let i = 0; i + 4 < segments.length; i++) {
     if (segments[i] !== "aidlc" || segments[i + 1] !== "spaces" || segments[i + 3] !== "intents") continue;
     if (segments[i + 2].length === 0) continue;
@@ -7299,11 +13426,69 @@ function symlinkedParentComponent(
   return null;
 }
 
+function sourcePathIsRegistered(
+  sourceRepoDir: string,
+  carriesWorkspaceShell: boolean,
+  path: string,
+): boolean {
+  const harnessShellDirs = carriesWorkspaceShell
+    ? sourceHarnessShellDirs(sourceRepoDir)
+    : new Set<string>();
+  if (harnessShellDirs === null) return false;
+  const registered = sourceFingerprintRegistryPaths(
+    sourceRepoDir,
+    carriesWorkspaceShell,
+    harnessShellDirs,
+  );
+  if (registered === null) return false;
+  const effective = new Set(registered);
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(sourceRepoDir);
+  } catch {
+    return false;
+  }
+  for (const logicalPath of registered) {
+    const physical = registeredPhysicalSourcePath(
+      rootReal,
+      logicalPath,
+      false,
+    );
+    if (physical === null || physical.path === null) return false;
+    const physicalPath = physical.path;
+    const physicalInside = pathIsWithinRoot(rootReal, physicalPath);
+    if (physical.externalHop && physicalInside) return false;
+    if (!physicalInside) continue;
+    const physicalRel = relative(rootReal, physicalPath)
+      .split(sep)
+      .join("/");
+    if (
+      physicalRel.length > 0 &&
+      !sourcePathPhysicallyExcluded(
+        physicalRel,
+        carriesWorkspaceShell,
+        harnessShellDirs,
+      )
+    ) {
+      effective.add(physicalRel);
+    }
+  }
+  const normalized = path.replace(/\/+$/, "");
+  if (effective.has(normalized)) return true;
+  let slash = normalized.lastIndexOf("/");
+  while (slash !== -1) {
+    if (effective.has(normalized.slice(0, slash))) return true;
+    slash = normalized.lastIndexOf("/", slash - 1);
+  }
+  return false;
+}
+
 function ignoredSourceClaimReason(
   sourceRepoDir: string,
   path: string,
   prefix: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  carriesWorkspaceShell: boolean,
 ): string | null {
   if (!isGitRepoDir(sourceRepoDir)) return null;
   const literalPath = path.replace(/\/+$/, "");
@@ -7374,6 +13559,15 @@ function ignoredSourceClaimReason(
     { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
   );
   if (ignored.status === 0) {
+    if (
+      sourcePathIsRegistered(
+        sourceRepoDir,
+        carriesWorkspaceShell,
+        literalPath,
+      )
+    ) {
+      return null;
+    }
     if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
   }
@@ -7579,6 +13773,14 @@ function symlinkClaimTargetReason(
       }
       const repoRelative = resolvedRelative.replaceAll("\\", "/");
       if (
+        !prefix &&
+        link === claimPath.replace(/\/+$/, "") &&
+        stat.isDirectory()
+      ) {
+        targetDisplay = "";
+        break;
+      }
+      if (
         sourcePathIsExcluded(
           repoRelative,
           carriesWorkspaceShell,
@@ -7592,6 +13794,7 @@ function symlinkClaimTargetReason(
         repoRelative,
         false,
         pathModeIndexes,
+        carriesWorkspaceShell,
       );
       if (ignored !== null) {
         const targetReason = prefix && stat.isDirectory()
@@ -7722,6 +13925,7 @@ export function readUnitSourceManifest(
       normalized.path,
       normalized.prefix,
       pathModeIndexes,
+      carriesWorkspaceShell,
     );
     if (ignoredReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
@@ -7861,7 +14065,7 @@ export function sourceBaselineAuditFields(
   intent?: string,
   space?: string,
 ): Record<string, string> {
-  const repos = intentRepos(projectDir, intent ?? null, space);
+  const repos = intentRepos(projectDir, intent, space);
   const hasGitCheckout =
     repos.length === 0
       ? isGitRepoDir(projectDir)
@@ -8118,11 +14322,11 @@ export function discoverSiblingRepos(projectDir: string): string[] {
   return [...new Set(found)].sort();
 }
 
-// Resolve the repo set for a new intent at birth: an explicit `--repos a,b` set
+// Resolve the repo set for a new intent at creation: an explicit `--repos a,b` set
 // wins (authoritative when the user names them); absent it, sibling auto-discovery
 // supplies the default. Each name is validated. Returns [] when neither yields a
 // repo (→ no repos row → lone-repo inference). Throws on an invalid explicit name.
-export function resolveBirthRepoSet(
+export function resolveIntentRepoSet(
   projectDir: string,
   explicitReposCsv?: string,
 ): string[] {
@@ -8152,8 +14356,13 @@ export function intentRepos(
   intentDirName?: string | null,
   space?: string,
 ): string[] {
-  const sp = space ?? activeSpace(projectDir);
-  const dirName = intentDirName ?? activeIntent(projectDir, sp);
+  if (intentDirName === null) return [];
+  const selection = resolveWorkflowSelection(projectDir, {
+    space,
+    intent: intentDirName,
+  });
+  const sp = selection.space;
+  const dirName = selection.intent;
   if (!dirName) return [];
   for (const entry of readIntentRegistry(projectDir, sp)) {
     if (!recordDirMatches(entry, dirName)) continue;
@@ -8239,10 +14448,10 @@ export function resolveConstructionRepo(
 // resolves, else the bare space record root (aidlc/spaces/<sp>/intents/). Every
 // family helper below joins under this so the whole tree moves with the intent in
 // lockstep. Stays total (never throws) so the hooks that call the family at
-// module top on a pre-birth shell don't crash.
+// module top on a pre-creation shell don't crash.
 export function docsRoot(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  return dir ?? spaceRecordRoot(projectDir, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
 }
 
 // The bare record-tree root (doctor's existence check, the init scaffolder's
@@ -8365,14 +14574,14 @@ function touchTurnMarker(path: string): void {
 }
 
 // NO WORKFLOW => NO MARKER. Both markers describe one workflow's turn shape, so
-// with nothing born there is nothing to describe. This self-gate is load-bearing
+// with nothing created there is nothing to describe. This self-gate is load-bearing
 // for more than tidiness: without it a marker write on a FRESH workspace would
 // create the record tree as a side effect (touchTurnMarker mkdir -p's the parent,
-// and docsRoot falls back to the bare space record root before birth), which
+// and docsRoot falls back to the bare space record root before creation), which
 // would break the invariant that `aidlc-orchestrate next` is a PURE READ that
-// births nothing. Mirrors the mint hooks' own `existsSync(stateFilePath(...))`
+// creates nothing. Mirrors the mint hooks' own `existsSync(stateFilePath(...))`
 // self-gate, so all four write sites agree.
-function workflowIsBorn(projectDir: string, intent?: string, space?: string): boolean {
+function workflowIsCreated(projectDir: string, intent?: string, space?: string): boolean {
   try {
     return existsSync(stateFilePath(projectDir, intent, space));
   } catch {
@@ -8384,14 +14593,14 @@ function workflowIsBorn(projectDir: string, intent?: string, space?: string): bo
 // seam of every harness: the core aidlc-record-human-turn.ts hook (Claude,
 // opencode) and both Kiro adapters' inlined `record-human-turn` targets.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
-  if (!workflowIsBorn(projectDir, intent, space)) return;
+  if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
 }
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
 // aidlc-orchestrate.ts's `next` / `report` / `park` entry points. A no-op in three
 // cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
-// for read-only utility routing (excluded at the call site), and before birth.
+// for read-only utility routing (excluded at the call site), and before creation.
 //
 // KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
@@ -8413,7 +14622,7 @@ export function markHumanTurn(projectDir: string, intent?: string, space?: strin
 // parity behind.
 export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
   if (process.env[STOP_HOOK_PROBE_ENV] === "1") return;
-  if (!workflowIsBorn(projectDir, intent, space)) return;
+  if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
 }
 
@@ -8479,6 +14688,1069 @@ export function composeMarkerPath(projectDir: string): string {
   return join(projectDir, "aidlc", ".aidlc-compose-pending");
 }
 
+export const UNIT_SCOPE_FILE = ".aidlc-unit-scope.json";
+export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
+export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
+export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
+export const CLAIM_REGISTRY_CACHE_FILE = ".aidlc-claim-registry.json";
+export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
+export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
+
+export interface UnitScopeStamp {
+  version: 1;
+  space: string;
+  intent_uuid: string;
+  intent_id8: string;
+  unit: string;
+  owner: string;
+  generation: number;
+  nonce: string;
+  claim_ref: string;
+  claim_oid: string;
+  claimed_from_oid: string;
+  integration_ref: string;
+  gate_rhythm: "per-stage" | "unit-end";
+  audit_shard?: string;
+}
+
+export interface CachedUnitClaim {
+  status: "claimed" | "released";
+  owner: string;
+  generation: number;
+  nonce: string;
+  ref: string;
+  oid: string;
+  observed_at?: string;
+}
+
+export interface UnitClaimRegistryCache {
+  version: 1;
+  space: string;
+  intent_uuid: string;
+  claims: Record<string, CachedUnitClaim>;
+  warning?: string;
+}
+
+export interface UnitMergeEvidence {
+  stages_expected: string[];
+  stages_completed: string[];
+  gates_expected: string[];
+  gates_approved: string[];
+  reviewers_expected: string[];
+  reviewers_ready: string[];
+  plan_fingerprint: string | null;
+  artifact_paths: string[];
+  audit_shards: string[];
+  outside_unit_record_paths: string[];
+  merge_held: boolean;
+}
+
+export interface UnitMergeTransaction {
+  version: 1;
+  status:
+    | "pinned"
+    | "approved"
+    | "rejected"
+    | "git-landed"
+    | "state-folded"
+    | "complete";
+  space: string;
+  intent_uuid: string;
+  intent_id8: string;
+  unit: string;
+  owner: string;
+  generation: number;
+  nonce: string;
+  claim_ref: string;
+  pinned_oid: string;
+  candidate_tree_oid: string;
+  candidate_base_oid: string;
+  integration_oid: string;
+  integration_branch: string;
+  main_before_oid: string;
+  pinned_at: string;
+  pin_id?: string;
+  audit_shard?: string;
+  evidence: UnitMergeEvidence;
+  decision?: string;
+  user_input?: string;
+  target_branch?: string;
+  strategy?: "merge";
+  live_stage_columns?: string[];
+  checkpoint_parent_oid?: string;
+  checkpoint_commit_oid?: string;
+  git_commit_oid?: string;
+  conflict_files?: string[];
+  released_after_git?: {
+    accepted_at: string;
+    user_input: string;
+    tombstone_oid: string;
+    tombstone_generation: number;
+  };
+  state_fold_authorized?: {
+    authorized_at: string;
+    mode: "live-claim" | "released-after-git";
+    observed_oid: string;
+    owner: string;
+  };
+}
+
+export function unitScopePath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), UNIT_SCOPE_FILE);
+}
+
+export function unitParkedPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), UNIT_PARKED_FILE);
+}
+
+export function claimGenerationsPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), CLAIM_GENERATIONS_FILE);
+}
+
+export function unitParticipantPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
+}
+
+export function claimRegistryCachePath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), CLAIM_REGISTRY_CACHE_FILE);
+}
+
+function identityScopedUnitPath(
+  projectDir: string,
+  root: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): string {
+  const resolvedSpace = space ?? activeSpace(projectDir);
+  const resolvedIntent = intentUuid ?? activeIntentUuid(projectDir, resolvedSpace);
+  if (!resolvedIntent) {
+    throw new Error("Cannot resolve the active intent for Unit recovery state.");
+  }
+  for (const [label, value] of [
+    ["space", resolvedSpace],
+    ["intent UUID", resolvedIntent],
+    ["Unit", unit],
+  ] as const) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) {
+      throw new Error(`Invalid ${label} path segment "${value}".`);
+    }
+  }
+  return join(workspaceRoot(projectDir), root, resolvedSpace, resolvedIntent, `${unit}.json`);
+}
+
+export function unitReleasePendingPath(
+  projectDir: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): string {
+  return identityScopedUnitPath(
+    projectDir,
+    UNIT_RELEASE_PENDING_FILE,
+    unit,
+    space,
+    intentUuid,
+  );
+}
+
+export function unitMergeTransactionPath(
+  projectDir: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): string {
+  return identityScopedUnitPath(
+    projectDir,
+    UNIT_MERGE_DIR,
+    unit,
+    space,
+    intentUuid,
+  );
+}
+
+export function readUnitMergeTransaction(
+  projectDir: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): UnitMergeTransaction | null {
+  try {
+    const resolvedSpace = space ?? activeSpace(projectDir);
+    const resolvedIntent = intentUuid ?? activeIntentUuid(projectDir, resolvedSpace);
+    if (!resolvedIntent) return null;
+    const parsed = JSON.parse(
+      readFileSync(
+        unitMergeTransactionPath(
+          projectDir,
+          unit,
+          resolvedSpace,
+          resolvedIntent,
+        ),
+        "utf-8",
+      ),
+    ) as UnitMergeTransaction;
+    const oid = (value: unknown): value is string =>
+      typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+    if (
+      parsed.version !== 1 ||
+      ![
+        "pinned",
+        "approved",
+        "rejected",
+        "git-landed",
+        "state-folded",
+        "complete",
+      ].includes(parsed.status) ||
+      typeof parsed.space !== "string" ||
+      parsed.space !== resolvedSpace ||
+      typeof parsed.intent_uuid !== "string" ||
+      parsed.intent_uuid !== resolvedIntent ||
+      typeof parsed.intent_id8 !== "string" ||
+      typeof parsed.unit !== "string" ||
+      parsed.unit !== unit ||
+      typeof parsed.owner !== "string" ||
+      !Number.isInteger(parsed.generation) ||
+      parsed.generation < 1 ||
+      typeof parsed.nonce !== "string" ||
+      typeof parsed.claim_ref !== "string" ||
+      !parsed.claim_ref.endsWith(`/${unit}`) ||
+      !oid(parsed.pinned_oid) ||
+      !oid(parsed.candidate_tree_oid) ||
+      !oid(parsed.candidate_base_oid) ||
+      !oid(parsed.integration_oid) ||
+      typeof parsed.integration_branch !== "string" ||
+      !oid(parsed.main_before_oid) ||
+      typeof parsed.pinned_at !== "string" ||
+      (parsed.audit_shard !== undefined &&
+        (typeof parsed.audit_shard !== "string" ||
+          !/^[A-Za-z0-9._-]+\.md$/.test(parsed.audit_shard))) ||
+      parsed.evidence === null ||
+      typeof parsed.evidence !== "object" ||
+      !Array.isArray(parsed.evidence.stages_expected) ||
+      !Array.isArray(parsed.evidence.stages_completed) ||
+      !Array.isArray(parsed.evidence.gates_expected) ||
+      !Array.isArray(parsed.evidence.gates_approved) ||
+      !Array.isArray(parsed.evidence.reviewers_expected) ||
+      !Array.isArray(parsed.evidence.reviewers_ready) ||
+      !Array.isArray(parsed.evidence.artifact_paths) ||
+      !Array.isArray(parsed.evidence.audit_shards) ||
+      !Array.isArray(parsed.evidence.outside_unit_record_paths) ||
+      (parsed.live_stage_columns !== undefined &&
+        !Array.isArray(parsed.live_stage_columns)) ||
+      (parsed.checkpoint_parent_oid !== undefined &&
+        !oid(parsed.checkpoint_parent_oid)) ||
+      (parsed.checkpoint_commit_oid !== undefined &&
+        !oid(parsed.checkpoint_commit_oid)) ||
+      (parsed.git_commit_oid !== undefined && !oid(parsed.git_commit_oid))
+      ||
+      (
+        parsed.released_after_git !== undefined &&
+        (
+          typeof parsed.released_after_git.accepted_at !== "string" ||
+          typeof parsed.released_after_git.user_input !== "string" ||
+          !oid(parsed.released_after_git.tombstone_oid) ||
+          !Number.isInteger(
+            parsed.released_after_git.tombstone_generation,
+          ) ||
+          parsed.released_after_git.tombstone_generation < 2
+        )
+      )
+      ||
+      (
+        parsed.state_fold_authorized !== undefined &&
+        (
+          typeof parsed.state_fold_authorized.authorized_at !== "string" ||
+          (
+            parsed.state_fold_authorized.mode !== "live-claim" &&
+            parsed.state_fold_authorized.mode !== "released-after-git"
+          ) ||
+          !oid(parsed.state_fold_authorized.observed_oid) ||
+          typeof parsed.state_fold_authorized.owner !== "string" ||
+          parsed.state_fold_authorized.owner.length === 0
+        )
+      )
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnitMergeTransaction(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+): void {
+  const path = unitMergeTransactionPath(
+    projectDir,
+    transaction.unit,
+    transaction.space,
+    transaction.intent_uuid,
+  );
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify(transaction, null, 2)}\n`);
+}
+
+export function unitMergeTransactionsForIdentity(
+  projectDir: string,
+  space: string,
+  intentUuid: string,
+): UnitMergeTransaction[] {
+  const dir = join(
+    workspaceRoot(projectDir),
+    UNIT_MERGE_DIR,
+    space,
+    intentUuid,
+  );
+  let files: string[];
+  try {
+    files = readdirSync(dir)
+      .filter((file) => file.endsWith(".json"))
+      .sort();
+  } catch {
+    return [];
+  }
+  const transactions: UnitMergeTransaction[] = [];
+  for (const file of files) {
+    const unit = file.slice(0, -".json".length);
+    const transaction = readUnitMergeTransaction(
+      projectDir,
+      unit,
+      space,
+      intentUuid,
+    );
+    if (transaction) {
+      transactions.push(transaction);
+    }
+  }
+  return transactions;
+}
+
+export function unitMergeTransactions(
+  projectDir: string,
+): UnitMergeTransaction[] {
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  return intentUuid
+    ? unitMergeTransactionsForIdentity(projectDir, space, intentUuid)
+    : [];
+}
+
+export function hasAnyUnitMergeTransactions(projectDir: string): boolean {
+  return unitMergeTransactions(projectDir).length > 0;
+}
+
+export function readClaimGenerations(
+  projectDir: string,
+): Record<string, number> {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(claimGenerationsPath(projectDir), "utf-8"),
+    ) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, number] =>
+          Number.isInteger(entry[1]) && (entry[1] as number) > 0,
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function claimGenerationKey(projectDir: string, unit: string): string {
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space) ?? "legacy";
+  return `${space}/${intentUuid}/${unit}`;
+}
+
+export function writeClaimGeneration(
+  projectDir: string,
+  unit: string,
+  generation: number,
+): void {
+  const generations = readClaimGenerations(projectDir);
+  generations[claimGenerationKey(projectDir, unit)] = generation;
+  writeFileAtomic(
+    claimGenerationsPath(projectDir),
+    `${JSON.stringify(generations, null, 2)}\n`,
+  );
+}
+
+export function clearClaimGeneration(projectDir: string, unit: string): void {
+  const generations = readClaimGenerations(projectDir);
+  delete generations[claimGenerationKey(projectDir, unit)];
+  writeFileAtomic(
+    claimGenerationsPath(projectDir),
+    `${JSON.stringify(generations, null, 2)}\n`,
+  );
+}
+
+export function readUnitClaimRegistryCache(
+  projectDir: string,
+): UnitClaimRegistryCache | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(claimRegistryCachePath(projectDir), "utf-8"),
+    ) as Partial<UnitClaimRegistryCache>;
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.space !== "string" ||
+      typeof parsed.intent_uuid !== "string" ||
+      parsed.claims === null ||
+      typeof parsed.claims !== "object" ||
+      Array.isArray(parsed.claims)
+    ) {
+      return null;
+    }
+    const claims: Record<string, CachedUnitClaim> = {};
+    for (const [unit, value] of Object.entries(parsed.claims)) {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      const claim = value as Partial<CachedUnitClaim>;
+      if (
+        (claim.status !== "claimed" && claim.status !== "released") ||
+        typeof claim.owner !== "string" ||
+        !Number.isInteger(claim.generation) ||
+        (claim.generation ?? 0) < 1 ||
+        typeof claim.nonce !== "string" ||
+        typeof claim.ref !== "string" ||
+        typeof claim.oid !== "string" ||
+        (
+          claim.observed_at !== undefined &&
+          typeof claim.observed_at !== "string"
+        )
+      ) {
+        return null;
+      }
+      claims[unit] = claim as CachedUnitClaim;
+    }
+    return {
+      version: 1,
+      space: parsed.space,
+      intent_uuid: parsed.intent_uuid,
+      claims,
+      ...(typeof parsed.warning === "string" && parsed.warning
+        ? { warning: parsed.warning }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnitClaimRegistryCache(
+  projectDir: string,
+  cache: UnitClaimRegistryCache,
+): void {
+  writeFileAtomic(
+    claimRegistryCachePath(projectDir),
+    `${JSON.stringify(cache, null, 2)}\n`,
+  );
+}
+
+interface ClaimRegistryPayload {
+  status: "claimed" | "released";
+  intent_uuid: string;
+  unit: string;
+  generation: number;
+  nonce: string;
+}
+
+const LIVE_CLAIM_PAYLOADS = new Map<string, ClaimRegistryPayload | null>();
+
+function claimRegistryGit(
+  projectDir: string,
+  args: string[],
+  options: { localOnly?: boolean } = {},
+): { ok: boolean; stdout: string; stderr: string } {
+  const result = spawnSync("git", args, {
+    cwd: projectDir,
+    encoding: "utf-8",
+    env: options.localOnly
+      ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+      : process.env,
+  });
+  return {
+    ok: result.status === 0,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+function claimRegistryRemote(projectDir: string): string | null {
+  const remoteResult = claimRegistryGit(projectDir, ["remote"]);
+  if (!remoteResult.ok) {
+    throw new Error(`Unit claim registry read failed: ${remoteResult.stderr.trim()}`);
+  }
+  const remotes = remoteResult.stdout
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (remotes.includes("origin")) return "origin";
+  if (remotes.length === 0) return null;
+  if (remotes.length === 1) return remotes[0];
+  throw new Error(
+    `Unit claim registry read failed: multiple remotes (${remotes.join(", ")}) and no origin.`,
+  );
+}
+
+function claimRegistryTips(
+  projectDir: string,
+  intentUuid: string,
+): Array<{ oid: string; ref: string }> {
+  const prefix = `refs/heads/claim/${idSuffix(intentUuid)}/`;
+  const remote = claimRegistryRemote(projectDir);
+  const found = remote
+    ? claimRegistryGit(projectDir, ["ls-remote", remote, `${prefix}*`])
+    : claimRegistryGit(
+        projectDir,
+        ["for-each-ref", "--format=%(objectname) %(refname)", prefix],
+      );
+  if (!found.ok) {
+    throw new Error(
+      `Unit claim registry read failed: ${found.stderr.trim() || found.stdout.trim()}`,
+    );
+  }
+  return found.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length >= 2 && parts[0] && parts[1])
+    .map(([oid, ref]) => ({ oid, ref }));
+}
+
+function claimPayloadAtTip(
+  projectDir: string,
+  intentUuid: string,
+  tip: { oid: string; ref: string },
+): ClaimRegistryPayload {
+  const remote = claimRegistryRemote(projectDir);
+  const localOnly = { localOnly: true };
+  const hasCommit = (): boolean =>
+    claimRegistryGit(
+      projectDir,
+      ["cat-file", "-e", `${tip.oid}^{commit}`],
+      localOnly,
+    ).ok;
+  const payloadBlob = (): string | null => {
+    const found = claimRegistryGit(
+      projectDir,
+      ["rev-parse", `${tip.oid}:.aidlc-unit-claim.json`],
+      localOnly,
+    );
+    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
+      ? found.stdout.trim()
+      : null;
+  };
+  const hasBlob = (blob: string | null): boolean =>
+    blob !== null &&
+    claimRegistryGit(projectDir, ["cat-file", "-e", blob], localOnly).ok;
+  let blob = payloadBlob();
+  if ((!hasCommit() || !hasBlob(blob)) && remote) {
+    const fetched = claimRegistryGit(
+      projectDir,
+      ["fetch", "--no-tags", "--no-filter", remote, tip.ref],
+    );
+    if (!fetched.ok) {
+      throw new Error(
+        `Unit claim registry fetch failed: ${fetched.stderr.trim()} ` +
+          `(a partial clone requires a non-filtered fetch of ${tip.ref}).`,
+      );
+    }
+    blob = payloadBlob();
+  }
+  if (blob && !hasBlob(blob) && remote) {
+    const hydrated = claimRegistryGit(
+      projectDir,
+      ["fetch", "--no-tags", "--no-filter", remote, blob],
+    );
+    if (!hydrated.ok) {
+      throw new Error(
+        `Unit claim registry fetch failed: ${hydrated.stderr.trim()} ` +
+          `(the partial clone is missing payload blob ${blob} for ${tip.ref}).`,
+      );
+    }
+  }
+  if (!hasCommit() || !hasBlob(blob)) {
+    throw new Error(
+      `Unit claim registry fetch failed: payload at ${tip.ref} is unavailable after a non-filtered fetch; ` +
+        "the partial clone is missing the claim payload blob.",
+    );
+  }
+  const shown = claimRegistryGit(
+    projectDir,
+    ["show", `${tip.oid}:.aidlc-unit-claim.json`],
+    localOnly,
+  );
+  if (!shown.ok) {
+    throw new Error(`Unit claim registry payload is unreadable at ${tip.ref}.`);
+  }
+  try {
+    const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+    if (
+      (payload.status !== "claimed" && payload.status !== "released") ||
+      payload.intent_uuid !== intentUuid ||
+      typeof payload.unit !== "string" ||
+      !Number.isInteger(payload.generation) ||
+      (payload.generation as number) < 1 ||
+      typeof payload.nonce !== "string"
+    ) {
+      throw new Error("invalid payload");
+    }
+    return payload as unknown as ClaimRegistryPayload;
+  } catch {
+    throw new Error(`Unit claim registry payload is invalid at ${tip.ref}.`);
+  }
+}
+
+function liveClaimPayload(
+  projectDir: string,
+  unit: string,
+): ClaimRegistryPayload | null {
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (!intentUuid) return null;
+  const cacheKey = `${canonicalPathKey(projectDir)}:${space}:${intentUuid}:${unit}`;
+  if (LIVE_CLAIM_PAYLOADS.has(cacheKey)) {
+    return LIVE_CLAIM_PAYLOADS.get(cacheKey) ?? null;
+  }
+  const ref = `refs/heads/claim/${idSuffix(intentUuid)}/${unit}`;
+  const tip = claimRegistryTips(projectDir, intentUuid).find(
+    (candidate) => candidate.ref === ref,
+  );
+  if (!tip) {
+    LIVE_CLAIM_PAYLOADS.set(cacheKey, null);
+    return null;
+  }
+  const payload = claimPayloadAtTip(projectDir, intentUuid, tip);
+  if (payload.unit !== unit) {
+    throw new Error(`Unit claim registry payload is invalid at ${ref}.`);
+  }
+  LIVE_CLAIM_PAYLOADS.set(cacheKey, payload);
+  return payload;
+}
+
+export function invalidateLiveClaimPayloadCache(
+  projectDir: string,
+  unit?: string,
+): void {
+  const prefix = `${canonicalPathKey(projectDir)}:`;
+  for (const key of LIVE_CLAIM_PAYLOADS.keys()) {
+    if (
+      key.startsWith(prefix) &&
+      (unit === undefined || key.endsWith(`:${unit}`))
+    ) {
+      LIVE_CLAIM_PAYLOADS.delete(key);
+    }
+  }
+}
+
+export function hasAnyUnitClaimRefs(projectDir: string): boolean {
+  const localOnly = { localOnly: true };
+  if (!claimRegistryGit(projectDir, ["rev-parse", "--git-dir"], localOnly).ok) {
+    return false;
+  }
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (!intentUuid) return false;
+  const id8 = idSuffix(intentUuid);
+  const local = claimRegistryGit(
+    projectDir,
+    [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/heads/claim/",
+      "refs/remotes/",
+    ],
+    localOnly,
+  );
+  if (!local.ok) return false;
+  if (
+    local.stdout
+      .split(/\r?\n/)
+      .some((ref) =>
+        ref.startsWith(`refs/heads/claim/${id8}/`) ||
+        new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
+      )
+  ) {
+    return true;
+  }
+  const cache = readUnitClaimRegistryCache(projectDir);
+  return !!cache &&
+    cache.space === space &&
+    cache.intent_uuid === intentUuid &&
+    Object.keys(cache.claims).length > 0;
+}
+
+export function readUnitScopeStamp(projectDir: string): UnitScopeStamp | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(unitScopePath(projectDir), "utf-8"),
+    );
+    if (parsed === null || typeof parsed !== "object") return null;
+    const stamp = parsed as Partial<UnitScopeStamp>;
+    if (
+      stamp.version !== 1 ||
+      typeof stamp.space !== "string" ||
+      typeof stamp.intent_uuid !== "string" ||
+      typeof stamp.intent_id8 !== "string" ||
+      typeof stamp.unit !== "string" ||
+      typeof stamp.owner !== "string" ||
+      !Number.isInteger(stamp.generation) ||
+      (stamp.generation ?? 0) < 1 ||
+      typeof stamp.nonce !== "string" ||
+      typeof stamp.claim_ref !== "string" ||
+      typeof stamp.claim_oid !== "string" ||
+      typeof stamp.claimed_from_oid !== "string" ||
+      typeof stamp.integration_ref !== "string" ||
+      (stamp.gate_rhythm !== "per-stage" && stamp.gate_rhythm !== "unit-end") ||
+      (stamp.audit_shard !== undefined &&
+        (typeof stamp.audit_shard !== "string" ||
+          !/^[A-Za-z0-9._-]+\.md$/.test(stamp.audit_shard)))
+    ) {
+      return null;
+    }
+    return stamp as UnitScopeStamp;
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnitScopeStamp(
+  projectDir: string,
+  stamp: UnitScopeStamp,
+): void {
+  writeFileAtomic(
+    unitScopePath(projectDir),
+    `${JSON.stringify(stamp, null, 2)}\n`,
+  );
+}
+
+export function clearUnitScopeStamp(projectDir: string): void {
+  try {
+    unlinkSync(unitScopePath(projectDir));
+  } catch {
+    // Already absent.
+  }
+}
+
+function applicableTeamUnitScopeStamp(
+  projectDir: string,
+  stateContent?: string,
+): UnitScopeStamp | null {
+  let state = stateContent;
+  try {
+    state ??= readStateFile(projectDir);
+  } catch {
+    return null;
+  }
+  if (!isTeamUnitOwnership(state)) return null;
+  const stamp = readUnitScopeStamp(projectDir);
+  if (!stamp) return null;
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (
+    !intentUuid ||
+    stamp.space !== space ||
+    stamp.intent_uuid !== intentUuid
+  ) {
+    return null;
+  }
+  return stamp;
+}
+
+export function readApplicableTeamUnitScopeStamp(
+  projectDir: string,
+  stateContent?: string,
+): UnitScopeStamp | null {
+  return applicableTeamUnitScopeStamp(projectDir, stateContent);
+}
+
+export function worktreeClaimBoundaryMatches(
+  projectDir: string,
+  worktreeDir: string,
+  unit: string,
+): UnitScopeStamp | null {
+  const main = applicableTeamUnitScopeStamp(projectDir);
+  const forked = applicableTeamUnitScopeStamp(worktreeDir);
+  if (
+    !main ||
+    !forked ||
+    main.unit !== unit ||
+    forked.unit !== unit ||
+    main.intent_uuid !== forked.intent_uuid ||
+    main.generation !== forked.generation ||
+    main.nonce !== forked.nonce ||
+    main.claim_oid !== forked.claim_oid
+  ) {
+    return null;
+  }
+  return main;
+}
+
+function cachedClaimFanoutActive(projectDir: string): boolean {
+  const cache = readUnitClaimRegistryCache(projectDir);
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (!intentUuid) return false;
+  if (
+    cache &&
+    cache.space === space &&
+    cache.intent_uuid === intentUuid &&
+    Object.values(cache.claims).some((claim) => claim.status === "claimed")
+  ) {
+    return true;
+  }
+  const id8 = idSuffix(intentUuid);
+  const refs = claimRegistryGit(projectDir, [
+    "for-each-ref",
+    "--format=%(objectname) %(refname)",
+    "refs/heads/claim/",
+    "refs/remotes/",
+  ], { localOnly: true });
+  if (!refs.ok) return false;
+  for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
+    const [oid, ref] = line.trim().split(/\s+/, 2);
+    if (
+      !oid ||
+      !ref ||
+      (
+        !ref.startsWith(`refs/heads/claim/${id8}/`) &&
+        !new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
+      )
+    ) {
+      continue;
+    }
+    const shown = claimRegistryGit(
+      projectDir,
+      ["show", `${oid}:.aidlc-unit-claim.json`],
+      { localOnly: true },
+    );
+    if (!shown.ok) continue;
+    try {
+      const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+      if (
+        payload.intent_uuid === intentUuid &&
+        payload.status === "claimed"
+      ) {
+        return true;
+      }
+    } catch {
+      // Malformed local claim refs are handled by notice composition.
+    }
+  }
+  return false;
+}
+
+export function validateLiveUnitScope(
+  projectDir: string,
+  requestedUnit?: string,
+): UnitScopeStamp | null {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state)) return null;
+  const stamp = applicableTeamUnitScopeStamp(pd, state);
+  if (!stamp) {
+    if (cachedClaimFanoutActive(pd)) {
+      throw new Error(
+        "Team Unit fan-out is active in an unscoped checkout; claim a Unit before lifecycle or report work.",
+      );
+    }
+    return null;
+  }
+  if (requestedUnit && requestedUnit !== stamp.unit) {
+    throw new Error(
+      `This checkout is scoped to Unit "${stamp.unit}"; refusing foreign Unit "${requestedUnit}".`,
+    );
+  }
+  return stamp;
+}
+
+export function isWalkingSkeletonUnitOnMain(
+  projectDir: string,
+  unit: string,
+): boolean {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (
+    !isTeamUnitOwnership(state) ||
+    applicableTeamUnitScopeStamp(pd, state)
+  ) {
+    return false;
+  }
+  const scope = getField(state, "Scope") ?? "";
+  if (loadScopeMetadata()[scope]?.skeleton !== true) return false;
+  const dag = resolveBoltDag(pd);
+  if (dag.state !== "ok" || dag.batches[0]?.[0] !== unit) return false;
+  const top = claimRegistryGit(
+    pd,
+    ["rev-parse", "--show-toplevel"],
+    { localOnly: true },
+  );
+  const common = claimRegistryGit(
+    pd,
+    ["rev-parse", "--git-common-dir"],
+    { localOnly: true },
+  );
+  if (!top.ok || !common.ok) return false;
+  try {
+    const topReal = realpathSync(top.stdout.trim());
+    const commonAbs = resolvePath(topReal, common.stdout.trim());
+    return topReal === realpathSync(dirname(commonAbs));
+  } catch {
+    return false;
+  }
+}
+
+const CLAIM_BOUNDARY_WARNINGS = new Set<string>();
+
+function warnOfflineClaimBoundaryOnce(
+  projectDir: string,
+  unit: string,
+  message: string,
+): void {
+  const key = `${canonicalPathKey(projectDir)}:${unit}:${message}`;
+  if (CLAIM_BOUNDARY_WARNINGS.has(key)) return;
+  CLAIM_BOUNDARY_WARNINGS.add(key);
+  process.stderr.write(
+    `[aidlc] warning: Unit "${unit}" claim registry is unavailable (${message}); ` +
+      "proceeding from the checkout stamp for this claim-sensitive boundary.\n",
+  );
+}
+
+export function requireLiveClaimForTeamUnit(
+  projectDir: string,
+  unit: string,
+  selector: {
+    intent?: string;
+    space?: string;
+    walkingSkeletonMain?: boolean;
+  } = {},
+): UnitScopeStamp | null {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd, selector.intent, selector.space);
+  if (!isTeamUnitOwnership(state)) return null;
+  if (
+    selector.walkingSkeletonMain &&
+    isWalkingSkeletonUnitOnMain(pd, unit)
+  ) {
+    return null;
+  }
+  const stamp = applicableTeamUnitScopeStamp(pd, state);
+  if (!stamp) {
+    throw new Error(
+      `Unit Ownership: team requires a live claim for Unit "${unit}" before fork or lifecycle work.`,
+    );
+  }
+  if (selector.space && selector.space !== stamp.space) {
+    throw new Error(
+      `Claimed Unit "${stamp.unit}" belongs to space "${stamp.space}", not "${selector.space}".`,
+    );
+  }
+  if (
+    selector.intent &&
+    selector.intent !== stamp.intent_uuid &&
+    !selector.intent.endsWith(stamp.intent_id8)
+  ) {
+    throw new Error(
+      `Claimed Unit "${stamp.unit}" belongs to intent "${stamp.intent_uuid}", not "${selector.intent}".`,
+    );
+  }
+  validateLiveUnitScope(pd, unit);
+  try {
+    invalidateLiveClaimPayloadCache(pd, stamp.unit);
+    const current = liveClaimPayload(pd, stamp.unit);
+    if (
+      current?.status !== "claimed" ||
+      current.intent_uuid !== stamp.intent_uuid ||
+      current.unit !== stamp.unit ||
+      current.generation !== stamp.generation ||
+      current.nonce !== stamp.nonce
+    ) {
+      throw new Error(
+        `The Unit "${stamp.unit}" claim attempt is stale or released; re-claim before continuing.`,
+      );
+    }
+  } catch (error) {
+    const message = errorMessage(error);
+    if (
+      message.startsWith("Unit claim registry read failed:") ||
+      message.startsWith("Unit claim registry fetch failed:")
+    ) {
+      warnOfflineClaimBoundaryOnce(pd, unit, message);
+    } else {
+      throw error;
+    }
+  }
+  return stamp;
+}
+
+export function claimAttemptFields(
+  projectDir: string,
+  unit?: string,
+): Record<string, string> {
+  const stamp = applicableTeamUnitScopeStamp(projectDir);
+  if (!stamp || (unit !== undefined && stamp.unit !== unit)) return {};
+  return { "Attempt Generation": String(stamp.generation) };
+}
+
+export function eventMatchesClaimAttempt(
+  projectDir: string,
+  block: string,
+  unit?: string,
+): boolean {
+  let state: string;
+  try {
+    state = readStateFile(projectDir);
+  } catch {
+    return true;
+  }
+  if (!isTeamUnitOwnership(state)) return true;
+  const stamp = applicableTeamUnitScopeStamp(projectDir, state);
+  if (!stamp) {
+    if (!unit) return true;
+    const eventGeneration = auditBlockField(block, "Attempt Generation");
+    if (eventGeneration === null) return true;
+    const generation =
+      readClaimGenerations(projectDir)[claimGenerationKey(projectDir, unit)];
+    return generation === undefined
+      ? true
+      : eventGeneration === String(generation);
+  }
+  const eventUnit = auditBlockField(block, "Unit");
+  if (unit !== undefined && unit !== stamp.unit) return false;
+  if (eventUnit !== null && eventUnit !== stamp.unit) return false;
+  return (
+    auditBlockField(block, "Attempt Generation") === String(stamp.generation)
+  );
+}
+
+export function unitMergedReceipts(
+  projectDir: string,
+  auditRows?: readonly AuditShardEvent[],
+): Set<string> {
+  const rows = auditRows ?? readAuditShardEvents(projectDir);
+  const merged = new Set<string>();
+  for (const row of rows) {
+    if (row.event !== "UNIT_MERGED") continue;
+    const unit = auditBlockField(row.block, "Unit");
+    if (!unit || !eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
+    merged.add(unit);
+  }
+  return merged;
+}
+
+export function effectiveUnitGateRhythm(
+  projectDir: string,
+  stateContent: string,
+): UnitGateRhythm {
+  return applicableTeamUnitScopeStamp(projectDir, stateContent)?.gate_rhythm ??
+    readUnitGateRhythm(stateContent);
+}
+
 // Freshness window for the compose marker. The Stop hook honours the carve-out
 // only while the marker's mtime is younger than this; an older marker is an
 // orphan (a session that crashed between write and gate-resolve) and is ignored
@@ -8487,12 +15759,262 @@ export function composeMarkerPath(projectDir: string): string {
 // open gate while still catching a stranded marker.
 export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 
+// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
+// dispatch ledger. Entries are session-scoped and reference-counted so
+// overlapping workers cannot clear or authorize each other. The file remains
+// workspace-level because dispatch and completion hooks can run outside an
+// intent record, while each entry carries the session identity needed by Stop.
+export function subagentInflightMarkerPath(projectDir: string): string {
+  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
+}
+
+// Freshness window for each background-subagent entry. The Stop hook honours
+// only matching fresh entries; older entries are orphaned dispatches and are
+// pruned under the workspace lock. 2h covers long-running agents while bounding
+// how long a crashed dispatch can relax forwarding-loop enforcement.
+export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
+
+interface SubagentInflightEntry {
+  sessionId: string | null;
+  startedAtMs: number;
+}
+
+interface SubagentInflightLedger {
+  version: 1;
+  entries: SubagentInflightEntry[];
+}
+
+interface SubagentInflightRead {
+  exists: boolean;
+  malformed: boolean;
+  entries: SubagentInflightEntry[];
+}
+
+export interface SubagentInflightSummary {
+  exists: boolean;
+  malformed: boolean;
+  freshCount: number;
+  staleCount: number;
+  oldestAgeMs: number | null;
+}
+
+export interface SubagentInflightMatch {
+  active: boolean;
+  staleRemoved: number;
+  malformed: boolean;
+  invalidSession: boolean;
+}
+
+function subagentSessionIdentity(
+  sessionId: unknown,
+): { valid: true; sessionId: string | null } | { valid: false } {
+  if (sessionId === undefined || sessionId === "") {
+    return { valid: true, sessionId: null };
+  }
+  if (typeof sessionId !== "string") return { valid: false };
+  const valid = validSessionId(sessionId);
+  return valid ? { valid: true, sessionId: valid } : { valid: false };
+}
+
+function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
+  const path = subagentInflightMarkerPath(projectDir);
+  if (!existsSync(path)) return { exists: false, malformed: false, entries: [] };
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") {
+      return { exists: true, malformed: true, entries: [] };
+    }
+    const candidate = parsed as Partial<SubagentInflightLedger>;
+    if (candidate.version !== 1 || !Array.isArray(candidate.entries)) {
+      return { exists: true, malformed: true, entries: [] };
+    }
+    const entries: SubagentInflightEntry[] = [];
+    for (const value of candidate.entries) {
+      if (value === null || typeof value !== "object") {
+        return { exists: true, malformed: true, entries: [] };
+      }
+      const entry = value as Partial<SubagentInflightEntry>;
+      const validIdentity =
+        entry.sessionId === null ||
+        (typeof entry.sessionId === "string" &&
+          validSessionId(entry.sessionId) === entry.sessionId);
+      if (
+        !validIdentity ||
+        typeof entry.startedAtMs !== "number" ||
+        !Number.isFinite(entry.startedAtMs) ||
+        entry.startedAtMs <= 0
+      ) {
+        return { exists: true, malformed: true, entries: [] };
+      }
+      entries.push({
+        sessionId: entry.sessionId ?? null,
+        startedAtMs: entry.startedAtMs,
+      });
+    }
+    return { exists: true, malformed: false, entries };
+  } catch {
+    return existsSync(path)
+      ? { exists: true, malformed: true, entries: [] }
+      : { exists: false, malformed: false, entries: [] };
+  }
+}
+
+function writeSubagentInflightLedger(
+  projectDir: string,
+  entries: SubagentInflightEntry[],
+): void {
+  const path = subagentInflightMarkerPath(projectDir);
+  if (entries.length === 0) {
+    try {
+      unlinkSync(path);
+    } catch {
+      // Already absent or unreadable: callers retain fail-closed behavior.
+    }
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const ledger: SubagentInflightLedger = { version: 1, entries };
+  writeFileAtomic(path, `${JSON.stringify(ledger)}\n`);
+}
+
+function freshSubagentEntries(
+  entries: SubagentInflightEntry[],
+  nowMs: number,
+): SubagentInflightEntry[] {
+  return entries.filter(
+    (entry) => nowMs - entry.startedAtMs <= SUBAGENT_INFLIGHT_TTL_MS,
+  );
+}
+
+export function markSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+): boolean {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return false;
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const nowMs = Date.now();
+    const entries = freshSubagentEntries(current.entries, nowMs);
+    entries.push({ sessionId: identity.sessionId, startedAtMs: nowMs });
+    writeSubagentInflightLedger(projectDir, entries);
+    return true;
+  });
+}
+
+export function completeSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+): boolean {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return false;
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) return false;
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    const index = entries.findIndex(
+      (entry) => entry.sessionId === identity.sessionId,
+    );
+    if (index >= 0) entries.splice(index, 1);
+    writeSubagentInflightLedger(projectDir, entries);
+    return index >= 0;
+  });
+}
+
+export function matchSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+): SubagentInflightMatch {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) {
+    return {
+      active: false,
+      staleRemoved: 0,
+      malformed: false,
+      invalidSession: true,
+    };
+  }
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) {
+      return {
+        active: false,
+        staleRemoved: 0,
+        malformed: false,
+        invalidSession: false,
+      };
+    }
+    if (current.malformed) {
+      return {
+        active: false,
+        staleRemoved: 0,
+        malformed: true,
+        invalidSession: false,
+      };
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    const staleRemoved = current.entries.length - entries.length;
+    if (staleRemoved > 0) writeSubagentInflightLedger(projectDir, entries);
+    return {
+      active: entries.some(
+        (entry) => entry.sessionId === identity.sessionId,
+      ),
+      staleRemoved,
+      malformed: false,
+      invalidSession: false,
+    };
+  });
+}
+
+export function inspectSubagentInflight(
+  projectDir: string,
+): SubagentInflightSummary {
+  const current = readSubagentInflightLedger(projectDir);
+  if (!current.exists || current.malformed) {
+    return {
+      exists: current.exists,
+      malformed: current.malformed,
+      freshCount: 0,
+      staleCount: 0,
+      oldestAgeMs: null,
+    };
+  }
+  const nowMs = Date.now();
+  let freshCount = 0;
+  let staleCount = 0;
+  let oldestAgeMs: number | null = null;
+  for (const entry of current.entries) {
+    const ageMs = Math.max(0, nowMs - entry.startedAtMs);
+    oldestAgeMs = Math.max(oldestAgeMs ?? 0, ageMs);
+    if (ageMs <= SUBAGENT_INFLIGHT_TTL_MS) freshCount++;
+    else staleCount++;
+  }
+  return {
+    exists: true,
+    malformed: false,
+    freshCount,
+    staleCount,
+    oldestAgeMs,
+  };
+}
+
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
-// `baseDir` is the project dir for the dispatcher, or a tsconfig anchor for the
-// type-check sensor; callers append a stage slug as needed. The tsconfig-anchor
-// caller passes a non-projectDir base, so the record-dir resolution is OPT-OUT:
-// only resolve per-intent when the caller passes intent/space context; a bare
-// baseDir keeps the flat `.aidlc-sensors` leaf for the type-check anchor case.
+// `baseDir` is the project dir for current dispatcher and type-check callers;
+// callers append a stage slug as needed. Before 2.6.94, type-check passed a
+// tsconfig directory instead, creating legacy package-local record trees. With
+// no explicit intent/space, `docsRoot` follows the active-intent cursor (or lone
+// record) when one resolves, so caches and failure details share the manifest's
+// per-intent location; only pre-intent does it fall back to the flat space root.
 export function sensorsDir(baseDir: string, intent?: string, space?: string): string {
   if (intent === undefined && space === undefined) {
     return join(docsRoot(baseDir), ".aidlc-sensors");
@@ -8807,7 +16329,76 @@ export function hasUnsafeSingleLineCharacter(value: string): boolean {
       return true;
     }
   }
-  return false;
+	return false;
+}
+
+export function authoritativeProjectDescription(raw: string): {
+  description: string;
+  pastedDocumentPresent: boolean;
+  error?: string;
+} {
+  const open = "<document>";
+  const close = "</document>";
+  const start = raw.indexOf(open);
+  const strayClose = raw.indexOf(close);
+  if (start < 0) {
+    if (strayClose >= 0) {
+      return {
+        description: "",
+        pastedDocumentPresent: false,
+        error: `project description has ${close} without a matching ${open}`,
+      };
+    }
+    return {
+      description: raw.trim(),
+      pastedDocumentPresent: false,
+    };
+  }
+  if (strayClose >= 0 && strayClose < start) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: `project description has ${close} before the next ${open}`,
+    };
+  }
+
+  const end = raw.indexOf(close, start + open.length);
+  if (end < 0) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: `project description has ${open} without a matching ${close}`,
+    };
+  }
+  const nested = raw.indexOf(open, start + open.length);
+  if (nested >= 0 && nested < end) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: "project description has nested <document> blocks",
+    };
+  }
+
+  const trailing = raw.slice(end + close.length);
+  if (trailing.includes(open) || trailing.includes(close)) {
+    return {
+      description: "",
+      pastedDocumentPresent: true,
+      error: "project description has repeated or additional <document> markers",
+    };
+  }
+  if (trailing.trim().length > 0) {
+    return {
+      description: "",
+      pastedDocumentPresent: true,
+      error: `project description has content after terminal ${close}`,
+    };
+  }
+
+  return {
+    description: raw.slice(0, start).trim(),
+    pastedDocumentPresent: true,
+  };
 }
 
 // --- State file I/O ---
@@ -8818,6 +16409,79 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
     throw new Error(`State file not found: ${path}`);
   }
   return readFileSync(path, "utf-8");
+}
+
+export const PROJECT_DESCRIPTION_FILE = "project-description.json";
+export const DOCUMENT_INPUT_REQUEST_FILE = ".aidlc-document-input-path";
+const LEGACY_PROJECT_DESCRIPTION_SOURCE = "aidlc-state.md#Project";
+
+export interface ProjectDescriptionAuthority {
+  description: string;
+  source: typeof PROJECT_DESCRIPTION_FILE | typeof LEGACY_PROJECT_DESCRIPTION_SOURCE;
+}
+
+/**
+ * Load the exact initial description for one workflow record.
+ *
+ * A source marker makes the JSON sidecar mandatory. Records without the marker
+ * retain the pre-sidecar Project-field fallback; a malformed marked record never
+ * silently degrades to the preview.
+ */
+export function readProjectDescriptionAuthority(
+  recordRoot: string,
+  stateContent?: string,
+): ProjectDescriptionAuthority {
+  const state =
+    stateContent ?? readFileSync(join(recordRoot, "aidlc-state.md"), "utf-8");
+  const source = getField(state, "Project Description Source") ?? "";
+  if (source === "") {
+    const description = getField(state, "Project");
+    if (description === null) {
+      throw new Error("legacy aidlc-state.md is missing the Project field");
+    }
+    return { description, source: LEGACY_PROJECT_DESCRIPTION_SOURCE };
+  }
+  if (source !== PROJECT_DESCRIPTION_FILE) {
+    throw new Error(`unsupported Project Description Source ${source}`);
+  }
+
+  const path = join(recordRoot, PROJECT_DESCRIPTION_FILE);
+  if (!existsSync(path)) {
+    throw new Error(
+      `${PROJECT_DESCRIPTION_FILE} is required by aidlc-state.md but missing`,
+    );
+  }
+  try {
+    const parsed: unknown = JSON.parse(
+      readRegularFileNoFollowOrThrow(path, "project description").toString(
+        "utf-8",
+      ),
+    );
+    if (typeof parsed !== "string") {
+      throw new Error("project description JSON must contain one string");
+    }
+    return { description: parsed, source: PROJECT_DESCRIPTION_FILE };
+  } catch (error) {
+    throw new Error(
+      `failed to read ${PROJECT_DESCRIPTION_FILE}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+export function projectDescriptionFilePath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), PROJECT_DESCRIPTION_FILE);
+}
+
+export function documentInputRequestFilePath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), DOCUMENT_INPUT_REQUEST_FILE);
 }
 
 export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
@@ -8867,9 +16531,24 @@ export function getField(content: string, field: string): string | null {
 // sites cannot drift. (This PR uses the helper only at the NEW gate sites;
 // refactoring the existing open-coded sites is a tracked follow-up.)
 export const AUTONOMY_MODE_FIELD = "Construction Autonomy Mode";
+export const UNIT_OWNERSHIP_FIELD = "Unit Ownership";
+export const UNIT_GATE_RHYTHM_FIELD = "Unit Gate Rhythm";
+
+export type UnitGateRhythm = "per-stage" | "unit-end";
 
 export function isAutonomousMode(stateContent: string | null): boolean {
   return !!stateContent && getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous";
+}
+
+export function isTeamUnitOwnership(stateContent: string | null): boolean {
+  return !!stateContent && getField(stateContent, UNIT_OWNERSHIP_FIELD)?.trim() === "team";
+}
+
+export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm {
+  if (!isTeamUnitOwnership(stateContent)) return "per-stage";
+  return getField(stateContent!, UNIT_GATE_RHYTHM_FIELD)?.trim() === "unit-end"
+    ? "unit-end"
+    : "per-stage";
 }
 
 // True only for the topology the engine can dispatch as an autonomous swarm.
@@ -8891,6 +16570,7 @@ export function isAutonomousSwarmStage(
   if (!isAutonomousMode(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   if (first !== null && first.slug === stage.slug) return false;
   const resolution = resolveBoltDag(projectDir);
@@ -8903,6 +16583,21 @@ export function isAutonomousSwarmStage(
 // synthetic CI runs that drive approve/answer against bare fixtures.
 export function humanPresenceGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD === "1";
+}
+
+// An unattended driver is the only component that knows its prompt-submit
+// event did not originate from a person. Withhold the authority-bearing ledger
+// mint while retaining non-authority turn markers used by forwarding hooks.
+export function humanTurnMintAllowed(): boolean {
+  return process.env.AIDLC_UNATTENDED !== "1";
+}
+
+export function unattendedHumanPresenceHint(): string {
+  return humanTurnMintAllowed()
+    ? ""
+    : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
+      "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
+      "mode, then submit a new human response.";
 }
 
 export function setField(content: string, field: string, value: string): string {
@@ -9072,6 +16767,61 @@ export function parseCheckboxes(content: string): CheckboxLine[] {
   return results;
 }
 
+export function recoveryGuidance(
+  _projectDir: string,
+  stateContent: string,
+  stageSlug: string,
+): string {
+  const stage = parseCheckboxes(stateContent).find(
+    (entry) => entry.slug === stageSlug,
+  );
+  if (stage?.suffix.startsWith("SKIP")) {
+    return (
+      "This stage is excluded from the current plan; change to a scope that " +
+      `includes it with /aidlc --scope <scope>, then restart ${stageSlug}.`
+    );
+  }
+  if (!stage || stage.state === "pending") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (stage.state === "skipped") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (
+    stage.state === "in-progress" ||
+    stage.state === "awaiting-approval"
+  ) {
+    return (
+      "To change this document, tell me what should change and I'll record your " +
+      "Request Changes decision (this works before the gate opens); that unlocks " +
+      "the file for revision and a fresh review."
+    );
+  }
+  if (stage.state === "revising") {
+    return (
+      "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
+      `/aidlc --stage ${stageSlug} (your recorded answers survive; you will ` +
+      "re-confirm the summary once)."
+    );
+  }
+  if (stage.state === "completed") {
+    return (
+      "This stage is already approved; restore the reviewed source state, or " +
+      `jump back with /aidlc --stage ${stageSlug} to redo it.`
+    );
+  }
+  return (
+    `Restart this stage with /aidlc --stage ${stageSlug}; the recorded answers ` +
+    "survive, and the stage will ask for confirmation again."
+  );
+}
+
 export function setCheckbox(
   content: string,
   slug: string,
@@ -9117,32 +16867,31 @@ export function countCheckboxes(
 // The audit lock is a cross-process mutex: a bare mkdir-EEXIST dir in tmpdir().
 // It is keyed PER INTENT so two intents (or two Bolts in different intents) run
 // truly in parallel without false serialization. Two keying invariants (P4's
-// auto-birth depends on them):
+// auto-create depends on them):
 //
 //  (1) intent-OMITTED hashes a RESERVED sentinel `__workspace__` bucket, distinct
-//      from every per-intent bucket, and does NOT resolve activeIntent() (at
-//      birth there is no active intent; resolving would throw or bucket on
+//      from every per-intent bucket, and does NOT resolve activeIntent() (during
+//      intent creation there is no active intent; resolving would throw or bucket on
 //      "default", and two concurrent first-runs would key different/empty
-//      buckets and both birth). EVERY intents.json mutation takes this workspace
+//      buckets and both create intents). EVERY intents.json mutation takes this
+//      workspace
 //      bucket; only intent-scoped state/audit writes take a per-intent bucket.
 //  (2) the composite identity (projectDir + space + intent | sentinel) keys the
-//      lock dir AND the in-process depth/handler maps, or the maps collide
-//      across intents.
+//      lock dir. In-process receipt/depth/handler maps use a stable lexical
+//      request key, while each receipt retains the acquisition-bound identity.
 //
-// REAPER: acquire stamps owner PID + start-time into the lock dir (owner.json).
-// A waiter reclaims a lock iff process.kill(pid,0) throws ESRCH (owner gone) OR
-// the stamp's age exceeds a conservative threshold — a live under-threshold
-// holder is NEVER robbed. Reclaim is atomic (rename the dead dir aside, then
-// re-mkdir) so only one waiter wins.
+// REAPER: acquire stamps owner PID + acquisition generation + a random token
+// into owner.json. Automatic recovery is fail-closed: malformed/unreadable
+// stamps and live owners are never reaped. A recoverable owner-stamped reap
+// gate blocks acquisition while a provably-dead generation (or an old genuinely
+// missing stamp) is moved, verified, deleted, or restored.
 
-// The reserved bucket for workspace-level mutations (intents.json, intent birth).
+// The reserved bucket for workspace-level mutations (intents.json, intent creation).
 export const WORKSPACE_LOCK_SENTINEL = "__workspace__";
 
-// Default stale-lock age threshold (ms). A lock whose owner is still alive but
-// whose stamp is older than this is treated as leaked (a wedged holder). Tunable
-// via AIDLC_LOCK_STALE_MS for tests/ops. Conservative by default (10 min) so a
-// genuinely slow-but-live holder is never robbed on liveness alone — the PID
-// liveness check reclaims a dead owner immediately regardless of age.
+// Default stale-lock age threshold (ms). Doctor uses this to surface a
+// live-but-old owner for manual diagnosis; automatic acquisition never reaps a
+// live stamped owner. Tunable via AIDLC_LOCK_STALE_MS for tests/ops.
 export const DEFAULT_LOCK_STALE_MS = 10 * 60 * 1000;
 
 function lockStaleMs(): number {
@@ -9163,8 +16912,11 @@ export function auditLockIdentity(projectDir: string, intent?: string, space?: s
   try {
     canonicalProjectDir = realpathSync(canonicalProjectDir);
   } catch {
-    // Birth and diagnostics can lock before the project exists. The absolute
+    // Creation and diagnostics can lock before the project exists. The absolute
     // lexical path is stable until realpath can resolve filesystem aliases.
+  }
+  if (process.platform === "win32") {
+    canonicalProjectDir = canonicalProjectDir.toLowerCase();
   }
   if (intent === undefined) {
     return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
@@ -9173,22 +16925,442 @@ export function auditLockIdentity(projectDir: string, intent?: string, space?: s
   return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
 }
 
+// Stable call-site key for process-local receipt/depth/handler maps. Unlike the
+// filesystem identity, it deliberately does not read realpath or active-space,
+// so release remains bound to the acquisition even if a previously-missing path
+// becomes a symlink/real directory or the active-space cursor changes.
+function auditLockRequestKey(projectDir: string, intent?: string, space?: string): string {
+  const lexicalProjectDir = process.platform === "win32"
+    ? resolvePath(projectDir).toLowerCase()
+    : resolvePath(projectDir);
+  if (intent === undefined) {
+    return JSON.stringify([lexicalProjectDir, "workspace"]);
+  }
+  return JSON.stringify([
+    lexicalProjectDir,
+    "intent",
+    space === undefined ? null : space,
+    intent,
+  ]);
+}
+
 export function auditLockDir(projectDir: string, intent?: string, space?: string): string {
   const identity = auditLockIdentity(projectDir, intent, space);
   const hash = createHash("md5").update(identity).digest("hex").slice(0, 8);
   return join(tmpdir(), `.aidlc-audit-${hash}.lock`);
 }
 
-// Owner stamp written into the lock dir on acquire. start-time uses the process
-// start epoch when available (a wrapped-around PID reuse is then detectable by a
-// start-time mismatch); falls back to acquire-time. No Math.random / Date.now in
-// the steal SUFFIX (scripts forbid them) — see reapStaleLock.
+// Owner stamp written into the lock dir on acquire. The random token identifies
+// the lock generation; processGeneration binds the PID to its OS creation time
+// where the platform exposes one (Linux procfs and Windows GetProcessTimes).
 interface LockOwner {
-  pid: number; startedAtMs: number; reapLiveOwnerAfterStale: boolean; token?: string;
+  pid: number;
+  startedAtMs: number;
+  reapLiveOwnerAfterStale: boolean;
+  token?: string;
+  processGeneration?: string;
+}
+
+type OwnerStampRead =
+  | { status: "ok"; owner: LockOwner }
+  | { status: "missing" }
+  | { status: "invalid" }
+  | { status: "unreadable"; code: string };
+
+export interface AuditLockFaultHooksForTests {
+  afterReleaseOwnerCheck?: (lockDir: string) => void;
+  beforeReleaseRename?: (retiredPath: string, attempt: number) => void;
+  failReleaseRename?: (retiredPath: string, attempt: number) => boolean;
+  afterSuccessfulReap?: (lockDir: string) => void;
+  afterReapFinalCheck?: (lockDir: string) => void;
+  failReapRename?: (privatePath: string, attempt: number) => boolean;
+  beforeAcquirerOwnerStamp?: (lockDir: string, token: string) => void;
+  beforeGateOwnerStamp?: (
+    candidateDir: string,
+    canonicalDir: string,
+    token: string,
+  ) => void;
+  failGateReleaseRename?: (retiredPath: string, attempt: number) => boolean;
+  afterReleasableGateCheck?: (gateDir: string) => void;
+  posixGateLibraryCandidates?: string[];
+  processProbe?: (pid: number) => { alive: boolean; generation: string | null };
+  selfProcessGeneration?: () => string | null;
+}
+
+let AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS: AuditLockFaultHooksForTests | null = null;
+
+export function _setAuditLockFaultHooksForTests(
+  hooks: AuditLockFaultHooksForTests | null,
+): void {
+  AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS = hooks;
+  POSIX_GATE_API = undefined;
 }
 
 function ownerStampPath(lockDir: string): string {
   return join(lockDir, "owner.json");
+}
+
+const LOCK_GENERATION_TOKEN_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function lockGenerationTokenDir(lockDir: string, token: string): string | null {
+  if (!LOCK_GENERATION_TOKEN_REGEX.test(token)) return null;
+  const root = resolvePath(lockDir);
+  const tokenDir = resolvePath(root, token);
+  const lexicalChild = relative(root, tokenDir);
+  if (
+    lexicalChild === "" ||
+    lexicalChild === ".." ||
+    lexicalChild.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalChild)
+  ) return null;
+  try {
+    const rootStat = lstatSync(root);
+    const tokenStat = lstatSync(tokenDir);
+    if (
+      !rootStat.isDirectory() ||
+      rootStat.isSymbolicLink() ||
+      !tokenStat.isDirectory() ||
+      tokenStat.isSymbolicLink()
+    ) return null;
+    const realChild = relative(realpathSync(root), realpathSync(tokenDir));
+    if (
+      realChild === "" ||
+      realChild === ".." ||
+      realChild.startsWith(`..${sep}`) ||
+      isAbsolute(realChild)
+    ) return null;
+    return tokenDir;
+  } catch {
+    return null;
+  }
+}
+
+function loadWindowsProcessApi() {
+  return dlopen("kernel32.dll", {
+    CreateFileW: {
+      args: [
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+      ],
+      returns: FFIType.ptr,
+    },
+    LockFileEx: {
+      args: [
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+      ],
+      returns: FFIType.bool,
+    },
+    UnlockFileEx: {
+      args: [
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+      ],
+      returns: FFIType.bool,
+    },
+    OpenProcess: {
+      args: [FFIType.u32, FFIType.bool, FFIType.u32],
+      returns: FFIType.ptr,
+    },
+    GetProcessTimes: {
+      args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+      returns: FFIType.bool,
+    },
+    CloseHandle: {
+      args: [FFIType.ptr],
+      returns: FFIType.bool,
+    },
+  });
+}
+
+function muslArchitecture(): string {
+  const mapping: Record<string, string> = {
+    arm64: "aarch64",
+    ia32: "i386",
+    ppc64: "powerpc64le",
+    x64: "x86_64",
+  };
+  return mapping[process.arch] ?? process.arch;
+}
+
+function posixGateLibraryCandidates(): string[] {
+  if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.posixGateLibraryCandidates) {
+    return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.posixGateLibraryCandidates;
+  }
+  if (process.platform === "darwin") {
+    return ["/usr/lib/libSystem.B.dylib"];
+  }
+  const arch = muslArchitecture();
+  const candidates = [
+    "libc.so.6",
+    `/lib/ld-musl-${arch}.so.1`,
+    `/usr/lib/ld-musl-${arch}.so.1`,
+    `/lib/libc.musl-${arch}.so.1`,
+    `/usr/lib/libc.musl-${arch}.so.1`,
+    `libc.musl-${arch}.so.1`,
+    "libc.so",
+  ];
+  for (const dir of ["/lib", "/usr/lib", "/lib64", "/usr/lib64"]) {
+    try {
+      for (const entry of readdirSync(dir)) {
+        if (/^(?:ld-musl-|libc\.musl-).+\.so\.1$/.test(entry)) {
+          candidates.push(join(dir, entry));
+        }
+      }
+    } catch {
+      // Directory absent or unreadable; explicit candidates still apply.
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+export function _posixGateLibraryCandidatesForTests(): string[] {
+  return posixGateLibraryCandidates();
+}
+
+function loadPosixGateApi() {
+  let lastError: unknown;
+  for (const library of posixGateLibraryCandidates()) {
+    try {
+      return dlopen(library, {
+      flock: {
+        args: [FFIType.i32, FFIType.i32],
+        returns: FFIType.i32,
+      },
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("No POSIX flock library candidate could be loaded");
+}
+
+function loadMacProcessApi() {
+  return dlopen("/usr/lib/libproc.dylib", {
+    proc_pidinfo: {
+      args: [FFIType.i32, FFIType.i32, FFIType.u64, FFIType.ptr, FFIType.i32],
+      returns: FFIType.i32,
+    },
+  });
+}
+
+let WINDOWS_PROCESS_API:
+  | ReturnType<typeof loadWindowsProcessApi>
+  | null
+  | undefined;
+let MAC_PROCESS_API:
+  | ReturnType<typeof loadMacProcessApi>
+  | null
+  | undefined;
+let POSIX_GATE_API:
+  | ReturnType<typeof loadPosixGateApi>
+  | null
+  | undefined;
+let SELF_PROCESS_GENERATION: string | null | undefined;
+
+function windowsProcessGeneration(pid: number): string | null {
+  try {
+    if (WINDOWS_PROCESS_API === undefined) {
+      WINDOWS_PROCESS_API = loadWindowsProcessApi();
+    }
+    if (WINDOWS_PROCESS_API === null) return null;
+    const handle = WINDOWS_PROCESS_API.symbols.OpenProcess(0x1000, false, pid);
+    if (!handle) return null;
+    const creation = new Uint32Array(2);
+    const exit = new Uint32Array(2);
+    const kernel = new Uint32Array(2);
+    const user = new Uint32Array(2);
+    try {
+      if (!WINDOWS_PROCESS_API.symbols.GetProcessTimes(
+        handle,
+        creation,
+        exit,
+        kernel,
+        user,
+      )) return null;
+      return `${creation[1].toString(16)}:${creation[0].toString(16)}`;
+    } finally {
+      WINDOWS_PROCESS_API.symbols.CloseHandle(handle);
+    }
+  } catch {
+    WINDOWS_PROCESS_API = null;
+    return null;
+  }
+}
+
+function linuxProcessGeneration(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const close = stat.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = stat.slice(close + 1).trim().split(/\s+/);
+    return fields[19] || null; // procfs field 22: process start time in ticks
+  } catch {
+    return null;
+  }
+}
+
+function macProcessGeneration(pid: number): string | null {
+  try {
+    if (MAC_PROCESS_API === undefined) {
+      MAC_PROCESS_API = loadMacProcessApi();
+    }
+    if (MAC_PROCESS_API === null) return null;
+    const PROC_PIDTBSDINFO = 3;
+    const buffer = new Uint8Array(136);
+    const read = MAC_PROCESS_API.symbols.proc_pidinfo(
+      pid,
+      PROC_PIDTBSDINFO,
+      0n,
+      buffer,
+      buffer.byteLength,
+    );
+    if (read < 136) return null;
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    return `${view.getBigUint64(120, true)}:${view.getBigUint64(128, true)}`;
+  } catch {
+    MAC_PROCESS_API = null;
+    return null;
+  }
+}
+
+type NativeGateMutexReceipt =
+  | { kind: "posix"; fd: number }
+  | {
+      kind: "windows";
+      handle: Pointer;
+      overlapped: Uint8Array;
+    };
+
+function nativeGateMutexPath(lockDir: string): string {
+  return `${lockDir}.gate-mutex`;
+}
+
+function invalidWindowsHandle(handle: Pointer | bigint | null): boolean {
+  if (handle === null) return true;
+  return BigInt.asIntN(64, BigInt(handle)) === -1n;
+}
+
+function tryAcquireNativeGateMutex(
+  lockDir: string,
+): NativeGateMutexReceipt | null {
+  const path = nativeGateMutexPath(lockDir);
+  if (process.platform === "win32") {
+    try {
+      if (WINDOWS_PROCESS_API === undefined) {
+        WINDOWS_PROCESS_API = loadWindowsProcessApi();
+      }
+      if (WINDOWS_PROCESS_API === null) return null;
+      const widePath = Buffer.from(`${path}\0`, "utf16le");
+      const rawHandle = WINDOWS_PROCESS_API.symbols.CreateFileW(
+        widePath,
+        0xc0000000,
+        3,
+        null,
+        4,
+        0x80,
+        null,
+      );
+      if (invalidWindowsHandle(rawHandle)) return null;
+      const handle = rawHandle as Pointer;
+      const overlapped = new Uint8Array(32);
+      if (!WINDOWS_PROCESS_API.symbols.LockFileEx(
+        handle,
+        3,
+        0,
+        1,
+        0,
+        overlapped,
+      )) {
+        WINDOWS_PROCESS_API.symbols.CloseHandle(handle);
+        return null;
+      }
+      return {
+        kind: "windows",
+        handle,
+        overlapped,
+      };
+    } catch {
+      return null;
+    }
+  }
+  try {
+    if (POSIX_GATE_API === undefined) {
+      POSIX_GATE_API = loadPosixGateApi();
+    }
+    if (POSIX_GATE_API === null) return null;
+    const fd = openSync(path, "a+", 0o600);
+    if (POSIX_GATE_API.symbols.flock(fd, 2 | 4) !== 0) {
+      closeSync(fd);
+      return null;
+    }
+    return { kind: "posix", fd };
+  } catch {
+    POSIX_GATE_API = null;
+    return null;
+  }
+}
+
+function acquireNativeGateMutex(
+  lockDir: string,
+  maxRetries = 100,
+  retryMs = 5,
+): NativeGateMutexReceipt | null {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const receipt = tryAcquireNativeGateMutex(lockDir);
+    if (receipt) return receipt;
+    if (attempt < maxRetries) Bun.sleepSync(retryMs);
+  }
+  return null;
+}
+
+function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
+  if (receipt.kind === "posix") {
+    try { POSIX_GATE_API?.symbols.flock(receipt.fd, 8); } catch { /* closing also unlocks */ }
+    try { closeSync(receipt.fd); } catch { /* already closed */ }
+    return;
+  }
+  try {
+    WINDOWS_PROCESS_API?.symbols.UnlockFileEx(
+      receipt.handle,
+      0,
+      1,
+      0,
+      receipt.overlapped,
+    );
+  } catch { /* closing also unlocks */ }
+  try { WINDOWS_PROCESS_API?.symbols.CloseHandle(receipt.handle); } catch { /* already closed */ }
+}
+
+function processGeneration(pid: number): string | null {
+  if (pid === process.pid && AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.selfProcessGeneration) {
+    return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.selfProcessGeneration();
+  }
+  if (pid === process.pid && SELF_PROCESS_GENERATION !== undefined) {
+    return SELF_PROCESS_GENERATION;
+  }
+  const generation = process.platform === "win32"
+    ? windowsProcessGeneration(pid)
+    : process.platform === "linux"
+      ? linuxProcessGeneration(pid)
+      : process.platform === "darwin"
+        ? macProcessGeneration(pid)
+        : null;
+  if (pid === process.pid) SELF_PROCESS_GENERATION = generation;
+  return generation;
 }
 
 function writeOwnerStamp(
@@ -9196,11 +17368,13 @@ function writeOwnerStamp(
   reapLiveOwnerAfterStale = true,
   token?: string,
 ): LockOwner | null {
+  const generation = processGeneration(process.pid);
   const owner: LockOwner = {
     pid: process.pid,
     startedAtMs: lockAcquireEpochMs(),
     reapLiveOwnerAfterStale,
     ...(token ? { token } : {}),
+    ...(generation ? { processGeneration: generation } : {}),
   };
   try {
     writeFileSync(ownerStampPath(lockDir), JSON.stringify(owner), {
@@ -9210,29 +17384,55 @@ function writeOwnerStamp(
     });
     return owner;
   } catch {
-    // Best-effort: a missing stamp degrades the reaper to age-only on the next
-    // waiter (it can't read a PID), never to incorrectness.
+    // Acquisition treats a missing stamp as failure and abandons its directory.
     return null;
   }
 }
 
-function readOwnerStamp(lockDir: string): LockOwner | null {
+function inspectOwnerStamp(lockDir: string): OwnerStampRead {
+  let raw: string;
   try {
-    const raw = readFileSync(ownerStampPath(lockDir), "utf-8");
-    const parsed: unknown = JSON.parse(raw);
-    if (isPlainObject(parsed) && typeof parsed.pid === "number" && typeof parsed.startedAtMs === "number") {
-      return {
-        pid: parsed.pid,
-        startedAtMs: parsed.startedAtMs,
-        // Older stamps have no field and retain the historical over-age reaping.
-        reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
-        ...(typeof parsed.token === "string" && parsed.token.length > 0 ? { token: parsed.token } : {}),
-      };
-    }
-  } catch {
-    // no stamp / unreadable
+    raw = readFileSync(ownerStampPath(lockDir), "utf-8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+    return code === "ENOENT"
+      ? { status: "missing" }
+      : { status: "unreadable", code };
   }
-  return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "invalid" };
+  }
+  if (!isPlainObject(parsed) || typeof parsed.pid !== "number" || typeof parsed.startedAtMs !== "number") {
+    return { status: "invalid" };
+  }
+  let token: string | undefined;
+  if (parsed.token !== undefined) {
+    if (
+      typeof parsed.token !== "string" ||
+      lockGenerationTokenDir(lockDir, parsed.token) === null
+    ) return { status: "invalid" };
+    token = parsed.token;
+  }
+  return {
+    status: "ok",
+    owner: {
+      pid: parsed.pid,
+      startedAtMs: parsed.startedAtMs,
+      reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
+      ...(token ? { token } : {}),
+      ...(typeof parsed.processGeneration === "string" && parsed.processGeneration.length > 0
+        ? { processGeneration: parsed.processGeneration }
+        : {}),
+    },
+  };
+}
+
+function readOwnerStamp(lockDir: string): LockOwner | null {
+  const result = inspectOwnerStamp(lockDir);
+  return result.status === "ok" ? result.owner : null;
 }
 
 // A monotonic-ish epoch for the owner stamp. performance.timeOrigin + now()
@@ -9245,9 +17445,8 @@ function lockAcquireEpochMs(): number {
 }
 
 // Is a PID still alive? signal 0 probes liveness without delivering a signal:
-// ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive), success ⇒ alive. A
-// missing/invalid pid is treated as "not alive" so an unstamped leaked dir/file
-// is reclaimable on age alone. EXPORTED so a caller outside the lock mechanism
+// ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive), success ⇒ alive.
+// EXPORTED so a caller outside the lock mechanism
 // (e.g. a staged-transaction collector distinguishing a live writer's staging
 // dir from a crashed one's) can ask the same question this module already
 // answers for the lock reaper, rather than re-deriving it.
@@ -9262,9 +17461,17 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-function ownerAlive(owner: LockOwner | null): boolean {
-  if (!owner) return false;
-  return isPidAlive(owner.pid);
+type OwnerProcessState = "dead" | "same" | "different" | "unknown";
+
+function ownerProcessState(owner: LockOwner): OwnerProcessState {
+  const injected = AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.processProbe?.(owner.pid);
+  const alive = injected?.alive ?? isPidAlive(owner.pid);
+  if (!alive) return "dead";
+  const observedGeneration = injected
+    ? injected.generation
+    : processGeneration(owner.pid);
+  if (!owner.processGeneration || !observedGeneration) return "unknown";
+  return owner.processGeneration === observedGeneration ? "same" : "different";
 }
 
 // A monotonic per-process counter for the steal-rename suffix (no Math.random /
@@ -9304,169 +17511,474 @@ function lockDirMtimeMs(lockDir: string): number | null {
   }
 }
 
-// True iff `dir` carries the exact owner identity `judged` to be reclaimable
-// (same pid + startedAtMs). Called by reapStaleLock on the reaper-PRIVATE moved
-// dir AFTER the CAS rename, to confirm we grabbed the same stale lock we judged
-// — not a fresh live lock a competitor re-acquired in the decide→rename window.
-//
-// A `null` judged-owner means the dir was judged reclaimable as an OLD UNSTAMPED
-// dir. It still matches only if it is STILL unstamped AND still over the grace
-// window. renameSync preserves the inode's mtime, so a genuine old leak keeps
-// its over-grace mtime through the move, whereas a competitor's freshly-mkdir'd
-// re-acquire has a RECENT mtime (under grace) → mismatch → restore. A now-present
-// stamp (a live re-acquirer that already wrote owner.json) likewise mismatches.
-//
-// A concrete judged stamp (dead, or live-but-over-age) matches only if the moved
-// dir still carries the SAME pid + startedAtMs. A re-acquire rewrites owner.json
-// with a different pid / fresher startedAtMs → mismatch → restore.
-function stampMatches(dir: string, judged: LockOwner | null): boolean {
-  const now = readOwnerStamp(dir);
-  if (judged === null) {
-    // Old-unstamped leak. Still unstamped + still over grace (mtime preserved by
-    // rename). A re-created dir resets mtime → under grace → mismatch; a now-
-    // stamped dir → a live re-acquirer → mismatch.
-    if (now !== null) return false;
-    const mtime = lockDirMtimeMs(dir);
-    if (mtime === null) return false; // vanished — nothing to steal
-    return lockAcquireEpochMs() - mtime > unstampedGraceMs();
-  }
-  if (now === null) return false;
+function ownerStampsEqual(now: LockOwner, judged: LockOwner): boolean {
   return (
     now.pid === judged.pid &&
     now.startedAtMs === judged.startedAtMs &&
     now.reapLiveOwnerAfterStale === judged.reapLiveOwnerAfterStale &&
-    now.token === judged.token
+    now.token === judged.token &&
+    now.processGeneration === judged.processGeneration
   );
 }
 
-// Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
-// live, under-threshold holder is left alone (returns false). Returns true iff
-// THIS call freed the dir.
-//
-// MUTUAL-EXCLUSION SAFETY (compare-and-swap steal): the staleness DECISION (read
-// stamp, judge dead/over-age) and the steal are not one OS-atomic operation, so
-// a competing waiter can reap + re-mkdir + stamp a FRESH LIVE lock at the same
-// path in between. A "re-read stamp THEN rename" guard shrinks but does NOT
-// eliminate the window — the competitor can still re-acquire between the re-read
-// and the rename, and the rename then robs the fresh live holder (two concurrent
-// holders → lost update). So the steal is a true CAS keyed on the OS-atomic
-// rename:
-//
-//   1. Rename lockDir aside to a reaper-PRIVATE nonce path. renameSync is the
-//      atomic arbiter — exactly one process moves a given dir; the losers get
-//      ENOENT and fall back to a normal mkdir retry. After this we hold the
-//      moved dir EXCLUSIVELY (no other process can see it under the nonce name).
-//   2. Read the owner stamp INSIDE the moved dir and compare against `judged`
-//      (the identity we decided was stale). If it MATCHES, the dir we grabbed is
-//      the same stale lock we judged → legitimate steal → remove it, return true.
-//   3. If it does NOT match, a competitor reaped the stale dir and re-acquired a
-//      FRESH lock at lockDir between our decision and our rename — we just moved
-//      THEIR live lock. Restore it: rename the nonce dir back to lockDir. If that
-//      restore fails (yet another process already re-mkdir'd lockDir in the gap),
-//      the live lock already exists again at lockDir, so just drop our private
-//      copy. Either way we return false WITHOUT having robbed a live holder.
-//
-// This preserves both invariants atomically — a live (fresh, under-threshold)
-// holder is never destroyed, and exactly one reaper ever frees a given stale dir.
-//
-// RESIDUAL (documented, not silently shipped): the only remaining mutual-
-// exclusion gap is the restore in step 3 — between renaming a wrongly-grabbed
-// fresh lock OUT of lockDir and renaming it BACK, a third process can mkdir
-// lockDir (seeing it momentarily empty); the restore then fails EEXIST and two
-// processes briefly believe they hold the lock. This requires THREE specific
-// interleavings in a sub-microsecond rename↔mkdir window (a competitor must
-// re-acquire before our first rename, AND a third process must mkdir between our
-// two renames) — orders of magnitude narrower than the pre-CAS decide→rename
-// window, and the lock protects an idempotent audit-first transaction (re-run
-// safe). A kernel-atomic compare-and-swap on a directory does not exist in
-// portable POSIX (rename + mkdir are separate syscalls), so closing it fully
-// needs a different primitive (e.g. O_EXCL lockfile with fcntl); tracked as a
-// known limitation, acceptable for this phase given the blast radius.
-function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
-  const owner = readOwnerStamp(lockDir);
-  if (owner === null) {
-    // UNSTAMPED dir: a live holder mid-acquire (between mkdir and stamp) OR a
-    // process SIGKILL'd in that window. Distinguish by the dir's own age — only
-    // steal one OLDER than the grace window; a fresh unstamped dir is a live
-    // holder about to stamp and MUST NOT be robbed (the C2b concurrent-fork
-    // serialization depends on this).
-    if (!reapUnstamped) return false;
+function stampMatches(dir: string, judged: LockOwner): boolean {
+  const current = inspectOwnerStamp(dir);
+  return current.status === "ok" && ownerStampsEqual(current.owner, judged);
+}
+
+interface ReapCandidate {
+  owner: LockOwner | null;
+  unstampedIdentity: string | null;
+}
+
+function unstampedIdentity(lockDir: string): string | null {
+  try {
+    const stat = statSync(lockDir);
+    return createHash("sha256")
+      .update(`${stat.dev}\x00${stat.ino}\x00${stat.birthtimeMs}\x00${stat.mtimeMs}`)
+      .digest("hex")
+      .slice(0, 24);
+  } catch {
+    return null;
+  }
+}
+
+function reapCandidate(lockDir: string): ReapCandidate | null {
+  const inspected = inspectOwnerStamp(lockDir);
+  if (inspected.status === "invalid" || inspected.status === "unreadable") {
+    return null;
+  }
+  if (inspected.status === "missing") {
     const mtime = lockDirMtimeMs(lockDir);
-    if (mtime === null) return false; // vanished — let the next mkdir try
-    if (lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return false;
-    // else: an old unstamped dir → genuine leak, fall through to steal.
-  } else if (ownerAlive(owner)) {
-    if (!owner.reapLiveOwnerAfterStale) return false;
-    // Live owner: only reclaim if its stamp is over-age (a wedged-but-running
-    // holder). A fresh, live holder is never robbed.
-    if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
-  }
-  // STEP 1 — CAS swap: move the dir to a reaper-private nonce path. This is the
-  // atomic arbiter; only one process wins the rename of a given dir.
-  const dead = `${lockDir}.dead.${reapSuffix()}`;
-  try {
-    renameSync(lockDir, dead);
-  } catch {
-    return false; // another waiter already reclaimed (or the holder released)
-  }
-  // STEP 2 — verify the dir we just grabbed STILL carries the identity judged
-  // stale. stampMatches re-reads owner.json inside the now-private `dead` dir.
-  if (!stampMatches(dead, owner)) {
-    // STEP 3 — we grabbed a FRESH lock a competitor re-acquired in the window.
-    // Restore it so the live holder is not robbed.
-    try {
-      renameSync(dead, lockDir);
-    } catch {
-      // lockDir already re-created by yet another process → the live lock is
-      // back in place; discard our private snapshot.
-      try { rmSync(dead, { recursive: true, force: true }); } catch { /* harmless */ }
+    if (mtime === null || lockAcquireEpochMs() - mtime <= unstampedGraceMs()) {
+      return null;
     }
-    return false;
+    const identity = unstampedIdentity(lockDir);
+    return identity === null
+      ? null
+      : {
+          owner: null,
+          unstampedIdentity: identity,
+        };
   }
-  // Legitimate steal: dead owner, live-but-over-age, or old-unstamped — AND the
-  // identity we grabbed matches what we judged. Remove the private dir.
+  const processState = ownerProcessState(inspected.owner);
+  if (processState === "same" || processState === "unknown") {
+    // Integrity first: automatic acquisition never reaps the same or
+    // generation-unknown live process.
+    return null;
+  }
+  return {
+    owner: inspected.owner,
+    unstampedIdentity: null,
+  };
+}
+
+function reapCandidateStillMatches(lockDir: string, candidate: ReapCandidate): boolean {
+  if (candidate.owner !== null) {
+    const current = inspectOwnerStamp(lockDir);
+    const state = current.status === "ok"
+      ? ownerProcessState(current.owner)
+      : "unknown";
+    return (
+      current.status === "ok" &&
+      ownerStampsEqual(current.owner, candidate.owner) &&
+      (state === "dead" || state === "different")
+    );
+  }
+  return (
+    inspectOwnerStamp(lockDir).status === "missing" &&
+    unstampedIdentity(lockDir) === candidate.unstampedIdentity
+  );
+}
+
+function reapClaimDir(lockDir: string): string {
+  return `${lockDir}.reap`;
+}
+
+function reapPrivateDir(lockDir: string, claimToken: string): string {
+  return `${lockDir}.dead.${claimToken}`;
+}
+
+function tryCreateOwnerStampedDir(
+  dir: string,
+  reapLiveOwnerAfterStale = true,
+): OwnerStampedLockReceipt | null {
+  const candidate = `${dir}.candidate.${randomUUID()}`;
   try {
-    rmSync(dead, { recursive: true, force: true });
+    mkdirSync(candidate, { mode: 0o700 });
   } catch {
-    // leftover .dead dir is harmless (it never collides with the live lock name)
+    return null;
   }
+  const token = randomUUID();
+  const candidateTokenDir = join(candidate, token);
+  try {
+    mkdirSync(candidateTokenDir, { mode: 0o700 });
+    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeGateOwnerStamp?.(
+      candidate,
+      dir,
+      token,
+    );
+    const owner = writeOwnerStamp(candidate, reapLiveOwnerAfterStale, token);
+    if (!owner?.token) throw new Error("owner stamp failed");
+    renameSync(candidate, dir);
+    return {
+      lockDir: dir,
+      tokenDir: join(dir, token),
+      owner: owner as LockOwner & { token: string },
+    };
+  } catch {
+    try { rmSync(candidate, { recursive: true, force: true }); } catch { /* private debris */ }
+    return null;
+  }
+}
+
+function restoreReapPrivate(
+  lockDir: string,
+  privateDir: string,
+): boolean {
+  if (!existsSync(privateDir)) return true;
+  if (existsSync(lockDir)) return false;
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    try {
+      renameSync(privateDir, lockDir);
+      return true;
+    } catch {
+      if (existsSync(lockDir)) return false;
+      if (!existsSync(privateDir)) return true;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return false;
+}
+
+function retireReapClaim(claimDir: string): boolean {
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    const retired = `${claimDir}.retired.${randomUUID()}`;
+    try {
+      renameSync(claimDir, retired);
+      try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
+      return true;
+    } catch {
+      if (!existsSync(claimDir)) return true;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return false;
+}
+
+function recoverReapClaim(lockDir: string, owner: LockOwner): boolean {
+  const claimDir = reapClaimDir(lockDir);
+  const privateDir = owner.token ? reapPrivateDir(lockDir, owner.token) : "";
+  if (privateDir && existsSync(privateDir) && !existsSync(lockDir)) {
+    // The stale gate still excludes every canonical mutation. Restore first,
+    // regardless of whether the displaced generation is dead, live, or
+    // unreadable; the next gate owner will classify it from the canonical path.
+    if (!restoreReapPrivate(lockDir, privateDir)) return false;
+  }
+  return retireReapClaim(claimDir);
+}
+
+const PENDING_REAP_GATE_RELEASES = new Map<string, {
+  receipt: OwnerStampedLockReceipt;
+  handler: () => void;
+}>();
+
+type ReapGateReleaseState = "held" | "releasable" | "invalid";
+
+function reapGateReleasablePath(
+  claimDir: string,
+  owner: LockOwner & { token: string },
+): string | null {
+  const tokenDir = lockGenerationTokenDir(claimDir, owner.token);
+  return tokenDir === null ? null : join(tokenDir, "releasable");
+}
+
+function reapGateReleaseState(
+  claimDir: string,
+  owner: LockOwner,
+): ReapGateReleaseState {
+  if (typeof owner.token !== "string") return "invalid";
+  const path = reapGateReleasablePath(
+    claimDir,
+    owner as LockOwner & { token: string },
+  );
+  if (path === null) return "invalid";
+  try {
+    return lstatSync(path).isFile() ? "releasable" : "invalid";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "held"
+      : "invalid";
+  }
+}
+
+function markReapGateReleasable(receipt: OwnerStampedLockReceipt): boolean {
+  const path = reapGateReleasablePath(receipt.lockDir, receipt.owner);
+  if (path === null) return false;
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    try {
+      writeFileSync(path, "", { flag: "wx", mode: 0o600 });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return reapGateReleaseState(receipt.lockDir, receipt.owner) === "releasable";
+      }
+      if (!ownerReceiptMatches(receipt)) return false;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return false;
+}
+
+function clearPendingReapGateRelease(claimDir: string): void {
+  const pending = PENDING_REAP_GATE_RELEASES.get(claimDir);
+  if (!pending) return;
+  process.off("exit", pending.handler);
+  PENDING_REAP_GATE_RELEASES.delete(claimDir);
+}
+
+function retryPendingReapGateRelease(claimDir: string): boolean {
+  const pending = PENDING_REAP_GATE_RELEASES.get(claimDir);
+  if (!pending) return true;
+  if (!existsSync(claimDir)) {
+    clearPendingReapGateRelease(claimDir);
+    return true;
+  }
+  if (!markReapGateReleasable(pending.receipt)) return false;
+  const outcome = releaseOwnerStampedLock(pending.receipt, false, true);
+  if (outcome === "retryable") return false;
+  clearPendingReapGateRelease(claimDir);
   return true;
+}
+
+function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
+  const claimDir = reapClaimDir(lockDir);
+  const mutex = acquireNativeGateMutex(lockDir);
+  if (!mutex) return null;
+  try {
+    if (!retryPendingReapGateRelease(claimDir)) return null;
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      const created = tryCreateOwnerStampedDir(claimDir, false);
+      if (created) return created;
+      const inspected = inspectOwnerStamp(claimDir);
+      if (inspected.status === "ok") {
+        const releaseState = reapGateReleaseState(claimDir, inspected.owner);
+        if (releaseState === "invalid") return null;
+        if (releaseState === "releasable") {
+          AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(
+            claimDir,
+          );
+          if (!retireReapClaim(claimDir)) return null;
+          continue;
+        }
+        const state = ownerProcessState(inspected.owner);
+        if (state === "same" || state === "unknown") return null;
+        if (!recoverReapClaim(lockDir, inspected.owner)) return null;
+      } else if (inspected.status === "missing") {
+        const mtime = lockDirMtimeMs(claimDir);
+        if (mtime === null || lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return null;
+        if (!retireReapClaim(claimDir)) return null;
+      } else {
+        // Invalid/unreadable claim ownership is ambiguous and remains fail-closed.
+        return null;
+      }
+    }
+    return null;
+  } finally {
+    releaseNativeGateMutex(mutex);
+  }
+}
+
+function releaseReapClaim(receipt: OwnerStampedLockReceipt): boolean {
+  const lockDir = receipt.lockDir.endsWith(".reap")
+    ? receipt.lockDir.slice(0, -".reap".length)
+    : receipt.lockDir;
+  const mutex = acquireNativeGateMutex(lockDir);
+  let outcome: LockReleaseOutcome = "retryable";
+  if (mutex) {
+    try {
+      const marked = markReapGateReleasable(receipt);
+      outcome = marked
+        ? releaseOwnerStampedLock(receipt, false, true)
+        : "retryable";
+    } finally {
+      releaseNativeGateMutex(mutex);
+    }
+  }
+  if (outcome !== "retryable") {
+    clearPendingReapGateRelease(receipt.lockDir);
+    return true;
+  }
+  if (!PENDING_REAP_GATE_RELEASES.has(receipt.lockDir)) {
+    const handler = () => {
+      releaseReapClaim(receipt);
+    };
+    PENDING_REAP_GATE_RELEASES.set(receipt.lockDir, { receipt, handler });
+    process.on("exit", handler);
+  }
+  return false;
+}
+
+// Reclaim only a provably-dead stamped owner, a generation-mismatched reused
+// PID, or a genuinely old missing-stamp directory. The fixed owner-stamped reap
+// gate blocks acquisition while canonical ownership is moved or restored.
+function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
+  const claim = acquireReapClaim(lockDir);
+  if (!claim) return false;
+  let releaseClaim = true;
+  const dead = reapPrivateDir(lockDir, claim.owner.token);
+  let moved = false;
+  try {
+    const candidate = reapCandidate(lockDir);
+    if (
+      candidate === null ||
+      (!reapUnstamped && candidate.owner === null)
+    ) return false;
+    if (!reapCandidateStillMatches(lockDir, candidate)) return false;
+    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReapFinalCheck?.(lockDir);
+    for (let attempt = 0; attempt <= 100; attempt++) {
+      if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failReapRename?.(dead, attempt)) {
+        if (attempt < 100) Bun.sleepSync(5);
+        continue;
+      }
+      try {
+        renameSync(lockDir, dead);
+        moved = true;
+        break;
+      } catch {
+        if (!reapCandidateStillMatches(lockDir, candidate)) return false;
+        if (attempt < 100) Bun.sleepSync(5);
+      }
+    }
+    if (!moved) return false;
+    if (!reapCandidateStillMatches(dead, candidate)) {
+      if (!restoreReapPrivate(lockDir, dead)) releaseClaim = false;
+      return false;
+    }
+    try {
+      rmSync(dead, { recursive: true, force: true });
+    } catch {
+      // Private dead-generation debris never aliases the canonical lock path.
+    }
+    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterSuccessfulReap?.(lockDir);
+    return true;
+  } finally {
+    if (releaseClaim && !releaseReapClaim(claim)) {
+      // A valid claim left behind is recoverable by a later contender.
+    }
+  }
 }
 
 interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
 }
 
+interface AuditLockReceipt extends OwnerStampedLockReceipt {
+  identityKey: string;
+  releasePending: boolean;
+}
+
 function ownerReceiptMatches(receipt: OwnerStampedLockReceipt): boolean {
   return stampMatches(receipt.lockDir, receipt.owner);
 }
 
-function releaseOwnerStampedLock(receipt: OwnerStampedLockReceipt): void {
-  const retired = `${receipt.lockDir}.released.${reapSuffix()}`;
-  try { renameSync(receipt.lockDir, retired); } catch { return; }
-  if (!stampMatches(retired, receipt.owner)) {
-    try { renameSync(retired, receipt.lockDir); } catch {
-      try { rmSync(retired, { recursive: true, force: true }); } catch { /* replacement is authoritative */ }
-    }
-    return;
-  }
-  try { rmSync(retired, { recursive: true, force: true }); } catch { /* retired debris is not live */ }
-}
+type LockReleaseOutcome = "released" | "not-owner" | "retryable";
 
-function abandonUnstampedActiveDirectiveLock(lockDir: string, token: string): void {
-  const retired = `${lockDir}.failed.${reapSuffix()}`;
-  try { renameSync(lockDir, retired); } catch { return; }
-  if (readOwnerStamp(retired) === null && existsSync(join(retired, token))) {
-    try { rmSync(retired, { recursive: true, force: true }); } catch { /* failed acquisition debris */ }
-    return;
-  }
-  try { renameSync(retired, lockDir); } catch {
-    try { rmSync(retired, { recursive: true, force: true }); } catch { /* replacement is authoritative */ }
-  }
-}
-
-function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
+function releaseOwnerStampedLock(
+  receipt: OwnerStampedLockReceipt,
+  applyFaultHooks = true,
+  applyGateFaultHooks = false,
+): LockReleaseOutcome {
+  let checked = false;
   for (let attempt = 0; attempt <= 100; attempt++) {
+    const current = inspectOwnerStamp(receipt.lockDir);
+    if (current.status === "missing" && !existsSync(receipt.lockDir)) return "not-owner";
+    if (current.status !== "ok") {
+      if (attempt < 100) Bun.sleepSync(5);
+      continue;
+    }
+    if (!ownerStampsEqual(current.owner, receipt.owner)) return "not-owner";
+    if (!checked && applyFaultHooks) {
+      checked = true;
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleaseOwnerCheck?.(receipt.lockDir);
+    }
+    const retired = `${receipt.lockDir}.released.${receipt.owner.token}.${randomUUID()}`;
+    if (applyFaultHooks) {
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeReleaseRename?.(retired, attempt);
+    }
+    if (
+      applyFaultHooks &&
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failReleaseRename?.(retired, attempt)
+    ) {
+      if (attempt < 100) Bun.sleepSync(5);
+      continue;
+    }
+    if (
+      applyGateFaultHooks &&
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failGateReleaseRename?.(
+        retired,
+        attempt,
+      )
+    ) {
+      if (attempt < 100) Bun.sleepSync(5);
+      continue;
+    }
+    try {
+      renameSync(receipt.lockDir, retired);
+      try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
+      return "released";
+    } catch {
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return "retryable";
+}
+
+function releaseCanonicalOwnerStampedLock(
+  receipt: OwnerStampedLockReceipt,
+): LockReleaseOutcome {
+  const gate = acquireReapClaim(receipt.lockDir);
+  if (!gate) return "retryable";
+  try {
+    return releaseOwnerStampedLock(receipt);
+  } finally {
+    releaseReapClaim(gate);
+  }
+}
+
+function abandonUnstampedUnderGate(lockDir: string, token: string): void {
+  // Only a successfully-created token directory proves this process owns the
+  // unstamped generation. The caller holds the coordination gate throughout.
+  if (!existsSync(join(lockDir, token))) return;
+  const retired = `${lockDir}.failed.${randomUUID()}`;
+  let moved = false;
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    try {
+      renameSync(lockDir, retired);
+      moved = true;
+      break;
+    } catch {
+      if (!existsSync(join(lockDir, token))) return;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  if (!moved) return;
+  if (!existsSync(join(retired, token))) {
+    restoreReapPrivate(lockDir, retired);
+    return;
+  }
+  try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
+}
+
+function acquireOwnerStampedLock(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  reapLiveOwnerAfterStale = true,
+): OwnerStampedLockReceipt | null {
+  const create = (): OwnerStampedLockReceipt | null => {
+    const gate = acquireReapClaim(lockDir);
+    if (!gate) return null;
     try {
       mkdirSync(lockDir, { mode: 0o700 });
       const token = randomUUID();
@@ -9474,12 +17986,16 @@ function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | 
       try {
         mkdirSync(tokenDir, { mode: 0o700 });
       } catch {
-        abandonUnstampedActiveDirectiveLock(lockDir, token);
+        abandonUnstampedUnderGate(lockDir, token);
         return null;
       }
-      const owner = writeOwnerStamp(lockDir, true, token);
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeAcquirerOwnerStamp?.(
+        lockDir,
+        token,
+      );
+      const owner = writeOwnerStamp(lockDir, reapLiveOwnerAfterStale, token);
       if (!owner?.token) {
-        abandonUnstampedActiveDirectiveLock(lockDir, token);
+        abandonUnstampedUnderGate(lockDir, token);
         return null;
       }
       const receipt: OwnerStampedLockReceipt = {
@@ -9490,11 +18006,102 @@ function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | 
       return receipt;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
-      if (reapStaleLock(lockDir)) continue;
-      if (attempt < 100) Bun.sleepSync(10);
+      return null;
+    } finally {
+      releaseReapClaim(gate);
     }
+  };
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const acquired = create();
+    if (acquired) return acquired;
+    if (reapStaleLock(lockDir)) {
+      const afterReap = create();
+      if (afterReap) return afterReap;
+    }
+    if (attempt < maxRetries) Bun.sleepSync(retryMs);
   }
   return null;
+}
+
+export type OwnerStampedLockRun<T> =
+  | { acquired: false }
+  | { acquired: true; value: T };
+
+export function runWithOwnerStampedLock<T>(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  action: () => T,
+): OwnerStampedLockRun<T> {
+  const receipt = acquireOwnerStampedLock(lockDir, maxRetries, retryMs);
+  if (!receipt) return { acquired: false };
+  const onExit = () => {
+    releaseCanonicalOwnerStampedLock(receipt);
+  };
+  process.on("exit", onExit);
+  try {
+    return { acquired: true, value: action() };
+  } finally {
+    const outcome = releaseCanonicalOwnerStampedLock(receipt);
+    if (outcome !== "retryable") process.off("exit", onExit);
+  }
+}
+
+function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
+  return acquireOwnerStampedLock(lockDir, 100, 10);
+}
+
+// Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
+// canonical lock identity. Stable lexical request bindings preserve that
+// identity across path materialization/active-space changes, while an
+// equivalent existing symlink or Windows-case alias resolves directly to the
+// same canonical identity.
+const AUDIT_LOCK_RECEIPTS = new Map<string, AuditLockReceipt>();
+const AUDIT_LOCK_REQUEST_BINDINGS = new Map<string, string>();
+
+function unregisterAuditLockHandler(identityKey: string): void {
+  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(identityKey);
+  if (!handler) return;
+  process.off("exit", handler);
+  AUDIT_LOCK_EXIT_HANDLERS.delete(identityKey);
+}
+
+function removeAuditRequestBindings(identityKey: string): void {
+  for (const [requestKey, boundIdentity] of AUDIT_LOCK_REQUEST_BINDINGS) {
+    if (boundIdentity === identityKey) AUDIT_LOCK_REQUEST_BINDINGS.delete(requestKey);
+  }
+}
+
+function releaseAuditReceipt(identityKey: string): boolean {
+  const receipt = AUDIT_LOCK_RECEIPTS.get(identityKey);
+  if (!receipt) {
+    unregisterAuditLockHandler(identityKey);
+    removeAuditRequestBindings(identityKey);
+    return true;
+  }
+  const outcome = releaseCanonicalOwnerStampedLock(receipt);
+  if (outcome === "retryable") {
+    receipt.releasePending = true;
+    return false;
+  }
+  AUDIT_LOCK_RECEIPTS.delete(identityKey);
+  unregisterAuditLockHandler(identityKey);
+  removeAuditRequestBindings(identityKey);
+  return true;
+}
+
+function auditLockBoundIdentity(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): { requestKey: string; identityKey: string } {
+  const requestKey = auditLockRequestKey(projectDir, intent, space);
+  return {
+    requestKey,
+    identityKey:
+      AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ??
+      auditLockIdentity(projectDir, intent, space),
+  };
 }
 
 export function acquireAuditLock(
@@ -9505,46 +18112,42 @@ export function acquireAuditLock(
   space?: string,
   reapLiveOwnerAfterStale = true,
 ): boolean {
-  const lockDir = auditLockDir(projectDir, intent, space);
-  for (let i = 0; i <= maxRetries; i++) {
-    try {
-      mkdirSync(lockDir);
-      writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
-      return true;
-    } catch {
-      // EEXIST: someone holds it. Before sleeping, try to reap a dead/stale
-      // holder so a SIGKILL'd owner doesn't wedge every waiter for the full
-      // retry budget. If we reap, retry the mkdir immediately (next loop turn).
-      if (reapStaleLock(lockDir)) {
-        try {
-          mkdirSync(lockDir);
-          writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
-          return true;
-        } catch {
-          // another waiter beat us to the freed dir — fall through to sleep
-        }
-      }
-      if (i < maxRetries) {
-        Bun.sleepSync(retryMs);
-      }
-    }
+  const { requestKey, identityKey } = auditLockBoundIdentity(
+    projectDir,
+    intent,
+    space,
+  );
+  const existing = AUDIT_LOCK_RECEIPTS.get(identityKey);
+  if (existing) {
+    if (!existing.releasePending || !releaseAuditReceipt(identityKey)) return false;
   }
-  return false;
+  const lockDir = auditLockDir(projectDir, intent, space);
+  const receipt = acquireOwnerStampedLock(
+    lockDir,
+    maxRetries,
+    retryMs,
+    reapLiveOwnerAfterStale,
+  );
+  if (!receipt) return false;
+  AUDIT_LOCK_RECEIPTS.set(identityKey, {
+    ...receipt,
+    identityKey,
+    releasePending: false,
+  });
+  AUDIT_LOCK_REQUEST_BINDINGS.set(requestKey, identityKey);
+  return true;
 }
 
 export function releaseAuditLock(projectDir: string, intent?: string, space?: string): void {
-  const lockDir = auditLockDir(projectDir, intent, space);
-  const key = auditLockIdentity(projectDir, intent, space);
-  try {
-    rmSync(lockDir, { recursive: true, force: true });
-  } catch {
-    // Lock dir may already be removed
+  const { requestKey, identityKey } = auditLockBoundIdentity(
+    projectDir,
+    intent,
+    space,
+  );
+  if (AUDIT_LOCK_RECEIPTS.has(identityKey)) {
+    AUDIT_LOCK_REQUEST_BINDINGS.set(requestKey, identityKey);
   }
-  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(key);
-  if (handler) {
-    process.off("exit", handler);
-    AUDIT_LOCK_EXIT_HANDLERS.delete(key);
-  }
+  releaseAuditReceipt(identityKey);
 }
 
 /** True only while `ownerPid` is the live process stamped into this lock.
@@ -9558,7 +18161,9 @@ export function auditLockOwnedByProcess(
 ): boolean {
   if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
   const owner = readOwnerStamp(auditLockDir(projectDir, intent, space));
-  return owner?.pid === ownerPid && ownerAlive(owner);
+  if (owner?.pid !== ownerPid) return false;
+  const state = ownerProcessState(owner);
+  return state === "same" || state === "unknown";
 }
 
 // Tracks per-identity exit handlers that release the audit lock if a caller
@@ -9566,18 +18171,19 @@ export function auditLockOwnedByProcess(
 // blocks, so a tool that wraps locked work in try/finally and then calls
 // errorWithSlug → emitError → process.exit will leak the lock dir without
 // this safety net. Lock acquire registers a handler; release deregisters.
-// Keyed on the COMPOSITE lock identity (projectDir + space + intent | sentinel)
-// so handlers for different intents don't collide (invariant 2).
+// Keyed on the canonical acquisition identity; lexical request bindings route
+// path/active-space drift back to that identity.
 const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 
-// Per-IDENTITY reentrancy depth. Same-process nested withAuditLock calls for the
-// same lock identity would otherwise self-deadlock — the inner mkdir hits
+// Per-IDENTITY reentrancy depth. Equivalent aliases therefore share depth while
+// a materialized-path request remains bound to the identity it acquired.
+// Same-process nested withAuditLock calls would otherwise self-deadlock — the inner mkdir hits
 // EEXIST against the lock the outer caller already holds, and burns the
 // retry budget (50 × 100ms = 5s) before throwing. The depth counter makes the
 // primitive reentrant: the outer call performs the OS-level lock acquire/release;
 // inner calls just bump depth and return. Cross-process locking is unaffected —
 // different processes still serialise via mkdir EEXIST. Keyed on the composite
-// identity so two intents in one process don't share a depth counter.
+// identity so two intents/explicit spaces in one process don't share a depth.
 const AUDIT_LOCK_DEPTH = new Map<string, number>();
 
 // writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
@@ -9665,9 +18271,43 @@ export function removeTreeSync(path: string): void {
   rmSync(path, { recursive: true, force: true });
 }
 
+// Parse an anchor-relative boundary path into components without first
+// normalizing away `..`. win32.parse recognises both slash families on every
+// host and preserves Windows drive/UNC roots, so a POSIX slash cannot hide a
+// component from a native Windows walk and a Windows root cannot become a
+// relative filename on POSIX.
+function boundaryRelativePartsOrThrow(anchorReal: string, rel: string): string[] {
+  if (win32.parse(rel).root !== "") {
+    throw new Error(`path escapes its anchor lexically: ${rel}`);
+  }
+
+  const parts: string[] = [];
+  let cursor = rel;
+  while (cursor !== "" && cursor !== ".") {
+    const parsed = win32.parse(cursor);
+    if (parsed.root !== "") {
+      throw new Error(`path escapes its anchor lexically: ${rel}`);
+    }
+    if (parsed.base !== "" && parsed.base !== ".") {
+      parts.unshift(parsed.base);
+    }
+    if (parsed.dir === "" || parsed.dir === ".") break;
+    if (parsed.dir === cursor) {
+      throw new Error(`path escapes its anchor lexically: ${rel}`);
+    }
+    cursor = parsed.dir;
+  }
+
+  if (parts.some((part) => part === "..")) {
+    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
+  }
+  return parts;
+}
+
 // Walk `rel` one component at a time from a REAL anchor and refuse if ANY
-// component is a symlink, returning the joined path when the whole chain is
-// clean. Throws (does not exit) so each caller attaches its own message and code.
+// component is a symlink or junction, returning the joined native path when the
+// whole chain is clean. Both slash families delimit components. Throws (does
+// not exit) so each caller attaches its own message and code.
 //
 // Why per-COMPONENT rather than one realpath of the leaf: a containment check on
 // the fully-resolved leaf answers "does this land inside?" but not "did we travel
@@ -9681,13 +18321,7 @@ export function removeTreeSync(path: string): void {
 // each leaf they touch, not once for the parent.
 export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): string {
   if (rel === "") return anchorReal;
-  if (isAbsolute(rel)) {
-    throw new Error(`path escapes its anchor lexically: ${rel}`);
-  }
-  const parts = rel.split(sep);
-  if (parts.some((part) => part === "..")) {
-    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
-  }
+  const parts = boundaryRelativePartsOrThrow(anchorReal, rel);
   let current = anchorReal;
   for (const part of parts) {
     if (part.length === 0) continue;
@@ -9710,6 +18344,18 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
   return current;
 }
 
+export interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+function sameFileIdentity(
+  left: FileIdentity,
+  right: FileIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
 // REGULAR file or throws; it never blocks indefinitely and never follows a link.
@@ -9727,11 +18373,37 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
 //   another if something swapped the name in between — and readFileSync follows
 //   symlinks, so the swap can redirect the read to any file this process can
 //   read. Opening ONCE with O_NOFOLLOW and fstat-ing THAT descriptor makes the
-//   identity checked the identity read; there is no second resolution to race.
+//   final-component identity checked the identity read. A caller that validated
+//   parent-chain containment first passes an expected identity or real path as
+//   well, binding the opened descriptor to the file observed while that
+//   containment held.
 //
 // Throws (does not exit) so each caller can attach its own flag name and exit
 // code. `what` names the thing in the message: "--text-file", "source", ….
-export function readRegularFileNoFollowOrThrow(path: string, what: string): Buffer {
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes?: number,
+  expected?: FileIdentity | string,
+): Buffer;
+
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes: number | undefined,
+  expected: FileIdentity | string | undefined,
+  withSnapshot: true,
+): { bytes: Buffer; mtimeMs: number };
+
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes?: number,
+  expected?: FileIdentity | string,
+  withSnapshot = false,
+): Buffer | { bytes: Buffer; mtimeMs: number } {
+  const expectedIdentity = typeof expected === "object" ? expected : undefined;
+  const expectedRealPath = typeof expected === "string" ? expected : undefined;
   let fd: number;
   try {
     // O_NONBLOCK matters as much as O_NOFOLLOW here, and for a non-obvious
@@ -9756,6 +18428,14 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
   }
   try {
     const st = fstatSync(fd);
+    if (
+      expectedIdentity !== undefined &&
+      !sameFileIdentity(st, expectedIdentity)
+    ) {
+      throw changedDuringReadError(
+        `${what} changed after project-containment validation: ${path}`,
+      );
+    }
     if (!st.isFile()) {
       const kind = st.isFIFO()
         ? "a FIFO / named pipe"
@@ -9782,17 +18462,71 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
           `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
       );
     }
+    if (maxBytes !== undefined && st.size > maxBytes) {
+      throw new Error(
+        `${what} is ${st.size} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
+          `Reduce the file before retrying.`,
+      );
+    }
     // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
     // identity check for races on every platform.
     if (lstatSync(path).isSymbolicLink()) {
       throw new Error(`${what} is a symlink, which is not followed: ${path}`);
     }
-    const current = statSync(realpathSync(path));
+    const currentRealPath = realpathSync(path);
+    if (
+      expectedRealPath !== undefined &&
+      currentRealPath !== expectedRealPath
+    ) {
+      throw new Error(
+        `${what} resolved outside its prevalidated path: ${path} -> ${currentRealPath}. ` +
+          `No path component may be replaced by a symlink while the file is read.`,
+      );
+    }
+    const current = statSync(currentRealPath);
     if (current.dev !== st.dev || current.ino !== st.ino) {
       throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
-    const bytes = readFileSync(fd);
-    const after = statSync(realpathSync(path));
+    let bytes: Buffer;
+    if (maxBytes === undefined) {
+      bytes = readFileSync(fd);
+    } else {
+      // The stat check rejects files already over the cap. Bound the descriptor
+      // read as well so a file that grows concurrently cannot force an
+      // allocation beyond its original size plus one detection byte.
+      const bounded = Buffer.alloc(Math.min(maxBytes + 1, st.size + 1));
+      let length = 0;
+      while (length < bounded.length) {
+        const count = readSync(
+          fd,
+          bounded,
+          length,
+          bounded.length - length,
+          length,
+        );
+        if (count === 0) break;
+        length += count;
+      }
+      if (length > maxBytes) {
+        const currentSize = fstatSync(fd).size;
+        throw new Error(
+          `${what} is ${currentSize} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
+            "Reduce the file before retrying.",
+        );
+      }
+      bytes = bounded.subarray(0, length);
+    }
+    const afterRealPath = realpathSync(path);
+    if (
+      expectedRealPath !== undefined &&
+      afterRealPath !== expectedRealPath
+    ) {
+      throw new Error(
+        `${what} resolved outside its prevalidated path while being read: ${path} -> ${afterRealPath}. ` +
+          `No path component may be replaced by a symlink while the file is read.`,
+      );
+    }
+    const after = statSync(afterRealPath);
     const afterFd = fstatSync(fd);
     if (after.dev !== st.dev || after.ino !== st.ino ||
         afterFd.nlink !== 1 || afterFd.size !== st.size ||
@@ -9800,7 +18534,7 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
         bytes.length !== st.size) {
       throw changedDuringReadError(`${what} changed while reading: ${path}`);
     }
-    return bytes;
+    return withSnapshot ? { bytes, mtimeMs: st.mtimeMs } : bytes;
   } finally {
     closeSync(fd);
   }
@@ -9940,12 +18674,15 @@ export function withAuditLock<T>(
   // immediately regardless, so a big budget only ever waits on live work.
   maxRetries = 50,
   retryMs = 100,
-  // Long external operations such as repository clones can exceed the generic
-  // ten-minute stale threshold while still making progress. Those callers opt
-  // out of live-owner reaping; dead owners remain immediately reclaimable.
+  // Long external operations can opt out of over-age doctor classification.
+  // Automatic acquisition never reaps a live owner regardless of this flag;
+  // provably-dead owners remain immediately reclaimable.
   reapLiveOwnerAfterStale = true,
 ): T extends Promise<unknown> ? never : T {
-  const key = auditLockIdentity(projectDir, intent, space);
+  const requestKey = auditLockRequestKey(projectDir, intent, space);
+  let key =
+    AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ??
+    auditLockIdentity(projectDir, intent, space);
   const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
   if (currentDepth === 0) {
     if (
@@ -9960,13 +18697,15 @@ export function withAuditLock<T>(
     ) {
       throw new Error(`Failed to acquire audit lock for ${key} after retries`);
     }
+    key = AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ?? key;
+    const receipt = AUDIT_LOCK_RECEIPTS.get(key);
+    if (!receipt) {
+      throw new Error(`Audit lock receipt missing after acquire for ${key}`);
+    }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
     // case), the on-exit handler releases the lock dir so the project isn't
     // poisoned for ~5s on the next invocation.
-    const onExit = () => {
-      const lockDir = auditLockDir(projectDir, intent, space);
-      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* already removed */ }
-    };
+    const onExit = () => { releaseCanonicalOwnerStampedLock(receipt); };
     AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
     process.on("exit", onExit);
   }
@@ -9984,10 +18723,9 @@ export function withAuditLock<T>(
   }
 }
 
-// True iff THIS process currently holds the audit lock for the given identity
-// (projectDir + intent | sentinel) via an outer withAuditLock (or a bare
-// acquireAuditLock paired with the exit-handler install). The lock-acquire path
-// registers a per-identity exit handler and the release path removes it (see
+// True iff THIS process currently holds the audit lock for the given request
+// via an outer withAuditLock. The lock-acquire path registers a per-request exit
+// handler and the release path removes it (see
 // AUDIT_LOCK_EXIT_HANDLERS), so the handler's presence is the in-lock signal.
 // emitError (below) already branches on this to pick appendAuditEntryUnlocked
 // vs appendAuditEntry; the state tool's emitAudit helper uses it for the same
@@ -9997,14 +18735,16 @@ export function withAuditLock<T>(
 // withAuditLock's depth counter is — so it would burn the full 50×100ms retry
 // budget and then throw).
 export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
-  return AUDIT_LOCK_EXIT_HANDLERS.has(auditLockIdentity(projectDir, intent, space));
+  const { identityKey } = auditLockBoundIdentity(projectDir, intent, space);
+  return AUDIT_LOCK_EXIT_HANDLERS.has(identityKey);
 }
 
 // --- Doctor probe: leaked audit locks ----------------------------------------
 //
-// A leaked lock is a lock dir whose owner is provably dead (ESRCH) OR whose
-// stamp is over the stale threshold. `/aidlc doctor` surfaces it (and, when
-// clear=true, clears it loudly). We can't enumerate tmpdir() hashes back to
+// Doctor surfaces provably-dead, old missing-stamp, over-age live, malformed,
+// and unreadable locks. Automatic clear is restricted to dead valid owners and
+// old genuinely-missing stamps; every ambiguous/live case remains fail-closed.
+// We can't enumerate tmpdir() hashes back to
 // projects, so we probe the buckets THIS project would use: the workspace
 // sentinel bucket + every intent record across every space (the same identities
 // the writers key on). A leaked lock is reported with its bucket + owner PID.
@@ -10012,60 +18752,188 @@ export function holdsAuditLock(projectDir: string, intent?: string, space?: stri
 export interface LeakedLock {
   bucket: string; // "__workspace__" or "<space>/<intent>"
   lockDir: string; ownerPid: number | null;
-  reason: "dead-owner" | "over-age" | "unstamped" | "legacy-transaction";
-  kind: "audit" | "active-directive" | "legacy-active-directive-transaction"; cleared: boolean;
+  reason:
+    | "dead-owner"
+    | "over-age"
+    | "unstamped"
+    | "invalid-owner"
+    | "unreadable-owner"
+    | "generation-unavailable"
+    | "released-gate"
+    | "legacy-transaction";
+  kind:
+    | "audit"
+    | "active-directive"
+    | "coordination-gate"
+    | "legacy-active-directive-transaction";
+  cleared: boolean;
 }
 
-// Detect (and optionally clear) leaked locks for this project. `staleMs`
-// defaults to the configured threshold. Returns the leaks found (and cleared,
-// when clear=true). Pure-read when clear=false.
+function clearCoordinationGate(
+  lockDir: string,
+  expectedOwner: LockOwner,
+  reason: "released-gate" | "dead-owner",
+): boolean {
+  const mutex = acquireNativeGateMutex(lockDir);
+  if (!mutex) return false;
+  try {
+    const gateDir = reapClaimDir(lockDir);
+    const current = inspectOwnerStamp(gateDir);
+    if (
+      current.status !== "ok" ||
+      !ownerStampsEqual(current.owner, expectedOwner)
+    ) return false;
+    if (reason === "released-gate") {
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(gateDir);
+      return (
+        reapGateReleaseState(gateDir, current.owner) === "releasable" &&
+        retireReapClaim(gateDir)
+      );
+    }
+    const state = ownerProcessState(current.owner);
+    return (
+      (state === "dead" || state === "different") &&
+      recoverReapClaim(lockDir, current.owner)
+    );
+  } finally {
+    releaseNativeGateMutex(mutex);
+  }
+}
+
+// Detect (and safely clear eligible) leaked locks for this project. Returns the
+// findings and whether each was cleared. Pure-read when clear=false.
 export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock[] {
   const leaks: LeakedLock[] = [];
+  const probeCoordinationGate = (
+    bucketLabel: string,
+    lockDir: string,
+  ): void => {
+    const gateDir = reapClaimDir(lockDir);
+    if (!existsSync(gateDir)) return;
+    const inspected = inspectOwnerStamp(gateDir);
+    if (inspected.status === "invalid" || inspected.status === "unreadable") {
+      leaks.push({
+        bucket: bucketLabel,
+        lockDir: gateDir,
+        ownerPid: null,
+        reason: inspected.status === "invalid" ? "invalid-owner" : "unreadable-owner",
+        kind: "coordination-gate",
+        cleared: false,
+      });
+      return;
+    }
+    if (inspected.status === "ok") {
+      const releaseState = reapGateReleaseState(gateDir, inspected.owner);
+      if (releaseState === "invalid") {
+        leaks.push({
+          bucket: bucketLabel,
+          lockDir: gateDir,
+          ownerPid: inspected.owner.pid,
+          reason: "invalid-owner",
+          kind: "coordination-gate",
+          cleared: false,
+        });
+        return;
+      }
+      if (releaseState !== "releasable") {
+        const state = ownerProcessState(inspected.owner);
+        if (state === "dead" || state === "different") {
+          const cleared = clear
+            ? clearCoordinationGate(lockDir, inspected.owner, "dead-owner")
+            : false;
+          leaks.push({
+            bucket: bucketLabel,
+            lockDir: gateDir,
+            ownerPid: inspected.owner.pid,
+            reason: "dead-owner",
+            kind: "coordination-gate",
+            cleared,
+          });
+        }
+        return;
+      }
+      const cleared = clear
+        ? clearCoordinationGate(lockDir, inspected.owner, "released-gate")
+        : false;
+      leaks.push({
+        bucket: bucketLabel,
+        lockDir: gateDir,
+        ownerPid: inspected.owner.pid,
+        reason: "released-gate",
+        kind: "coordination-gate",
+        cleared,
+      });
+      return;
+    }
+  };
   const probe = (bucketLabel: string, intent?: string, space?: string): void => {
     const lockDir = auditLockDir(projectDir, intent, space);
+    probeCoordinationGate(bucketLabel, lockDir);
     if (!existsSync(lockDir)) return;
-    const owner = readOwnerStamp(lockDir);
+    const inspected = inspectOwnerStamp(lockDir);
+    const owner = inspected.status === "ok" ? inspected.owner : null;
     let reason: LeakedLock["reason"] | null = null;
-    if (!owner) {
+    if (inspected.status === "invalid") {
+      reason = "invalid-owner";
+    } else if (inspected.status === "unreadable") {
+      reason = "unreadable-owner";
+    } else if (inspected.status === "missing") {
       // Unstamped: only a leak if older than the mid-acquire grace window (else
       // a live process is between mkdir and stamp).
       const mtime = lockDirMtimeMs(lockDir);
       if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) {
         reason = "unstamped";
       }
-    } else if (!ownerAlive(owner)) {
-      reason = "dead-owner";
-    } else if (
-      owner.reapLiveOwnerAfterStale &&
-      lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()
-    ) {
-      reason = "over-age";
+    } else if (inspected.status === "ok") {
+      const state = ownerProcessState(inspected.owner);
+      if (state === "dead" || state === "different") {
+        reason = "dead-owner";
+      } else if (state === "unknown") {
+        reason = "generation-unavailable";
+      } else if (
+        inspected.owner.reapLiveOwnerAfterStale &&
+        lockAcquireEpochMs() - inspected.owner.startedAtMs > lockStaleMs()
+      ) {
+        reason = "over-age";
+      }
     }
     if (reason === null) return; // a live, fresh, stamped lock is legitimately held
-    let cleared = false;
-    if (clear && !reapStaleLock(lockDir)) {
-      // Ownership changed after classification, or another reaper already won.
-      // Never remove a fresh replacement lock by pathname.
-      return;
-    }
-    if (clear) cleared = true;
+    const cleared = clear && (reason === "dead-owner" || reason === "unstamped")
+      ? reapStaleLock(lockDir)
+      : false;
     leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason, kind: "audit", cleared });
   };
   const probeActiveDirective = (bucketLabel: string, root: string): void => {
     const lockDir = join(root, ACTIVE_DIRECTIVE_LOCK);
+    probeCoordinationGate(bucketLabel, lockDir);
     if (existsSync(lockDir)) {
-      const owner = readOwnerStamp(lockDir);
+      const inspected = inspectOwnerStamp(lockDir);
+      const owner = inspected.status === "ok" ? inspected.owner : null;
       let reason: LeakedLock["reason"] | null = null;
-      if (!owner) {
+      if (inspected.status === "invalid") {
+        reason = "invalid-owner";
+      } else if (inspected.status === "unreadable") {
+        reason = "unreadable-owner";
+      } else if (inspected.status === "missing") {
         const mtime = lockDirMtimeMs(lockDir);
         if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) reason = "unstamped";
-      } else if (!ownerAlive(owner)) {
-        reason = "dead-owner";
-      } else if (owner.reapLiveOwnerAfterStale && lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()) {
-        reason = "over-age";
+      } else if (inspected.status === "ok") {
+        const state = ownerProcessState(inspected.owner);
+        if (state === "dead" || state === "different") {
+          reason = "dead-owner";
+        } else if (state === "unknown") {
+          reason = "generation-unavailable";
+        } else if (
+          inspected.owner.reapLiveOwnerAfterStale &&
+          lockAcquireEpochMs() - inspected.owner.startedAtMs > lockStaleMs()
+        ) {
+          reason = "over-age";
+        }
       }
       if (reason !== null) {
-        const cleared = clear ? reapStaleLock(lockDir) : false;
+        const cleared = clear && (reason === "dead-owner" || reason === "unstamped")
+          ? reapStaleLock(lockDir)
+          : false;
         leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason,
           kind: "active-directive", cleared });
       }
@@ -10193,6 +19061,9 @@ export interface PipelineLinkReceipt {
   repo: string | null;
   position: string | null;
   timestamp: string;
+  artifactPath: string | null;
+  artifactSha256: string | null;
+  artifactMtimeMs: number | null;
 }
 
 export interface PipelineLinkEvidence {
@@ -10210,48 +19081,32 @@ export function pipelineLinks(
   return [stage.lead_agent, ...(stage.support_agents ?? [])];
 }
 
-interface OrderedPipelineEvidenceEvent {
-  block: string;
-  position: number;
-  event: string;
-  timestamp: string;
-}
+type OrderedPipelineEvidenceEvent = AuditShardEvent;
 
 function orderedPipelineEvidenceEvents(
   projectDir: string,
 ): OrderedPipelineEvidenceEvent[] {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return [];
-  return audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position): OrderedPipelineEvidenceEvent | null => {
-      const event = auditBlockField(block, "Event");
-      if (!event) return null;
-      return {
-        block,
-        position,
-        event,
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-      };
-    })
-    .filter((entry): entry is OrderedPipelineEvidenceEvent => entry !== null)
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? (a.timestamp < b.timestamp ? -1 : 1)
-        : a.position - b.position
-    );
+  return readAuditShardEvents(projectDir).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+}
+
+interface PipelineAttemptFloor {
+  timestamp: string;
+  rows: OrderedPipelineEvidenceEvent[];
 }
 
 function pipelineAttemptFloor(
   events: OrderedPipelineEvidenceEvent[],
   stageSlug: string,
   singleRun: boolean,
-): number {
+): PipelineAttemptFloor | null {
   const workflow = `single-stage:${stageSlug}`;
-  let floor = -1;
-  for (let i = 0; i < events.length; i++) {
-    const entry = events[i];
+  const boundaries = events.filter((entry) => {
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       !singleRun &&
@@ -10265,10 +19120,9 @@ function pipelineAttemptFloor(
       ) &&
       !eventWorkflow?.startsWith("single-stage:")
     ) {
-      floor = i;
-      continue;
+      return true;
     }
-    if (
+    return (
       entry.event === "STAGE_STARTED" &&
       auditBlockField(entry.block, "Stage") === stageSlug &&
       (
@@ -10276,17 +19130,89 @@ function pipelineAttemptFloor(
           ? eventWorkflow === workflow
           : !eventWorkflow?.startsWith("single-stage:")
       )
+    );
+  });
+  if (boundaries.length === 0) return null;
+  const timestamp = boundaries[boundaries.length - 1].timestamp;
+  return {
+    timestamp,
+    rows: boundaries.filter((entry) => entry.timestamp === timestamp),
+  };
+}
+
+function pipelineEventAfterFloor(
+  entry: OrderedPipelineEvidenceEvent,
+  floor: PipelineAttemptFloor | null,
+): boolean {
+  if (floor === null) return true;
+  if (entry.timestamp !== floor.timestamp) {
+    return entry.timestamp > floor.timestamp;
+  }
+  const shards = new Set(floor.rows.map((row) => row.shard));
+  if (shards.size !== 1) return false;
+  const shard = floor.rows[0].shard;
+  if (entry.shard !== shard) return false;
+  const maxPos = Math.max(...floor.rows.map((row) => row.pos));
+  return entry.pos > maxPos;
+}
+
+export function pipelineAttemptStartedAt(
+  projectDir: string,
+  stageSlug: string,
+  options: { singleRun?: boolean } = {},
+): string {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(
+    events,
+    stageSlug,
+    options.singleRun === true,
+  );
+  return floor?.timestamp ?? "";
+}
+
+export function singleStageAttemptIsOpen(
+  projectDir: string,
+  stageSlug: string,
+): boolean {
+  const workflow = `single-stage:${stageSlug}`;
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(events, stageSlug, true);
+  if (floor === null) return false;
+  const floorShards = new Set(floor.rows.map((row) => row.shard));
+  if (floorShards.size !== 1) return false;
+  const floorShard = floor.rows[0].shard;
+  const floorPos = Math.max(...floor.rows.map((row) => row.pos));
+  for (const entry of events) {
+    if (
+      entry.event !== "STAGE_COMPLETED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      auditBlockField(entry.block, "Workflow") !== workflow
     ) {
-      floor = i;
+      continue;
+    }
+    if (pipelineEventAfterFloor(entry, floor)) return false;
+    if (
+      entry.timestamp === floor.timestamp &&
+      entry.shard !== floorShard
+    ) {
+      return false;
+    }
+    if (
+      entry.timestamp === floor.timestamp &&
+      entry.shard === floorShard &&
+      entry.pos > floorPos
+    ) {
+      return false;
     }
   }
-  return floor;
+  return true;
 }
 
 // Current-attempt pipeline receipts are scoped to either the main workflow or
 // one isolated `--single` stream. A later matching STAGE_STARTED resets that
-// scope; rows from the other scope never participate in order or duplicate
-// checks and can never satisfy its completion guard.
+// scope; main runs also reset on workflow starts, jumps, and gate rejection.
+// Same-shard timestamp ties retain append order, while cross-shard ties fail
+// closed because their causal order cannot be proven.
 export function currentPipelineLinkReceipts(
   projectDir: string,
   stageSlug: string,
@@ -10297,8 +19223,8 @@ export function currentPipelineLinkReceipts(
   const workflow = `single-stage:${stageSlug}`;
   const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
   const receipts: PipelineLinkReceipt[] = [];
-  for (let i = floor + 1; i < events.length; i++) {
-    const entry = events[i];
+  for (const entry of events) {
+    if (!pipelineEventAfterFloor(entry, floor)) continue;
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event !== "PIPELINE_LINK_COMPLETED" ||
@@ -10318,37 +19244,134 @@ export function currentPipelineLinkReceipts(
       repo: auditBlockField(entry.block, "Repo"),
       position: auditBlockField(entry.block, "Position"),
       timestamp: entry.timestamp,
+      artifactPath: auditBlockField(entry.block, "Artifact Path"),
+      artifactSha256: auditBlockField(entry.block, "Artifact SHA256"),
+      artifactMtimeMs: (() => {
+        const value = auditBlockField(entry.block, "Artifact Mtime Ms");
+        return value && /^[0-9]+(?:\.[0-9]+)?$/.test(value)
+          ? Number(value)
+          : null;
+      })(),
     });
   }
   return receipts;
 }
 
-function currentPipelineReusedRepos(
+export function latestPipelineLinkArtifactMtime(
   projectDir: string,
   stageSlug: string,
-): string[] {
+  link: string,
+  repo: string | null,
+  options: { singleRun?: boolean } = {},
+): number | null {
+  const workflow = `single-stage:${stageSlug}`;
+  const singleRun = options.singleRun === true;
   const events = orderedPipelineEvidenceEvents(projectDir);
-  const floor = pipelineAttemptFloor(events, stageSlug, false);
-  const reused = new Set<string>();
-  for (let i = floor + 1; i < events.length; i++) {
-    const entry = events[i];
+  let latest: number | null = null;
+  for (const entry of events) {
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (
+      entry.event !== "PIPELINE_LINK_COMPLETED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      auditBlockField(entry.block, "Link") !== link ||
+      auditBlockField(entry.block, "Repo") !== repo ||
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
+    ) {
+      continue;
+    }
+    const value = auditBlockField(entry.block, "Artifact Mtime Ms");
+    if (!value || !/^[0-9]+(?:\.[0-9]+)?$/.test(value)) continue;
+    latest = Math.max(latest ?? Number.NEGATIVE_INFINITY, Number(value));
+  }
+  return latest;
+}
+
+function pipelineReceiptArtifactIsCurrent(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent">,
+  receipt: PipelineLinkReceipt,
+): boolean {
+  if (
+    stage.slug !== "reverse-engineering" ||
+    receipt.link !== stage.lead_agent
+  ) {
+    return true;
+  }
+  if (
+    !receipt.artifactPath ||
+    !receipt.artifactSha256 ||
+    receipt.artifactMtimeMs === null ||
+    !/^sha256:[0-9a-f]{64}$/.test(receipt.artifactSha256)
+  ) {
+    return false;
+  }
+  const root = recordDir(projectDir);
+  if (root === null) return false;
+  const path = resolvePath(projectDir, receipt.artifactPath);
+  if (path !== root && !path.startsWith(`${root}${sep}`)) return false;
+  try {
+    const guardedPath = assertNoSymlinkInChainOrThrow(
+      realpathSync(projectDir),
+      relative(projectDir, path),
+    );
+    const snapshot = readRegularFileNoFollowOrThrow(
+      guardedPath,
+      "reverse-engineering developer handoff",
+      undefined,
+      guardedPath,
+      true,
+    );
+    if (
+      Math.abs(snapshot.mtimeMs - receipt.artifactMtimeMs) > 0.01
+    ) {
+      return false;
+    }
+    const digest = createHash("sha256")
+      .update(snapshot.bytes)
+      .digest("hex");
+    return receipt.artifactSha256 === `sha256:${digest}`;
+  } catch {
+    return false;
+  }
+}
+
+function currentPipelineReuseEvidence(
+  projectDir: string,
+  stageSlug: string,
+  singleRun: boolean,
+): Set<string | null> {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
+  const workflow = `single-stage:${stageSlug}`;
+  const reused = new Set<string | null>();
+  for (const entry of events) {
+    if (!pipelineEventAfterFloor(entry, floor)) continue;
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event !== "ARTIFACT_REUSED" ||
       auditBlockField(entry.block, "Stage") !== stageSlug ||
       auditBlockField(entry.block, "Decision") !== "keep" ||
-      auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
     ) {
       continue;
     }
-    const repo = auditBlockField(entry.block, "Repo");
-    if (repo) reused.add(repo);
+    reused.add(auditBlockField(entry.block, "Repo"));
   }
-  return [...reused];
+  return reused;
 }
 
-// Registered multi-repo intents run one independent receipt chain per repo.
-// A current-attempt per-repo reuse row satisfies that repo without dispatch.
-// Single/unrecorded intents retain one chain and may omit Repo on every row.
+// Every recorded repo identity runs one independent, repo-qualified receipt
+// chain, including an intent with exactly one registered repo. A current-attempt
+// per-repo reuse row satisfies that repo without dispatch. Only an unrecorded
+// project-root repo uses the null/unqualified chain.
 export function pipelineLinkEvidence(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
@@ -10356,17 +19379,49 @@ export function pipelineLinkEvidence(
 ): PipelineLinkEvidence {
   const links = pipelineLinks(stage);
   const registeredRepos = intentRepos(projectDir);
-  const repos = registeredRepos.length > 1 ? registeredRepos : [];
+  const repos = registeredRepos;
   const singleRun = options.singleRun === true;
-  const receipts = currentPipelineLinkReceipts(
+  const rawReceipts = currentPipelineLinkReceipts(
     projectDir,
     stage.slug,
     { singleRun },
   );
-  const reusedRepos = singleRun
-    ? []
-    : currentPipelineReusedRepos(projectDir, stage.slug)
-      .filter((repo) => repos.includes(repo));
+  const receipts: PipelineLinkReceipt[] = [];
+  const chainRepos = repos.length > 0 ? repos : [null];
+  for (const repo of chainRepos) {
+    const chain: PipelineLinkReceipt[] = [];
+    for (const receipt of rawReceipts) {
+      if (receipt.repo !== repo) continue;
+      if (receipt.link === links[0]) {
+        chain.length = 0;
+        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt)) {
+          chain.push(receipt);
+        }
+        continue;
+      }
+      if (
+        chain.length > 0 &&
+        chain.length < links.length &&
+        receipt.link === links[chain.length]
+      ) {
+        chain.push(receipt);
+      }
+    }
+    receipts.push(...chain);
+  }
+  const reuseEvidence = currentPipelineReuseEvidence(
+    projectDir,
+    stage.slug,
+    singleRun,
+  );
+  const reusedRepos = repos.filter((repo) =>
+    reuseEvidence.has(repo) &&
+    (!singleRun || codekbStoreIsCurrent(projectDir, repo))
+  );
+  const unrecordedRepoReused =
+    repos.length === 0 &&
+    reuseEvidence.has(null) &&
+    (!singleRun || codekbStoreIsCurrent(projectDir));
   const missing: Array<{ link: string; repo: string | null }> = [];
 
   if (repos.length > 0) {
@@ -10381,16 +19436,18 @@ export function pipelineLinkEvidence(
       }
     }
   } else {
-    for (const link of links) {
-      if (!receipts.some((receipt) => receipt.link === link)) {
-        missing.push({ link, repo: null });
+    if (!unrecordedRepoReused) {
+      for (const link of links) {
+        if (!receipts.some((receipt) => receipt.link === link)) {
+          missing.push({ link, repo: null });
+        }
       }
     }
   }
 
-  // The directive keeps the compact link-name form for a single chain. A
-  // multi-repo stage qualifies each completed entry so resume can distinguish
-  // independent chains without adding another wire field.
+  // Recorded repo identities qualify every completed entry so the handoff,
+  // receipt, codekb destination, and resume lookup all use the same key. Only
+  // an unrecorded project-root repo keeps the compact link-name form.
   const completed = repos.length > 0
     ? repos.flatMap((repo) =>
         reusedRepos.includes(repo)
@@ -10403,11 +19460,145 @@ export function pipelineLinkEvidence(
             )
             .map((link) => `${repo}:${link}`)
       )
-    : links.filter((link) =>
-        receipts.some((receipt) => receipt.link === link)
-      );
+    : unrecordedRepoReused
+      ? [...links]
+      : links.filter((link) =>
+          receipts.some((receipt) => receipt.link === link)
+        );
 
   return { links, repos, receipts, reusedRepos, completed, missing };
+}
+
+export type UnitGateScope = "per-stage" | "unit-end";
+export type UnitGateStatus =
+  | "pending"
+  | "awaiting-approval"
+  | "revising"
+  | "approved";
+
+function gateStagesFromBlock(block: string): string[] {
+  const explicit = auditBlockField(block, "Gate Stages");
+  if (explicit) {
+    return explicit
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  const stage = auditBlockField(block, "Stage");
+  return stage ? [stage] : [];
+}
+
+function gateEventMatchesUnit(
+  block: string,
+  slug: string,
+  unit: string | undefined,
+): boolean {
+  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  const eventUnit = auditBlockField(block, "Unit");
+  return unit === undefined ? eventUnit === null : eventUnit === unit;
+}
+
+function gateRejectionMatchesAttempt(
+  block: string,
+  slug: string,
+  unit: string | undefined,
+): boolean {
+  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  const eventUnit = auditBlockField(block, "Unit");
+  if (eventUnit === null) return true;
+  return unit !== undefined && eventUnit === unit;
+}
+
+export function unitGateStatus(
+  projectDir: string,
+  stage: string,
+  unit: string,
+  scope: UnitGateScope,
+  auditRows?: readonly AuditShardEvent[],
+): UnitGateStatus {
+  const rows = auditRows ?? readAuditShardEvents(projectDir).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  let status: UnitGateStatus = "pending";
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (
+      end < rows.length &&
+      rows[end].timestamp === rows[start].timestamp
+    ) {
+      end++;
+    }
+    const relevant = rows.slice(start, end).filter((row) => {
+      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+        return true;
+      }
+      if (
+        row.event !== "STAGE_AWAITING_APPROVAL" &&
+        row.event !== "STAGE_REVISING" &&
+        row.event !== "GATE_APPROVED" &&
+        row.event !== "GATE_REJECTED"
+      ) {
+        return false;
+      }
+      return (
+        gateEventMatchesUnit(row.block, stage, unit) &&
+        eventMatchesClaimAttempt(projectDir, row.block, unit) &&
+        (auditBlockField(row.block, "Gate Scope") ?? "per-stage") === scope
+      );
+    });
+    if (relevant.length > 0) {
+      const relevantShards = new Set(relevant.map((row) => row.shard));
+      const hasBoundary = relevant.some(
+        (row) =>
+          row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED",
+      );
+      if (relevantShards.size > 1) {
+        if (hasBoundary) {
+          status = "pending";
+        } else {
+          const statuses = new Set(
+            relevant.map((row): UnitGateStatus =>
+              row.event === "GATE_APPROVED"
+                ? "approved"
+                : row.event === "GATE_REJECTED" ||
+                    row.event === "STAGE_REVISING"
+                  ? "revising"
+                  : "awaiting-approval",
+            ),
+          );
+          status = statuses.has("revising")
+            ? "revising"
+            : statuses.has("awaiting-approval")
+              ? "awaiting-approval"
+              : statuses.size === 1
+                ? "approved"
+                : "pending";
+        }
+      } else {
+        for (const row of relevant) {
+          if (
+            row.event === "WORKFLOW_STARTED" ||
+            row.event === "STAGE_JUMPED"
+          ) {
+            status = "pending";
+          } else if (row.event === "GATE_APPROVED") {
+            status = "approved";
+          } else if (
+            row.event === "GATE_REJECTED" ||
+            row.event === "STAGE_REVISING"
+          ) {
+            status = "revising";
+          } else {
+            status = "awaiting-approval";
+          }
+        }
+      }
+    }
+    start = end;
+  }
+  return status;
 }
 
 // Exact identity for the current main-workflow attempt of one stage. The token
@@ -10416,7 +19607,7 @@ export function pipelineLinkEvidence(
 //
 // Unit-major Construction can run a later stage before that stage's own
 // STAGE_STARTED row exists. For that walk, a stage attempt begins at the latest
-// workflow birth, jump, or stage rejection and deliberately ignores
+// workflow creation, jump, or stage rejection and deliberately ignores
 // STAGE_STARTED. This matches the reviewer-receipt floor: the later stage start
 // must not invalidate work legitimately completed earlier in the same
 // unit-major block.
@@ -10427,6 +19618,7 @@ export function latestMainWorkflowStageRunFloor(
   audit: string,
   slug: string,
   unitMajor = false,
+  unit?: string,
 ): string {
   let floor = "unstarted#0";
   const ordinals = new Map<string, number>();
@@ -10463,7 +19655,7 @@ export function latestMainWorkflowStageRunFloor(
     if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
       matches = true;
     } else if (row.event === "GATE_REJECTED") {
-      matches = stage === slug;
+      matches = gateRejectionMatchesAttempt(row.block, slug, unit);
     } else if (row.event === "STAGE_STARTED" && !unitMajor) {
       matches =
         stage === slug &&
@@ -10487,8 +19679,26 @@ export function latestMainWorkflowStageRunFloorForProject(
   projectDir: string,
   slug: string,
   unitMajor = false,
+  unit?: string,
+  auditRows?: readonly AuditShardEvent[],
   intent?: string,
   space?: string,
+): string {
+  return latestMainWorkflowStageRunFloorFromRows(
+    auditRows ?? readAuditShardEvents(projectDir, intent, space),
+    slug,
+    unitMajor,
+    unit,
+    auditRows !== undefined,
+  );
+}
+
+function latestMainWorkflowStageRunFloorFromRows(
+  rowsInput: readonly AuditShardEvent[],
+  slug: string,
+  unitMajor = false,
+  unit?: string,
+  preSorted = false,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -10496,41 +19706,52 @@ export function latestMainWorkflowStageRunFloorForProject(
     "STAGE_JUMPED",
     "GATE_REJECTED",
   ]);
-  const rows = readAuditShardEvents(projectDir, intent, space)
+  const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
       const stage = auditBlockField(row.block, "Stage");
       if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
         return true;
       }
-      if (row.event === "GATE_REJECTED") return stage === slug;
+      if (row.event === "GATE_REJECTED") {
+        return gateRejectionMatchesAttempt(row.block, slug, unit);
+      }
       return (
         !unitMajor &&
         stage === slug &&
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
       );
-    })
-    .sort((a, b) => {
+    });
+  if (!preSorted) {
+    rows.sort((a, b) => {
       if (a.timestamp !== b.timestamp) {
         return a.timestamp < b.timestamp ? -1 : 1;
       }
       if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
       return a.pos - b.pos;
     });
+  }
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
   const tied = rows.filter((row) => row.timestamp === latestTimestamp);
   if (new Set(tied.map((row) => row.shard)).size > 1) {
     const identity = tied
-      .map((row) =>
-        [
+      .map((row) => {
+        const fields = [
           basename(row.shard),
           row.pos,
           row.event,
           auditBlockField(row.block, "Stage") ?? "",
-        ].join(":"),
-      )
+        ];
+        if (unit !== undefined) {
+          fields.push(
+            auditBlockField(row.block, "Unit") ?? "",
+            auditBlockField(row.block, "Gate Stages") ?? "",
+          );
+        }
+        return fields.join(":");
+      })
       .sort()
       .join("|");
     const digest = createHash("sha256").update(identity).digest("hex").slice(0, 12);
@@ -10562,17 +19783,74 @@ export function swarmConvergedUnits(
   projectDir: string,
   slug: string,
 ): Set<string> {
-  const audit = readAllAuditShards(projectDir);
-  if (!audit) return new Set();
-  const startedAt = latestMainWorkflowStageStarted(audit, slug);
-  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
+  const unreadableShards: string[] = [];
+  const auditRows = readAuditShardEvents(
+    projectDir,
+    undefined,
+    undefined,
+    unreadableShards,
+  );
+  if (unreadableShards.length > 0 || auditRows.length === 0) return new Set();
+  const stageStarts = auditRows
+    .filter(
+      (row) =>
+        row.event === "STAGE_STARTED" &&
+        auditBlockField(row.block, "Stage") === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  const startedAt = stageStarts.at(-1)?.timestamp ?? null;
+  const floor = latestMainWorkflowStageRunFloorFromRows(auditRows, slug);
+  const sourceChain = currentSwarmSourceMergeChain(projectDir, slug);
+  const rowsByUnit = new Map<string, AuditShardEvent[]>();
+  for (const row of auditRows) {
+    if (row.event !== "SWARM_UNIT_CONVERGED") continue;
+    if (auditBlockField(row.block, "Stage") !== slug) continue;
+    if ((auditBlockField(row.block, "Run floor") ?? "") !== floor) continue;
+    if (startedAt && row.timestamp < startedAt) continue;
+    const unit = auditBlockField(row.block, "Unit name");
+    if (!unit) continue;
+    const rows = rowsByUnit.get(unit) ?? [];
+    rows.push(row);
+    rowsByUnit.set(unit, rows);
+  }
   const converged = new Set<string>();
-  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
-    if (auditBlockField(block, "Stage") !== slug) continue;
-    if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
-    if (startedAt && timestamp < startedAt) continue;
-    const unit = auditBlockField(block, "Unit name");
-    if (unit) converged.add(unit);
+  for (const [unit, rows] of rowsByUnit) {
+    rows.sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+    const latestTimestamp = rows.at(-1)?.timestamp;
+    if (!latestTimestamp) continue;
+    const latest = rows.filter((row) => row.timestamp === latestTimestamp);
+    const identities = new Set(
+      latest.map((row) =>
+        [
+          auditBlockField(row.block, "Batch number") ?? "",
+          auditBlockField(row.block, "Source Fingerprint") ?? "",
+          auditBlockField(row.block, "Source Commit") ?? "",
+          auditBlockField(row.block, "Source Freshness Bypass") ?? "",
+        ].join("\0")
+      ),
+    );
+    if (
+      new Set(latest.map((row) => row.shard)).size > 1 &&
+      identities.size !== 1
+    ) continue;
+    const block = latest.at(-1)?.block;
+    if (!block) continue;
+    const sourceKind = swarmConvergenceSourceKind(block);
+    if (sourceKind === "invalid") continue;
+    if (
+      sourceKind === "bound" &&
+      (sourceChain.state !== "ready" || !sourceChain.units.has(unit))
+    ) continue;
+    converged.add(unit);
   }
   return converged;
 }
@@ -10592,6 +19870,8 @@ export function currentSwarmAttemptObligations(
     projectDir,
     slug,
     false,
+    undefined,
+    undefined,
     intent,
     space,
   );
@@ -10601,8 +19881,7 @@ export function currentSwarmAttemptObligations(
       auditBlockField(row.block, "Stage") === slug &&
       auditBlockField(row.block, "Run floor") === floor &&
       ((row.event === "SWARM_UNIT_CONVERGED" &&
-        (auditBlockField(row.block, "Source Commit") !== null ||
-          auditBlockField(row.block, "Source Freshness Bypass") !== null)) ||
+        swarmConvergenceSourceKind(row.block) !== "legacy") ||
         row.event === "SWARM_SOURCE_MERGED"),
   );
   const missingObligations = (): SwarmAttemptObligations =>
@@ -10702,6 +19981,8 @@ export function currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     false,
+    undefined,
+    undefined,
     intent,
     space,
   );
@@ -10797,6 +20078,8 @@ export function currentSwarmSourceMergeChain(
     projectDir,
     slug,
     false,
+    undefined,
+    undefined,
     intent,
     space,
   );
@@ -10974,13 +20257,50 @@ function currentUnitLifecycleRows(
   audit: string,
   slug: string,
   unitMajor: boolean,
+  auditRows?: readonly AuditShardEvent[],
+  stateContent?: string,
 ): UnitLifecycleRow[] {
-  const startedAt = latestMainWorkflowStageStarted(audit, slug);
-  const floor = latestMainWorkflowStageRunFloorForProject(
-    projectDir,
-    slug,
-    unitMajor,
-  );
+  const sourceRows = auditRows ?? readAuditShardEvents(projectDir);
+  const startedAt = auditRows
+    ? sourceRows
+        .filter(
+          (row) =>
+            row.event === "STAGE_STARTED" &&
+            auditBlockField(row.block, "Stage") === slug &&
+            !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+        )
+        .sort((a, b) => {
+          if (a.timestamp !== b.timestamp) {
+            return a.timestamp < b.timestamp ? -1 : 1;
+          }
+          if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+          return a.pos - b.pos;
+        })
+        .at(-1)?.timestamp ?? ""
+    : latestMainWorkflowStageStarted(audit, slug);
+  let teamOwnership = false;
+  try {
+    teamOwnership = isTeamUnitOwnership(
+      stateContent ?? readStateFile(projectDir),
+    );
+  } catch {
+    // No readable state means legacy stage-scoped flooring.
+  }
+  const floorByUnit = new Map<string, string>();
+  const floorFor = (unit: string): string => {
+    const key = teamOwnership ? unit : "";
+    const existing = floorByUnit.get(key);
+    if (existing) return existing;
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      projectDir,
+      slug,
+      unitMajor,
+      teamOwnership ? unit : undefined,
+      sourceRows,
+    );
+    floorByUnit.set(key, floor);
+    return floor;
+  };
   const unitEvents = new Set([
     "UNIT_STARTED",
     "UNIT_PAUSED",
@@ -10988,13 +20308,14 @@ function currentUnitLifecycleRows(
     "UNIT_COMPLETED",
   ]);
   const rows: UnitLifecycleRow[] = [];
-  for (const row of readAuditShardEvents(projectDir)) {
+  for (const row of sourceRows) {
     if (!unitEvents.has(row.event)) continue;
     if (auditBlockField(row.block, "Stage") !== slug) continue;
-    if (auditBlockField(row.block, "Run floor") !== floor) continue;
-    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
     const unit = auditBlockField(row.block, "Unit");
     if (!unit) continue;
+    if (!eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
+    if (auditBlockField(row.block, "Run floor") !== floorFor(unit)) continue;
+    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
     rows.push({
       ts: row.timestamp,
       pos: row.pos,
@@ -11066,6 +20387,112 @@ function unitMajorLifecycleMode(projectDir: string): boolean {
   } catch {
     return false;
   }
+}
+
+export interface UnitLifecycleSnapshot {
+  receipts: Set<string>;
+  checkpoint: {
+    unit: string;
+    state: "in-progress" | "paused";
+    reason: string | null;
+    nextAction: string | null;
+  } | null;
+  inUse: boolean;
+  mode: UnitLifecycleMode;
+}
+
+export function unitLifecycleSnapshot(
+  projectDir: string,
+  slug: string,
+  auditRows: readonly AuditShardEvent[],
+  stateContent: string,
+  options: {
+    artifactFingerprint?: (
+      stage: StageEntry,
+      unit: string,
+    ) => string | null;
+  } = {},
+): UnitLifecycleSnapshot {
+  const unitMajor =
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const rows = currentUnitLifecycleRows(
+    projectDir,
+    "",
+    slug,
+    unitMajor,
+    auditRows,
+    stateContent,
+  );
+  const stage = resolveStage(slug);
+  const receipts = new Set<string>();
+  let sawSerial = false;
+  let sawWave = false;
+  for (const row of rows) {
+    if (auditBlockField(row.block, "Mode") === "wave") sawWave = true;
+    else sawSerial = true;
+    if (row.event !== "UNIT_COMPLETED") {
+      receipts.delete(row.unit);
+      continue;
+    }
+    if (auditBlockField(row.block, "Mode") !== "wave") {
+      receipts.add(row.unit);
+      continue;
+    }
+    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
+    const current =
+      stage === undefined
+        ? null
+        : options.artifactFingerprint
+          ? options.artifactFingerprint(stage, row.unit)
+          : reviewArtifactFingerprint(projectDir, stage, row.unit, {
+              requireRequiredArtifacts: true,
+            });
+    if (
+      recorded !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recorded) &&
+      current === recorded
+    ) {
+      receipts.add(row.unit);
+    } else {
+      receipts.delete(row.unit);
+    }
+  }
+  const latest = new Map<string, { event: string; block: string }>();
+  for (const row of rows) {
+    latest.set(row.unit, { event: row.event, block: row.block });
+  }
+  let checkpoint: UnitLifecycleSnapshot["checkpoint"] = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const final = latest.get(rows[i].unit);
+    if (!final || final.event === "UNIT_COMPLETED") continue;
+    checkpoint = {
+      unit: rows[i].unit,
+      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
+      reason: auditBlockField(final.block, "Reason"),
+      nextAction: auditBlockField(final.block, "Next Action"),
+    };
+    break;
+  }
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  const inUse = auditRows.some(
+    (row) =>
+      unitEvents.has(row.event) &&
+      auditBlockField(row.block, "Stage") === slug,
+  );
+  const mode: UnitLifecycleMode =
+    sawSerial && sawWave
+      ? "mixed"
+      : sawWave
+        ? "wave"
+        : sawSerial
+          ? "serial"
+          : "none";
+  return { receipts, checkpoint, inUse, mode };
 }
 
 export function unitCompletedReceipts(
@@ -11694,7 +21121,7 @@ export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): D
  * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
  * callers that just need the resolved scope name. `preferred` is the caller's
  * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
- * intent birth).
+ * intent creation).
  * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
  * the nominated freeform default (or the sole enabled plugin's first scope) is
  * returned, falling back to `preferred` when nothing can be chosen.
@@ -12219,6 +21646,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "mode",
     "summary_confirmation",
     "reviewer",
+    "review_artifact",
     "reviewer_max_iterations",
     "review_class",
     "for_each",
@@ -12496,10 +21924,32 @@ export function nextInScopeStage(
   return null;
 }
 
-// Parse the "- [x] slug — EXECUTE" / "— SKIP" suffix from Stage Progress. The
-// suffix is set by `aidlc-utility init` per scope + Greenfield/Brownfield
-// overrides, then preserved across stage transitions — it represents the
-// plan, not the current run-state (checkbox letters are separate).
+// Resolve one stage's action in the approved workflow plan. State suffixes
+// include recomposition and project-type overrides, so they take precedence
+// over the stock scope grid.
+export function effectivePlanAction(
+  slug: string,
+  scope: string | null | undefined,
+  stateContent: string | null,
+): "EXECUTE" | "SKIP" | undefined {
+  const stateAction = stateContent
+    ? parseStateStageSuffixes(stateContent).get(slug)
+    : undefined;
+  if (stateAction !== undefined) return stateAction;
+  return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
+}
+
+// A per-unit stage uses one stage-level artifact set when the approved plan
+// excludes the Unit DAG producer.
+export function usesStageLevelPerUnitArtifacts(
+  scope: string | null | undefined,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+}
+
+// Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
+// the approved plan action, independent of the checkbox run state.
 export function parseStateStageSuffixes(
   content: string
 ): Map<string, "EXECUTE" | "SKIP"> {
@@ -12516,6 +21966,35 @@ export function parseStateStageSuffixes(
     m = regex.exec(content);
   }
   return out;
+}
+
+export function unitMajorConstructionStageSlugs(
+  scope: string,
+  stateContent: string,
+  includeCompleted = false,
+): string[] {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return [];
+  const stateOverrides = parseStateStageSuffixes(stateContent);
+  const checkboxStates = new Map(
+    parseCheckboxes(stateContent).map((entry) => [entry.slug, entry.state]),
+  );
+  return loadStageGraph()
+    .filter((stage) => {
+      if (
+        stage.phase !== "construction" ||
+        stage.for_each !== "unit-of-work"
+      ) {
+        return false;
+      }
+      const checkbox = checkboxStates.get(stage.slug);
+      if (checkbox === "skipped") return false;
+      if (checkbox === "completed" && !includeCompleted) return false;
+      return (
+        stateOverrides.get(stage.slug) ?? mapping.stages[stage.slug]
+      ) === "EXECUTE";
+    })
+    .map((stage) => stage.slug);
 }
 
 export function firstInScopeStageOfPhase(
@@ -12564,7 +22043,7 @@ export function stagesInScope(
 //
 // One source of truth for the ceremony a scope (or an arbitrary composer grid)
 // carries: stage counts, approval-gate count, and per-unit fan-out. The routing
-// strings, the birth print, the scope-change output, and the composer validator
+// strings, the creation print, the scope-change output, and the composer validator
 // all read these numbers instead of recomputing them, so the confirm the user
 // sees agrees with the grid the engine runs.
 
@@ -12574,7 +22053,8 @@ export interface ScopeCostSummary {
   skip: number;          // total - execute
   gates: number;         // EXECUTE stages outside initialization; mirrors
                          // computeGate() in aidlc-orchestrate.ts - change together
-  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work
+  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work when
+                         // units-generation EXECUTEs; otherwise they run once
 }
 
 // Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
@@ -12590,6 +22070,7 @@ export function gridCostSummary(
   const byslug = new Map<string, StageEntry>();
   for (const s of loadStageGraph()) byslug.set(s.slug, s);
   const total = Object.keys(stages).length;
+  const hasUnitDag = stages["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
   let perUnitStages = 0;
@@ -12599,7 +22080,9 @@ export function gridCostSummary(
     const node = byslug.get(slug);
     if (!node) continue;
     if (node.phase !== "initialization") gates++;
-    if (isPerUnitStage(node)) perUnitStages++;
+    // Without units-generation there is no Unit DAG, so per-unit stages
+    // degrade to one stage-level pass (aidlc-orchestrate.ts).
+    if (hasUnitDag && isPerUnitStage(node)) perUnitStages++;
   }
   return { total, execute, skip: total - execute, gates, perUnitStages };
 }
@@ -13627,11 +23110,22 @@ export function parseBoltDag(body: string): BoltDagParse {
   }
 
   const names = new Set<string>();
+  const foldedNames = new Map<string, string>();
   for (const u of edges) {
     if (names.has(u.name)) {
       return { ok: false, reason: "malformed", detail: `duplicate unit name: ${u.name}` };
     }
     names.add(u.name);
+    const folded = u.name.toLowerCase();
+    const existing = foldedNames.get(folded);
+    if (existing !== undefined && existing !== u.name) {
+      return {
+        ok: false,
+        reason: "malformed",
+        detail: `case-folding unit name collision: "${existing}" and "${u.name}"`,
+      };
+    }
+    foldedNames.set(folded, u.name);
   }
   for (const u of edges) {
     for (const dep of u.depends_on) {
@@ -13796,7 +23290,7 @@ export function filterProducesByKind(
 // State-schema-version classification (shared by runtime + doctor)
 // -----------------------------------------------------------------------------
 // The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
-// the state-graph schema the workflow was born under. v8 renamed the Inception
+// the state-graph schema the workflow was created under. v8 renamed the Inception
 // `application-design` stage to `domain-design` and inserted `contract-design`,
 // so a pre-v8 state file's stage rows no longer match the compiled graph. An
 // incompatible state must be refused up front by BOTH runtime commands

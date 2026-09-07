@@ -83,8 +83,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -94,11 +101,11 @@ const STATE = join(TOOLS, "aidlc-state.ts");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 const LOG = join(TOOLS, "aidlc-log.ts");
 
-// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
+// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
 // state lands at <record>/aidlc-state.md and audit in per-clone shards under
 // <record>/audit/<host>-<pid>.md, NOT the flat aidlc-docs/. The active-intent
-// cursor follows the born record, so every subsequent gate-start/reject/revise/
-// approve/advance default-resolves to it. Fall back to flat for a not-yet-born
+// cursor follows the created record, so every subsequent gate-start/reject/revise/
+// approve/advance default-resolves to it. Fall back to flat for a not-yet-created
 // project. The checkbox markers + audit event stream are unchanged — only the
 // LOCATION moved.
 function recordDirOf(p: string): string {
@@ -119,7 +126,7 @@ function recordDirOf(p: string): string {
 const statePath = (p: string): string =>
   join(recordDirOf(p), "aidlc-state.md");
 // Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
-// a content read, falling back to the flat audit.md for a not-yet-born project.
+// a content read, falling back to the flat audit.md for a not-yet-created project.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
   if (existsSync(auditDir)) {
@@ -153,6 +160,52 @@ function run(tool: string, args: string[], p: string): CliResult {
     stdout,
     out: `${stdout}${res.stderr ?? ""}`,
   };
+}
+
+function recordRequirementsReview(p: string): void {
+  const artifact = join(
+    recordDirOf(p),
+    "inception",
+    "requirements-analysis",
+    "requirements.md",
+  );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
+  const args = [
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+  ];
+  expect(run(LOG, args, p).status).toBe(0);
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  expect(run(LOG, [...args, "--verdict", "READY"], p).status).toBe(0);
 }
 
 /** `get <field>` -> trimmed stdout (mirrors `bun "$STATE" get "<field>"`). */
@@ -284,16 +337,15 @@ beforeAll(() => {
   // init --scope bugfix (the .sh's `bun "$UTIL" init --scope bugfix`).
   const init = run(UTIL, ["intent-create", "--scope", "bugfix"], proj);
   expect(init.status).toBe(0);
-  // P4: resolve the state path only AFTER init — birth creates the per-intent
+  // P4: resolve the state path only AFTER init - creation creates the per-intent
   // record + active-intent cursor that statePath/recordDirOf follow. Computing
   // it pre-init would resolve the flat aidlc-docs/ fallback (which never exists
-  // for a born project).
+  // for a created project).
   const sp = statePath(proj);
   stateAfterInit = readFileSync(sp, "utf-8");
 
   // Step 1: reviewer receipt, then gate-start [-] -> [?]
-  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"], proj);
-  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"], proj);
+  recordRequirementsReview(proj);
   expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
   stateAfterGateStart = readFileSync(sp, "utf-8");
   // Step 2: reject [?] -> [R], increments Revision Count
@@ -308,8 +360,7 @@ beforeAll(() => {
   // requirements-analysis declares a reviewer; record a fresh terminal review
   // before revise so the §12a gate precondition passes. This test targets
   // the reject/revise transition trail, not the reviewer gate.
-  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"], proj);
-  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"], proj);
+  recordRequirementsReview(proj);
   // Step 3: revise [R] -> [?]
   expect(run(STATE, ["revise", "requirements-analysis"], proj).status).toBe(0);
   stateAfterRevise = readFileSync(sp, "utf-8");

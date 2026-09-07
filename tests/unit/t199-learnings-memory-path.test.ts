@@ -37,7 +37,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   createTestProject,
@@ -47,6 +47,11 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import {
+  createIntent,
+  setActiveIntentCursor,
+  writeSessionBinding,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -167,6 +172,74 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(out.phase).toBe("inception");
     // The diary was resolved: one Interpretations entry -> one candidate.
     expect(out.candidates.length).toBe(1);
+  }, TIMEOUT);
+
+  test("surface uses the session binding when the shared cursor points elsewhere", () => {
+    const pd = mkWorkspaceProject();
+    expect(
+      spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    const boundDiary = join(
+      seededRecordDir(pd),
+      "inception",
+      "user-stories",
+      "memory.md",
+    );
+    mkdirSync(dirname(boundDiary), { recursive: true });
+    writeFileSync(boundDiary, memoryDiary());
+
+    const other = createIntent(pd, "cursor-other", DEFAULT_SPACE, "feature");
+    const otherRecord = join(
+      pd,
+      "aidlc",
+      "spaces",
+      DEFAULT_SPACE,
+      "intents",
+      other.dirName,
+    );
+    writeFileSync(
+      join(otherRecord, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n",
+    );
+    writeFileSync(
+      join(otherRecord, "runtime-graph.json"),
+      JSON.stringify({
+        stages: [{
+          stage_slug: "user-stories",
+          memory_path:
+            `aidlc/spaces/${DEFAULT_SPACE}/intents/${other.dirName}/inception/user-stories/memory.md`,
+        }],
+      }),
+    );
+    const otherDiary = join(
+      otherRecord,
+      "inception",
+      "user-stories",
+      "memory.md",
+    );
+    mkdirSync(dirname(otherDiary), { recursive: true });
+    writeFileSync(
+      otherDiary,
+      "## Interpretations\n- This belongs to the shared cursor only\n",
+    );
+    writeSessionBinding(pd, "session-a", DEFAULT_SPACE, DEFAULT_RECORD_DIR);
+    setActiveIntentCursor(pd, other.dirName, DEFAULT_SPACE);
+
+    const surfaced = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SESSION_OVERRIDE: "session-a" },
+      },
+    );
+    expect(surfaced.status, surfaced.stderr).toBe(0);
+    const out = JSON.parse(surfaced.stdout);
+    expect(out.intent).toBe(DEFAULT_RECORD_DIR);
+    expect(out.candidates).toHaveLength(1);
+    expect(out.candidates[0].summary).toContain("existing auth module");
   }, TIMEOUT);
 
   // ===========================================================================

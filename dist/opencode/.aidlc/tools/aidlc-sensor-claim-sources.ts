@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { errorMessage, visibleMarkdownLines } from "./aidlc-lib.ts";
+import {
+	authoritativeProjectDescription,
+	errorMessage,
+	readProjectDescriptionAuthority,
+	visibleMarkdownLines,
+} from "./aidlc-lib.ts";
 
 interface Flags {
 	stage?: string;
@@ -28,11 +33,13 @@ interface SourceUniverse {
 	answeredQuestions: Set<string>;
 	assumptionsAccepted: boolean;
 	acceptedAssumptions: Set<string>;
+	pastedDocumentPresent: boolean;
 	findings: string[];
 }
 
 interface RecordAuthority {
 	projectDescription: string;
+	pastedDocumentPresent: boolean;
 	scope: string;
 	projectRoot: string;
 	activeSpace: string;
@@ -153,9 +160,10 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 	const findings: string[] = [];
 	const recordRoot = findRecordRoot(stageDir);
 	if (!recordRoot) {
-		return {
-			projectDescription: "",
-			scope: "",
+			return {
+				projectDescription: "",
+				pastedDocumentPresent: false,
+				scope: "",
 			projectRoot: "",
 			activeSpace: "",
 			findings: ["cannot verify source register: aidlc-state.md was not found"],
@@ -171,14 +179,31 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 		);
 	}
 
-	const projectDescription = stateField(stateBody, "Project");
+	let rawProjectDescription = "";
+	try {
+		rawProjectDescription = readProjectDescriptionAuthority(
+			recordRoot,
+			stateBody,
+		).description;
+	} catch (error) {
+		findings.push(
+			`cannot verify source register: ${errorMessage(error)}`,
+		);
+	}
+	const description = authoritativeProjectDescription(rawProjectDescription);
+	if (description.error) {
+		findings.push(`cannot verify source register: ${description.error}`);
+	}
+	const projectDescription = description.error
+		? ""
+		: description.description;
 	const scope = stateField(stateBody, "Scope");
 	const projectRoot = projectRootFor(recordRoot, stateBody);
 	const activeSpace = projectRoot
 		? activeSpaceFor(projectRoot, recordRoot)
 		: "";
 	if (!projectDescription) {
-		findings.push("aidlc-state.md is missing Project authority for [desc]");
+		findings.push("the record is missing authoritative project directions for [desc]");
 	}
 	if (!scope) findings.push("aidlc-state.md is missing Scope authority for [scope]");
 	if (!projectRoot) {
@@ -190,6 +215,7 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 
 	return {
 		projectDescription,
+		pastedDocumentPresent: description.pastedDocumentPresent,
 		scope,
 		projectRoot,
 		activeSpace,
@@ -308,10 +334,11 @@ function parseSourceUniverse(
 	if (!existsSync(questionsPath)) {
 		return {
 			registered: new Set(),
-			answeredQuestions: new Set(),
-			assumptionsAccepted: false,
-			acceptedAssumptions: new Set(),
-			findings: [`questions file missing: ${questionsPath}`],
+				answeredQuestions: new Set(),
+				assumptionsAccepted: false,
+				acceptedAssumptions: new Set(),
+				pastedDocumentPresent: false,
+				findings: [`questions file missing: ${questionsPath}`],
 		};
 	}
 
@@ -321,10 +348,11 @@ function parseSourceUniverse(
 	} catch (error) {
 		return {
 			registered: new Set(),
-			answeredQuestions: new Set(),
-			assumptionsAccepted: false,
-			acceptedAssumptions: new Set(),
-			findings: [
+				answeredQuestions: new Set(),
+				assumptionsAccepted: false,
+				acceptedAssumptions: new Set(),
+				pastedDocumentPresent: false,
+				findings: [
 				`failed to read questions file ${questionsPath}: ${errorMessage(error)}`,
 			],
 		};
@@ -358,13 +386,13 @@ function parseSourceUniverse(
 					value,
 				);
 				const parsed = desc ? parseQuotedValue(desc[1]) : null;
-				if (parsed === null) {
-					findings.push(
-						'[desc] must use Initial description: "<verbatim project description>"',
-					);
+					if (parsed === null) {
+						findings.push(
+							'[desc] must use Initial description: "<authoritative user directions>"',
+						);
 				} else if (parsed !== authority.projectDescription) {
 					findings.push(
-						"[desc] does not exactly match Project in aidlc-state.md",
+						"[desc] does not exactly match the authoritative project description",
 					);
 				} else {
 					valid = true;
@@ -444,10 +472,11 @@ function parseSourceUniverse(
 	return {
 		registered,
 		answeredQuestions,
-		assumptionsAccepted:
-			assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
-		acceptedAssumptions,
-		findings,
+			assumptionsAccepted:
+				assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
+			acceptedAssumptions,
+			pastedDocumentPresent: authority.pastedDocumentPresent,
+			findings,
 	};
 }
 
@@ -1283,9 +1312,15 @@ function inspectDeliverable(
 			}
 		}
 
-		for (const tag of tags) {
-			if (tag === "assumption") continue;
-			if (tag.startsWith("Q")) {
+			for (const tag of tags) {
+				if (tag === "assumption") continue;
+				if (tag === "desc" && universe.pastedDocumentPresent) {
+					findings.push(
+						`${location}: [desc] cannot ground artifacts when the initial request contains <document>; use confirmed [Q<n>]`,
+					);
+					continue;
+				}
+				if (tag.startsWith("Q")) {
 				if (!universe.answeredQuestions.has(tag)) {
 					findings.push(`${location}: [${tag}] has no filled answer`);
 				}

@@ -27,8 +27,8 @@ and gate counts.
 | **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 33 | Comprehensive | Comprehensive | `/aidlc enterprise` |
 | **MVP** | A real first product increment without the Operation phase | 23 / 33 | Standard | Standard | `/aidlc mvp` |
 | **Proof of concept** | Testing feasibility with the smallest useful implementation path | 8 / 33 | Minimal | Minimal | `/aidlc poc` |
-| **Bugfix** | A known defect that needs a focused fix and regression test | 7 / 33 | Minimal | Minimal | `/aidlc bugfix` |
-| **Refactor** | Improving existing code without changing product behavior | 8 / 33 | Minimal | Minimal | `/aidlc refactor` |
+| **Bugfix** | A known defect that needs a focused fix and regression test | 9 / 33 | Minimal | Minimal | `/aidlc bugfix` |
+| **Refactor** | Improving existing code without changing product behavior | 10 / 33 | Minimal | Minimal | `/aidlc refactor` |
 | **Infrastructure** | Environments, IaC, deployment foundations, or cost work | 13 / 33 | Standard | Standard | `/aidlc infra` |
 | **Security patch** | A CVE or focused vulnerability response | 10 / 33 | Minimal | Minimal | `/aidlc security-patch` |
 | **Workshop** | A facilitated training or group delivery session | 26 / 33 | Standard | Minimal | `/aidlc workshop` |
@@ -112,18 +112,19 @@ evidence for a later decision; it is not the production-readiness profile.
 **Choose Bugfix when:** the defect is known and the desired outcome is a focused
 repair with verification.
 
-Bugfix uses 7 stages at Minimal depth. It preserves workspace understanding,
-requirements, Code Generation, and Build and Test while dropping discovery,
-broad design, and Operation work that does not help resolve the defect.
+Bugfix uses 9 stages at Minimal depth. It preserves workspace understanding,
+requirements, Code Generation, Build and Test, and the deployment path while
+dropping discovery, broad design, and unrelated Operation work.
 
 ## `refactor`
 
 **Choose Refactor when:** behavior should stay stable while internal structure,
 maintainability, or technical debt improves.
 
-Refactor uses 8 stages at Minimal depth. It emphasizes understanding the existing
-code, defining the internal change, implementing it, and proving behavior did
-not regress. Use Feature instead if the work changes user-visible behavior.
+Refactor uses 10 stages at Minimal depth. It emphasizes understanding the
+existing code, defining the internal change, implementing it, proving behavior
+did not regress, and carrying the verified result through deployment. Use
+Feature instead if the work changes user-visible behavior.
 
 ## `infra`
 

@@ -44,31 +44,27 @@ system behaves, beyond the per-unit construction tests.
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-quality-agent persona from `agents/aidlc-quality-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-quality-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 Read the deployed-environment coordinates from `deployment-log`, the regression
 suite (`test-pro-regression-suite`), and the cross-unit integration results.
 
-### Step 3: Execute the Full Suite
+### Step 2: Execute the Full Suite
 
 Run the regression suite, the edge/boundary tests, and the API positive+negative
 tests against the deployed environment. Capture pass/fail per category.
 
-### Step 4: Generate Reports
+### Step 3: Generate Reports
 
 Write `test-pro-full-suite-results.md` (regression results, per-category
 summary) and `test-pro-edge-api-report.md` (edge + API positive/negative detail,
 with any failures and the requirement each touches).
 
-### Step 5: Open the Approval Gate
+### Step 4: Open the Approval Gate
 
 Run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage test-pro-full-suite --result awaiting-approval`.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :test_tube:
 Review path: this stage's engine-resolved record dir.
@@ -84,10 +80,11 @@ This stage's outputs are markdown artefacts under its record dir. The imported `
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under: Interpretations, Deviations, Tradeoffs, Open questions —
-each with an ISO 8601 timestamp.
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under Interpretations,
+Deviations, Tradeoffs, and Open questions, each with an ISO 8601 timestamp.
 
 Stage files are immutable framework artefacts — the ritual writes into the
 harness, not into this file.

@@ -24,12 +24,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  activeIntent,
-  activeSpace,
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
   errorMessage,
+  hookChildEnv,
   hookDebug,
   hooksHealthDir,
   isClaudeCodeHookInput,
@@ -38,25 +37,28 @@ import {
   readAllAuditShards,
   readSessionIntentUuid,
   recordHookDrop,
+  resolveWorkflowSelection,
   resolveProjectDirFromHook,
   runtimeGraphPath,
+  validSessionId,
   harnessDir,
   writeSessionIntentHandoff,
+  writeSessionBinding,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
 // conversation yet. PostToolUse is the first boundary that carries both the
-// exact host session_id and the successful birth result. Bind from that pair,
+// exact host session_id and the successful creation result. Bind from that pair,
 // never from the workspace-global `.current-session` marker: another
-// pre-workflow conversation may have started more recently. Existing stamps
-// are immutable here so a second, unrelated birth keeps the ending session
-// owned by its original intent.
+// pre-workflow conversation may have started more recently. A second creation
+// moves binding and attribution to the created intent; the transient handoff
+// receipt retains the prior UUID for the Stop-hook continuation boundary.
 function bindCreatedIntentToInvokingSession(
   projectDir: string,
   parsed: ClaudeCodeHookInput,
 ): void {
-  const sessionId = parsed.session_id;
+  const sessionId = validSessionId(parsed.session_id);
   if (!sessionId) return;
   const command = parsed.tool_input?.command ?? "";
   const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
@@ -89,9 +91,9 @@ function bindCreatedIntentToInvokingSession(
     existingUuid: existingUuid ?? "",
   });
   if (!created?.uuid) return;
-  if (existingUuid) {
+  writeSessionBinding(projectDir, sessionId, space, dirName);
+  if (existingUuid && existingUuid !== created.uuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
-    return;
   }
   writeSessionIntentUuid(projectDir, sessionId, created.uuid);
 }
@@ -156,8 +158,11 @@ if (!ideAuditMode) {
 //    would never refresh after a transition (the major). Resolve the active
 //    intent (cursor / lone-intent → null = flat-legacy) and glob-merge its
 //    shards. Exit cleanly before init (no audit yet → "").
-const space = activeSpace(projectDir);
-const intent = activeIntent(projectDir, space) ?? undefined;
+const selection = resolveWorkflowSelection(projectDir, {
+  sessionId: validSessionId(parsed.session_id) ?? undefined,
+});
+const space = selection.space;
+const intent = selection.intent ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
 if (audit.length === 0) {
   hookDebug(projectDir, "rebuild-stage-graph", "exit: audit empty");
@@ -168,7 +173,7 @@ if (audit.length === 0) {
 //    Kept at the bare (workspace-level) health dir to match where --doctor reads
 //    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
 //    is a per-hook liveness probe, not per-intent state.
-const healthDir = hooksHealthDir(projectDir);
+const healthDir = hooksHealthDir(projectDir, intent, space);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "rebuild-stage-graph.last"), isoTimestamp(), "utf-8");
 
@@ -189,7 +194,7 @@ const last3 = blocks.slice(-3);
 //    runtime-graph at gate-start — without it, the gate ritual reads a
 //    stale memory_entries count snapshotted at STAGE_STARTED time
 //    (before the orchestrator wrote any §13 entries).
-const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
+const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
 if (!hasTransition) {
@@ -239,6 +244,7 @@ try {
   const args = ["run", runtimeTs, "compile"];
   const result = spawnSync("bun", args, {
     cwd: projectDir,
+    env: hookChildEnv(projectDir, parsed.session_id),
     timeout: 30_000,
     stdio: ["ignore", "pipe", "pipe"],
   });

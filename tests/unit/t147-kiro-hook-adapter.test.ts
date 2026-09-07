@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -22,6 +22,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -37,7 +38,12 @@ import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
+  markSubagentInflight,
   readIntentRegistry,
+  sanitizeHarnessPlainText,
+  splitKiroCommandArgs,
+  subagentInflightMarkerPath,
+  writeActiveDirectiveMarker,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
@@ -155,6 +161,7 @@ function runAdapter(
   target: string,
   payload: unknown,
   extraArgs: string[] = [],
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
@@ -167,7 +174,12 @@ function runAdapter(
       cwd: projectDir,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      env: {
+        ...process.env,
+        AIDLC_UNATTENDED: undefined,
+        CLAUDE_PROJECT_DIR: projectDir,
+        ...envOverrides,
+      } as NodeJS.ProcessEnv,
       timeout: 30_000,
     },
   );
@@ -206,12 +218,38 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     `$1code-generation`,
   );
   writeFileSync(seededStateFile(dir), state, "utf-8");
+  writeActiveDirectiveMarker(dir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit,
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
   });
 }
 
 describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
+  test("unattended prompt submit does not mint HUMAN_TURN", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+      };
+      expect(
+        runAdapter(dir, "verb-intercept", payload, [], {
+          AIDLC_UNATTENDED: "1",
+        }).code,
+      ).toBe(0);
+      expect(readAudit(dir)).not.toContain("HUMAN_TURN");
+      expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
@@ -231,7 +269,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const original = readIntentRegistry(dir)[0];
       const created = createIntent(dir, "new-work", "default", "bugfix");
       const sessionId = "kiro-handoff-session";
-      writeSessionIntentUuid(dir, sessionId, original.uuid);
+      writeSessionIntentUuid(dir, sessionId, created.uuid);
       writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
 
       const r = runAdapter(dir, "continue-workflow", {
@@ -270,8 +308,35 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
       expect(r.stderr).toContain("unit todo-core");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1bb: plan-approval guard blocks native Kiro write and shell mutation payloads", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      for (const payload of [
+        {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "fs_write",
+          tool_input: { path: join(dir, "src", "blocked.ts") },
+        },
+        {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { command: "sort input.txt -o src/blocked.txt" },
+        },
+      ]) {
+        const r = runAdapter(dir, "plan-approval-guard", payload);
+        expect(r.code).toBe(2);
+        expect(r.stderr).toContain("Code generation cannot");
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -342,7 +407,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           cwd: dir,
         });
         expect(r.code, `payload-${index}`).toBe(2);
-        expect(r.stderr, `payload-${index}`).toContain("plan-approval guard");
+        expect(r.stderr, `payload-${index}`).toContain("Code generation cannot start");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -366,7 +431,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -391,7 +456,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -462,6 +527,174 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("3a: terminal utility output stays UTF-8 and drops only terminal controls", () => {
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        [
+          'process.stdout.write("Unicode: ─ ✓ █▒ ⇄\\n");',
+          'process.stdout.write("Path: C:\\\\work\\\\file.txt; literal: \\\\\\\\x1b[31m\\n");',
+          'process.stdout.write("\\u001b[31mred\\u001b[0m\\n");',
+          'process.stdout.write("\\u001b]633;P;Cwd=C:\\\\shell\\\\noise\\u0007");',
+          'process.stdout.write("after-osc\\u0008\\n");',
+          'process.stderr.write("stderr: → preserved\\n");',
+          "process.exit(7);",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const r = runAdapter(dir, "verb-intercept", {
+        cwd: dir,
+        prompt: "/aidlc --status",
+      });
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(r.stdout).toContain("Path: C:\\work\\file.txt");
+      expect(r.stdout).toContain("literal: \\\\x1b[31m");
+      expect(r.stdout).toContain("red");
+      expect(r.stdout).toContain("after-osc");
+      expect(r.stdout).toContain("stderr: → preserved");
+      expect(r.stdout).not.toContain("\u001b");
+      expect(r.stdout).not.toContain("\u0008");
+      expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3b: plain-text sanitizer drops unterminated 7-bit and 8-bit controls", () => {
+    for (const introducer of ["\u001b[", "\u009b"]) {
+      expect(sanitizeHarnessPlainText(`before${introducer}31`)).toBe("before");
+    }
+    for (const introducer of [
+      "\u001bP",
+      "\u001bX",
+      "\u001b]",
+      "\u001b^",
+      "\u001b_",
+      "\u0090",
+      "\u0098",
+      "\u009d",
+      "\u009e",
+      "\u009f",
+    ]) {
+      expect(
+        sanitizeHarnessPlainText(`before${introducer}terminal-payload`),
+      ).toBe("before");
+    }
+  });
+
+  test("3c: terminal dispatch preserves unquoted, quoted, and UNC Windows paths", () => {
+    const dir = scratchProject(true);
+    try {
+      const argvPath = join(dir, "terminal-argv.json");
+      writeFileSync(
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
+          'process.stdout.write("ok\\n");',
+        ].join("\n"),
+        "utf-8",
+      );
+      for (const [prompt, expected] of [
+        [
+          String.raw`/aidlc --doctor --export --output C:\temp\diag`,
+          String.raw`C:\temp\diag`,
+        ],
+        [
+          String.raw`/aidlc --doctor --export --output "C:\Program Files\diag"`,
+          String.raw`C:\Program Files\diag`,
+        ],
+        [
+          String.raw`/aidlc --doctor --export --output \\server\share\diag`,
+          String.raw`\\server\share\diag`,
+        ],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--export", "--output", expected]);
+      }
+
+      const trailing = runAdapter(dir, "verb-intercept", {
+        cwd: dir,
+        prompt:
+          String.raw`/aidlc --doctor --output C:\temp\ --export`,
+      });
+      expect(trailing.code).toBe(0);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--output",
+        "C:\\temp\\",
+        "--export",
+      ]);
+
+      for (const [prompt, expected] of [
+        [
+          '/aidlc --doctor --output "C:\\" --export',
+          "C:\\",
+        ],
+        [
+          '/aidlc --doctor --output "C:\\Program Files\\diag\\" --export',
+          "C:\\Program Files\\diag\\",
+        ],
+        [
+          String.raw`/aidlc --doctor --output .\diag\ --export`,
+          ".\\diag\\",
+        ],
+        [
+          '/aidlc --doctor --output "out\\" --export',
+          "out\\",
+        ],
+        [
+          String.raw`/aidlc --doctor --output out\ --export`,
+          "out\\",
+        ],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--output", expected, "--export"]);
+      }
+
+      expect(
+        splitKiroCommandArgs(String.raw`one\ argument "a\"b"`),
+      ).toEqual(["one argument", 'a"b']);
+      expect(
+        splitKiroCommandArgs(
+          String.raw`answer\ the\ question\;\ continue\ without\ waiting`,
+        ),
+      ).toEqual(["answer the question; continue without waiting"]);
+
+      for (const [prompt, expected] of [
+        [
+          String.raw`/aidlc --doctor --export --output reports\ 2026`,
+          "reports 2026",
+        ],
+        [
+          String.raw`/aidlc --doctor --export --output /tmp/report\ dir`,
+          "/tmp/report dir",
+        ],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--export", "--output", expected]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("4: todo_list create with [slug] suffix syncs the state file", () => {
     const dir = scratchProject(true);
     try {
@@ -504,7 +737,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
       expect(r.stderr).toContain(
-        "Direct aidlc-state.ts approve is blocked",
+        "Stage status cannot be changed with aidlc-state.ts approve",
       );
       expect(r.stderr).toContain("aidlc-orchestrate.ts report");
     } finally {
@@ -705,6 +938,18 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           `bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard ${config.name}`,
         timeout_ms: 15000,
       });
+      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
+        matcher: "fs_write",
+        command:
+          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        timeout_ms: 15000,
+      });
+      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
+        matcher: "execute_bash",
+        command:
+          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        timeout_ms: 15000,
+      });
     }
   });
 
@@ -725,7 +970,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         ["aidlc-design-agent"],
       );
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+      expect(r.stderr).toContain("only the main workflow session can change stage status or routing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -762,7 +1007,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
-        expect(r.stderr, tool_name).toContain("reviewer read-scope");
+        expect(r.stderr, tool_name).toContain("This review cannot open");
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
@@ -783,7 +1028,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
-        expect(r.stderr, tool_name).toContain("reviewer read-scope");
+        expect(r.stderr, tool_name).toContain("This review cannot open");
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
@@ -816,7 +1061,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         ["aidlc-architecture-reviewer-agent"],
       );
       expect(operations.code).toBe(2);
-      expect(operations.stderr).toContain("reviewer read-scope");
+      expect(operations.stderr).toContain("This review cannot open");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -825,8 +1070,14 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "log-subagent", FIXTURES.postToolUse_subagent);
+      const sessionId = "kiro-log-session";
+      expect(markSubagentInflight(dir, sessionId)).toBe(true);
+      const r = runAdapter(dir, "log-subagent", {
+        ...(FIXTURES.postToolUse_subagent as Record<string, unknown>),
+        session_id: sessionId,
+      });
       expect(r.code).toBe(0);
+      expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
       const audit = readAudit(dir);
       expect(audit).toContain("SUBAGENT_COMPLETED");
       expect(audit).toContain("aidlc-developer-agent");
@@ -923,7 +1174,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const batchAudit = readAudit(dir).slice(beforeBatch.length);
       expect(batch.code).toBe(0);
       expect(batchAudit.match(/\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/g)).toHaveLength(2);
-      expect(batchAudit.match(/\*\*Event\*\*: SENSOR_FIRED/g)).toHaveLength(4);
+      // The document sensors are gate-fired; PostToolUse still reaches the
+      // dispatcher heartbeat but must not evaluate them on intermediate writes.
+      expect(batchAudit.match(/\*\*Event\*\*: SENSOR_FIRED/g) ?? []).toHaveLength(0);
       for (const path of batchPaths) {
         expect(batchAudit).toContain(
           `<project-dir>/${relative(dir, path).replace(/\\/g, "/")}`,
@@ -960,7 +1213,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     try {
       const created = createIntent(dir, "kiro-posttool-create", "default");
-      const sid = "kiro-birth-session";
+      const sid = "kiro-creation-session";
       const r = runAdapter(dir, "rebuild-stage-graph", {
         hook_event_name: "postToolUse",
         cwd: dir,
@@ -989,20 +1242,20 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("10: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3)", () => {
     // M3: the Kiro adapter now forwards session_id when present, so the core
     // hook's per-session→intent STAMP is written (the session→intent record).
-    // Proof: birth an intent (live cursor resolves a uuid), fire session-start
+    // Proof: create an intent (live cursor resolves a uuid), fire session-start
     // with a session_id in the payload, and assert the stamp file
     // aidlc/.aidlc-sessions/<session_id> was written with that uuid. Without
     // the forwarded session_id the core hook's `if (sessionId)` block is inert.
     const dir = scratchProject(true);
     try {
-      const born = createIntent(dir, "kiro-stamp", "default");
+      const created = createIntent(dir, "kiro-stamp", "default");
       const sid = "kiro-session-abc123";
       const r = runAdapter(dir, "session-start", { ...(FIXTURES.agentSpawn as object), session_id: sid });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("AIDLC WORKFLOW ACTIVE");
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(existsSync(stampPath)).toBe(true);
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(born.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(created.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

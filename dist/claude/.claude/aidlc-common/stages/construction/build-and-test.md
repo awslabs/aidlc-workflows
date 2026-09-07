@@ -45,26 +45,31 @@ outputs: build-instructions.md, integration-test-instructions.md, performance-te
 
 # Build and Test
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
-### Step 1: Load Personas
-
-Load aidlc-quality-agent (lead) persona from `agents/aidlc-quality-agent.md` and knowledge from `.claude/knowledge/aidlc-quality-agent/`. Load aidlc-devsecops-agent persona from `agents/aidlc-devsecops-agent.md` and knowledge from `.claude/knowledge/aidlc-devsecops-agent/` for security testing input. Apply aidlc-quality-agent as the primary perspective with aidlc-devsecops-agent providing security testing expertise.
-
-### Step 2: Analyze Testing Requirements
+### Step 1: Analyze Testing Requirements
 
 Read code generation outputs across all units from
 `<record>/construction/*/code-generation/code-summary.md` and per-unit test
 instructions from
 `<record>/construction/*/code-generation/unit-test-instructions.md`. For a
 zero-Unit scope such as `express`, read the stage-level equivalents under
-`<record>/construction/code-generation/`. Review NFR requirements across units
-(if they exist) to identify performance and security testing needs. Catalog all
-test types required.
+`<record>/construction/code-generation/`.
 
-### Step 3: Generate Build Instructions
+Build a source-complete inventory of every measurable quality target before
+generating instructions. Read all applicable stage-level and per-unit sources:
+
+- every artifact under `nfr-requirements/`
+- every artifact under `nfr-design/`
+- every approved `## Testing Contract` in `code-generation-plan.md`
+
+For each target, record a stable target ID (derive one from the source path and
+section when the source has none), source path/section, expected value, the
+check or instruction file that will produce its actual value, and the later
+validation stage that owns it when Build and Test cannot execute it locally.
+Catalog all required test types from this inventory.
+
+### Step 2: Generate Build Instructions
 
 Create `<record>/construction/build-and-test/build-instructions.md`:
 - Dependency installation steps
@@ -73,7 +78,7 @@ Create `<record>/construction/build-and-test/build-instructions.md`:
 - Build verification steps
 - Troubleshooting common build issues
 
-### Step 4-8: Generate Test Instructions (Strategy-Aware)
+### Step 3-7: Generate Test Instructions (Strategy-Aware)
 
 Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
 
@@ -99,16 +104,22 @@ Each instruction file should include:
 
 These are soft guidelines — the LLM can generate additional test types at any strategy level if context demands it (e.g., a Minimal security-patch may still warrant security test instructions).
 
-### Step 9: Generate Build and Test Summary
+### Step 8: Generate Build and Test Summary
 
 Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Overall build status and prerequisites
 - Test type inventory (which test types were generated)
 - Coverage expectations per unit
+- A `## Target Verification Matrix` with one row per target and these columns:
+  Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
+- Each applicable target begins with Actual and Evidence `Pending`, and Verdict
+  `Pending`. `N/A` is valid only when the source inventory found no applicable
+  measurable target; in that case write one explanatory `N/A` row. An
+  applicable target may never use `N/A`.
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
-### Step 10: Execute Build and Tests
+### Step 9: Execute Build and Tests
 
 Attempt to execute the build and test commands documented in the instruction files:
 
@@ -123,23 +134,48 @@ Attempt to execute the build and test commands documented in the instruction fil
    once, never N times. Capture and report stage-level/per-unit pass/fail
    results without double counting.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
-4. **Report results**: Create or update `<record>/construction/build-and-test/test-results.md` with:
+4. **Other applicable checks**: Run every applicable command from performance,
+   security, contract, E2E, accessibility, and other generated instruction
+   files. A check may be deferred only when it requires a deployed or
+   production-like environment AND the current execution plan contains a later
+   validation stage that explicitly owns that check (for example,
+   `performance-validation`). Record the owning stage and expected evidence
+   path. A deferred target remains `Unverified` and cannot contribute to a
+   successful stage result. If no later owning stage is scheduled, the target
+   is `Unverified`, not deferred successfully.
+5. **Finalize and report results**: Create or update
+   `<record>/construction/build-and-test/test-results.md` and the Build and Test
+   Summary on every exit path, including loop-back, halt-and-ask, abort, and
+   accepted failure, with:
    - Build status (success/failure + output)
    - Test results (total, passed, failed, skipped)
    - Failure details (test name, assertion, stack trace)
    - Coverage report (if test framework supports it)
+   - The finalized Target Verification Matrix: actual value, evidence path or
+     command output, owning stage, and exactly one final verdict per applicable
+     target: `Met`, `Not Met`, or `Unverified`. `Pending` is allowed only while
+     Step 8 is being prepared; no `Pending` verdict may remain when Step 9
+     exits.
    - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a
      loop-back): one `### Loop-back N — <ISO timestamp>` entry per attempt,
      carrying Diagnosis / Root-cause stage / Planned fix / Estimated impact. This section
      is APPEND-ONLY and must survive re-runs of this stage (choose Modify,
      never Redo, on loop-back re-entry — Redo would erase the ledger).
 
-**On failure**: If build or tests fail, run the failure-escalation ladder:
+**Failure predicate**: Build and Test has failed when any build or test command
+fails OR any applicable target is `Not Met` or `Unverified`. Before entering
+failure handling, finalize the matrix and summary with all evidence available
+on that exit path. Weakening, relaxing, lowering, or disabling a defined
+quality target is never an acceptable fix.
+
+**On failure**: Run the same failure-escalation ladder for command failures,
+`Not Met` targets, and `Unverified` targets:
 
 1. **In-stage fix (max 2 attempts)** — for root causes inside this stage's own
-   remit (test config, build scripts, environment setup): read the error
-   output, identify the failing configuration or scaffolding, apply the fix,
-   re-run the failing step.
+   remit (test config, build scripts, environment setup, or an executable target
+   check): read the failure evidence, identify the failing configuration or
+   scaffolding, apply the fix, re-run the failing step, and refresh the target
+   matrix.
 2. **Classify and estimate impact** — when in-stage attempts are exhausted OR the
    diagnosis points upstream: decide whether the root cause lies in the
    generated source or test code — regardless of defect size — or an approach
@@ -183,9 +219,11 @@ iteration the replay uses the serial per-unit walk, never the autonomous swarm.
 to move. Stop at rung 2, log the diagnosis + impact-estimated options in
 test-results.md, and present them in this run's isolated-run summary.
 
-**On success**: Update the Build and Test Summary with actual results (not just instructions).
+**On success**: Only when every executed command passed AND every applicable
+target is `Met` (or the inventory has the single explanatory `N/A` row), update
+the Build and Test Summary with a successful readiness result.
 
-### Step 11: Cross-Unit Final Coverage Gate
+### Step 10: Cross-Unit Final Coverage Gate
 
 This is a stage-level gate, not the Construction phase boundary. Enumerate:
 
@@ -205,13 +243,13 @@ pass/fail verdict, per-ID coverage, owning stage/Unit, target file, and every
 uncovered element. Any uncovered ID is a build-and-test finding that must be
 surfaced at the approval gate.
 
-### Step 12: Completion Handoff
+### Step 11: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage build-and-test --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 13: Completion
+### Step 12: Completion
 
 Present completion message and approval gate:
 
@@ -235,48 +273,22 @@ and test commands as part of execution. The instruction artefacts are
 the agent-authored outputs the markdown-shape sensors check; the build
 itself emits exit codes and a results report.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`, `type-check`.
 
-- **`required-sections`** verifies each instruction file contains the
-  registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the prose references the upstream
-  artefacts this stage consumes (`code-generation-plan`,
-  `unit-test-instructions`, `code-summary`).
-- **`type-check`** runs against any TypeScript/TSX code touched as part
-  of test generation (matches `**/*.{ts,tsx}`).
+Upstream targets: `code-generation-plan`, `unit-test-instructions`, `code-summary`.
 
-`linter` is intentionally NOT imported. The canonical lint runs as part
-of the build pipeline this stage drives — double-firing the framework
-sensor would produce redundant findings against the same files. The
-build's own exit code is the load-bearing signal.
+`type-check` inspects matching TypeScript/TSX code touched during test
+generation.
+
+`linter` is intentionally NOT imported. The canonical lint runs in the build
+pipeline this stage drives, so importing it would duplicate findings; the
+build exit code remains the authoritative signal.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.claude/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.

@@ -22,6 +22,7 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -189,8 +190,16 @@ async function resolveHealthDir(): Promise<string> {
 // severity is a leading `[degraded]`/`[advisory]` token on the reason field.
 type DropSeverity = "degraded" | "advisory";
 const _drops: string[] = [];
+const _installedToolPayloadDrops: string[] = [];
+let installedToolPayloadAuditRan = false;
+function dropLine(reason: string, severity: DropSeverity): string {
+  return `${new Date().toISOString()}\t[${severity}] ${reason.replace(/\r?\n/g, " ")}`;
+}
 function recordDrop(reason: string, severity: DropSeverity = "degraded"): void {
-  _drops.push(`${new Date().toISOString()}\t[${severity}] ${reason.replace(/\r?\n/g, " ")}`);
+  _drops.push(dropLine(reason, severity));
+}
+function recordInstalledToolPayloadDrop(reason: string): void {
+  _installedToolPayloadDrops.push(dropLine(reason, "advisory"));
 }
 // Flush drops as the CURRENT run's complete record: OVERWRITE (not append), and
 // REMOVE the file when the run had none. So the drops file always reflects only
@@ -215,6 +224,39 @@ async function flushDrops(): Promise<void> {
     }
   } catch { /* truly non-fatal */ }
   _drops.length = 0;
+}
+
+// Installed test/fixture payloads are a property of ONE harness's installed
+// tools tree, not of whichever plugin happens to compose next. Legacy compose
+// versions recorded no tool-file provenance, so audit them in an ownership-
+// neutral file instead of blaming every current plugin through its per-plugin
+// drops record. The record is keyed by the harness leaf: each compose scans
+// only its own HARNESS_DIR/tools, so a clean compose on one harness (e.g.
+// .codex) must never erase the advisory another harness (.claude) still needs.
+// --doctor scans every *.drops file in the health dir, so scoped names stay
+// visible.
+const HARNESS_KEY = HARNESS_LEAF.replace(/^\./, "").replace(/[^\w.-]/g, "_") || "harness";
+async function flushInstalledToolPayloadDrops(): Promise<void> {
+  if (!installedToolPayloadAuditRan) return;
+  try {
+    const healthDir = await resolveHealthDir();
+    const dropFile = join(
+      healthDir,
+      `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`,
+    );
+    if (_installedToolPayloadDrops.length === 0) {
+      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+    } else {
+      mkdirSync(healthDir, { recursive: true });
+      writeFileSync(
+        dropFile,
+        _installedToolPayloadDrops.map((line) => line + "\n").join(""),
+        { flag: "w" },
+      );
+    }
+  } catch { /* truly non-fatal */ }
+  _installedToolPayloadDrops.length = 0;
+  installedToolPayloadAuditRan = false;
 }
 
 function escapeRegExp(s: string): string {
@@ -459,6 +501,32 @@ function walk(dir: string): string[] {
   return out;
 }
 
+// Destination-tree walk for the installed-tools audit. Unlike walk(), which
+// only ever traverses trusted projection sources, this walks the USER-writable
+// installed tree, which can contain legacy junk including symlinks: lstat every
+// entry and never follow a link, so a circular directory link cannot ELOOP and
+// an external directory link cannot pull unrelated trees into the audit or
+// escape the tools root. A symlink is returned as a leaf so name-based payload
+// matching still sees a linked "tests" dir or "*.test.ts" file. An entry that
+// vanishes mid-scan is skipped; a readdir failure propagates to the caller,
+// which degrades the audit rather than aborting composition.
+function walkInstalledNoFollow(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const e of readdirSync(dir)) {
+    const p = join(dir, e);
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(p);
+    } catch {
+      continue; // vanished mid-scan
+    }
+    if (st.isDirectory()) out.push(...walkInstalledNoFollow(p));
+    else out.push(p);
+  }
+  return out;
+}
+
 type CopyContext = { file: string; rel: string; content: string };
 type CopyPrecheck = (ctx: CopyContext & { dest: string }) => boolean;
 type CopyTransform = (ctx: CopyContext) => string;
@@ -624,6 +692,58 @@ function doctorScriptOwnershipPrecheck(): CopyPrecheck {
     const owner = foreignOwner(relPosix);
     if (!owner) return true;
     drop(relPosix, owner, false);
+    return false;
+  };
+}
+
+function toolsTestPayloadPrecheck(): CopyPrecheck {
+  const targetRoot = join(HARNESS_DIR, "tools");
+  const payloadDirs = new Set(["tests", "__tests__", "fixtures"]);
+  const payloadReason = (relPosix: string): string | null => {
+    const segments = relPosix.split("/");
+    const payloadDir = segments.find((segment) => payloadDirs.has(segment));
+    if (payloadDir) return `it uses the reserved "${payloadDir}/" test/fixture path`;
+    const base = basename(relPosix);
+    return /\.(?:test|spec)\.ts$/.test(base)
+      ? `its basename "${base}" matches a co-located test pattern`
+      : null;
+  };
+  const drop = (relPosix: string, why: string): void => {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" tool file "${relPosix}" is a test/fixture payload: ${why}; plugin tests and fixtures live in top-level "tests/", never inside "tools/" - not copied`,
+      "advisory",
+    );
+  };
+  // Audit the INSTALLED tree independently of the current source projection.
+  // Older compose versions recorded no owning plugin for arbitrary tool files,
+  // so these diagnostics deliberately do not attribute the path to PLUGIN_NAME.
+  // The tree is user-writable: traversal never follows symlinks, and a failed
+  // scan must neither abort composition nor let a partial (hence possibly
+  // clean-looking) result erase the previous record for this harness.
+  installedToolPayloadAuditRan = true;
+  try {
+    for (const file of walkInstalledNoFollow(targetRoot)) {
+      const relPosix = relative(targetRoot, file).replace(/\\/g, "/");
+      const why = payloadReason(relPosix);
+      if (why) {
+        recordInstalledToolPayloadDrop(
+          `installed tool file "${relPosix}" is a test/fixture payload: ${why}; originating plugin is not recorded in legacy installs, so ownership is not attributed; remove the file and re-run compose`,
+        );
+      }
+    }
+  } catch (e) {
+    installedToolPayloadAuditRan = false;
+    _installedToolPayloadDrops.length = 0;
+    recordDrop(
+      `installed tools audit under "${HARNESS_LEAF}/tools" failed (${String(e)}); keeping the previous installed-payload record for this harness - fix the unreadable path and re-run compose`,
+      "degraded",
+    );
+  }
+  return ({ rel }) => {
+    const relPosix = rel.replace(/\\/g, "/");
+    const why = payloadReason(relPosix);
+    if (!why) return true;
+    drop(relPosix, why);
     return false;
   };
 }
@@ -1366,6 +1486,7 @@ function copyTreeNoClobber(
   precheck?: CopyPrecheck,
   transform?: CopyTransform,
   existingHandler?: ExistingCopyHandler,
+  composedPaths?: Set<string>,
 ): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
@@ -1390,6 +1511,7 @@ function copyTreeNoClobber(
         installed,
       }) ?? "compare";
       if (existingAction === "written") {
+        composedPaths?.add(rel.replace(/\\/g, "/"));
         wrote = true;
         continue;
       }
@@ -1402,7 +1524,9 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current === null || !installed.equals(current)) {
+      if (current !== null && installed.equals(current)) {
+        composedPaths?.add(rel.replace(/\\/g, "/"));
+      } else {
         recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
       }
       continue;
@@ -1419,6 +1543,7 @@ function copyTreeNoClobber(
     }
     mkdirSync(join(dest, ".."), { recursive: true });
     writeComposeFile(dest, buf);
+    composedPaths?.add(rel.replace(/\\/g, "/"));
     wrote = true;
   }
   return wrote;
@@ -1475,14 +1600,14 @@ function mergeListField(content: string, field: string, items: string[], target:
 // Append consumes objects (artifact + required + optional conditional_on).
 // Handles block + `consumes: []`.
 type ConsumeEntry = { artifact: string; required: boolean; conditional_on?: string };
-function mergeConsumes(content: string, entries: ConsumeEntry[], target: string, added?: string[]): string {
+function mergeConsumes(content: string, entries: ConsumeEntry[], target: string, added?: ConsumeEntry[]): string {
   if (entries.length === 0) return content;
   const render = (e: ConsumeEntry) =>
     `  - artifact: ${e.artifact}\n    required: ${e.required}` +
     (e.conditional_on ? `\n    conditional_on: ${e.conditional_on}` : "");
   const emptyRe = /^consumes:\s*\[\s*\]\s*$/m;
   if (emptyRe.test(content)) {
-    added?.push(...entries.map((e) => e.artifact));
+    added?.push(...entries.map((entry) => ({ ...entry })));
     return content.replace(emptyRe, "consumes:\n" + entries.map(render).join("\n"));
   }
   // Each entry is `- artifact:` plus every following indented continuation line
@@ -1499,7 +1624,7 @@ function mergeConsumes(content: string, entries: ConsumeEntry[], target: string,
   const existing = new Set([...m[1].matchAll(/- artifact:\s*([\w-]+)/g)].map((x) => x[1]));
   const toAdd = entries.filter((e) => !existing.has(e.artifact));
   if (toAdd.length === 0) return content;
-  added?.push(...toAdd.map((e) => e.artifact));
+  added?.push(...toAdd.map((entry) => ({ ...entry })));
   return content.replace(blockRe, m[1] + toAdd.map(render).join("\n") + "\n");
 }
 
@@ -1597,6 +1722,7 @@ function hashProse(s: string): string {
 }
 
 interface Fragment { plugin: string; anchor: string; order: number; prose: string; }
+interface FragmentRecord { anchor: string; order: number; hash: string; }
 
 // Splice ONE fragment into stage source, idempotently and order-deterministically.
 // Each spliced block is delimited by an open sentinel carrying (plugin, anchor,
@@ -1620,11 +1746,16 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
   // Present already? Skip on hash match; replace the whole block on hash change.
   const mine = content.match(new RegExp(`<!-- plugin:${pE}:${aE}:${f.order}:([0-9a-f]+) -->`));
   if (mine) {
-    if (mine[1] === hash) return content;
     const start = mine.index!;
     const oldClose = closeOf(mine[1]); // the OLD block's own hash-qualified close
     const end = content.indexOf(oldClose, start);
     if (end === -1) { recordDrop(`contribution to ${target}: fragment block for "${f.anchor}" order ${f.order} missing close marker; left as-is`); return content; }
+    if (
+      mine[1] === hash &&
+      content.slice(start, end + oldClose.length) === block
+    ) {
+      return content;
+    }
     return content.slice(0, start) + block + content.slice(end + oldClose.length);
   }
 
@@ -1655,6 +1786,38 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
 let changed = false;
 try {
   const pluginKeySafe = await installedSchemaAccepts("plugin", "probe-name");
+  const pluginFilesManifestPath = join(
+    HARNESS_DIR,
+    "tools",
+    "data",
+    `plugin-files-${PLUGIN_KEY}.json`,
+  );
+  const priorKnowledgeOwnership = (() => {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(pluginFilesManifestPath, "utf-8"),
+      ) as {
+        schema_version?: unknown;
+        plugin?: unknown;
+        knowledge?: unknown;
+      };
+      if (
+        parsed.schema_version !== 1 ||
+        parsed.plugin !== PLUGIN_NAME ||
+        !Array.isArray(parsed.knowledge)
+      ) {
+        return new Set<string>();
+      }
+      return new Set(
+        parsed.knowledge.filter((value): value is string =>
+          typeof value === "string"
+        ),
+      );
+    } catch {
+      return new Set<string>();
+    }
+  })();
+  const composedKnowledge = new Set<string>();
 
   // 1. Copy NEW primitives (no-clobber, token-substituted).
   // Plugin scopes and agents use the plugin prefix in place of core's `aidlc-`
@@ -1717,40 +1880,158 @@ try {
       ) || changed;
     }
   }
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
+  const knowledgeSource = join(PLUGIN_ROOT, "knowledge");
+  const knowledgeTarget = join(HARNESS_DIR, "knowledge");
+  changed = copyTreeNoClobber(
+    knowledgeSource,
+    knowledgeTarget,
+    "knowledge",
+    undefined,
+    undefined,
+    undefined,
+    composedKnowledge,
+  ) || changed;
+  // Composition is no-clobber: source removal does not remove an installed
+  // file, so retain its prior provenance until the installed file is gone.
+  // Byte-identical installed files also establish ownership for upgrades from
+  // compose hooks that predated the ownership sidecar.
+  const ownedKnowledge = new Set(
+    [...priorKnowledgeOwnership].filter((rel) =>
+      existsSync(join(knowledgeTarget, rel))
+    ),
+  );
+  for (const rel of composedKnowledge) ownedKnowledge.add(rel);
+  const pluginFilesManifest = `${
+    JSON.stringify({
+      schema_version: 1,
+      plugin: PLUGIN_NAME,
+      knowledge: [...ownedKnowledge].sort(),
+    }, null, 2)
+  }\n`;
+  try {
+    const current = existsSync(pluginFilesManifestPath)
+      ? readFileSync(pluginFilesManifestPath, "utf-8")
+      : null;
+    if (current !== pluginFilesManifest) {
+      mkdirSync(dirname(pluginFilesManifestPath), { recursive: true });
+      writeComposeFile(pluginFilesManifestPath, pluginFilesManifest);
+    }
+  } catch (e) {
+    recordDrop(
+      `could not write plugin file ownership sidecar ${
+        relative(PROJECT_DIR, pluginFilesManifestPath)
+      }: ${e instanceof Error ? e.message : String(e)} - Minimal context may not recognize recursively composed knowledge`,
+      "advisory",
+    );
+  }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor", sensorManifestNamePrecheck()) || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool", doctorScriptOwnershipPrecheck()) || changed;
+  changed = copyTreeNoClobber(
+    join(PLUGIN_ROOT, "tools"),
+    join(HARNESS_DIR, "tools"),
+    "tool",
+    combinePrechecks(toolsTestPayloadPrecheck(), doctorScriptOwnershipPrecheck()),
+  ) || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
   // Probe ONCE whether the installed engine accepts required_sections — writing
   // it into a stage an older engine can't parse would break every later compile.
   const requiredSectionsSafe = await installedSchemaAccepts("required_sections", ["Probe Section"]);
   const contribRoot = join(PLUGIN_ROOT, "contributions");
-  // Per-plugin sidecar of what compose ACTUALLY merged into core stage source
-  // (structural adds carry no in-file provenance, unlike the sentinel-marked
-  // prose fragments), keyed by target stage. select-plugins reads it to strip
-  // a disabled plugin's merged entries - without it, disable left the plugin's
-  // produces/sensors/consumes/scopes welded into enabled core stages. Accumulated
-  // across re-runs: entries this run added are unioned into any prior record
-  // (an idempotent re-compose adds nothing and must not erase the record).
-  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: string[]; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean };
+  // Per-plugin sidecar of what compose ACTUALLY merged into core stage source,
+  // keyed by target stage. Structural additions need it for disable-time strip;
+  // fragment records let doctor verify sentinel-marked prose after an engine
+  // reinstall. Accumulated across re-runs: structural entries are unioned, while
+  // a fragment upgrade replaces the prior hash for its (anchor, order) identity.
+  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: Array<string | ConsumeEntry>; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean; fragments?: FragmentRecord[] };
+  type StringContribField = "produces" | "sensors" | "scopes" | "required_sections";
   const contribManifestPath = join(HARNESS_DIR, "tools", "data", `plugin-contrib-${PLUGIN_KEY}.json`);
+  let contribManifestLoadError: string | null = null;
   const contribManifest: Record<string, StageContribRecord> = (() => {
+    if (!existsSync(contribManifestPath)) return {};
     try {
       const parsed = JSON.parse(readFileSync(contribManifestPath, "utf-8"));
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch { return {}; }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("expected a JSON object");
+      }
+      if (Object.keys(parsed).length === 0) throw new Error("has no stage records");
+      for (const [target, record] of Object.entries(parsed)) {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          throw new Error(`target ${target} must contain an object record`);
+        }
+      }
+      return parsed as Record<string, StageContribRecord>;
+    } catch (e) {
+      contribManifestLoadError = e instanceof Error ? e.message : String(e);
+      return {};
+    }
   })();
-  const recordContrib = (target: string, field: keyof StageContribRecord, values: string[]): void => {
+  let contribManifestDirty = false;
+  const contribRecord = (target: string): StageContribRecord => {
+    const current = contribManifest[target];
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      contribManifest[target] = {};
+    }
+    return contribManifest[target];
+  };
+  const recordContrib = (target: string, field: StringContribField, values: string[]): void => {
     if (values.length === 0) return;
-    contribManifest[target] ??= {};
-    const rec = contribManifest[target];
-    if (field === "required_sections_created") return; // set directly, not via list
-    const prior = new Set((rec[field] as string[] | undefined) ?? []);
+    const rec = contribRecord(target);
+    const existing = rec[field];
+    const prior = new Set(
+      Array.isArray(existing)
+        ? existing.filter((value): value is string => typeof value === "string")
+        : [],
+    );
     for (const v of values) prior.add(v);
     (rec[field] as string[]) = [...prior].sort();
   };
-  let contribManifestDirty = false;
+  const recordConsumes = (target: string, values: ConsumeEntry[]): void => {
+    if (values.length === 0) return;
+    const rec = contribRecord(target);
+    const byArtifact = new Map<string, string | ConsumeEntry>();
+    for (const value of Array.isArray(rec.consumes) ? rec.consumes : []) {
+      if (typeof value === "string" && value.length > 0) {
+        byArtifact.set(value, value);
+      } else if (
+        value !== null &&
+        typeof value === "object" &&
+        typeof value.artifact === "string" &&
+        typeof value.required === "boolean" &&
+        (value.conditional_on === undefined || typeof value.conditional_on === "string")
+      ) {
+        byArtifact.set(value.artifact, { ...value });
+      }
+    }
+    for (const value of values) byArtifact.set(value.artifact, { ...value });
+    rec.consumes = [...byArtifact.values()].sort((a, b) =>
+      (typeof a === "string" ? a : a.artifact).localeCompare(
+        typeof b === "string" ? b : b.artifact,
+      )
+    );
+  };
+  const recordFragment = (target: string, fragment: FragmentRecord): void => {
+    const rec = contribRecord(target);
+    const prior = Array.isArray(rec.fragments)
+      ? rec.fragments.filter((entry): entry is FragmentRecord =>
+          entry !== null &&
+          typeof entry === "object" &&
+          typeof entry.anchor === "string" &&
+          Number.isSafeInteger(entry.order) &&
+          typeof entry.hash === "string")
+      : [];
+    const next = [
+      ...prior.filter((entry) =>
+        entry.anchor !== fragment.anchor || entry.order !== fragment.order
+      ),
+      fragment,
+    ].sort((a, b) =>
+      a.anchor.localeCompare(b.anchor) || a.order - b.order || a.hash.localeCompare(b.hash)
+    );
+    if (JSON.stringify(prior) !== JSON.stringify(next)) {
+      rec.fragments = next;
+      contribManifestDirty = true;
+    }
+  };
   // Fragment keys seen across ALL contribution files this run, so a same
   // (target, plugin, anchor, order) arriving from a SECOND file drops-with-log
   // rather than silently last-writer-winning via the hash-upgrade path (round-3).
@@ -1762,7 +2043,15 @@ try {
   // produces/sensors/prose into enabled stages (and undo select-plugins'
   // disable-time strip on the very next session start). The advisory drop at
   // the top of this run already names the select-plugins command to enable.
-  const contribPhases = pluginEnabledBySelection() && existsSync(contribRoot) ? readdirSync(contribRoot) : [];
+  if (contribManifestLoadError) {
+    recordDrop(
+      `contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)} is unreadable or invalid (${contribManifestLoadError}); refusing to replace provenance from an already-composed stage - refresh the stock dist/<harness>/ engine, remove the invalid sidecar, then run plugin sync`,
+    );
+  }
+  const contribPhases =
+    !contribManifestLoadError && pluginEnabledBySelection() && existsSync(contribRoot)
+      ? readdirSync(contribRoot)
+      : [];
   // Installed scope roster for the adds.scopes guards, keyed by frontmatter
   // `name:` (the runtime's scope identity — core files carry the `aidlc-`
   // stem prefix, so filename lookup would miss them). Snapshotted once here:
@@ -1890,7 +2179,7 @@ try {
       // stage (mixed endings). Contribution content is already normalized above.
       let stageContent = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
       const before = stageContent;
-      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: string[] = [], addedScopes: string[] = [], addedSections: string[] = [];
+      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: ConsumeEntry[] = [], addedScopes: string[] = [], addedSections: string[] = [];
       const sectionsMeta: { created?: boolean } = {};
       // adds.scopes — set-union the target stage into this plugin's scopes.
       // Two guard rails, both drop-logged: the scope's identity file must
@@ -1930,12 +2219,11 @@ try {
       }
       recordContrib(target, "produces", addedProduces);
       recordContrib(target, "sensors", addedSensors);
-      recordContrib(target, "consumes", addedConsumes);
+      recordConsumes(target, addedConsumes);
       recordContrib(target, "scopes", addedScopes);
       recordContrib(target, "required_sections", addedSections);
       if (sectionsMeta.created) {
-        contribManifest[target] ??= {};
-        contribManifest[target].required_sections_created = true;
+        contribRecord(target).required_sections_created = true;
       }
       if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedSections.length) {
         contribManifestDirty = true;
@@ -2007,6 +2295,13 @@ try {
         if (seenFragKeys.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${f.plugin}:${f.anchor}:${f.order} (same plugin/anchor/order, possibly across files); dropped`); continue; }
         seenFragKeys.add(key);
         stageContent = spliceFragment(stageContent, f, target);
+        const fragment = { anchor: f.anchor, order: f.order, hash: hashProse(f.prose) };
+        const open = `<!-- plugin:${f.plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
+        const close = `<!-- /plugin:${f.plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
+        const openIdx = stageContent.indexOf(open);
+        if (openIdx !== -1 && stageContent.indexOf(close, openIdx + open.length) !== -1) {
+          recordFragment(target, fragment);
+        }
       }
 
       if (stageContent !== before) { // compare-before-write (review #11)
@@ -2016,15 +2311,16 @@ try {
     }
   }
 
-  // Persist the contribution sidecar so select-plugins can strip this
-  // plugin's merged structural adds on disable. Written only when this run
-  // added something (idempotent re-runs leave the prior record untouched).
+  // Persist structural and fragment provenance when this run changes it.
+  // A prose-only plugin therefore leaves a sidecar that doctor can verify after
+  // a fresh engine distribution overwrites the composed stage source.
   if (contribManifestDirty) {
     try {
       mkdirSync(join(HARNESS_DIR, "tools", "data"), { recursive: true });
       writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
     } catch (e) {
-      recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - disabling this plugin will not strip its merged contributions`, "advisory");
+      recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - doctor cannot verify the composed surface and disabling this plugin will not strip its merged contributions`);
+      rollbackComposeWrites();
     }
   }
 
@@ -2142,6 +2438,7 @@ try {
   // Non-fatal: never break the user's session over a compose failure.
 }
 } finally {
+  await flushInstalledToolPayloadDrops();
   composeOwnsWorkspaceLock = false;
   lockLib.releaseAuditLock(PROJECT_DIR);
 }

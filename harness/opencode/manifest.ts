@@ -77,7 +77,11 @@ const manifest: HarnessManifest = {
   // (not folder-drop stage bundles), so the projection ships the uniform
   // store layout for manual composition. The compose hooks.json wiring is not
   // executable by opencode today — documented limitation.
-  plugin: { manifestDir: ".opencode-plugin", kind: "store" },
+  plugin: {
+    manifestDir: ".opencode-plugin",
+    kind: "store",
+    installRoots: [".opencode"],
+  },
 };
 
 export default manifest;

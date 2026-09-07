@@ -57,7 +57,6 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
-  activeSpace,
   auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
@@ -79,6 +78,7 @@ import {
   parseStageFrontmatter,
   planFilePath,
   resolveProjectDir,
+  resolveWorkflowSelection,
   type ScopeDefinition,
   type StageEntry,
   stageEnabledBySelection,
@@ -121,13 +121,15 @@ export interface RuleResolution {
 // Per-sensor resolution row baked into each stage's sensors_applicable.
 // Pull authoring: the stage's frontmatter `sensors: [<id>]` declares the
 // import; the resolver looks the manifest up by id and copies its
-// capability filter (matches) verbatim. matches is omitted when the
-// manifest declares no path filter (e.g., required-sections,
-// upstream-coverage). The PostToolUse hook reads the snapshotted matches
-// off the graph node — never re-opens the manifest at fire time.
+// dispatch policy and capability metadata verbatim. matches is omitted when
+// the manifest declares no path filter. Runtime dispatchers read this
+// snapshotted binding off the graph node — never re-open the manifest.
 export interface SensorResolution {
   id: string;
   path: string;
+  fire_on: "write" | "gate";
+  default_severity: "advisory" | "blocking";
+  category?: string;
   matches?: string;
 }
 
@@ -186,6 +188,8 @@ export interface GraphStage extends StageEntry {
   // Absent when no review step is configured. Parsed from stage frontmatter
   // `reviewer:` field and carried through to the run-stage directive.
   reviewer?: string;
+  // Required Markdown output that owns the appended reviewer section.
+  review_artifact?: string;
   // reviewer_max_iterations — review cycle cap before escalating to human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
@@ -331,7 +335,9 @@ function memoryDisplayPath(rel: string): string {
  *  `memorySegmentsForSpace`. (The TPL templates dir is this + "templates"; see
  *  `memoryTemplatesDir`.) */
 export function memoryDirFor(projectDir: string, space?: string): string {
-  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)));
+  const resolvedSpace =
+    space ?? resolveWorkflowSelection(projectDir).space;
+  return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
@@ -343,7 +349,9 @@ export function memoryDirFor(projectDir: string, space?: string): string {
  *  gets teamB's templates. Kept here (not hardcoded in the dispatcher) so it
  *  stays byte-aligned with where the packager emits and the resolver reads. */
 export function memoryTemplatesDir(projectDir: string, space?: string): string {
-  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)), "templates");
+  const resolvedSpace =
+    space ?? resolveWorkflowSelection(projectDir).space;
+  return join(projectDir, ...memorySegmentsForSpace(resolvedSpace), "templates");
 }
 
 /** The FRAMEWORK-DEFAULT templates dir — the read-only, engine-shipped middle
@@ -468,6 +476,7 @@ const FIELD_ORDER = [
   "sensors",
   "scopes",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
   "summary_confirmation",
@@ -780,7 +789,15 @@ export function resolveSensorsForStage(
           `Known ids: ${known}`,
       );
     }
-    const entry: SensorResolution = { id: sensor.id, path: sensor.path };
+    const entry: SensorResolution = {
+      id: sensor.id,
+      path: sensor.path,
+      fire_on: sensor.manifest.fire_on,
+      default_severity: sensor.manifest.default_severity,
+    };
+    if (sensor.manifest.category !== undefined) {
+      entry.category = sensor.manifest.category;
+    }
     if (sensor.manifest.matches !== undefined) {
       entry.matches = sensor.manifest.matches;
     }
@@ -827,6 +844,31 @@ export function consumersOf(artifact: string): GraphStage[] {
   return loadGraph().filter((s) =>
     (s.consumes ?? []).some((c) => c.artifact === artifact)
   );
+}
+
+/** Consumed artifacts with more than one loaded producer. Runtime resolution
+ *  selects the first producer by graph load order, so callers can surface this
+ *  ambiguous configuration before that implicit choice affects a workflow. */
+export function consumedArtifactProducerCollisions(): {
+  artifact: string;
+  producers: string[];
+  consumers: string[];
+}[] {
+  const consumedArtifacts = [
+    ...new Set(
+      loadGraph().flatMap((stage) =>
+        (stage.consumes ?? []).map((consume) => consume.artifact)
+      )
+    ),
+  ].sort();
+
+  return consumedArtifacts
+    .map((artifact) => ({
+      artifact,
+      producers: producersOf(artifact).map((stage) => stage.slug),
+      consumers: consumersOf(artifact).map((stage) => stage.slug).sort(),
+    }))
+    .filter(({ producers }) => producers.length >= 2);
 }
 
 /** TPL — the subset of a stage's `produces[]` eligible for a template
@@ -1908,8 +1950,9 @@ export function compileStageGraph(): {
   }
 
   // Resolve per-stage sensor imports. Pull authoring: each stage's
-  // sensors[] list is looked up against the manifest registry; matches
-  // is copied verbatim into the resolved entry. Unknown ids throw —
+  // sensors[] list is looked up against the manifest registry; dispatch
+  // policy, severity, category, and matches are copied into the resolved
+  // entry. Unknown ids throw —
   // authoring errors fail loud at compile, not at fire time.
   const sensorsById = loadSensors();
   for (const stage of stages) {
@@ -2085,6 +2128,7 @@ function buildGraphStage(
   }
   if (parsed.reviewer !== undefined) {
     stage.reviewer = parsed.reviewer;
+    stage.review_artifact = parsed.review_artifact;
     // Default the cap to 2 when a reviewer is declared but no explicit cap is
     // set. The parser (V1) now returns a real number and validateStageFrontmatter
     // (V2) rejects a non-positive-integer cap upstream, so this should always

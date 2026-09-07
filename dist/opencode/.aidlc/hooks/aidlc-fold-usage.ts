@@ -31,7 +31,9 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   resolveProjectDirFromHook,
   isEngineToolCall,
-  stateFilePath,
+  resolveWorkflowSelection,
+  stateFilePathForSelection,
+  validSessionId,
   writeCurrentSessionId,
 } from "../tools/aidlc-lib.ts";
 import { isLifecycleBoundaryCommand } from "./aidlc-state-transition-guard.ts";
@@ -78,7 +80,9 @@ async function main(): Promise<void> {
     const raw: unknown = JSON.parse(input);
     if (raw !== null && typeof raw === "object") {
       const obj = raw as Record<string, unknown>;
-      if (typeof obj.session_id === "string") sessionId = obj.session_id;
+      if (typeof obj.session_id === "string") {
+        sessionId = validSessionId(obj.session_id) ?? "";
+      }
       if (obj.hook_event_name === "PreToolUse") {
         const toolName = typeof obj.tool_name === "string" ? obj.tool_name : "";
         foldMode = isLifecycleBoundaryToolCall(toolName, obj.tool_input)
@@ -99,7 +103,10 @@ async function main(): Promise<void> {
   // file directly. Absent state => null so byStage is not polluted.
   let currentStage: string | null = null;
   try {
-    const statePath = stateFilePath(projectDir);
+    const selection = resolveWorkflowSelection(projectDir, {
+      sessionId: sessionId || undefined,
+    });
+    const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
       currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;
     }

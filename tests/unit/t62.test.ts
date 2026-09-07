@@ -566,10 +566,14 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
     expect(errs(fixture())).toBe("VALID");
   });
 
-  test("reviewer present, cap absent -> valid (cap defaults to 2)", () => {
-    expect(errs({ ...fixture(), reviewer: "aidlc-product-lead-agent" })).toBe(
-      "VALID",
-    );
+  test("reviewer + review_artifact present, cap absent -> valid", () => {
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "aidlc-product-lead-agent",
+        review_artifact: "scope-document",
+      }),
+    ).toBe("VALID");
   });
 
   test("valid reviewer + cap 2 -> valid", () => {
@@ -577,6 +581,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
       errs({
         ...fixture(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "scope-document",
         reviewer_max_iterations: 2,
       }),
     ).toBe("VALID");
@@ -595,6 +600,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
       errs({
         ...fixture(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "scope-document",
         reviewer_max_iterations: "2",
       }),
     ).toContain("reviewer_max_iterations must be a positive integer");
@@ -605,6 +611,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
       errs({
         ...fixture(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "scope-document",
         reviewer_max_iterations: 0,
       }),
     ).toContain("reviewer_max_iterations must be a positive integer");
@@ -615,6 +622,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
       errs({
         ...fixture(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "scope-document",
         reviewer_max_iterations: -3,
       }),
     ).toContain("reviewer_max_iterations must be a positive integer");
@@ -625,6 +633,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
       errs({
         ...fixture(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "scope-document",
         reviewer_max_iterations: 2.5,
       }),
     ).toContain("reviewer_max_iterations must be a positive integer");
@@ -638,7 +647,11 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
 
   test("reviewer not in ctx.agents -> Rule 9 roster error", () => {
     const out = errs(
-      { ...fixture(), reviewer: "ghost-reviewer-agent" },
+      {
+        ...fixture(),
+        reviewer: "ghost-reviewer-agent",
+        review_artifact: "scope-document",
+      },
       { agents: ["aidlc-product-agent", "aidlc-delivery-agent"] },
     );
     expect(out).toContain('reviewer "ghost-reviewer-agent" has no matching');
@@ -647,7 +660,11 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   test("reviewer in ctx.agents -> valid", () => {
     expect(
       errs(
-        { ...fixture(), reviewer: "aidlc-product-lead-agent" },
+        {
+          ...fixture(),
+          reviewer: "aidlc-product-lead-agent",
+          review_artifact: "scope-document",
+        },
         {
           agents: [
             "aidlc-product-agent",
@@ -662,8 +679,12 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   test("without ctx.agents -> reviewer not roster-checked", () => {
     // No ctx → agent-slug lookup skipped (same as lead_agent), so a ghost
     // reviewer still validates as a string.
-    expect(errs({ ...fixture(), reviewer: "ghost-reviewer-agent" })).toBe(
-      "VALID",
-    );
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "ghost-reviewer-agent",
+        review_artifact: "scope-document",
+      }),
+    ).toBe("VALID");
   });
 });

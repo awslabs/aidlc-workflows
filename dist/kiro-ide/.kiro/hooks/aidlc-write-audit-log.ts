@@ -7,7 +7,7 @@
 // active workflow in this cwd) to preserve the existing "only log when
 // relevant" behaviour.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   auditFilePath,
@@ -54,7 +54,9 @@ try {
 }
 
 const tool = parsed.tool_name ?? "";
-const file: string = parsed.tool_input?.file_path ?? "";
+const rawFile: string = parsed.tool_input?.file_path ?? "";
+if (!rawFile) return 0;
+const file = isAbsolute(rawFile) ? rawFile : join(projectDir, rawFile);
 const auditFileValue = file.replace(/\\/g, "/");
 const fileNorm = auditFileValue; // forward-slash form for all path matching below
 
@@ -135,7 +137,7 @@ if (underRecord && fileNorm.length > recordRoot.length) {
 // - Write tool → CREATE only if the file was brand new; otherwise UPDATE
 // PostToolUse fires after the write, so `existsSync` is always true by the
 // time this hook runs. We infer "was this a net-new file?" from the file's
-// mtime equalling its birthtime (within a small epsilon) — true on fresh
+// mtime matching its filesystem creation timestamp (within a small epsilon), true on fresh
 // creation, false on overwrite. This matches the plan's intent that
 // ARTIFACT_CREATED answers "when was this artifact first created?" and
 // Write-overwriting-existing should emit ARTIFACT_UPDATED.
@@ -148,8 +150,9 @@ if (tool === "Edit") {
   try {
     const { statSync } = await import("node:fs");
     const st = statSync(file);
-    // birthtimeMs is monotonic with mtimeMs on fresh creation. If a file was
-    // overwritten, mtime advances past birthtime. Accept 10ms slack for
+    // The filesystem creation timestamp (birthtimeMs) tracks mtimeMs on fresh
+    // creation. If a file was overwritten, mtime advances past that timestamp.
+    // Accept 10ms slack for
     // filesystem timestamp granularity.
     isNew = Math.abs(st.mtimeMs - st.birthtimeMs) < 10;
   } catch {

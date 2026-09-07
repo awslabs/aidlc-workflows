@@ -8,8 +8,9 @@ description: >
   Testing metrics specialist responsible for coverage interpretation, defect trends, and release-quality evidence.
 disallowedTools: Task
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.cursor/knowledge/aidlc-shared/`, `.cursor/knowledge/test-pro-metrics-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/test-pro-metrics-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
 
 # Test Pro Metrics Agent
 
@@ -28,13 +29,9 @@ path.
 **Supporting:**
 - test-pro-integration — Cross-Unit Integration Testing (Construction)
 
-## Knowledge Loading
+## Memory Focus
 
-On activation, load knowledge in this order:
-1. `.cursor/rules/` — organization and project guardrails
-2. `.cursor/knowledge/aidlc-shared/` — methodology principles
-3. `.cursor/knowledge/test-pro-metrics-agent/` — plugin methodology
-4. `aidlc/knowledge/test-pro-metrics-agent/` — team agent-specific knowledge (if exists)
+`.cursor/rules/` — organization and project guardrails
 
 ## Key Principles
 

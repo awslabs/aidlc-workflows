@@ -61,8 +61,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -97,10 +104,10 @@ interface RuntimeGraphShape {
 let proj = "";
 let firstStage = "";
 
-// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/),
+// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/),
 // and aidlc-runtime compile writes runtime-graph.json + audit shards INSIDE that
 // record, not the flat aidlc-docs/. Resolve the record dir from the active-space
-// + active-intent cursors, falling back to the flat layout for a not-yet-born
+// + active-intent cursors, falling back to the flat layout for a not-yet-created
 // project. The graph/audit CONTENT is unchanged — only the LOCATION moved.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
@@ -122,7 +129,7 @@ const graphPathOf = (p: string): string =>
 const statePathOf = (p: string): string =>
   join(recordDirOf(p), "aidlc-state.md");
 // Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
-// a content read, falling back to the flat audit.md for a not-yet-born project.
+// a content read, falling back to the flat audit.md for a not-yet-created project.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
   if (existsSync(auditDir)) {
@@ -180,7 +187,7 @@ beforeAll(() => {
   initOk = init.status === 0;
 
   // First in-flight stage from state.md (the [-] row), exactly as .sh:49.
-  // P4: state lives in the born intent's record, not the flat aidlc-docs/.
+  // P4: state lives in the created intent's record, not the flat aidlc-docs/.
   const state = readFileSync(statePathOf(proj), "utf-8");
   const inProgress = state
     .split("\n")
@@ -211,7 +218,28 @@ beforeAll(() => {
     "--project-dir",
     proj,
   ];
+  const reviewArtifact = join(
+    recordDirOf(proj),
+    "inception",
+    firstStage,
+    "requirements.md",
+  );
+  mkdirSync(dirname(reviewArtifact), { recursive: true });
+  writeFileSync(reviewArtifact, "# Requirements\n");
   run(LOG, reviewArgs);
+  appendFileSync(
+    reviewArtifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
   run(LOG, [
     ...reviewArgs,
     "--verdict",
@@ -254,7 +282,7 @@ beforeAll(() => {
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   graphAfterApprove = readGraph();
   rawBeforeRecompile = readFileSync(graphPathOf(proj), "utf-8");
-  // P4: audit is sharded under the born record's audit/ dir; concat the shards.
+  // P4: audit is sharded under the created record's audit/ dir; concat the shards.
   auditAfterApprove = readAudit(proj);
 
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------

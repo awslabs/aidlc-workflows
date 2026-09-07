@@ -78,6 +78,14 @@ valid choices are shown again; nothing is recorded and the gate remains open.
 
 The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
+Automation that submits prompts without a person present must set
+`AIDLC_UNATTENDED=1` in the driving process. The declaration is opt-in because
+only the driver knows whether a prompt is unattended; without it, prompt-submit
+events retain interactive behavior. With it set, every harness withholds the
+authority-bearing `HUMAN_TURN`, so approval and interview gates continue to
+wait. When a person takes over, unset `AIDLC_UNATTENDED` and submit a fresh
+response. Presence-related refusal messages name the flag when it is still set.
+
 ### Approval Gate Flow
 
 ```mermaid
@@ -120,16 +128,16 @@ flowchart TD
 
     ADD_STAGE --> ADD_EXEC
 
-    style COMPLETE fill:#e8f5e9,stroke:#388e3c
-    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
-    style ASK fill:#bbdefb,stroke:#1565c0
-    style APPROVE fill:#a5d6a7,stroke:#2e7d32
-    style CHANGES fill:#fff9c4,stroke:#f9a825
-    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00
-    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0
-    style ACCEPT fill:#ffccbc,stroke:#bf360c
-    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2
-    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
+    style COMPLETE fill:#e8f5e9,stroke:#388e3c,color:#000
+    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ASK fill:#bbdefb,stroke:#1565c0,color:#000
+    style APPROVE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style CHANGES fill:#fff9c4,stroke:#f9a825,color:#000
+    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00,color:#000
+    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ACCEPT fill:#ffccbc,stroke:#bf360c,color:#000
+    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c,color:#000
 ```
 
 <!-- Text fallback: Stage work completes, report awaiting-approval opens the gate (the engine records STAGE_AWAITING_APPROVAL), and AskUserQuestion presents the approval gate. Approve: report approved with the exact choice so the engine records GATE_APPROVED, completes, and routes; show progress; proceed. Request Changes: report rejected with the exact Request Changes choice and separate feedback (the engine records GATE_REJECTED), check revision count (if <3, note escape hatch coming, revise, report revised to re-open the gate, and re-present; if >=3, Accept-as-is becomes available). Accept as-is: report approved with that exact label. Add Skipped Stage (Ideation/Inception only): recompose the plan. The report calls own the gate's audit trail; no separate log entries are added for the gate prompt or choice. -->

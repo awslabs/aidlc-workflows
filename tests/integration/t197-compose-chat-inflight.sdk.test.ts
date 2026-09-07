@@ -7,7 +7,7 @@
 // path (the SKILL.md first-judgment step: continuation / new-work /
 // plan-reshape):
 //
-//   seed:      an active mid-ideation feature workflow (the born shape).
+//   seed:      an active mid-ideation feature workflow (the post-creation shape).
 //   drive:     `/aidlc can we skip market research? we already know this
 //              market` - no compose verb, no flag, pure conversation.
 //   conductor: classifies the input as a plan-reshape (not a continuation -
@@ -55,7 +55,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
   test(
     "a conversational skip request reaches the gate and lands via the recompose verb; no stage advances",
     async () => {
-      // A real BORN workflow (not a fixture): birth feature scope, so
+      // A real created workflow (not a fixture): create a feature-scope intent, so
       // market-research is a pending grid-EXECUTE stage ahead of the
       // cursor (intent-capture).
       const proj = setupIntegrationProject({
@@ -63,7 +63,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
         stripEnvScope: true,
       });
       try {
-        const birth = Bun.spawnSync({
+        const creation = Bun.spawnSync({
           cmd: [
             process.execPath,
             join(proj, ".claude", "tools", "aidlc-utility.ts"),
@@ -72,7 +72,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           stdout: "pipe",
           stderr: "pipe",
         });
-        expect(birth.exitCode).toBe(0);
+        expect(creation.exitCode).toBe(0);
         const before = readStateFile(proj) ?? "";
         expect(before).toMatch(/- \[ \] market-research — EXECUTE/);
         const cursorBefore = /- \*\*Current Stage\*\*: (.*)/.exec(before)?.[1];

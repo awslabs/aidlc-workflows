@@ -41,8 +41,16 @@
 // Nothing is written under tests/fixtures/**.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmdirSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -57,14 +65,18 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const UTIL_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const STATE_LOCK_STRESS_ROUNDS = Math.max(
+  1,
+  Number.parseInt(process.env.AIDLC_T145_LOCK_STRESS_ROUNDS ?? "1", 10) || 1,
+);
 
 let proj: string;
 
-// P4: init now BIRTHS a per-intent record — state lands at
+// P4: init now CREATES a per-intent record - state lands at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
 // <record>/audit/<host>-<clone>.md (per-clone shards), NOT the flat aidlc-docs/.
-// Resolve the born record from the active-space + active-intent cursors (flat
-// fallback for a not-yet-born project). The concurrency under test is unchanged
+// Resolve the created record from the active-space + active-intent cursors (flat
+// fallback for a not-yet-created project). The concurrency under test is unchanged
 // — the per-intent lock serialises the concurrent writers exactly as before.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
@@ -130,14 +142,44 @@ function stateSync(args: string[], p: string): { status: number; stdout: string;
 /** Record a terminal READY review so a reviewer-bearing stage passes the §12a
  *  gate precondition (these tests target the state lock, not the reviewer gate). */
 function logReview(slug: string, reviewer: string, p: string): void {
+  const artifact = join(recordDirOf(p), "inception", slug, "requirements.md");
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   const args = [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--project-dir", p];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    Bun.spawnSync({
-      cmd: [...args, ...suffix],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  }
+  Bun.spawnSync({
+    cmd: args,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  Bun.spawnSync({
+    cmd: [...args, "--verdict", "READY"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 /**
@@ -198,15 +240,18 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   test("N concurrent `set Revision Count=+1` all land — no lost increments [guard-the-guard]", async () => {
     const N = 20;
     expect(field(proj, "Revision Count")).toBe("0"); // fixture precondition
-    const codes = await fireParallel(
-      proj,
-      Array.from({ length: N }, () => ["set", "Revision Count=+1"]),
-    );
-    // Every writer succeeded (lock serialises; none errors out).
-    expect(codes.every((c) => c === 0)).toBe(true);
-    // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
-    expect(field(proj, "Revision Count")).toBe(String(N));
-  }, 60000);
+    for (let round = 0; round < STATE_LOCK_STRESS_ROUNDS; round++) {
+      const codes = await fireParallel(
+        proj,
+        Array.from({ length: N }, () => ["set", "Revision Count=+1"]),
+      );
+      // Every writer succeeded (lock serialises; none errors out).
+      expect(codes.every((c) => c === 0), `stress round ${round + 1}`).toBe(true);
+      // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
+      expect(field(proj, "Revision Count"), `stress round ${round + 1}`)
+        .toBe(String((round + 1) * N));
+    }
+  }, 300000);
 
   // ---------------------------------------------------------------------------
   // TEST 2 — two concurrent `set` of DISTINCT fields. Both updates must survive

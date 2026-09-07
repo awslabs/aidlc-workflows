@@ -1,7 +1,7 @@
 // Directive schema — the frozen engine↔conductor interface. The engine
 // (aidlc-orchestrate.ts) answers "what's next?" with exactly one typed
 // `Directive`; the conductor reads its `kind` and does the one move it names.
-// This module defines the discriminated union over the 10 kinds the engine can
+// This module defines the discriminated union over the 11 kinds the engine can
 // emit, plus a runtime validator. Sibling of aidlc-stage-schema.ts and
 // aidlc-sensor-schema.ts — same tool-boundary discipline: a refused or
 // malformed directive is a clear signal, not a silent miss.
@@ -67,7 +67,7 @@ export const VALID_PROTOCOL_MODULES = [
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 
-// The 10 kinds, keyed on the `kind` discriminator.
+// The 11 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
   | "run-stage"
@@ -78,7 +78,8 @@ export type DirectiveKind =
   | "print"
   | "error"
   | "done"
-  | "parked";
+  | "parked"
+  | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
 // bundle. The conductor applies rules_content in order and immediately invokes
@@ -135,6 +136,11 @@ export interface RunStagePipeline {
   completed: string[];
 }
 
+export interface LegacyPlanApprovalChoices {
+  approve: string;
+  request_changes: string;
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -152,7 +158,7 @@ export interface RunStageDirective {
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   // Pipeline recovery surface. links is the declared lead→support chain;
   // completed contains current-attempt receipts (repo-qualified as
-  // `<repo>:<agent>` when the intent registers multiple repositories).
+  // `<repo>:<agent>` whenever the intent records repository identity).
   pipeline?: RunStagePipeline;
   // single marks an isolated stage-runner invocation. The conductor branches
   // on this before gate handling, reports with `report --single`, and treats
@@ -173,6 +179,9 @@ export interface RunStageDirective {
   // walking-skeleton gate, which the conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
+  // Present only for team-owned unit-major approval beats. The stage body is
+  // already settled; the conductor opens/reports this unit gate with --unit.
+  unit_gate?: "per-stage" | "unit-end";
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
@@ -183,12 +192,19 @@ export interface RunStageDirective {
   // bundle. On dispatched topologies the conductor passes the already-loaded
   // rule text to every agent brief.
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
+  // Kiro IDE 0.12 has no chat/session id. The engine emits this one-time
+  // capability only to the `next`/`continue` caller that owns legacy planning;
+  // runtime authority stores hashes, never these plaintext labels.
+  legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
   // configured for this stage. See stage-protocol-reviewer.md §12a.
   reviewer?: string;
+  // Required Markdown output that owns the appended reviewer section.
+  review_artifact?: string;
   // reviewer_max_iterations — how many review cycles before escalating to the
   // human. Default 2 when reviewer is present. Absent when no reviewer.
   reviewer_max_iterations?: number;
@@ -245,11 +261,12 @@ export interface RunStageDirective {
   wave?: RunStageWave;
   // consumes_absent: REQUIRED declared inputs whose resolved file does NOT
   // exist on disk at emit time, each annotated with why. `expected: true` =
-  // the producing stage is not on the active scope's path (the scope
-  // deliberately skipped it — absence is by design; substitute available
-  // context, do not invent the artifact). `expected: false` = a producer IS
-  // on the path but the file is still missing (runtime-skipped conditional
-  // producer, or a real gap worth surfacing per stage-protocol-recovery).
+  // the producing stage is not on the active scope's path or every on-path
+  // producer has audit provenance for a conditional runtime skip (absence is
+  // by design; substitute available context, do not invent the artifact).
+  // `expected: false` = an on-path producer was not skipped but the file is
+  // still missing, including a stage marked [S] by a forward jump, so this is
+  // a real gap worth surfacing per stage-protocol-recovery.
   // Optional (`required: false`) consumes never appear here — missing means
   // dropped, not flagged. Omitted entirely when nothing qualifies, and on
   // the ctx-less emit path (no projectDir to check against). Paths with an
@@ -277,6 +294,7 @@ export interface DispatchSubagentDirective {
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   worker: string;
@@ -299,6 +317,7 @@ export interface InvokeSwarmDirective {
   stage?: string;
   stage_file?: string;
   reviewer?: string;
+  review_artifact?: string;
   reviewer_max_iterations?: number;
   // review_class — the stage's DECLARED class, carried for observability.
   // Swarm reviews are exempt from scope caps and run overrides (the reviewer
@@ -315,6 +334,7 @@ export interface InvokeSwarmDirective {
   // conductor's knowledge call, so it supplies --repo from the intent's recorded
   // set). When present, the conductor passes it straight through as `prepare --repo`.
   repo?: string;
+  legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -344,6 +364,12 @@ export interface ReportAskDirective extends AskDirectiveBase {
   response_route?: undefined;
   new_work_description?: undefined;
   proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -351,9 +377,48 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   response_route: "next";
   new_work_description: string;
   proposed_scope: string;
+  /** Existing unselected intent record-dir selectors, when the clone-local cursor is missing. */
+  available_intents?: string[];
+  /** Engine-authored numbered rendering for prose-only harnesses such as Kiro. */
+  numbered_prose_question: string;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
 }
 
-export type AskDirective = ReportAskDirective | NewWorkRoutingAskDirective;
+export interface UnitClaimAskDirective extends AskDirectiveBase {
+  ask_type: "unit-claim";
+  response_route: "claim";
+  claimable_units: string[];
+  claimed_units: Array<{ unit: string; holder: string }>;
+  waiting_units: Array<{ unit: string; blocked_by: string[] }>;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  recovery_choice?: undefined;
+}
+
+export interface LegacyPlanApprovalRecoveryAskDirective
+  extends AskDirectiveBase {
+  ask_type: "legacy-plan-approval-recovery";
+  response_route: "next";
+  recovery_choice: "Recover Plan Approval";
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+}
+
+export type AskDirective =
+  | ReportAskDirective
+  | NewWorkRoutingAskDirective
+  | UnitClaimAskDirective
+  | LegacyPlanApprovalRecoveryAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -404,6 +469,12 @@ export interface StageValidityAdvisory {
   warning: string;
 }
 
+export interface NoticeDirective {
+  kind: "notice";
+  narration?: NarrationField;
+  message: string;
+}
+
 // The Directive union — the engine emits exactly one of these per `next`.
 type DirectivePayload =
   | LoadSteeringDirective
@@ -415,7 +486,8 @@ type DirectivePayload =
   | PrintDirective
   | ErrorDirective
   | DoneDirective
-  | ParkedDirective;
+  | ParkedDirective
+  | NoticeDirective;
 
 /** `stage_validity` is universal and advisory; `kind` still owns routing. */
 export type Directive = DirectivePayload & {
@@ -428,7 +500,7 @@ export type ValidationResult =
 
 // --- Exported constants (imported by tests) ---
 
-// The 10 kinds, in the engine design's catalogue order. Used both for the unknown-kind
+// The 11 kinds, in the engine design's catalogue order. Used both for the unknown-kind
 // error message and as the discriminator allowlist.
 export const VALID_KINDS = [
   "load-steering",
@@ -441,6 +513,7 @@ export const VALID_KINDS = [
   "error",
   "done",
   "parked",
+  "notice",
 ] as const;
 
 // The mode enum carried by run-stage / dispatch-subagent. Mirrors
@@ -465,6 +538,7 @@ const RUN_STAGE_FIELDS = [
   "inline_context_paths",
   "context_warnings",
   "gate",
+  "unit_gate",
   "memory_path",
   "consumes",
   "produces",
@@ -472,6 +546,7 @@ const RUN_STAGE_FIELDS = [
   "sensors_applicable",
   "stage_file",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
   "protocol_modules",
@@ -481,6 +556,7 @@ const RUN_STAGE_FIELDS = [
   "unit",
   "wave",
   "consumes_absent",
+  "legacy_plan_approval_choices",
 ] as const;
 
 const LOAD_STEERING_FIELDS = [
@@ -501,7 +577,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "single" &&
       field !== "wave" &&
       field !== "protocol_modules" &&
-      field !== "swarm_settled",
+      field !== "swarm_settled" &&
+      field !== "legacy_plan_approval_choices",
   ),
   "worker",
 ] as const;
@@ -512,10 +589,12 @@ const INVOKE_SWARM_FIELDS = [
   "stage",
   "stage_file",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
   "protocol_modules",
   "repo",
+  "legacy_plan_approval_choices",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
@@ -525,14 +604,21 @@ const ASK_FIELDS = [
   "response_route",
   "new_work_description",
   "proposed_scope",
+  "available_intents",
+  "numbered_prose_question",
+  "claimable_units",
+  "claimed_units",
+  "waiting_units",
+  "recovery_choice",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
+const NOTICE_FIELDS = ["kind", "message"] as const;
 
 // `narration` is legal on EVERY kind, so it is folded into each allowed-key set
-// centrally rather than repeated in ten literals. A presentation field carries no
+// centrally rather than repeated in eleven literals. A presentation field carries no
 // per-kind meaning: the conductor speaks it when present and works silently when
 // absent, on any kind. Folding it here also means a future emission point can
 // attach a line without touching this file.
@@ -556,6 +642,7 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
   error: withNarration(ERROR_FIELDS),
   done: withNarration(DONE_FIELDS),
   parked: withNarration(PARKED_FIELDS),
+  notice: withNarration(NOTICE_FIELDS),
 };
 
 // --- Validator ---
@@ -600,7 +687,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   }
 
   // Rule 3b: narration is legal on every kind, so it is type-checked once here
-  // rather than in each of the ten switch arms. Optional: absent is the normal
+  // rather than in each of the eleven switch arms. Optional: absent is the normal
   // case and never an error; present-but-not-a-string is, because the conductor
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
@@ -640,14 +727,29 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
+      checkOptionalString(o, "review_artifact", kind, errors);
       checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
       checkOptionalString(o, "review_class", kind, errors);
       checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
       if ("review_class" in o && typeof o.reviewer !== "string") {
         errors.push(`${kind}: review_class requires reviewer`);
       }
+      if (
+        typeof o.reviewer === "string" &&
+        typeof o.review_artifact !== "string"
+      ) {
+        errors.push(`${kind}: reviewer requires review_artifact`);
+      }
+      if (
+        "review_artifact" in o &&
+        typeof o.review_artifact === "string" &&
+        typeof o.reviewer !== "string"
+      ) {
+        errors.push(`${kind}: review_artifact requires reviewer`);
+      }
       checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
+      checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);
@@ -660,9 +762,17 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "response_route", kind, errors);
       checkOptionalString(o, "new_work_description", kind, errors);
       checkOptionalString(o, "proposed_scope", kind, errors);
-      if ("ask_type" in o && o.ask_type !== "new-work-routing") {
+      checkOptionalStringArray(o, "available_intents", kind, errors);
+      checkOptionalString(o, "numbered_prose_question", kind, errors);
+      checkOptionalString(o, "recovery_choice", kind, errors);
+      if (
+        "ask_type" in o &&
+        o.ask_type !== "new-work-routing" &&
+        o.ask_type !== "unit-claim" &&
+        o.ask_type !== "legacy-plan-approval-recovery"
+      ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery, got ${String(o.ask_type)}`,
         );
       }
       if (o.ask_type === "new-work-routing") {
@@ -671,11 +781,74 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
+        checkString(o, "numbered_prose_question", kind, errors);
+        for (const field of [
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} is not valid for new-work-routing`,
+            );
+          }
+        }
+      } else if (o.ask_type === "unit-claim") {
+        if (o.response_route !== "claim") {
+          errors.push(`${kind}: unit-claim response_route must be "claim"`);
+        }
+        checkStringArray(o, "claimable_units", kind, errors);
+        checkUnitClaimRows(o, "claimed_units", "holder", kind, errors);
+        checkUnitClaimRows(o, "waiting_units", "blocked_by", kind, errors);
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "recovery_choice",
+        ] as const) {
+          if (field in o) {
+            errors.push(`${kind}: ${field} is not valid for unit-claim`);
+          }
+        }
+      } else if (o.ask_type === "legacy-plan-approval-recovery") {
+        if (o.response_route !== "next") {
+          errors.push(
+            `${kind}: legacy-plan-approval-recovery response_route must be "next"`,
+          );
+        }
+        if (o.recovery_choice !== "Recover Plan Approval") {
+          errors.push(
+            `${kind}: legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"`,
+          );
+        }
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
+            );
+          }
+        }
       } else {
         for (const field of [
           "response_route",
           "new_work_description",
           "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
         ] as const) {
           if (field in o) {
             errors.push(
@@ -697,6 +870,9 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "parked":
       checkString(o, "reason", kind, errors);
       checkString(o, "stage", kind, errors);
+      break;
+    case "notice":
+      checkString(o, "message", kind, errors);
       break;
     // No default: the union is exhaustive — every member of DirectiveKind has a
     // case above. TS flags a missing case at compile time if a kind is added.
@@ -740,6 +916,7 @@ function checkRunStageShared(
   checkStringArray(o, "rules_in_context", kind, errors);
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
+  checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
   // next_stage: optional-nullable on a run-stage directive. Present as a string
   // names the following in-scope stage; null means this is the final in-scope
@@ -750,11 +927,25 @@ function checkRunStageShared(
   // stage declares a reviewer). Mirror the stage-schema validator: reviewer is
   // an optional string, reviewer_max_iterations an optional positive integer.
   checkOptionalString(o, "reviewer", kind, errors);
+  checkOptionalString(o, "review_artifact", kind, errors);
   checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
   checkOptionalString(o, "review_class", kind, errors);
   checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
   if ("review_class" in o && typeof o.reviewer !== "string") {
     errors.push(`${kind}: review_class requires reviewer`);
+  }
+  if (
+    typeof o.reviewer === "string" &&
+    typeof o.review_artifact !== "string"
+  ) {
+    errors.push(`${kind}: reviewer requires review_artifact`);
+  }
+  if (
+    "review_artifact" in o &&
+    typeof o.review_artifact === "string" &&
+    typeof o.reviewer !== "string"
+  ) {
+    errors.push(`${kind}: review_artifact requires reviewer`);
   }
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);
@@ -764,6 +955,17 @@ function checkRunStageShared(
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.
   checkOptionalString(o, "unit", kind, errors);
+  checkOptionalString(o, "unit_gate", kind, errors);
+  checkEnum(
+    o,
+    "unit_gate",
+    ["per-stage", "unit-end"] as const,
+    kind,
+    errors,
+  );
+  if ("unit_gate" in o && typeof o.unit !== "string") {
+    errors.push(`${kind}: unit_gate requires unit`);
+  }
   // consumes_absent: optional (present only when a declared consume's file is
   // missing at emit time). Each entry must be {path: string, expected: boolean}.
   checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
@@ -877,6 +1079,49 @@ function checkOptionalString(
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${kind}: ${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+function checkOptionalLegacyPlanApprovalChoices(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("legacy_plan_approval_choices" in o)) return;
+  const value = o.legacy_plan_approval_choices;
+  if (!isPlainObject(value)) {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices must be object, got ${describe(value)}`,
+    );
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "approve" && key !== "request_changes") {
+      errors.push(
+        `${kind}: legacy_plan_approval_choices unknown key: ${key}`,
+      );
+    }
+  }
+  const approve = value.approve;
+  const requestChanges = value.request_changes;
+  if (typeof approve !== "string") {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices.approve must be string, got ${describe(approve)}`,
+    );
+  }
+  if (typeof requestChanges !== "string") {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices.request_changes must be string, got ${describe(requestChanges)}`,
+    );
+  }
+  if (typeof approve !== "string" || typeof requestChanges !== "string") return;
+  const approveMatch = /^Approve Plan \[([0-9a-f]{12})\]$/.exec(approve);
+  const changesMatch =
+    /^Request Changes \[([0-9a-f]{12})\]$/.exec(requestChanges);
+  if (!approveMatch || !changesMatch || approveMatch[1] !== changesMatch[1]) {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices must carry matching protected choice labels`,
+    );
   }
 }
 
@@ -1304,12 +1549,52 @@ function checkEnum(
   }
 }
 
+function checkUnitClaimRows(
+  o: Record<string, unknown>,
+  field: string,
+  valueField: "holder" | "blocked_by",
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  const value = o[field];
+  if (!Array.isArray(value)) {
+    errors.push(`${kind}: field ${field} must be an array`);
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const row = value[i];
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      errors.push(`${kind}: ${field}[${i}] must be an object`);
+      continue;
+    }
+    const record = row as Record<string, unknown>;
+    if (typeof record.unit !== "string") {
+      errors.push(`${kind}: ${field}[${i}].unit must be a string`);
+    }
+    if (
+      valueField === "holder" &&
+      typeof record.holder !== "string"
+    ) {
+      errors.push(`${kind}: ${field}[${i}].holder must be a string`);
+    }
+    if (
+      valueField === "blocked_by" &&
+      (
+        !Array.isArray(record.blocked_by) ||
+        !record.blocked_by.every((entry) => typeof entry === "string")
+      )
+    ) {
+      errors.push(`${kind}: ${field}[${i}].blocked_by must be a string array`);
+    }
+  }
+}
+
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 10
+// `bun aidlc-directive.ts` constructs one well-formed example of each of the 11
 // kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 10 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 10 kinds".
+// errors), and exits 0 iff all 11 validate. Satisfies the acceptance check
+// "bun .../aidlc-directive.ts validates the 11 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (domain-design); the others follow the same catalogue table.
@@ -1392,6 +1677,7 @@ if (import.meta.main) {
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
     { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
+    { kind: "notice", message: "Team Unit fan-out is active." },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
     // and the first run-stage of a workflow also carries the conductor persona.
     {

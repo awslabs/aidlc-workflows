@@ -23,8 +23,8 @@
 //            Either way: gate before write, nothing on disk.
 //   beat 2:  codex exec resume --last "Approve" - same session (asserted via
 //            the stderr session id), the conductor completes the write +
-//            birth arc: the intent record, aidlc-state.md, WORKFLOW_STARTED
-//            audited, and the birth's scope resolving through the on-disk
+//            creation arc: the intent record, aidlc-state.md, WORKFLOW_STARTED
+//            audited, and the created intent's scope resolving through the on-disk
 //            registry (`.codex/scopes/aidlc-<name>.md` + scope-grid entry) -
 //            for a CUSTOM grid that file is authored fresh on the sanctioned
 //            path this session.
@@ -226,7 +226,7 @@ function scopeFiles(proj: string): string[] {
 
 describe("t-exec-codex-compose-front - interactive compose over exec + exec resume", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `beat 1 stops at the gate with nothing written; beat 2 resume-approves into birth${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
+    `beat 1 stops at the gate with nothing written; beat 2 resume-approves and creates the intent${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
     () => {
       const { proj, home, root } = setupCodexProject();
       try {
@@ -269,7 +269,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         // Same-session proof: resume continued beat 1's conversation.
         expect(sessionIdOf(b2.stderr)).toBe(b1Session);
 
-        // The approve completed the write + birth arc on disk.
+        // The approve completed the write + creation arc on disk.
         const records = intentRecords(proj);
         expect(records.length).toBe(1);
         const rec = join(proj, "aidlc", "spaces", "default", "intents", records[0]);
@@ -283,14 +283,14 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         expect(audit).toContain("**Event**: WORKFLOW_STARTED");
 
         // The composed scope persisted on its SANCTIONED path, not only in the
-        // env-seam mapping. The state's Scope field names the scope the birth
+        // env-seam mapping. The state's Scope field names the scope the creation
         // resolved against; that name must resolve through the on-disk registry
         // - BOTH halves the composer writes: `.codex/scopes/aidlc-<name>.md`
         // and the `scope-grid.json` entry (a `.md` without a grid entry resolves
         // all-SKIP). For a CUSTOM grid (a name outside the stock set) those
         // files exist only because the composer authored them this session on
         // the granted `.codex/` path - the direct proof the sandbox grant made
-        // the sanctioned write succeed; had `.codex/` stayed EPERM-denied, birth
+        // the sanctioned write succeed; had `.codex/` stayed EPERM-denied, creation
         // could only have limped along on the env-seam mapping and left no
         // sanctioned file for its name.
         const scope = getField(state, "Scope") ?? "";

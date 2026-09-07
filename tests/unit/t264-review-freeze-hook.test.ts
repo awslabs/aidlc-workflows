@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
+// covers: hook:aidlc-review-freeze, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -25,13 +25,31 @@
 // Mechanism = mixed: (a) is in-process import; (b) spawns the real hook and
 // real CLI tools at the process boundary; (c) is text/JSON invariants.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
+  REVIEW_FREEZE_FALLBACK_GUIDANCE,
+  reviewFreezeRecoveryGuidance,
+  shellCommandAltersExecutableResolution,
+  shellCommandInvocationDetails,
+  shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -50,6 +68,8 @@ const DIST_CLAUDE = join(REPO_ROOT, "dist", "claude", ".claude");
 const HOOK = join(DIST_CLAUDE, "hooks", "aidlc-review-freeze.ts");
 const LOG_TOOL = join(DIST_CLAUDE, "tools", "aidlc-log.ts");
 const STATE_TOOL = join(DIST_CLAUDE, "tools", "aidlc-state.ts");
+
+setDefaultTimeout(30_000);
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -71,6 +91,155 @@ const NFR = {
   reviewer: "aidlc-architecture-reviewer-agent",
   produces: ["nfr-requirements"],
 };
+
+test("wrapper value options retain the nested executable and arguments", () => {
+  for (const command of [
+    "env -a git HOME=/alternate git pwn",
+    "env --argv0 git HOME=/alternate git pwn",
+    "env --argv0=git HOME=/alternate git pwn",
+    "command env -a git HOME=/alternate git pwn",
+    "exec -a ignored env HOME=/alternate git pwn",
+    "command exec -a ignored env HOME=/alternate git pwn",
+    "xargs -d : env HOME=/alternate git pwn",
+    "xargs --delimiter : env HOME=/alternate git pwn",
+    "xargs --delimiter=: env HOME=/alternate git pwn",
+    "xargs --eof env HOME=/alternate git pwn",
+    "xargs --eof=STOP env HOME=/alternate git pwn",
+    "xargs --replace env HOME=/alternate git pwn",
+    "xargs --replace=TOKEN env HOME=/alternate git pwn",
+    "xargs --max-lines env HOME=/alternate git pwn",
+    "xargs --max-lines=1 env HOME=/alternate git pwn",
+    "xargs -L 1 env HOME=/alternate git pwn",
+    "xargs --process-slot-var SLOT env HOME=/alternate git pwn",
+    "xargs -J REPL env HOME=/alternate git pwn",
+    "xargs -rt --max-lines env HOME=/alternate git pwn",
+    "ENV.EXE HOME=/alternate GIT.EXE pwn",
+    "\"C:/Program Files/Git/usr/bin/env.exe\" HOME=/alternate \"C:/Program Files/Git/cmd/git.exe\" pwn",
+    String.raw`"C:\Program Files\Git\usr\bin\env.exe" HOME=/alternate "C:\Program Files\Git\cmd\git.exe" pwn`,
+    "env -uHOME HOME=/alternate git pwn",
+    "env -C/tmp git pwn",
+    "env -agit HOME=/alternate git pwn",
+    "env -i0 HOME=/alternate git pwn",
+  ]) {
+    expect(shellCommandInvocations(command), command).toEqual([
+      { name: "git", args: ["pwn"] },
+    ]);
+  }
+});
+
+test("unknown wrapper options remain explicitly ambiguous", () => {
+  expect(
+    shellCommandInvocations(
+      "xargs --future-value SLOT env HOME=/alternate git pwn",
+    ),
+  ).toEqual([{ name: "", args: [], ambiguous: true }]);
+});
+
+test("builtin wrappers recursively expose evaluators", () => {
+  for (const command of [
+    "builtin eval 'printf harmless'",
+    "builtin -- eval 'printf harmless'",
+    "builtin builtin -- eval 'printf harmless'",
+  ]) {
+    expect(shellCommandInvocations(command), command).toEqual([
+      { name: "eval", args: ["printf harmless"] },
+    ]);
+  }
+  expect(shellCommandInvocations("builtin -p eval")).toEqual([
+    { name: "", args: [], ambiguous: true },
+  ]);
+});
+
+test("inspection preserves executable provenance and unwraps multiplexer applets", () => {
+  expect(
+    shellCommandInvocationDetails(
+      "command ./scratch/echo.cmd harmless",
+    ),
+  ).toEqual([
+    {
+      name: "echo",
+      args: ["harmless"],
+      executable: "./scratch/echo.cmd",
+      launchers: ["command"],
+    },
+  ]);
+  expect(
+    shellCommandInvocationDetails("busybox env HOME=/tmp sh -c harmless"),
+  ).toEqual([
+    {
+      name: "sh",
+      args: ["-c", "harmless"],
+      executable: "sh",
+      launchers: ["busybox", "env"],
+    },
+  ]);
+  expect(shellCommandInvocations("toybox rm -rf aidlc")).toEqual([
+    { name: "rm", args: ["-rf", "aidlc"] },
+  ]);
+});
+
+test("inspection marks altered executable lookup and data-driven mutations", () => {
+  for (const command of [
+    "PATH=/tmp rg",
+    "env PATH=/tmp rg",
+    "env PaTh=/tmp rg",
+    "env PATHEXT=.CMD rg",
+    "env -uPATH rg",
+    "env --unset=PATH rg",
+    "env -i rg",
+    "env --ignore-environment rg",
+  ]) {
+    expect(shellCommandInvocationDetails(command), command).toEqual([
+      expect.objectContaining({
+        name: "rg",
+        executableResolutionChanged: true,
+      }),
+    ]);
+  }
+  for (const command of [
+    "PATH=/tmp; rg",
+    "env -S 'PATH=/tmp rg'",
+    "env --split-string='PATHEXT=.CMD rg'",
+  ]) {
+    expect(shellCommandAltersExecutableResolution(command), command).toBe(true);
+  }
+  for (const command of [
+    "HOME=/tmp rg",
+    "MYPATH=/tmp rg",
+    "echo PATH=/tmp",
+    "env --argv0 PATH rg",
+  ]) {
+    expect(shellCommandAltersExecutableResolution(command), command).toBe(false);
+  }
+  expect(shellCommandInvocationDetails("env HOME=/tmp rg")).toEqual([
+    {
+      name: "rg",
+      args: [],
+      executable: "rg",
+      launchers: ["env"],
+    },
+  ]);
+  expect(shellCommandInvocationDetails("xargs rm -rf")).toEqual([
+    {
+      name: "rm",
+      args: ["-rf"],
+      executable: "rm",
+      launchers: ["xargs"],
+      dataDriven: true,
+      dataDrivenMutation: true,
+    },
+  ]);
+  expect(shellCommandInvocationDetails("xargs printf '%s\\n'")).toEqual([
+    {
+      name: "printf",
+      args: ["%s\\n"],
+      executable: "printf",
+      launchers: ["xargs"],
+      dataDriven: true,
+    },
+  ]);
+});
+
 const NONE: ReadonlySet<string> = new Set();
 const ready = { stageVerdict: "READY", unitVerdicts: new Map<string, string>() };
 const notReady = { stageVerdict: "NOT-READY", unitVerdicts: new Map<string, string>() };
@@ -83,19 +252,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     const v = judgeFreeze(RA, raFile, NONE, ready);
     expect(v.block).toBe(true);
     expect(v.stage).toBe("requirements-analysis");
-    // The reason redirects to the gate, not to a retry of the same write.
-    expect(blockReason(v)).toContain("Present the gate instead");
-    expect(blockReason(v)).toContain("terminal receipt ends artifact work");
-    expect(blockReason(v)).toContain(
-      'report --stage "requirements-analysis" --result rejected',
-    );
+    expect(blockReason(v)).toContain("latest review is final");
+    expect(blockReason(v)).toContain("quote it at the gate");
     expect(blockReason(v)).toContain("Request Changes");
-    expect(blockReason(v)).toContain(
-      '--user-input "Request Changes" --reason "<requested changes>"',
-    );
-    expect(blockReason(v)).toContain("wait for a fresh human turn");
-    expect(blockReason(v)).toContain("still in-progress");
-    expect(blockReason(v)).toContain("backfills the missing gate row");
   });
 
   test("blocks under a terminal NOT-READY receipt", () => {
@@ -126,6 +285,90 @@ describe("t264 (a) judgeFreeze decision table", () => {
     const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "NOT-READY", unitVerdicts: new Map([["U03", "NOT-READY"]]) };
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
+  });
+
+  test("only a validated pending recovery request suspends its exact scope", () => {
+    const raFile =
+      "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        stagePending: { recovery: true, suspensionActive: true },
+      }).block,
+    ).toBe(false);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stagePending: { recovery: true, suspensionActive: true },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        sourceStale: false,
+        newestSourceUnit: null,
+        stagePending: {
+          recovery: true,
+          suspensionActive: true,
+          recoveryCause: "source",
+        },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        sourceStale: true,
+        newestSourceUnit: null,
+        stagePending: {
+          recovery: true,
+          suspensionActive: true,
+          recoveryCause: "source",
+        },
+      }).block,
+    ).toBe(false);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        stagePending: { recovery: false, suspensionActive: false },
+      }).block,
+    ).toBe(true);
+
+    const u3 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
+    const u4 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const receipts = {
+      stageVerdict: null,
+      unitVerdicts: new Map([
+        ["U03", "READY"],
+        ["U04", "READY"],
+      ]),
+      unitStale: new Set(["U03"]),
+      unitPending: new Map([
+        ["U03", { recovery: true, suspensionActive: true }],
+      ]),
+    };
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+  });
+
+  test("guidance failures fall back without changing the freeze decision", () => {
+    const guidance = reviewFreezeRecoveryGuidance(
+      "/p",
+      "- [-] requirements-analysis — EXECUTE",
+      "requirements-analysis",
+      () => {
+        throw new Error("injected helper failure");
+      },
+    );
+    expect(guidance).toBe(REVIEW_FREEZE_FALLBACK_GUIDANCE);
+    expect(blockReason(judgeFreeze(RA, raFile, NONE, ready), guidance)).toContain(
+      REVIEW_FREEZE_FALLBACK_GUIDANCE,
+    );
   });
 
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
@@ -194,6 +437,39 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(
       writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
     ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
+    expect(
+      writeTargets("Bash", { command: "find aidlc -depth -delete" }, "/p"),
+    ).toEqual([hostPath("/p/aidlc")]);
+    expect(
+      writeTargets("Bash", { command: "find -H -delete" }, "/p"),
+    ).toEqual([hostPath("/p")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -fprint /a/b.md" }, "/p"),
+    ).toEqual([hostPath("/a/b.md")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -fprintf /tmp/list '%p\\n'" }, "/p"),
+    ).toEqual([hostPath("/tmp/list")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -name '*.tmp'" }, "/p"),
+    ).toEqual([]);
+    expect(
+      writeTargets("Bash", { command: "Remove-Item aidlc -Recurse -Force" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "Remove-Item -Path:aidlc -Recurse" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "Move-Item aidlc scratch" }, "/p"),
+    ).toEqual(expect.arrayContaining([hostPath("/p/aidlc"), hostPath("/p/scratch")]));
+    expect(
+      writeTargets("Bash", { command: "rd /s /q aidlc" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "rsync --delete scratch/ aidlc" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "find aidlc -print0 | xargs -0 rm -rf" }, "/p"),
+    ).toContain(hostPath("/p"));
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
       writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
@@ -211,11 +487,26 @@ function projBeforeGate(): string {
   tempDirs.push(p);
   seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
+  const dir = join(
+    seededRecordDir(p),
+    "inception",
+    "requirements-analysis",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "requirements.md"), "# Requirements\n");
+  writeFileSync(
+    join(dir, "requirements-analysis-questions.md"),
+    "# Requirements Questions\n",
+  );
   return p;
 }
 
 function openGate(p: string): void {
-  const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", p],
@@ -225,6 +516,21 @@ function openGate(p: string): void {
 }
 
 function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
+  const artifact = raArtifact(p);
+  mkdirSync(dirname(artifact), { recursive: true });
+  if (!existsSync(artifact)) {
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+  } else {
+    const current = readFileSync(artifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        artifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   const args = [
     LOG_TOOL,
     "review",
@@ -237,16 +543,37 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     "--project-dir",
     p,
   ];
-  for (const suffix of [[], ["--verdict", verdict]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
-    }
+  const env = {
+    ...process.env,
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(
+      `review completion failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 
 function reject(p: string): void {
-  const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "reject", "requirements-analysis", "--feedback", "change it", "--project-dir", p],
@@ -291,7 +618,12 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const blocked = runHook(p, writePayload(file));
     expect(blocked.code).toBe(2);
     expect(blocked.stderr).toContain("review-freeze");
-    expect(blocked.stderr).toContain("Present the gate instead");
+    expect(blocked.stderr).toContain(
+      "If this is a reviewer suggestion, quote it at the gate",
+    );
+    expect(blocked.stderr).toContain(
+      "tell me what should change and I'll record your Request Changes decision",
+    );
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 
     // A recorded gate rejection resets the receipt floor: the freeze lifts
@@ -306,7 +638,11 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       [STATE_TOOL, "revise", "requirements-analysis", "--project-dir", p],
       {
         encoding: "utf-8",
-        env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+        env: {
+          ...process.env,
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
       },
     );
     if ((revise.status ?? -1) !== 0) {
@@ -423,7 +759,12 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
     openGate(p);
-    const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    const env = {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    };
     const approve = spawnSync(
       BUN,
       [STATE_TOOL, "approve", "requirements-analysis", "--user-input", "Approve", "--project-dir", p],

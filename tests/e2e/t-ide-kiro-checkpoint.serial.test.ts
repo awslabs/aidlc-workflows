@@ -69,12 +69,16 @@ import { cleanupTuiProject, KIRO_IDE_SRC, setupTuiProject } from "../harness/tui
 import {
   autoApprove,
   generateKiroIdeSeed,
+  inspectKiroIdeChatSurfaceDocument,
   KIRO_IDE_BIN,
   launchKiroIde,
   pageTarget,
+  prepareKiroIdeChat,
   removeSeedDir,
+  settleKiroIdeChatSurface,
   snapshotChatDom,
   teardown,
+  type KiroIdeChatSurfaceState,
   typeAndSubmit,
   waitForCdp,
   waitForChatInput,
@@ -159,6 +163,36 @@ function runSetupTool(sandbox: string, tool: string, args: string[]): void {
   }
 }
 
+function runGit(sandbox: string, args: string[]): void {
+  const result = spawnSync("git", ["-C", sandbox, ...args], {
+    encoding: "utf-8",
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed (${result.status ?? "no status"}): ` +
+        `${result.stderr || result.stdout}`,
+    );
+  }
+}
+
+function seedBindableWorkspace(sandbox: string): void {
+  runGit(sandbox, ["init", "-q"]);
+  runGit(sandbox, ["config", "user.email", "t@test"]);
+  runGit(sandbox, ["config", "user.name", "t"]);
+  writeFileSync(
+    join(sandbox, ".gitignore"),
+    ".kiro/\naidlc/\nAGENTS.md\n",
+    "utf-8",
+  );
+  writeFileSync(
+    join(sandbox, "app.ts"),
+    "export const approvalFixture = true;\n",
+    "utf-8",
+  );
+  runGit(sandbox, ["add", "-A"]);
+  runGit(sandbox, ["commit", "-qm", "seed bindable workspace"]);
+}
+
 /** Construct the real gate shape the live journey claims to exercise. */
 function seedApprovalGate(sandbox: string): void {
   seedGateFor(sandbox, COMMITTED_SLUG);
@@ -168,16 +202,67 @@ function seedGateFor(sandbox: string, slug: string): void {
   const phase = slug === COMMITTED_SLUG ? "inception" : "construction";
   const stageDir = join(seededRecordDir(sandbox), phase, slug);
   mkdirSync(stageDir, { recursive: true });
-  writeFileSync(
-    join(stageDir, "requirements.md"),
-    "# Requirements\n\n- Preserve one approval commit per human turn.\n",
-    "utf-8",
-  );
-  writeFileSync(
-    join(stageDir, "requirements-analysis-questions.md"),
-    "# Requirements Analysis Questions\n\n- No open questions.\n",
-    "utf-8",
-  );
+  if (slug === COMMITTED_SLUG) {
+    writeFileSync(
+      join(stageDir, "requirements.md"),
+      "# Requirements\n\n- Preserve one approval commit per human turn.\n",
+      "utf-8",
+    );
+    writeFileSync(
+      join(stageDir, "requirements-analysis-questions.md"),
+      "# Requirements Analysis Questions\n\n- No open questions.\n",
+      "utf-8",
+    );
+  } else {
+    for (const [name, body] of [
+      [
+        "code-generation-plan.md",
+        "# Code Generation Plan\n\n## Scope\n\nKeep the fixture minimal.\n\n## Steps\n\nAdd one source file.\n",
+      ],
+      [
+        "unit-test-instructions.md",
+        "# Unit Test Instructions\n\n## Coverage\n\nVerify the approval guard.\n\n## Commands\n\nRun the focused fixture test.\n",
+      ],
+      [
+        "code-summary.md",
+        "# Code Summary\n\n## Changes\n\nAdded the approval fixture.\n\n## Verification\n\nThe source receipt is bindable.\n",
+      ],
+    ]) {
+      writeFileSync(join(stageDir, name), body, "utf-8");
+    }
+    writeFileSync(
+      join(stageDir, "traceability.json"),
+      `${JSON.stringify(
+        {
+          stage: "code-generation",
+          upstream_ids: ["approval-fixture"],
+          coverage: [
+            {
+              id: "approval-fixture",
+              status: "OK",
+              target: "app.ts",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      join(stageDir, "source-manifest.json"),
+      `${JSON.stringify(
+        {
+          stage: "code-generation",
+          version: 1,
+          writes: [{ path: "app.ts" }],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+  }
   const reviewer =
     slug === COMMITTED_SLUG
       ? "aidlc-product-lead-agent"
@@ -192,6 +277,24 @@ function seedGateFor(sandbox: string, slug: string): void {
     "1",
   ];
   runSetupTool(sandbox, "aidlc-log.ts", reviewArgs);
+  appendFileSync(
+    join(
+      stageDir,
+      slug === COMMITTED_SLUG
+        ? "requirements.md"
+        : "code-generation-plan.md",
+    ),
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
   runSetupTool(sandbox, "aidlc-log.ts", [...reviewArgs, "--verdict", "READY"]);
   runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", slug]);
 }
@@ -225,6 +328,46 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
+
+const CLEAR_CHAT_SURFACE: KiroIdeChatSurfaceState = {
+  chatFrameCount: 1,
+  blockedHitPoints: [],
+  blockingOverlays: [],
+};
+const MIGRATION_BLOCKED_CHAT_SURFACE: KiroIdeChatSurfaceState = {
+  chatFrameCount: 1,
+  blockedHitPoints: [
+    {
+      x: 852,
+      y: 666,
+      hitTag: "DIV",
+      hitClassName: "welcome-carousel-modal-block",
+      hitText:
+        "We've upgraded how sessions are stored " +
+        "Migrate your previous sessions to keep them accessible.",
+    },
+  ],
+  blockingOverlays: [
+    {
+      text:
+        "We've upgraded how sessions are stored " +
+        "Migrate your previous sessions to keep them accessible. " +
+        "Go to documentation Remind me later",
+      className: "welcome-carousel-modal-block",
+      role: "dialog",
+      ariaModal: "true",
+      rect: { x: 0, y: 0, width: 1024, height: 768 },
+    },
+  ],
+};
+
+async function assertChatSurfaceUnblocked(port: number): Promise<string | null> {
+  const prepared = await prepareKiroIdeChat(port);
+  expect(prepared.surface.chatFrameCount).toBeGreaterThan(0);
+  expect(prepared.surface.blockingOverlays).toHaveLength(0);
+  expect(prepared.surface.blockedHitPoints).toHaveLength(0);
+  return prepared.dismissed;
+}
 
 // ---------------------------------------------------------------------------
 // Disk-only assertion helpers (never assert on chat prose).
@@ -274,6 +417,149 @@ function gateOpenedCountFor(sandbox: string, slug: string): number {
   return auditEventCountFor(sandbox, "STAGE_AWAITING_APPROVAL", slug);
 }
 
+describe("kiro-ide-driver startup overlay reconciliation", () => {
+  test("the real DOM probe rejects a non-ARIA element intercepting the chat iframe", () => {
+    const rect = {
+      x: 688,
+      y: 35,
+      left: 688,
+      top: 35,
+      right: 1016,
+      bottom: 746,
+      width: 328,
+      height: 711,
+      toJSON: () => ({}),
+    };
+    const blocker = {
+      tagName: "DIV",
+      className: "opaque-startup-overlay",
+      innerText: "Blocking startup overlay",
+      textContent: "Blocking startup overlay",
+    } as unknown as Element;
+    const frame = {
+      tagName: "IFRAME",
+      className: "webview ready",
+      getBoundingClientRect: () => rect,
+      contains: () => false,
+    } as unknown as Element;
+    const doc = {
+      querySelectorAll: (selector: string) =>
+        selector === "[aria-modal='true']" ? [] : [frame],
+      elementFromPoint: () => blocker,
+    } as unknown as Document;
+    const styleOf = (() => ({
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      pointerEvents: "auto",
+    })) as unknown as typeof getComputedStyle;
+
+    const surface = inspectKiroIdeChatSurfaceDocument(doc, styleOf);
+
+    expect(surface.chatFrameCount).toBe(1);
+    expect(surface.blockingOverlays).toHaveLength(0);
+    expect(surface.blockedHitPoints).toHaveLength(2);
+    expect(surface.blockedHitPoints.map((hit) => hit.hitClassName)).toEqual([
+      "opaque-startup-overlay",
+      "opaque-startup-overlay",
+    ]);
+  });
+
+  test("dismisses the current session-migration modal and waits for a clear chat hit-test", async () => {
+    const surfaces = [MIGRATION_BLOCKED_CHAT_SURFACE, CLEAR_CHAT_SURFACE];
+    let now = 0;
+    let dismissCalls = 0;
+
+    const prepared = await settleKiroIdeChatSurface(
+      {
+        inspect: async () => surfaces.shift() ?? CLEAR_CHAT_SURFACE,
+        dismissMigration: async () => {
+          dismissCalls++;
+          return "clicked:remind me later";
+        },
+        wait: async (ms) => {
+          now += ms;
+        },
+        now: () => now,
+      },
+      20,
+      5,
+    );
+
+    expect(dismissCalls).toBe(1);
+    expect(prepared.dismissed).toBe("clicked:remind me later");
+    expect(prepared.surface).toEqual(CLEAR_CHAT_SURFACE);
+  });
+
+  test("older Kiro with no migration modal proceeds without a dismissal", async () => {
+    let dismissCalls = 0;
+    const prepared = await settleKiroIdeChatSurface(
+      {
+        inspect: async () => CLEAR_CHAT_SURFACE,
+        dismissMigration: async () => {
+          dismissCalls++;
+          return null;
+        },
+        wait: async () => {},
+        now: () => 0,
+      },
+      20,
+      5,
+    );
+
+    expect(dismissCalls).toBe(0);
+    expect(prepared.dismissed).toBeNull();
+    expect(prepared.surface).toEqual(CLEAR_CHAT_SURFACE);
+  });
+
+  test("does not accept CDP-reachable chat behind a persistent blocking overlay", async () => {
+    let now = 0;
+    let dismissCalls = 0;
+
+    await expect(
+      settleKiroIdeChatSurface(
+        {
+          inspect: async () => MIGRATION_BLOCKED_CHAT_SURFACE,
+          dismissMigration: async () => {
+            dismissCalls++;
+            return dismissCalls === 1 ? "clicked:remind me later" : null;
+          },
+          wait: async (ms) => {
+            now += ms;
+          },
+          now: () => now,
+        },
+        10,
+        5,
+      ),
+    ).rejects.toThrow("blocking overlay remains over chat");
+    expect(dismissCalls).toBeGreaterThan(1);
+  });
+});
+
+describe("t-ide-kiro-checkpoint fixture", () => {
+  test("code-generation gate review binds to a real source fingerprint", () => {
+    const sandbox = setupTuiProject({
+      harness: "kiro-ide",
+      withState: "state-mid-inception.md",
+      withAudit: true,
+    });
+    try {
+      seedBindableWorkspace(sandbox);
+      runSetupTool(sandbox, "aidlc-state.ts", [
+        "checkbox",
+        `${BLOCKED_SLUG}=in-progress`,
+      ]);
+      seedGateFor(sandbox, BLOCKED_SLUG);
+      const audit = readFileSync(seededAuditShard(sandbox), "utf-8");
+      expect(audit).not.toContain("**Source Fingerprint**: unbindable");
+      expect(audit).toMatch(/\*\*Source Fingerprint\*\*: [0-9a-f]{40,64}/);
+    } finally {
+      cleanupTuiProject(sandbox);
+    }
+  });
+});
+
 describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate enforcement)", () => {
   // Drives the SHIPPED dist/kiro-ide tree and asserts the live HUMAN_TURN event
   // plus the committed GATE_APPROVED ledger row. The second, fabricated approval
@@ -291,6 +577,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
         withState: "state-mid-inception.md",
         withAudit: true,
       });
+      seedBindableWorkspace(sandbox);
       seedApprovalGate(sandbox);
 
       // One human prompt forces the constructed same-turn cascade: approve the open
@@ -318,6 +605,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
         // Poll for the chat input instead of a fixed settle sleep.
         expect(await waitForChatInput(handle.port)).toBe(true);
         diagnostic("chat-ready");
+        const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
+        diagnostic("chat-surface-unblocked", { startupDismissed });
 
         const t = await pageTarget(handle.port);
         // typeAndSubmit focuses + verifies the text landed + retries before Enter -
@@ -416,7 +705,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
         // The engine delivers refusals as a typed error directive on stdout with
         // exit code 0, so assert the directive text; the ledger asserts below
         // prove no mutation landed.
-        expect(fabricated.stdout).toContain("Refusing to approve");
+        expect(fabricated.stdout).toContain("Cannot approve");
+        expect(fabricated.stdout).toContain("no new human reply");
         // Settle a beat so a wrongly committed second gate would also have landed.
         await new Promise((r) => setTimeout(r, 8000));
 
@@ -477,6 +767,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
       try {
         expect(await waitForCdp(handle.port)).toBe(true);
         expect(await waitForChatInput(handle.port)).toBe(true);
+        const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
+        diagnostic("chat-surface-unblocked", { startupDismissed });
 
         const t = await pageTarget(handle.port);
         // A prompt that drives FIVE separate shell tool calls in one un-ended turn, so

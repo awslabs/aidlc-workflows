@@ -23,17 +23,14 @@ the build if the JSON diverges from the YAML.
 
 # [Stage Title]
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format,
-and completion messages.
-
 ## Steps
 # prose body — required, always populated
 
 ## Sensors
-# reserved — parser tolerates absence; populated when the sensor subsystem ships
+# compact Imports/Upstream-targets summary; stage-specific exceptions stay local
 
 ## Learn
-# reserved — parser tolerates absence; populated when the loop-driver subsystem ships
+# compact pointer to stage-protocol.md section 13; bootstrap stages keep the no-gate exception
 ```
 
 ---
@@ -51,9 +48,10 @@ copies this table verbatim.
 | `execution` | string | yes | `ALWAYS` \| `CONDITIONAL` |
 | `condition` | string | yes | free-form; describe always-on rationale for `ALWAYS`, branching condition for `CONDITIONAL` |
 | `lead_agent` | string | yes | agent slug; validated dynamically against `.codex/agents/*.md` via `loadAgents()` — no hardcoded enum |
-| `support_agents` | string[] | yes | empty list allowed; each entry a valid agent slug. Renamed from prose `Supporting Agents:` (format-only rename) |
+| `support_agents` | string[] | yes | empty list allowed; each entry a valid agent slug. For `mode: pipeline`, every entry across `lead_agent` plus `support_agents` must be unique so each ordered receipt position has one identity. Renamed from prose `Supporting Agents:` (format-only rename) |
 | `mode` | string | yes | `inline` \| `subagent` \| `pipeline` \| `mob` \| `agent-team`. The stage's **communication topology** — who talks to whom while the body runs. `inline` (conductor adopts every voice, zero dispatches), `subagent` (hub-and-spoke: the conductor dispatches the lead for the draft, then each `support_agents[]` entry as a real, mutually-blind spoke, then the lead to integrate), `pipeline` (chain: the links collectively author the artifacts, each link seeing all upstream work and advancing the work product directly; after every return the conductor mints `PIPELINE_LINK_COMPLETED`, and the final link leaves the artifacts complete), and `mob` (mesh: one room, cross-talk, dissent recorded; judgment-call objections surface to the human mid-stage) are active; `pipeline`/`mob` require non-empty `support_agents`. Writing model: each dispatched support agent writes its own contribution file (`contributions/<agent-slug>.md`, stage-protocol-ensemble.md §11); the lead alone edits the stage's `produces[]` artifacts except that serialized pipeline links advance them directly. On `mob`/`subagent`-with-supports stages contribution files are completion evidence; on `pipeline`, the complete ordered current-attempt receipt chain is completion evidence. **`agent-team` is reserved** — the future native-bus transport for mesh collaboration (`mob` is the portable mode); no stage declares it until a consumer ships. Orchestrator code reading `mode` MUST handle `agent-team` explicitly (at minimum throw "not yet implemented") — do not fall through to a default path. The review loop is NOT a mode: `reviewer` + `reviewer_max_iterations` deliver the two-party critique topology on every mode (stage-protocol-reviewer.md §12a) |
 | `reviewer` | string | optional | agent slug; invoked after artifact production and before the approval gate |
+| `review_artifact` | string | optional | Required whenever `reviewer` is present. Names one required Markdown entry from `produces[]`; that exact artifact owns the appended `## Review` section. For per-unit stages it must remain applicable for every Unit kind on which any required output is applicable. Plugin contributions may add outputs but cannot change this scalar owner implicitly. |
 | `reviewer_max_iterations` | integer | optional | positive integer; requires `reviewer`; defaults to `2` |
 | `review_class` | string | optional | `adversarial` \| `advisory`; requires `reviewer`; defaults to `adversarial`. `advisory` is one normal-flow pass with findings quoted verbatim at the human gate; a terminal receipt invalidated by a later output write gets one bounded recovery request at the next ordinal. `none` is not a stage value; scope `review_cap` and per-run `--review` may only lower the effective class |
 | `summary_confirmation` | string | optional | `required` \| `if-present`. Marks stages using the consolidated answer review before artifact generation. `required` requires a questions file, exact `Looks correct` answer, human-backed receipt, unchanged questions-file digest, and native artifact writes after that receipt. `if-present` applies the same checks only when a conditional question flow created a questions file |
@@ -146,10 +144,11 @@ The same emit-time resolution splits the consumed inputs by presence: the
 directive's `consumes` lists only resolved paths that exist on disk, and any
 REQUIRED declared input whose file is absent moves to `consumes_absent`,
 annotated `expected: true` when the producing stage is off the active scope's
-path (the scope deliberately skipped it — see `consumes[].required` above) or
-`expected: false` when a producer is on the path but the file is still
-missing. A `required: false` consume that is absent is simply dropped — an
-optional input that does not exist is not an input, never a gap. The
+path or every on-path producer is recorded `[S]` after a conditional runtime
+skip (the producer did not run — see `consumes[].required` above).
+`expected: false` means an on-path producer was not skipped but the file is
+still missing. A `required: false` consume that is absent is simply dropped —
+an optional input that does not exist is not an input, never a gap. The
 conductor is never pointed at a path that cannot be read; absence-by-design
 arrives as data, not as a failed read.
 

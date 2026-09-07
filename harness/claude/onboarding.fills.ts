@@ -29,6 +29,8 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
     prereq_bullets_tail: `- **Settings**: \`.claude/settings.json\` pre-approves tools (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so workflows run without per-call permission prompts.
 - **Personal overrides**: Copy \`.claude/settings.local.json.example\` to \`.claude/settings.local.json\` (gitignored) to override the model or set environment variables without affecting shared settings.`,
 
+    hook_permissions_note: `After copying the project shell, approve its hooks when Claude Code prompts or through \`/hooks\`, then fully restart Claude Code; \`/clear\` is not enough. Organization-managed policy can block project hooks, and \`/aidlc --doctor\` detects the supported managed-policy restriction.`,
+
     agents_note: `Each is a flat \`.md\` file prefixed \`aidlc-<role>-agent.md\`; the \`/aidlc\` session takes on each expert role itself where the stage calls for it, and hands work to a separate agent for the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests via the \`Task\` tool.`,
 
     structure_extra: "",

@@ -102,6 +102,9 @@ const ARTIFACT_VOCABULARY_PATH = join(
   TOOLS_DIR,
   "aidlc-artifact-vocabulary.ts",
 );
+const ORCHESTRATE_PATH = join(TOOLS_DIR, "aidlc-orchestrate.ts");
+const UNIT_PATH = join(TOOLS_DIR, "aidlc-unit.ts");
+const UTILITY_PATH = join(TOOLS_DIR, "aidlc-utility.ts");
 
 const REGISTRY_PATH =
   process.env.AIDLC_COVERAGE_REGISTRY ?? join(TESTS_DIR, ".coverage-registry.json");
@@ -236,6 +239,8 @@ export interface RegistryRow {
 //                     nested sub-switches (state.ts has practices-event + lookup
 //                     sub-switches keyed on different vars; we read only the
 //                     entry one keyed on `subcommand`).
+//   kind "if-chain" -> the entry `if (<anchor> === "x") ... else if ...` chain
+//                     inside main() (aidlc-unit uses this compact dispatch form).
 //
 // Verified against source on 2026-05-31:
 //   state.ts:115 switch(subcommand)     audit.ts:639 switch(subcommand)
@@ -243,15 +248,18 @@ export interface RegistryRow {
 //   log.ts:133 switch(subcommand)       worktree.ts:777 switch(subcommand)
 //   validate.ts:295 switch(subcommand)  learnings.ts:750 switch(cmd)
 //   sensor.ts:659 switch(cmd)           utility.ts:2814 switch(subcommand)
-//   graph.ts:1088 const COMMANDS = {}   runtime.ts:1024 const SUBCOMMANDS = {}
+//   unit.ts:729 if(command === ...)      graph.ts:1088 const COMMANDS = {}
+//   runtime.ts:1024 const SUBCOMMANDS = {}
 // ---------------------------------------------------------------------------
 interface ToolDescriptor {
   file: string; // basename under TOOLS_DIR
-  kind: "object" | "switch";
+  kind: "object" | "switch" | "if-chain";
   anchor: string; // object const name, or the switch variable
 }
 
 export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
+  { file: "aidlc-orchestrate.ts", kind: "switch", anchor: "subcommand" },
+  { file: "aidlc-unit.ts", kind: "if-chain", anchor: "command" },
   { file: "aidlc-state.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-attest.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-audit.ts", kind: "switch", anchor: "subcommand" },
@@ -347,14 +355,34 @@ export function parseSwitchDispatchCases(
   return cases;
 }
 
+/** String-literal commands in the direct `if/else if` dispatch chain keyed on
+ *  `dispatchVar`. The aidlc-unit entrypoint uses this compact form instead of a
+ *  switch; equality checks elsewhere are excluded by limiting the scan to
+ *  main()'s balanced function body. */
+export function parseIfDispatchCases(
+  src: string,
+  dispatchVar: string,
+): string[] {
+  const main = /\b(?:export\s+)?function\s+main\s*\([^)]*\)\s*:\s*void\s*\{/.exec(src);
+  if (!main) return [];
+  const block = balancedBlock(src, main.index);
+  const cases: string[] = [];
+  const re = new RegExp(
+    `^\\s*(?:if|else\\s+if)\\s*\\(\\s*${dispatchVar}\\s*===\\s*"([a-z][a-z0-9-]*)"\\s*\\)`,
+  );
+  for (const line of block.split("\n")) {
+    const match = re.exec(line);
+    if (match) cases.push(match[1]);
+  }
+  return cases;
+}
+
 /** Public: the subcommands of one tool, by its descriptor. */
 export function subcommandsForTool(d: ToolDescriptor): string[] {
   const src = readFileSync(join(TOOLS_DIR, d.file), "utf-8");
-  const keys =
-    d.kind === "object"
-      ? parseObjectDispatchKeys(src, d.anchor)
-      : parseSwitchDispatchCases(src, d.anchor);
-  return keys;
+  if (d.kind === "object") return parseObjectDispatchKeys(src, d.anchor);
+  if (d.kind === "if-chain") return parseIfDispatchCases(src, d.anchor);
+  return parseSwitchDispatchCases(src, d.anchor);
 }
 
 /** ANTI-ROT GUARD (b), independent counter. Re-counts the dispatch sites in the
@@ -369,6 +397,16 @@ export function independentSubcommandCount(d: ToolDescriptor): number {
     if (!m) return 0;
     const block = balancedBlock(src, m.index);
     return countDepthOneKeys(block);
+  }
+  if (d.kind === "if-chain") {
+    const main = /\b(?:export\s+)?function\s+main\s*\([^)]*\)\s*:\s*void\s*\{/.exec(src);
+    if (!main) return 0;
+    const block = balancedBlock(src, main.index);
+    const re = new RegExp(
+      `\\b${d.anchor}\\s*===\\s*"[a-z][a-z0-9-]*"`,
+      "g",
+    );
+    return block.match(re)?.length ?? 0;
   }
   const swRe = new RegExp(`\\bswitch\\s*\\(\\s*${d.anchor}\\s*\\)\\s*\\{`);
   const m = swRe.exec(src);
@@ -550,10 +588,12 @@ export function enumerateRenderSurfaces(): Unit[] {
 }
 
 /** Exported lib functions from shared library modules. Matches a
- *  top-level `export function|const|class|async function NAME`. unitId is
- *  `function:NAME` so it joins to the `function:NAME` covers-IDs t106-t111 use. */
+ *  top-level `export function|const|class|async function NAME`. Overload
+ *  declarations collapse to one class+ID identity. unitId is `function:NAME`
+ *  so it joins to the `function:NAME` covers-IDs t106-t111 use. */
 export function enumerateExportedFunctions(): Unit[] {
   const units: Unit[] = [];
+  const identities = new Set<string>();
   const re =
     /^export\s+(?:async\s+function|function|const|class)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
   for (const [path, rel] of [
@@ -566,12 +606,57 @@ export function enumerateExportedFunctions(): Unit[] {
   ] as const) {
     const src = readFileSync(path, "utf-8");
     for (const m of src.matchAll(re)) {
+      const unit: Unit = {
+        unitClass: "function",
+        unitId: `function:${m[1]}`,
+        minMechanism: MIN_MECHANISM.function,
+        source: rel,
+      };
+      const identity = `${unit.unitClass}\0${unit.unitId}`;
+      if (identities.has(identity)) continue;
+      identities.add(identity);
+      units.push(unit);
+    }
+  }
+  for (const [path, rel, names] of [
+    [
+      ORCHESTRATE_PATH,
+      "dist/claude/.claude/tools/aidlc-orchestrate.ts",
+      new Set([
+        "buildTeamConstructionBoard",
+        "buildTeamConstructionBoardForIntent",
+        "renderTeamConstructionBoard",
+      ]),
+    ],
+    [
+      UNIT_PATH,
+      "dist/claude/.claude/tools/aidlc-unit.ts",
+      new Set(["localUnitClaimOverviewForIntent"]),
+    ],
+    [
+      UTILITY_PATH,
+      "dist/claude/.claude/tools/aidlc-utility.ts",
+      new Set(["CLAIM_ACTIVITY_STALE_HOURS"]),
+    ],
+  ] as const) {
+    const src = readFileSync(path, "utf-8");
+    const found = new Set<string>();
+    for (const m of src.matchAll(re)) {
+      if (!names.has(m[1])) continue;
+      found.add(m[1]);
       units.push({
         unitClass: "function",
         unitId: `function:${m[1]}`,
         minMechanism: MIN_MECHANISM.function,
         source: rel,
       });
+    }
+    for (const name of names) {
+      if (!found.has(name)) {
+        throw new Error(
+          `function enumerator: expected export "${name}" missing from ${rel}`,
+        );
+      }
     }
   }
   return units;
@@ -734,14 +819,15 @@ export function claudeDependenciesOf(_fileName: string, src: string): ClaudeDepe
  *        stay {tui} and never spuriously gain {cli}.)
  *    2. A RUNTIME spawn — `spawnSync`/`spawn`/`execSync`/`execFileSync`/`Bun.spawn*`
  *       whose runtime is `BUN` / `process.execPath` / a literal `"bun"` or `"node"` —
- *       whose argv targets an `aidlc-*.ts` tool. The tool is matched whether it is an
- *       inline string literal (`spawnSync(BUN,["…/aidlc-state.ts"])`) OR a const bound
- *       to one (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts"); spawnSync(BUN,[GRAPH_TS,…])`),
+ *       whose argv targets the `aidlc.ts` dispatcher or an `aidlc-*.ts` tool. The
+ *       target is matched whether it is an inline string literal
+ *       (`spawnSync(BUN,["…/aidlc-state.ts"])`) OR a const bound to one
+ *       (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts"); spawnSync(BUN,[GRAPH_TS,…])`),
  *       since the const definition survives in the code view (imports/comments are stripped,
  *       but a `const X = "…aidlc-*.ts"` is real code).
  *    3. A `bash` spawn (`spawnSync("bash",…)` / `execFileSync("bash",…)`) of `run-tests.sh`.
  *
- *  WHY gate on a real spawn and not a bare `aidlc-*.ts` mention: 12 deterministic floor
+ *  WHY gate on a real spawn and not a bare `aidlc*.ts` mention: 12 deterministic floor
  *  tests reference a tool ONLY through a multi-line `import { … } from "…/aidlc-lib.ts"`
  *  whose path lands on a CONTINUATION line the import-strip misses — they call the lib
  *  IN-PROCESS and must stay {none}. Requiring (spawn primitive ∧ runtime ∧ shipped target)
@@ -750,9 +836,11 @@ function drivesCliSurface(code: string): boolean {
   // 1. claude in print mode (NOT --version).
   if (drivesClaudePrintSurface(code)) return true;
 
-  // The shipped targets: an aidlc-*.ts tool, or the run-tests.sh runner — as a
-  // string literal anywhere in the code view (inline arg OR a `const X = "…"` def).
-  const hasAidlcToolLiteral = /["'][^"']*\baidlc-[A-Za-z0-9_-]+\.ts["']/.test(code);
+  // The shipped targets: the aidlc.ts dispatcher, an aidlc-*.ts tool, or the
+  // run-tests.sh runner — as a string literal anywhere in the code view
+  // (inline arg OR a `const X = "…"` def).
+  const hasAidlcToolLiteral =
+    /["'][^"']*\baidlc(?:-[A-Za-z0-9_-]+)?\.ts["']/.test(code);
   const hasRunnerLiteral = /["'][^"']*\brun-tests\.sh["']/.test(code);
   if (!hasAidlcToolLiteral && !hasRunnerLiteral) return false;
 

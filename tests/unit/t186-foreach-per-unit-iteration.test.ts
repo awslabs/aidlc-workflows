@@ -42,7 +42,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -88,25 +93,52 @@ afterEach(() => {
 });
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const iteration = 1;
+  const reviewArtifact =
+    stage === "functional-design" ? "functional-spec" : null;
+  if (reviewArtifact === null) {
+    throw new Error(`no review artifact fixture for ${stage}`);
+  }
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    stage,
+    artifactFilename(reviewArtifact),
+  );
   const args = [
     LOG,
     "review",
     "--stage",
     stage,
     "--reviewer",
-    "aidlc-architecture-reviewer-agent",
+    reviewer,
     "--unit",
     unit,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const res = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((res.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
-    }
+  const request = spawnSync(BUN, args, { encoding: "utf-8" });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 
@@ -348,7 +380,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     );
   }, 30000);
 
-  test("5b: a composed plan that skips Units Generation uses stage-level paths without a DAG", () => {
+  test("5b: a composed plan that skips Units Generation ignores a stale valid DAG", () => {
     const proj = seedProject("functional-design", "on");
     const statePath = seededStateFile(proj);
     writeFileSync(
@@ -358,6 +390,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
         "- [S] units-generation — SKIP\n- [-] domain-design — EXECUTE",
       ),
     );
+    seedBoltDag(proj, ["stale-alpha"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
@@ -366,6 +399,26 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       `${RP}/construction/functional-design/functional-spec.md`,
     );
     expect(d.produces?.some((path) => path.includes("{unit-name}"))).toBe(false);
+
+    const unitStart = spawnSync(
+      BUN,
+      [
+        STATE,
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "stale-alpha",
+        "--project-dir",
+        proj,
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(unitStart.status).not.toBe(0);
+    expect(`${unitStart.stdout ?? ""}${unitStart.stderr ?? ""}`).toContain(
+      "runs once at stage level",
+    );
   }, 30000);
 
   // 6: coverage guard on report, approve with alpha + beta both uncovered ->
@@ -383,7 +436,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.message).toContain("functional-design");
     expect(d.message).toContain("alpha");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
+    expect(d.message).toContain("work items are not complete");
   }, 30000);
 
   // 6b: coverage guard refuses even when only the LAST unit is uncovered (the

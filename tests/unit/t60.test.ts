@@ -119,7 +119,7 @@ const utilityIn = (proj: string): string => toolIn(proj, "aidlc-utility.ts");
 const fixtureScopeFile = (proj: string): string =>
   join(proj, ".claude", "scopes", "aidlc-fixture-scope.md");
 
-// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/)
+// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/)
 // and writes aidlc-state.md there, not the flat aidlc-docs/. Resolve the record
 // dir from the active-space + active-intent cursors, falling back to the flat
 // layout for a seeded-flat project (Test 5 seeds flat state and never inits).

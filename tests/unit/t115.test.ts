@@ -77,7 +77,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   auditLockDir,
@@ -1083,6 +1089,14 @@ function log(args: string[], p: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
+function reviewAppendix(
+  reviewer: string,
+  iteration: string,
+  verdict: string,
+): string {
+  return `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`;
+}
+
 function completeReview(args: string[], p: string): CliResult {
   const verdictIndex = args.indexOf("--verdict");
   if (verdictIndex === -1) throw new Error("completeReview requires --verdict");
@@ -1090,8 +1104,47 @@ function completeReview(args: string[], p: string): CliResult {
     ...args.slice(0, verdictIndex),
     ...args.slice(verdictIndex + 2),
   ];
+  const stage = args[args.indexOf("--stage") + 1];
+  const reviewer = args[args.indexOf("--reviewer") + 1];
+  const iteration = args[args.indexOf("--iteration") + 1];
+  const verdict = args[verdictIndex + 1];
+  const unitIndex = args.indexOf("--unit");
+  const unit = unitIndex === -1 ? undefined : args[unitIndex + 1];
+  const definition = resolveStage(stage);
+  if (!definition?.review_artifact) {
+    throw new Error(`${stage} has no review_artifact`);
+  }
+  const dir =
+    definition.for_each === "unit-of-work"
+      ? join(
+          seededRecordDir(p),
+          "construction",
+          unit ?? "unit-alpha",
+          stage,
+        )
+      : join(seededRecordDir(p), definition.phase, stage);
+  mkdirSync(dir, { recursive: true });
+  const artifact = join(dir, `${definition.review_artifact}.md`);
+  if (!existsSync(artifact)) {
+    writeFileSync(artifact, `# ${stage}\n`, "utf-8");
+  } else {
+    const current = readFileSync(artifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        artifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   const requested = log(requestArgs, p);
   if (requested.status !== 0) return requested;
+  appendFileSync(
+    artifact,
+    reviewAppendix(reviewer, iteration, verdict),
+    "utf-8",
+  );
   return log(args, p);
 }
 
@@ -1130,7 +1183,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     // The transition was NOT committed — no GATE_APPROVED emitted.
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
@@ -1187,7 +1240,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("fresh REVIEW_COMPLETED");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1210,6 +1263,14 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R5: REVIEW_REQUESTED alone (no verdict) does NOT satisfy the precondition", () => {
     const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
     // Dispatch row only — no terminal verdict yet.
     const req = log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"],
@@ -1238,7 +1299,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1266,7 +1327,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     // Re-approve with no fresh review → refused (the pre-reject review is stale).
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
     // A fresh review after the reject unblocks it.
@@ -1293,7 +1354,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(openGateWithoutReview(p).status).toBe(0);
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1303,7 +1364,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const before = readFileSync(statePath(refusedProject), "utf-8");
       const refused = state([command, "requirements-analysis"], refusedProject);
       expect(refused.status, command).not.toBe(0);
-      expect(refused.out, command).toContain("declares a reviewer");
+      expect(refused.out, command).toContain("has not reviewed the current output");
       expect(readFileSync(statePath(refusedProject), "utf-8"), command).toBe(before);
 
       const acceptedProject = projWithState("state-mid-inception.md");
@@ -1336,7 +1397,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     const r = state(["approve", "requirements-analysis"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1361,7 +1422,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     ).toContain("**Workflow**: single-stage:requirements-analysis");
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1394,7 +1455,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain(
-        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+        "output document changed after aidlc-product-lead-agent reviewed it",
       );
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
@@ -1458,7 +1519,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain("has not reviewed the current output");
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
     }
   }, 30000);
@@ -1494,7 +1555,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain(
-        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+        "output document changed after aidlc-product-lead-agent reviewed it",
       );
 
       expect(state(["reject", "requirements-analysis", "--feedback", "artifact changed"], p).status).toBe(0);
@@ -1562,7 +1623,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     seedBoltDagBatches(p, [["foo"]]);
     const result = state(["finalize", "code-generation"], p);
     expect(result.status).not.toBe(0);
-    expect(result.out).toContain("declares a reviewer");
+    expect(result.out).toContain("do not have a current review");
   }, 30000);
 
   test("R19: a legacy unit-scoped receipt cannot satisfy the no-DAG stage fallback", () => {
@@ -1594,7 +1655,66 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       },
     );
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("no fresh REVIEW_COMPLETED");
+    expect(refused.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
+  }, 30000);
+
+  test("R20: a zero-Unit stage-level artifact mutation invalidates the pending review", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    replaceStateText(
+      p,
+      "### CONSTRUCTION PHASE",
+      "### INCEPTION PHASE\n- [S] units-generation — SKIP\n\n### CONSTRUCTION PHASE",
+    );
+    seedBoltDagBatches(p, [["stale-unit"]]);
+    const outputDir = join(
+      seededRecordDir(p),
+      "construction",
+      "code-generation",
+    );
+    mkdirSync(outputDir, { recursive: true });
+    const plan = join(outputDir, "code-generation-plan.md");
+    const summary = join(outputDir, "code-summary.md");
+    writeFileSync(plan, "# Reviewed code generation plan\n", "utf-8");
+    writeFileSync(summary, "# Reviewed code summary\n", "utf-8");
+
+    const request = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+    );
+    expect(request.status, request.out).toBe(0);
+
+    appendFileSync(
+      plan,
+      reviewAppendix("aidlc-architecture-reviewer-agent", "1", "READY"),
+      "utf-8",
+    );
+    writeFileSync(summary, "# Changed after dispatch\n", "utf-8");
+    const verdict = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ],
+      p,
+    );
+    expect(verdict.status).not.toBe(0);
+    expect(verdict.out).toContain("output documents changed");
+    expect(verdict.out).toContain("after review iteration");
+    expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, 30000);
 });

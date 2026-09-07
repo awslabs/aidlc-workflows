@@ -23,9 +23,8 @@
 //   - description:    must be present (non-empty) - the routing summary.
 //   - allowedTools:   must be ABSENT - a silently-ignored field removed in
 //                     v0.5.4 (.sh L40-45). Its reappearance is a regression.
-//   - disallowedTools: must contain `Task` - subagents must not spawn subagents
-//                     (single-level constraint; the body also carries the
-//                     "Do NOT use the Task tool" banner).
+//   - disallowedTools: must contain `Task` - the machine-enforced single-level
+//                     constraint that prevents subagents spawning subagents.
 //   - tier:           must equal the documented per-agent value
 //                     (judgment = multi-constraint reasoning under ambiguity,
 //                      output cascades downstream;

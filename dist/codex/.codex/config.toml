@@ -43,6 +43,11 @@ sandbox_mode = "workspace-write"
 network_access = true
 # writable_roots = ["/absolute/path/to/main-repo/.git"]
 
+# Delegated roles are leaves. The conductor owns every spawn and agents cannot
+# recursively delegate.
+[agents]
+max_depth = 1
+
 # Gates (D-3 both-track): prose gates are the floor; these flags enable the
 # structured request_user_input tool (verified working at 0.137.0+; the
 # default-mode flag is under development and prints a warning banner).

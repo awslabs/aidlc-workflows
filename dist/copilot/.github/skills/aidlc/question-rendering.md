@@ -49,10 +49,13 @@ Render every structured question as **numbered prose options in chat**. Both
 Copilot surfaces expose native picker tools (`ask_user` on the CLI and
 `vscode/askQuestions` in VS Code), but a picker selection returns as a tool
 result and does not fire the trusted `UserPromptSubmit` hook that records
-`HUMAN_TURN`. Calling either picker would therefore deadlock ordinary question
-answers and approval reports at the human-presence guard. Do not use those
-tools for AI-DLC questions until Copilot exposes a deterministic, host-verified
-picker-response event.
+`HUMAN_TURN`. Calling a picker would therefore make answer or approval logging
+refuse the selection and cause the question to be asked again. While the
+session-selected workflow has valid `Status: Running` state, the matcher-free
+PreToolUse guard denies the native picker execution IDs and directs the model
+to render numbered prose in chat and end the turn. With no running workflow,
+including completed or unusable state, the guard fails open so native pickers
+remain available. Never treat a picker tool result as a human turn.
 
 The user answers with a number (or free text). Render the spec like this:
 

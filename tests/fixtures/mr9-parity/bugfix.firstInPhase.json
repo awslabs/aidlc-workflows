@@ -3,5 +3,5 @@
   "ideation": "none",
   "inception": "reverse-engineering",
   "construction": "code-generation",
-  "operation": "none"
+  "operation": "deployment-pipeline"
 }

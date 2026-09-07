@@ -84,7 +84,7 @@ const DRIVE_TIMEOUT_MS = Math.max(90_000, TEST_TIMEOUT_MS - 15_000);
 // Known-answer help strings, read from the shipped handler (see header).
 const HELP_HEADER = "AI-DLC"; // HELP_TEXT_HEAD, utility.ts:106
 const HELP_STATUS = "--status"; // Utilities block, utility.ts:115
-// P4: the user-facing --init/--force are RETIRED (the engine auto-births; the
+// P4: the user-facing --init/--force are RETIRED (the engine auto-creates; the
 // workspace shell ships in dist/). The help lists the intent/space verb families
 // instead — assert those PLUS the absence of the retired flags.
 const HELP_INTENT = "intent"; // P4 verb family, renderHelpText

@@ -48,17 +48,19 @@ Core ships 11 named scopes. Each scope defines a stage set and a default depth l
 
 **Use when:** Fixing a specific bug. Streamlined path from intent capture through code generation and testing.
 
-- **Stages:** 7 of 33
+- **Stages:** 9 of 33
 - **Default depth:** Minimal
-- **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, all Operation stages
+- **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
+- **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
 
 ### refactor
 
 **Use when:** Cleaning up or restructuring existing code without changing functionality.
 
-- **Stages:** 8 of 33
+- **Stages:** 10 of 33
 - **Default depth:** Minimal
-- **Skips:** Similar to bugfix — focused on code analysis, design, and implementation
+- **Includes:** Functional Design plus Deployment Pipeline and Deployment Execution
+- **Skips:** Similar to bugfix — focused on code analysis, design, implementation, and deployment through the existing path
 
 ### infra
 
@@ -119,8 +121,8 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `feature` | 33 / 33 | Standard | Standard | Full lifecycle for new features |
 | `mvp` | 23 / 33 | Standard | Standard | Greenfield, skip late operations |
 | `poc` | 8 / 33 | Minimal | Minimal | Prove feasibility fast |
-| `bugfix` | 7 / 33 | Minimal | Minimal | Fix a specific bug |
-| `refactor` | 8 / 33 | Minimal | Minimal | Clean up existing code |
+| `bugfix` | 9 / 33 | Minimal | Minimal | Fix and deploy a specific bug |
+| `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
 | `classic` | 26 / 33 | Standard | Standard | V1-style lifecycle without Ideation — the implicit default |
@@ -128,7 +130,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
-Scopes differ by an order of magnitude in ceremony: `poc` runs 8 stages with 5 approval gates, while `feature` runs all 33 with 29 gates and five design stages that fan out per Unit of Work in Construction. So the scope confirmation line always names the exact numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid, never estimated. You know what you are consenting to before the workflow starts.
+Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs all 33 stages with 29 gates and five design stages that fan out per Unit of Work in Construction. The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
 
 > **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json`. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
@@ -165,14 +167,14 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
 | 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
 | 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
-| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ |  |
-| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 4.3 | Deployment Execution | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ | ✓ |
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **7** | **8** | **13** | **10** | **26** | **26** | **10** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **26** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
@@ -206,7 +208,7 @@ The engine analyzes your intent against keyword patterns:
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid:
 
 ```
-Starting a "bugfix" workflow for: "fix login bug" - 7 of 33 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed,
+Starting a "bugfix" workflow for: "fix login bug" - 8 of 33 stages, 5 approval gates. Confirm to proceed,
 name a different scope, or say "compose" for a tailored plan.
 ```
 
@@ -232,9 +234,9 @@ silently start Feature. You can also force composition:
 
 The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal you see at the gate carries the score breakdown (each component with a LOW/MED/HIGH band and its evidence), an advisory composite, and a per-stage decision table with a reason for every EXECUTE and SKIP. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. On approve:
 
-- If the proposal MATCHED a stock scope, the workflow births on that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
-- For a CUSTOM grid, the composer authors a real scope (a `scopes/aidlc-<name>.md` plus a `scope-grid.json` entry) and the workflow births on it in the same turn. The composed scope resolves like any stock scope afterwards (`/aidlc --scope <name>`), and it survives a graph recompile: `aidlc-graph.ts compile` folds composed grid entries back into the regenerated `scope-grid.json` rather than rebuilding the grid from stage frontmatter alone.
-- Every front/report proposal carries a nonblank `birthDescription`. When the compose request included task text, it is that text verbatim; report-only and task-less proposals derive it from the approved findings/plan. The same-turn birth passes it after the literal `--` delimiter as one shell-safe argv value (POSIX single-quoted when rendered in a shell), so the state Project field and intent-record slug preserve descriptions that contain shell metacharacters or begin with a flag. Scope-only compose births are forbidden.
+- If the proposal MATCHED a stock scope, AI-DLC creates the workflow with that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
+- For a CUSTOM grid, the composer authors a real scope (a `scopes/aidlc-<name>.md` plus a `scope-grid.json` entry) and AI-DLC creates the workflow with it in the same turn. The composed scope resolves like any stock scope afterwards (`/aidlc --scope <name>`), and it survives a graph recompile: `aidlc-graph.ts compile` folds composed grid entries back into the regenerated `scope-grid.json` rather than rebuilding the grid from stage frontmatter alone.
+- Every front/report proposal carries a nonblank `creationDescription`. When the compose request included task text, it is that text verbatim; report-only and task-less proposals derive it from the approved findings/plan. The same-turn creation passes it after the literal `--` delimiter as one shell-safe argv value (POSIX single-quoted when rendered in a shell), so the state Project field and intent-record slug preserve descriptions that contain shell metacharacters or begin with a flag. A compose approval cannot continue with only a scope and no description.
 
 **CodeKB grounding (optional):** CodeKB is an external MCP server that serves pre-computed structural analysis of a codebase (call graphs, component inventories, cross-package coupling). AI-DLC does not ship or require it - without it the composer scores structure from the bounded workspace scan, which is the normal path. When you do connect one, the composer uses it as the sole structural evidence source and cites it in the proposal (`method: codekb`). How to connect it depends on the harness: on Claude Code add the server to your project's `.mcp.json` (subagents inherit session MCP servers); on Codex add an `mcp_servers` entry to your `config.toml`; on opencode add it to your opencode config; on Copilot CLI add it to `~/.copilot/mcp-config.json`, and in VS Code to `.vscode/mcp.json`. On Kiro CLI the shipped composer config sets `includeMcpJson: true`, so connecting CodeKB means adding it to `.kiro/settings/mcp.json` without `"disabled": true` and adding its `@<server>` grant to the composer agent's `tools`; Kiro IDE remains fallback-only. Do not confuse CodeKB with the framework's own "codekb" directory (`aidlc/spaces/<space>/codekb/`) - that is the local artifact store the Reverse Engineering stage writes, unrelated to the MCP server. Note that with CodeKB evidence the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without that local store, and you decide at the gate.
 

@@ -149,7 +149,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         // `aidlc-utility.ts help` tool_call surfaces (stopAfterToolTitle would
         // never fire); the conductor only relays prose. Drive to the natural
         // end_turn and assert the deterministic surfaces: clean turn end + the
-        // on-disk no-op (no state births from a help run). The verbatim usage
+        // on-disk no-op (no state creates from a help run). The verbatim usage
         // sections + the ten scopes are covered by the SDK twin t23 + the CLI
         // twins t27/t31 (see header).
         const r = await driveKiroAcp({
@@ -159,7 +159,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         });
         expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
-        // Read-only: help births nothing, so the per-intent state file never
+        // Read-only: help creates nothing, so the per-intent state file never
         // appears (noAidlcDocs stripped the seeded record).
         expect(r.stateFile).toBeUndefined();
         expect(existsSync(seededStateFile(proj))).toBe(false);

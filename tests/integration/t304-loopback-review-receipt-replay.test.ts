@@ -7,8 +7,15 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { sourceBaselineAuditFields } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -88,10 +95,10 @@ function run(
     env: {
       ...process.env,
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   const stdout = result.stdout ?? "";
@@ -115,10 +122,10 @@ function next(args: string[] = []): Directive {
     env: {
       ...process.env,
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   expect(result.status).toBe(0);
@@ -171,6 +178,22 @@ function writeCodeGenerationArtifacts(unit: string): void {
 }
 
 function recordReview(unit: string): void {
+  const artifact = join(
+    seededRecordDir(project),
+    "construction",
+    unit,
+    "code-generation",
+    "code-generation-plan.md",
+  );
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) {
+    writeFileSync(
+      artifact,
+      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      "utf-8",
+    );
+  }
   const args = [
     "review",
     "--stage",
@@ -184,6 +207,11 @@ function recordReview(unit: string): void {
   ];
   const requested = run(LOG, args);
   expect(requested.status, requested.out).toBe(0);
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
   const completed = run(LOG, [...args, "--verdict", "READY"]);
   expect(completed.status, completed.out).toBe(0);
   expect(completed.stdout).toContain('"emitted":"REVIEW_COMPLETED"');
@@ -202,6 +230,16 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
     project = createOrchestrationTestProject();
     writeFileSync(seededStateFile(project), STATE_CONTENT, "utf-8");
     seedBoltDag(project, UNITS);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(project, "code-generation"),
+      },
+      project,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
     for (const unit of UNITS) {
       writeCodeGenerationArtifacts(unit);
       recordReview(unit);
@@ -215,7 +253,7 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
       "--user-input",
       "Approve",
     ]);
-    expect(firstApproval.kind).not.toBe("error");
+    expect(firstApproval.kind, JSON.stringify(firstApproval)).not.toBe("error");
     expect(readFileSync(seededStateFile(project), "utf-8")).toContain(
       "- **Current Stage**: build-and-test",
     );
@@ -254,7 +292,9 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
       "Retry with fix",
     ]);
     expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("2 of 2 applicable units have no fresh recorded review");
+    expect(stale.message).toContain(
+      "2 of 2 applicable units do not have a current review",
+    );
     expect(stale.message).toContain("alpha, beta");
 
     for (const unit of UNITS) recordReview(unit);

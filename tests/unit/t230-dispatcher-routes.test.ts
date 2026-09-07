@@ -27,6 +27,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -52,6 +53,42 @@ afterAll(() => {
 function makeProject(): string {
   const project = createTestProject();
   tempProjects.add(project);
+  return project;
+}
+
+function makeUnselectedKiroProject(): string {
+  const project = setupTuiProject({
+    harness: "kiro",
+    withState: "state-mid-ideation.md",
+  });
+  tempProjects.add(project);
+  const utility = join(project, ".kiro", "tools", "aidlc-utility.ts");
+  const created = run(
+    [
+      BUN,
+      utility,
+      "intent-create",
+      "--scope",
+      "poc",
+      "--label",
+      "second fixture",
+      "--project-dir",
+      project,
+    ],
+    project,
+  );
+  expect(created.exitCode, created.stderr.toString()).toBe(0);
+  rmSync(
+    join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "active-intent",
+    ),
+    { force: true },
+  );
   return project;
 }
 
@@ -360,6 +397,20 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "plugin validate maps to plugin-validate",
+      routerArgs: ["plugin", "validate", ".", "--json"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-validate", ".", "--json"],
+      fixture: true,
+    },
+    {
+      name: "plugin build maps to plugin-build",
+      routerArgs: ["plugin", "build", "claude", "out", "--plugin-root", "."],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-build", "claude", "out", "--plugin-root", "."],
+      fixture: true,
+    },
+    {
       name: "init maps to utility transition handler",
       routerArgs: ["init"],
       tool: "aidlc-utility.ts",
@@ -553,6 +604,29 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       expectSameRun(compiled, dev, item.name);
     });
   }
+
+  test("compiled main pins the Kiro harness name before unselected routing", () => {
+    const projectDir = makeUnselectedKiroProject();
+    const compiled = viaImportedCompiledMain(
+      [
+        "next",
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
+        "--project-dir",
+        projectDir,
+      ],
+      projectDir,
+    );
+    expect(compiled.exitCode, compiled.stderr.toString()).toBe(0);
+    const directive = JSON.parse(compiled.stdout.toString()) as {
+      kind?: string;
+      ask_type?: string;
+      available_intents?: string[];
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.available_intents).toHaveLength(2);
+  });
 });
 
 describe("t230 dispatcher route completeness", () => {
@@ -666,7 +740,9 @@ describe("t230 dispatcher help and errors", () => {
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout.toString("utf-8")).toContain("plugin select [names]");
+    expect(help.stdout.toString("utf-8")).toContain(
+      "plugin <select|list|sync|validate|build> [args]",
+    );
 
     const invalid = viaDispatcher(["plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);

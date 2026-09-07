@@ -4,7 +4,7 @@
 // zero spawn, zero LLM, zero tokens). Technique: deterministic closed predicate.
 //
 // P9 retired the flat `aidlc-docs/` record layout and the `/aidlc --init` command:
-// the docs now describe the per-intent workspace model + auto-birth. This gate
+// the docs now describe the per-intent workspace model + auto-create. This gate
 // makes that a CLOSED, reviewable predicate rather than a free-text "is this
 // legitimately legacy?" judgement (which is trivially satisfiable by allowlisting
 // everything). It scans every docs/**/*.md line PLUS the user-facing onboarding

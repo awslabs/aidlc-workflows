@@ -9,7 +9,7 @@
 // (a unit test has no base ref to compare to).
 //
 // Usage: bun scripts/ci-changelog-guard.ts <base-ref>
-//   e.g. bun scripts/ci-changelog-guard.ts origin/v2
+//   e.g. bun scripts/ci-changelog-guard.ts origin/main
 //
 // Exit 0 = every base heading is still present (new headings are fine).
 // Exit 1 = one or more base headings were removed (prints them), or the base

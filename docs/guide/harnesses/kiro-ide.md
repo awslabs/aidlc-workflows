@@ -32,12 +32,11 @@ hook wiring, activation) differs.
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+`main` branch:
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
+git clone --branch main https://github.com/awslabs/aidlc-workflows.git
 cd aidlc-workflows
-git checkout v2
 ```
 
 ```bash
@@ -57,6 +56,10 @@ rm -f \
 cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
 cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/kiro-ide/.gitignore your-project/.gitignore
+fi
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
@@ -72,6 +75,18 @@ The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
 of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
 once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
+
+The shipped `.gitignore` carries the workspace's commit/ignore split: the
+per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
+and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
+caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
+shared records — method memory, state, audit shards, artifacts — travel with
+git. The guarded command copies the complete starter file only when the project
+has no `.gitignore`. If one exists, preserve every project-owned rule and merge
+only the section from `# AI-DLC` through the end of the shipped file; do not
+copy its generic starter rules. The `## Git Integration` section of the
+installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
+workflow.
 
 Open `your-project/` in Kiro IDE. The install ships:
 
@@ -99,8 +114,8 @@ Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 `--phase`, `--depth`, `--test-strategy` all work, and the
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
-skills are installed. There is no init command — the shipped shell scaffolds
-the workspace and the first intent auto-births on your first `/aidlc`.
+skills are installed. There is no init command; the shipped shell scaffolds
+the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
 
 ## How hooks work on Kiro IDE
 
@@ -119,28 +134,43 @@ empty on both channels, so their written path must be recovered from the result
 text and audit-tail hooks (`rebuild-stage-graph`, `sync-workflow-state`) run
 from the audit trail. The graph-rebuild route also retains the shell result and session
 identity so a successful `intent-create` binds to the invoking session: modern
-events carry the exact `session_id`, while the legacy channel reuses the
-synthetic identity retained by SessionStart. Modern Stop likewise prefers its
+events carry the exact `session_id`, while the legacy channel derives a stable
+host-instance identity from the measured `VSCODE_IPC_HOOK`/`VSCODE_PID`
+environment and retains it at SessionStart. Modern Stop likewise prefers its
 event-local `session_id`, preventing one concurrent chat from consuming
 another chat's post-create handoff; legacy agentStop falls back to the retained
 identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
-adapter preserves those fields without depending on them.
+adapter preserves those fields. On Windows, deterministic utilities use those
+seams to avoid the IDE shell-result transport: builds that expose the submitted
+prompt run the utility at UserPromptSubmit, while builds such as 1.0.242 (whose
+prompt field is empty) fall back to the exact `execute_pwsh` PreToolUse command.
+The utility runs once per turn, its UTF-8 text is relayed without terminal
+protocol/control bytes, and the duplicate shell call is refused. Modern chats
+store turn and output state per `session_id`; context without a session identity
+uses one legacy compatibility bucket. Pre-1.0 camelCase payloads take the same
+fallback through `toolArgs.command`; raw prompt text is only a newer-generation
+compatibility shape.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus `session-start`
-and `continue-workflow` for their modern `session_id`. A non-empty
-`USER_PROMPT` is consumed immediately on 0.12 builds (which open stdin without
-ever writing); otherwise the adapter reads the 1.x stdin channel with a 2s
-broken-channel ceiling. Every other target - including `block`, which fires on
-every `PreToolUse` - touches neither channel and keeps its zero-latency path.
+(`audit-and-sensors`, `log-subagent`, `plan-approval-guard`,
+`rebuild-stage-graph`), the terminal-command seams, plus `session-start` and
+`continue-workflow` for their modern `session_id`, and `record-human-turn` for
+the exact approval response. A non-empty `USER_PROMPT` is consumed immediately
+on 0.12 builds (which open stdin without ever writing); otherwise the adapter
+reads the 1.x stdin channel with a 2s broken-channel ceiling. Every other target
+- including the approval floor, which fires on every `PreToolUse` - touches
+neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
 | `aidlc-session-start` | `SessionStart` | Injects workflow resume context once per session (the legacy pre-1.0 file stays wired to per-prompt `promptSubmit` — that generation has no session-start trigger) |
 | `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
+| `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available |
+| `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
+| `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
 | `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
 | `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |

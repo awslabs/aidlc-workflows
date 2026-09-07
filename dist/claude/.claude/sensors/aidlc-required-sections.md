@@ -3,7 +3,8 @@ id: required-sections
 kind: deterministic
 command: bun .claude/tools/aidlc-sensor-required-sections.ts
 default_severity: advisory
-description: Checks that stage output contains the required H2 headings — generic content-shape check, fires on every stage that writes markdown
+fire_on: gate
+description: Checks at the gate that stage output contains the required H2 headings
 category: document-shape
 matches: "**/{aidlc-docs,intents}/**"
 input_schema:

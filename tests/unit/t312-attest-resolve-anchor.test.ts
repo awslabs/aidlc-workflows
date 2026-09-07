@@ -20,7 +20,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -110,9 +110,24 @@ function cli(tool: string, args: string[], project: string): { rc: number; stdou
 function review(project: string, record: string, unit: string, writes: Array<{ path: string; repo?: string }>): void {
   writeManifest(record, unit, writes);
   const prior = (readAllAuditShards(project).match(new RegExp(`\\*\\*Event\\*\\*: REVIEW_REQUESTED[\\s\\S]*?\\*\\*Unit\\*\\*: ${unit}`, "g")) ?? []).length;
-  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", String(prior + 1)];
+  const iteration = String(prior + 1);
+  // The verdict path validates the reviewer appendix: bytes appended to the
+  // review artifact after REVIEW_REQUESTED must be a terminal `## Review`
+  // section matching verdict/reviewer/iteration. Strip any prior section
+  // before the request (its bytes belong to the request-time snapshot), then
+  // append the canonical appendix before submitting the verdict.
+  const artifact = join(record, "construction", unit, "code-generation", "code-generation-plan.md");
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) writeFileSync(artifact, `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`, "utf-8");
+  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", iteration];
   const request = cli(LOG, args, project);
   if (request.rc !== 0) throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`,
+    "utf-8",
+  );
   const verdict = cli(LOG, [...args, "--verdict", "READY"], project);
   if (verdict.rc !== 0) throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);
 }

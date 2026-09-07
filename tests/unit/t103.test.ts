@@ -61,8 +61,8 @@
 //        asserts the captured label block is non-empty AND contains both a
 //        Rule drift and a Paired sensor coverage line).
 //
-// 19 .sh assertions -> 19 expect()-bearing test() cases (case 2 split into
-// 2a/2b, case 3 split into 3a/3b/3c/3d, matching the .sh's TAP fan-out).
+// 19 .sh assertions -> 19 migrated expect()-bearing test() cases (case 2 split
+// into 2a/2b, case 3 split into 3a/3b/3c/3d), plus lifecycle schema coverage.
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's per-case `mktemp -d` rules dirs +
 // run_doctor's throwaway project dir + `rm -rf`): each case builds a FRESH
@@ -202,6 +202,113 @@ describe("t103 loader primitives (migrated from t103-doctor-rule-drift-coverage.
     // .sh asserted RC != 0. STRONGER: the thrown diagnostic text is asserted too.
     expect(r.status).not.toBe(0);
     expect(r.out).toContain('pairing must be "feedforward-only" or start with "aidlc-"');
+  });
+
+  test("lifecycle scalars parse and all valid statuses pass validation", () => {
+    const r = runBunEval(
+      `import { parseRuleFrontmatter, validateRuleFrontmatter } from ${lit(RULE_SCHEMA_TS)};\n` +
+        `const fm = parseRuleFrontmatter("---\\nstatus: active\\nstale_after: 2099-12-31\\nunknown: retained-for-forward-compat\\n---\\n");\n` +
+        `for (const status of ["active", "deprecated", "draft"]) validateRuleFrontmatter({ status }, "valid.md");\n` +
+        `validateRuleFrontmatter(fm, "parsed.md");\n` +
+        `console.log(JSON.stringify(fm));`,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}")).toEqual({
+      status: "active",
+      stale_after: "2099-12-31",
+    });
+  });
+
+  test("invalid status throws and names the file", () => {
+    const r = runBunEval(
+      `import { validateRuleFrontmatter } from ${lit(RULE_SCHEMA_TS)};\n` +
+        `validateRuleFrontmatter({ status: "retired" }, "rules/team.md");`,
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("rules/team.md: status must be one of");
+  });
+
+  test("malformed stale_after throws and names the file", () => {
+    const r = runBunEval(
+      `import { validateRuleFrontmatter } from ${lit(RULE_SCHEMA_TS)};\n` +
+        `validateRuleFrontmatter({ stale_after: "2099-1-01" }, "rules/project.md");`,
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("rules/project.md: stale_after must be a real calendar date");
+  });
+
+  test("impossible stale_after throws", () => {
+    const r = runBunEval(
+      `import { validateRuleFrontmatter } from ${lit(RULE_SCHEMA_TS)};\n` +
+        `validateRuleFrontmatter({ stale_after: "2026-02-30" }, "rules/org.md");`,
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("rules/org.md: stale_after must be a real calendar date");
+  });
+
+  test("blank and block-scalar lifecycle declarations fail through loadRules", () => {
+    const cases = [
+      ["blank status", "status:\n", "status must be one of"],
+      ["blank stale_after", "stale_after:\n", "stale_after must be a real calendar date"],
+      ["block status", "status: >\n  deprecated\n", "status must be one of"],
+      [
+        "block stale_after",
+        "stale_after: |\n  2026-01-01\n",
+        "stale_after must be a real calendar date",
+      ],
+    ] as const;
+
+    for (const [name, declaration, diagnostic] of cases) {
+      const rd = rulesDir({
+        "team.md": `---\n${declaration}---\n\n# Team\n`,
+      });
+      const r = runBunEval(
+        `import { loadRules } from ${lit(GRAPH_TS)};\nloadRules();`,
+        { AIDLC_RULES_DIR: rd },
+      );
+      expect(r.status, name).not.toBe(0);
+      expect(r.out, name).toContain("team.md");
+      expect(r.out, name).toContain(diagnostic);
+    }
+  });
+
+  test("unknown keys remain tolerated and frontmatter-less files remain empty", () => {
+    const r = runBunEval(
+      `import { parseRuleFrontmatter, validateRuleFrontmatter } from ${lit(RULE_SCHEMA_TS)};\n` +
+        `const unknown = parseRuleFrontmatter("---\\nfuture_key: future-value\\n---\\n# Rule\\n");\n` +
+        `const absent = parseRuleFrontmatter("# Rule without frontmatter\\n");\n` +
+        `validateRuleFrontmatter(unknown, "unknown.md");\n` +
+        `validateRuleFrontmatter(absent, "absent.md");\n` +
+        `console.log(JSON.stringify({ unknown, absent }));`,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}")).toEqual({
+      unknown: {},
+      absent: {},
+    });
+  });
+
+  test("isRuleStale follows deprecated, date, and boundary semantics", () => {
+    const r = runBunEval(
+      `import { isRuleStale } from ${lit(RULE_SCHEMA_TS)};\n` +
+        `console.log(JSON.stringify({\n` +
+        `deprecated: isRuleStale({ status: "deprecated" }, "2050-01-01"),\n` +
+        `active: isRuleStale({ status: "active" }, "2050-01-01"),\n` +
+        `draft: isRuleStale({ status: "draft" }, "2050-01-01"),\n` +
+        `past: isRuleStale({ stale_after: "2000-01-01" }, "2050-01-01"),\n` +
+        `future: isRuleStale({ stale_after: "2099-12-31" }, "2050-01-01"),\n` +
+        `boundary: isRuleStale({ stale_after: "2050-01-01" }, "2050-01-01")\n` +
+        `}));`,
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}")).toEqual({
+      deprecated: true,
+      active: false,
+      draft: false,
+      past: true,
+      future: false,
+      boundary: false,
+    });
   });
 
   // --- case 3 — parseRuleHeadings (via RuleFile.headings): splits A/B; skips

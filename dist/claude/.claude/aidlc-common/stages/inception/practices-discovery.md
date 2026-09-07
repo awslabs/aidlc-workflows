@@ -53,8 +53,6 @@ outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discove
 
 # Practices Discovery
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 This stage discovers how the team works: way of working, walking-skeleton
 stance, testing posture, deployment, and code style. It is a hub-and-spoke
 ensemble. The pipeline-deploy lead drafts; quality, developer, and devsecops
@@ -269,33 +267,18 @@ Use the stage-protocol.md completion template:
 This stage's declared outputs are markdown artifacts under
 `<record>/inception/practices-discovery/`.
 
-- **`required-sections`** checks the markdown shape of the declared outputs.
-- **`upstream-coverage`** checks citation of the brownfield evidence paths that
-  are present. Greenfield conditional inputs are absent by design.
+Imports: `required-sections`, `upstream-coverage`.
+
+Upstream targets: `code-structure`, `technology-stack`, `dependencies`, `code-quality-assessment`, `architecture`, `business-overview`.
+
+Brownfield upstream targets are conditional; inputs absent in a greenfield
+workspace do not count as missing coverage.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** - choices made where the stage prose was ambiguous
-- **Deviations** - places you intentionally departed from the stage prose, and why
-- **Tradeoffs** - alternatives considered and why you picked what you did
-- **Open questions** - anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z - <summary>; <context>`
-
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write through the
-section 13 learning tool to:
-
-- `aidlc/spaces/<active-space>/memory/project.md` by default, or `team.md` when
-  the human promotes a team-wide practice;
-- a new `.claude/sensors/aidlc-<id>.md` manifest for a verification
-  check, with its id added to the relevant stage's `sensors:` list.
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artifact directory as part of the stage's permanent record.
-Stage bodies remain immutable framework artifacts.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.

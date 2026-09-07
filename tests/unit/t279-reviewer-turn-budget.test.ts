@@ -119,7 +119,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(section).toMatch(/exactly ONE `## Review` section/);
       expect(section).toMatch(/exactly one verdict line/);
       expect(section).toMatch(
-        /Never end your run with the primary artifact missing its `## Review` section for this iteration\./,
+        /Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration\./,
       );
     });
 
@@ -202,7 +202,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("reviewer module §12a step 1 DELETES any existing ## Review section before EVERY dispatch (core + dist/claude)", () => {
+  test("reviewer module §12a step 1 records the request, hydrates prior findings, then deletes an existing ## Review section (core + dist/claude)", () => {
     // The stale-READY hole: a stage passes review READY; the human rejects at
     // the gate; the builder revises a produces[] artifact; the re-review is
     // itself cut off before writing - and the artifact still carries the
@@ -217,12 +217,35 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     ]) {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
-      expect(labelled).toMatch(/Invoke reviewer sub-agent\.\*\* Before dispatching - on every dispatch, not only the first/);
-      expect(labelled).toContain("DELETE that section");
-      expect(labelled).toMatch(/review history lives in the audit ledger/i);
+      expect(labelled).toMatch(
+        /Invoke reviewer sub-agent\.\*\* Before every dispatch, not only the first,[\s\S]*before changing an existing `## Review` section,[\s\S]*record the request/,
+      );
+      expect(labelled).toContain("Before every dispatch, not only the first");
+      expect(labelled).toContain(
+        "validated pending recovery request suspends the",
+      );
+      expect(labelled).toContain(
+        "`directive.review_artifact` names the one required Markdown output",
+      );
+      const request = labelled.indexOf(
+        "before changing an existing `## Review` section, record the request",
+      );
+      const hydrate = labelled.indexOf(
+        "aidlc-review-brief.ts context",
+        request,
+      );
+      const deletion = labelled.indexOf(
+        "DELETE the existing `## Review` section",
+        hydrate,
+      );
+      expect(request).toBeGreaterThan(-1);
+      expect(hydrate).toBeGreaterThan(request);
+      expect(deletion).toBeGreaterThan(hydrate);
+      expect(labelled).toContain("durable human dispositions from the audit ledger");
+      expect(labelled).toMatch(/receipt history remains in the audit ledger/i);
       // The Part 0 revision-path paragraph names step 1's delete rule as what
       // protects it.
-      expect(labelled).toContain("delete-before-dispatch rule removes the");
+      expect(labelled).toContain("request-first delete rule removes the stale");
       // Negative pin: the rename mechanism must not come back - superseded
       // sections leak reviewer prose into the claim-sources sensor scan.
       expect(labelled).not.toContain("## Review (superseded)");
@@ -241,35 +264,78 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(
         /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validate it/s,
       );
-      // Exactly one section, exactly one canonical token.
-      expect(labelled).toContain("exactly ONE current `## Review` section");
-      expect(labelled).toMatch(/exactly one canonical token, READY or NOT-READY/);
+      // Exactly one owned suffix with canonical identity fields.
+      expect(labelled).toContain(
+        "entire appended suffix is exactly ONE terminal owned `## Review` section",
+      );
+      expect(labelled).toContain(
+        "canonical verdict, reviewer, and iteration fields",
+      );
       // Partial and duplicated sections are named incomplete, not guessed at.
       expect(labelled).toMatch(/no canonical verdict line/);
+      expect(labelled).toContain("semantic bytes before the heading");
+      expect(labelled).toContain(
+        "rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes",
+      );
+      expect(labelled).toContain(
+        "Validation uses Bun's Markdown parser",
+      );
+      expect(labelled).toContain(
+        "list/blockquote/table containers cannot mint top-level ownership",
+      );
+      expect(labelled).toContain(
+        "forged/missing/conflicting duplicate ownership fields",
+      );
       expect(labelled).toMatch(/never guess which was meant/);
       // The incomplete-attempt path: retry the SAME unmatched request once,
       // consuming no iteration (the advisory budget is one pass - counting a
       // cut-off attempt would exhaust it without any review happening).
-      expect(labelled).toMatch(/On an incomplete attempt:[\s\S]*?`--retry-pending`[\s\S]*?consumes no review iteration/);
+      expect(labelled).toContain("**On an incomplete attempt:**");
       expect(labelled).toMatch(/re-dispatch it exactly once/);
+      expect(labelled).toContain("has not already spent its retry");
+      expect(labelled).toMatch(
+        /original artifact and\s+source bytes are restored/,
+      );
+      expect(labelled).toMatch(/never mints a\s+new fingerprint/);
+      expect(labelled).toContain("`Upgrade: legacy-request`");
+      expect(labelled).toMatch(
+        /A field-light historical `Retry: pending-request` marker is not\s+a modern binding/,
+      );
+      expect(labelled).toContain(
+        "A structurally malformed request row has no authority and is ignored",
+      );
       // The second incomplete attempt records the terminal receipt with the
       // named finding and routes per review class.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
-      expect(labelled).toMatch(/record the terminal receipt with `--verdict NOT-READY`/);
+      expect(labelled).toMatch(
+        /record\s+the\s+terminal receipt with `--verdict NOT-READY`/,
+      );
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
-      expect(labelled).toMatch(/never deadlocks/);
+      expect(labelled).toMatch(
+        /never presented on a\s+silently missing verdict, and never deadlocks/,
+      );
       // The turn cap is named as the reachable cause of a missing section.
       expect(labelled).toMatch(/hard turn cap/);
       // The complete-review receipt sentence survives verbatim - it was
       // silently dropped once in a rebase (PR #613 round 2, P1) and nothing
       // pinned it; now something does.
-      expect(labelled).toContain(
-        "record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>`",
+      expect(labelled).toMatch(
+        /record\s+the\s+terminal receipt with the same `aidlc-log\.ts review` command plus\s+`--verdict <READY\|NOT-READY>`/,
       );
       // Step 1's dispatch-failure contract now names the incomplete attempt
       // as a retry-pending cause too.
       expect(labelled).toMatch(/or ends without a recorded verdict/);
+      expect(labelled).toMatch(
+        /reuses\s+those original fingerprints instead of rebaselining/,
+      );
+      expect(labelled).toContain(
+        "malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request",
+      );
+      expect(labelled).toContain("one coherent snapshot");
+      expect(labelled).toContain(
+        "A complete reviewer appendix therefore records directly",
+      );
     }
   });
 
@@ -310,17 +376,39 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         "utf-8",
       );
       const labelled = `harness ${harness.name} module\n${module}`;
-      // Delete-before-dispatch, on every dispatch.
-      expect(labelled).toContain("DELETE that section");
-      expect(labelled).toContain("on every dispatch, not only the first");
-      // Canonical-verdict validation.
-      expect(labelled).toContain("exactly ONE current `## Review` section");
-      expect(labelled).toMatch(/exactly one canonical token, READY or NOT-READY/);
+      // Request-first, hydrate dispositions, then delete, on every dispatch.
+      expect(labelled).toContain("DELETE the existing `## Review` section");
+      expect(labelled).toContain("aidlc-review-brief.ts context");
+      expect(labelled).toContain(
+        "durable human dispositions from the audit ledger",
+      );
+      expect(labelled).toContain(
+        "before changing an existing `## Review` section",
+      );
+      expect(labelled).toContain("Before every dispatch, not only the first");
+      expect(labelled).toContain(
+        "validated pending recovery request suspends the",
+      );
+      // Canonical-verdict + ownership validation.
+      expect(labelled).toContain(
+        "entire appended suffix is exactly ONE terminal owned `## Review` section",
+      );
+      expect(labelled).toContain(
+        "canonical verdict, reviewer, and iteration fields",
+      );
       // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
       expect(labelled).toMatch(/no\s+current `## Review` section/);
       expect(labelled).toContain("`--retry-pending`");
-      expect(labelled).toContain("re-dispatch it exactly once");
+      expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
+      expect(labelled).toMatch(/never mints a\s+new fingerprint/);
+      expect(labelled).toContain("`Upgrade: legacy-request`");
+      expect(labelled).toContain(
+        "A structurally malformed request row has no authority and is ignored",
+      );
+      expect(labelled).toContain(
+        "complete reviewer appendix therefore records directly",
+      );
       // The review-class contract is present on every harness - including
       // Copilot, which shipped without it (its bullet predated #718 and the
       // six-harness test lists never caught it).

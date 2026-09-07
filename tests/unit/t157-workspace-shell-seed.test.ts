@@ -33,7 +33,7 @@
 //
 // SCOPE BOUNDARY. SEED ships the SHELL only. The lazy per-space skeleton
 // (intents/codekb/knowledge ensure-exists) + the workspace-scaffold→ensure-
-// exists rename is P4's auto-birth territory; the audit-shard WRITER/READER
+// exists rename is P4's auto-create territory; the audit-shard WRITER/READER
 // mechanism is P1 Step B's. This test asserts ONLY what SEED ships: the shell
 // resolves + the gitignore split is correct. It must NOT assert a .migrated
 // marker or a dummy intents/*/aidlc-state.md (that would defeat P1's
@@ -44,6 +44,7 @@
 // AIDLC_RULES_DIR seam (no LLM, no subprocess).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -51,6 +52,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -259,6 +261,29 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       expect(lines, `${h}: ignores per-intent .aidlc-*`).toContain(
         "aidlc/spaces/*/intents/*/.aidlc-*",
       );
+      expect(lines, `${h}: ignores engine-shaped sensor caches at any depth`).toContain(
+        "**/aidlc/spaces/*/intents/**/.aidlc-sensors/",
+      );
+      if (h === "cursor") {
+        expect(lines, "cursor: ignores the primary subagent ledger").toContain(
+          "aidlc/.aidlc-cursor-subagents/",
+        );
+        expect(lines, "cursor: ignores independent delegation witnesses").toContain(
+          "aidlc/.aidlc-cursor-subagent-*.json",
+        );
+      }
+
+      const repo = mkdtempSync(join(tmpdir(), `aidlc-t157-gitignore-${h}-`));
+      tempDirs.push(repo);
+      expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status, `${h}: git init`).toBe(0);
+      writeFileSync(join(repo, ".gitignore"), gi, "utf-8");
+      const nestedSensorCache =
+        "packages/api/aidlc/spaces/default/intents/.aidlc-sensors/x";
+      expect(
+        spawnSync("git", ["check-ignore", "-q", nestedSensorCache], { cwd: repo }).status,
+        `${h}: nested sensor cache is functionally ignored`,
+      ).toBe(0);
+
       // The flat-layout ignore rules are GONE (no leftover aidlc-docs/ leaf).
       const hasActiveIgnore = (pat: string): boolean =>
         lines.some((l) => l === pat); // an ignore rule, not the in-comment mention

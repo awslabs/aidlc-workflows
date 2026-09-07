@@ -187,7 +187,8 @@ Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed. A team that
 adds its own code- or config-emitting stage (a contract generator, an IaC
 executor) should set `workspace_requires: true` so the workspace guard applies.
-Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; bypass source binding and
+Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; that switch also bypasses
+the review-time required-output existence check. Bypass source binding and
 attribution separately with `AIDLC_SKIP_SOURCE_FRESHNESS=1`.
 
 ### `produces_kinds`
@@ -347,7 +348,8 @@ runs. Five values, four active:
   more to integrate.
 - `pipeline` — chain. The lead drafts; each support agent enriches in
   declared order, every link seeing the draft plus all earlier
-  contributions. Order is the point. Requires non-empty `support_agents`.
+  contributions. Order is the point. Requires non-empty `support_agents`, and
+  every agent across the lead plus support chain must be unique.
 - `mob` — mesh, run as bounded rounds: all support agents contribute in
   parallel against the lead's draft (mutually blind), the lead integrates,
   and unresolved objectors get one confirm-or-maintain round with the other
@@ -403,8 +405,11 @@ no agent file by design. No hardcoded enum in the schema — adding an agent
 means dropping its `.md` file in `.claude/agents/` with the required
 frontmatter. See
 [Contributing: Adding an Agent](11-contributing.md#adding-an-agent).
+Pipeline stages additionally reject a support agent repeated elsewhere in the
+chain, including the lead repeated as support, because link receipts identify
+one declared position by its unique agent.
 
-### `reviewer`, `reviewer_max_iterations`, and `review_class`
+### `reviewer`, `review_artifact`, `reviewer_max_iterations`, and `review_class`
 
 Optional. `reviewer` names a quality-gate agent invoked after the stage body
 produces its artifacts and before the approval gate (see [Stage
@@ -412,6 +417,13 @@ Protocol](04-stage-protocol.md)). Two reviewers ship today —
 `aidlc-product-lead-agent` and `aidlc-architecture-reviewer-agent` — and the
 compile validates the value against the discovered agent roster the same way
 `lead_agent` is validated.
+
+Every reviewer-bearing stage must also declare `review_artifact`, naming one
+required Markdown entry from `produces[]`. That scalar is the sole owner of the
+appended `## Review` section; list ordering and plugin-added outputs cannot
+change it. On a per-Unit stage the target must remain applicable for every Unit
+kind on which any required output is applicable, otherwise graph compilation
+fails. Structured outputs such as `traceability.json` cannot be review targets.
 
 `reviewer_max_iterations` caps the review/revise loop before the workflow proceeds
 to the gate with unresolved findings. It **defaults to 2** when `reviewer` is
@@ -493,13 +505,14 @@ Only `## Steps` is populated in v0.3.0.
 | Compartment | v0.3.0 | v0.5.0 | What goes here |
 |-------------|--------|--------|----------------|
 | `## Steps` | Required, populated | Unchanged | Imperative prose the agent follows |
-| `## Sensors` | Reserved, absent | Populated | Deterministic sensor bindings (IDs from the flat `.claude/sensors/` registry) |
-| `## Learn` | Reserved, absent | Populated | Loop-driver bindings and observer rules |
+| `## Sensors` | Reserved, absent | Populated | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
+| `## Learn` | Reserved, absent | Populated | Compact pointer to the shared §13 learning-loop contract and bootstrap exception |
 
 Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
 were slot-in changes, not body restructures. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
-the pull-import model.
+the pull-import model. Shared sensor behavior is defined once in
+`stage-protocol.md` §14, while the full learning ritual is defined in §13.
 
 **milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
 else. Most stage files already use `## Steps` as their first body heading.

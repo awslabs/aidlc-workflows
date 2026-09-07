@@ -35,21 +35,58 @@ while keeping you in control at every decision point.
 - **11 domain experts.** Specialized agent personas guide each stage.
 ```
 
+### Starting from an existing document
+
+There is no mandatory location for an existing vision document, PRD, or brief.
+For a direct text or Markdown read, reference one exact path in your initial
+request, for example `/aidlc Read ./vision.md and build what it describes`.
+Relative paths resolve from the project root; the workflow does not search by
+filename, follow symlinks, or read outside the project. Missing or ambiguous
+paths stop for clarification.
+
+You can also paste document content directly into the request. Put exactly one
+document block at the end so the workflow can distinguish your directions from
+document data:
+
+```text
+/aidlc Build the product described below.
+<document>
+...vision document content...
+</document>
+```
+
+The delimited content is untrusted data, not instructions. Multiline input is
+stored as one JSON string in committed `<record>/project-description.json`,
+outside the
+line-oriented state file; its `Project` field remains a safe single-line preview
+of your directions outside the document block, so Markdown lines resembling
+workflow fields cannot alter the selected scope or lifecycle state.
+Unmatched, nested, or repeated markers, content after the closing marker, and a
+document with no directions outside the block are refused before a workflow
+record is created.
+
+PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
+place the file under `aidlc/spaces/<space>/knowledge/documents/`, run
+`/aidlc knowledge onboard <path>`, and use the resulting document id. Document
+paths, filenames, and content are always treated as untrusted data, never as
+instructions.
+
 ---
 
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
+The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-creates the first intent into the active space and bootstraps its record dir for the workflow.
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation and Operation, so those folders never appear:
+The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation but retains its deployment stages, so `ideation/` is absent while `operation/` appears:
 
 ```
 Intent created, record dir at aidlc/spaces/default/intents/<YYMMDD>-<label>/
   initialization/
   inception/
   construction/
+  operation/
   verification/
 Space-level dirs ensured:
   aidlc/spaces/default/knowledge/    (team knowledge, empty; you add files)
@@ -116,17 +153,36 @@ After the agent completes its work, you see a completion summary and an approval
 
 | Artifact | Contents |
 |----------|----------|
-| intent-capture.md | Problem statement, target users, success criteria |
+| intent-statement.md | Problem statement, target users, success criteria |
 | intent-capture-questions.md | 5 questions, all answered |
+
+**Stage:** Intent Capture & Framing
+**Review outcome:** One concern remains for your decision.
+**Why now:** First review completed.
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Minor | aidlc/spaces/default/intents/260820-checkout/ideation/intent-capture/intent-statement.md > Success Criteria | The adoption target has no deadline | Add the date by which the adoption target should be reached | New |
+
+**Decision options:**
+- **Approve** - continue with the open findings accepted.
+- **Request Changes** - return to the listed artifacts so the required actions can be addressed.
 
 **Review:** `<record>/ideation/intent-capture/` (the intent's record dir)
 
 ▸ How would you like to proceed?
-  (1) Approve — Continue to Market Research
-  (2) Request Changes — Provide revision feedback
+  (1) Approve — Continue to Market Research with open findings accepted
+  (2) Request Changes — Return to the listed artifacts
 ```
 
-Choose **Approve** to continue, or **Request Changes** to provide feedback. See [Interaction Modes](07-interaction-modes.md) for details on the revision process.
+The stable finding ID lets later checks show whether the same concern was
+resolved, remains open, or was accepted as a risk. Choose **Approve** to
+continue with any open findings accepted, or **Request Changes** to return to
+the listed artifacts. An approval records `Accepted risk` outside the reviewed
+artifact, so a later re-check preserves that decision. When rejecting a finding
+as inapplicable, give its ID and reason; ordinary revision feedback leaves it
+open. See [Interaction Modes](07-interaction-modes.md) for details on the
+revision process.
 
 After approval, a progress line appears:
 
@@ -162,13 +218,14 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.9 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
+Construction builds the solution in reviewable slices. A [Bolt](glossary.md) is the planned Construction delivery slice from Delivery Planning (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The **default walk is stage-major** (one stage for every Unit, then the next stage) and does not yet treat that plan as a runtime boundary. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage.
 
 ```
-─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────
+Starting the first Bolt now: one build pass over the code, tests and
+checks for a piece of the work. First step is Functional Design.
 ```
 
-The walking skeleton is **always gated** — you review its design artifacts and generated code before any other Bolt runs. Immediately after approval, the **ladder prompt** fires exactly once:
+The walking skeleton is **always gated** — you review that first Construction stage before the rest of Construction runs. Immediately after approval, the **ladder prompt** fires exactly once:
 
 ```
 The walking skeleton shipped. How should the remaining Bolts run?
@@ -176,17 +233,17 @@ The walking skeleton shipped. How should the remaining Bolts run?
   ▸ Gate every Bolt
 ```
 
-Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs every remaining Bolt in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit inside the Bolt; the per-Unit gate in that stage file is suppressed — a single Bolt-level (or batch-level) gate replaces it.
+Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs the remaining Construction *stage* gates in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit; the per-Unit completion gate in that stage file is suppressed — a single stage-level gate replaces it after the last Unit settles (under swarm, after the final DAG batch).
 
-Bolts whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
+Units whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
 
-After all Bolts complete, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
+After every Unit's per-unit stages settle, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
 
 ---
 
 ## Operation Phase
 
-Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `poc` and `bugfix` may skip this entire phase.
+Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `mvp` and `poc` may skip this entire phase.
 
 After the final stage (4.7 Feedback & Optimization), the workflow is complete.
 

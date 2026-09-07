@@ -10,17 +10,17 @@
 // rule; the fixture is 5 code-level findings on a brownfield Todo app, the
 // canonical bugfix shape).
 //
-// Journey (one interactive run, stopped at the birth):
+// Journey (one interactive run, stopped at the creation):
 //   drive:     `/aidlc compose --report scan-report-sample.json` on a fresh
 //              BROWNFIELD project (the fixture stub) with the report copied in.
 //   conductor: dispatch -> triage -> proposal (matched: bugfix) -> gate
 //              (answerScript approves) -> NO scope write (stock match) ->
-//              same-turn birth on bugfix.
+//              same-turn creation on bugfix.
 //   disk:      NO new scope file (still 10 + 10 - the matched path skips the
-//              write); a born intent whose state carries Scope: bugfix.
+//              write); a created intent whose state carries Scope: bugfix.
 //
 // The deterministic halves are pinned by t198 (the --report flag parses,
-// value not leaked). This proves the LIVE triage->route->birth arc.
+// value not leaked). This proves the LIVE triage->route->creation arc.
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence (driveAidlc marks it SDK-dependent).
@@ -52,7 +52,7 @@ const APPROVE_ALL = {
 
 describe("t193 report composer journey (/aidlc compose --report, sdk live)", () => {
   test(
-    "a bug-shaped scan triages to the stock bugfix scope: no scope write, same-turn birth on bugfix",
+    "a bug-shaped scan triages to the stock bugfix scope: no scope write, same-turn creation on bugfix",
     async () => {
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
@@ -84,7 +84,7 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         assertToolResultContains(r, "Bash", "scan report at");
         assertToolResultContains(r, "Bash", "scan-report-sample.json");
 
-        // The gate fired and the birth ran in the SAME drive.
+        // The gate fired and the creation ran in the SAME drive.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
@@ -99,7 +99,7 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         ) as Record<string, unknown>;
         expect(Object.keys(grid).length).toBe(11);
 
-        // The born workflow rides the triaged route: a compact incremental
+        // The created workflow rides the triaged route: a compact incremental
         // scope (bugfix, or security-patch if the composer judged the hotspot
         // must deploy) - never the feature freeform default.
         const stateText = readStateFile(proj) ?? "";

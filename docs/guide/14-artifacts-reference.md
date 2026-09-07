@@ -84,9 +84,15 @@ level up, in the space-level per-repo CodeKB —
 per intent. On each applicable brownfield intent, the stage checks the store's
 recorded scope and working-tree fingerprint first. A verified-current store
 whose coverage fits the intent may be reused by human choice; otherwise a full
-or focused scan overwrites those nine files
+rescan replaces those nine files, while a focused scan merges the newly
+analyzed area into them and preserves prior prose outside it. Verified-current
+coverage is accumulated as a union; stale or unverifiable prior deep coverage
+is retained as prose and demoted to shallow
 (`reverse-engineering-timestamp.md` records when the last scan ran and what
-it covered). Intents therefore read the newest scan of the repo, not the one
+it covered). Pre-scan source/store generations and a locked all-artifact
+publication prevent a source change from being mislabeled current and prevent
+concurrent focused scans from silently replacing each other. Intents therefore
+read the newest scan of the repo, not the one
 taken when their own record dir was created. What the record dir does get is
 the stage's own `memory.md` diary — created by the engine when it emits the
 run-stage directive (see **Per-stage memory diary** below) — so an
@@ -116,7 +122,7 @@ method, state, audit, and artifacts — never application code. Generated code l
 in the workspace's **code repos**: in the common single-repo case, the project dir
 itself; in a multi-repo workspace, the sibling repo directories that are immediate
 children of the workspace root (each with its own `.git`). An intent records the
-repos it touches at birth — auto-discovered, or scoped with `--repos a,b` — in its
+repos it touches at creation - auto-discovered, or scoped with `--repos a,b` - in its
 `intents.json` row (`repos: [...]`); Construction anchors each git operation to one
 of them. An intent with no recorded `repos` is the single-repo default. See
 [CLI Commands](12-cli-commands.md).
@@ -137,9 +143,9 @@ flowchart LR
 
     CREATE --> REVIEW --> COMMIT --> CONSUME --> VERIFY
 
-    style CREATE fill:#e3f2fd,stroke:#2196f3
-    style REVIEW fill:#fff3e0,stroke:#ff9800
-    style VERIFY fill:#fce4ec,stroke:#e91e63
+    style CREATE fill:#e3f2fd,stroke:#2196f3,color:#000
+    style REVIEW fill:#fff3e0,stroke:#ff9800,color:#000
+    style VERIFY fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 <!-- Text fallback: Stage creates artifact, reviewed at approval gate, committed to version control, consumed by downstream stages, verified at phase boundary. -->
@@ -180,7 +186,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/` — one shared store per repo, reused when verified current or replaced by a human-selected rescan; only the stage's `memory.md` diary lands in the intent record) | Brownfield only |
+| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/` — one shared store per repo, reused when verified current, replaced by a full rescan, or cumulatively extended by a focused scan; only the stage's `memory.md` diary lands in the intent record) | Brownfield only |
 | 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md`, plus quality/developer/devsecops contribution files (promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` after approval) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |
@@ -250,7 +256,7 @@ cursors and machine-local derived state are ignored.
 | `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
-| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-conversation session→intent map) |
+| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
 
 ---

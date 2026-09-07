@@ -249,7 +249,7 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
   // ============================================================
   // Test 3 — the loader derives a fixture agent's display + examples from its
   // frontmatter. (P4: the old per-agent knowledge-README scaffolding moved out
-  // of birth — the workspace shell ships in dist/ via SEED, and birth only
+  // of creation - the workspace shell ships in dist/ via SEED, and create only
   // ensure-exists the per-intent record dirs. The covered unit is still
   // loadAgents(); here we prove it captures a dropped-in agent's display_name
   // AND the whole examples list in-process, the same derivation the README
@@ -273,8 +273,8 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
 
   // ============================================================
   // Test 4 — a malformed agent (missing display_name) is REJECTED by the loader.
-  // (P4: birth no longer iterates agents to scaffold knowledge READMEs, so the
-  // rejection no longer fires from birth. The validation lives in the loader;
+  // (P4: creation no longer iterates agents to scaffold knowledge READMEs, so the
+  // rejection no longer fires from creation. The validation lives in the loader;
   // doctor — which calls loadAgents() — surfaces it. Run the per-project doctor
   // and assert it errors citing the file + the field.)
   // ============================================================

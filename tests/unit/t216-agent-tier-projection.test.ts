@@ -20,8 +20,8 @@
 //   balanced  -> model: sonnet,  effort: medium (the reviewer tier; pinned
 //                in 2.5.40 after live A/B showed medium reviews at ~half the
 //                xhigh wall-clock with no finding-quality loss)
-//   templated -> model: sonnet,  effort: medium (the one deliberate,
-//                cost-saving downgrade)
+//   templated -> model: sonnet,  effort: medium (the pattern-following tier;
+//                currently the same cost-saving projection as balanced)
 //
 // Why this exists: t04 pins the authored tier split for the 11 domain-expert
 // agents. This companion pins the complete 14-agent roster's PROJECTED
@@ -113,7 +113,7 @@ describe("t216 complete Claude agent tier-projection contract", () => {
     }
   });
 
-  test("effort: is pinned for templated agents and ABSENT everywhere else", () => {
+  test("effort: matches the per-agent projection policy", () => {
     for (const agent of AGENTS) {
       const values = keyValues(frontmatter(agent), "effort");
       const want = EXPECTED[agent].effort;

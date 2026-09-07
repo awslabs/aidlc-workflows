@@ -23,7 +23,7 @@
 // THIS TEST OWNS THE DEPTH-AT-INIT SURFACE (the t27 gap). The tui t27
 // depth-override twin deliberately covers only the config-change one-shot
 // (`--depth <x>` on an EXISTING workflow) and omits the .sh's Case B
-// (`bugfix --depth comprehensive` — depth override AT workflow birth). That
+// (`bugfix --depth comprehensive` - depth override AT workflow creation). That
 // surface is THIS file's: `--depth comprehensive` overriding the bugfix scope's
 // Minimal default at init, asserted on the Depth state field the init tool writes.
 //

@@ -42,7 +42,7 @@ Before you forward `$ARGUMENTS` on step 1, make the SAME recognise-vs-route
 judgment the `/aidlc` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then `next`
-correctly returns `done` (the engine is read-only and never births alongside a
+correctly returns `done` (the engine is read-only and never creates alongside a
 live intent), and the loop above would simply stop. New work is NOT a
 continuation; the escape hatch is `next --new-intent`.
 
@@ -50,7 +50,7 @@ continuation; the escape hatch is `next --new-intent`.
   names a distinct feature/bug/unit unrelated to the active intent's subject
   (`bun .claude/tools/aidlc-utility.ts intent --json` gives its `slug` and
   `status`). When in doubt, continue: false-positive offers are the main risk.
-- **On genuine new-work, OFFER, never auto-birth.** Surface an
+- **On genuine new-work, OFFER, never auto-create.** Surface an
   `AskUserQuestion` showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
   `security-patch` (the new work is likely the same flavour that made the user reach for

@@ -792,7 +792,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   // NOTE: a reviewer-loop-incomplete rule was intentionally dropped here. It
   // depended on **Review** / **Review Iterations** audit fields that no emitter
   // on this base writes (the reviewer verdict lives in a `## Review` section on
-  // the primary artifact and the iteration counter lives only in conductor
+  // the stage's explicit review_artifact and the iteration counter lives only in conductor
   // context — see stage-protocol.md), so the rule was unreachable dead code.
   // Reinstate it only alongside a real audit emission for the reviewer verdict.
 

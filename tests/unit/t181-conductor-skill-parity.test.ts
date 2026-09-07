@@ -9,7 +9,7 @@
 // (per-intent layout, --init retirement, intent/space verbs, multi-repo --repo,
 // the "offer a second intent" conductor prose) updated every authored conductor
 // SKILL — EXCEPT harness/kiro-ide/skills/aidlc/SKILL.md, which was a stale fork
-// byte-identical to kiro CLI's SKILL at origin/v2 and never re-synced across the
+// byte-identical to kiro CLI's SKILL at origin/main and never re-synced across the
 // 43-commit stack. It shipped GREEN because NO test reads a per-harness conductor
 // SKILL: `package.ts --check` only proves dist==authored, so a self-consistent-
 // but-stale authored SKILL passes. This gate closes that hole in BOTH directions:
@@ -29,7 +29,8 @@
 // (t148/package.ts --check), so gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -51,6 +52,40 @@ function harnessQuestionAnnexes(): string[] {
     .sort();
 }
 
+function stageDefinitionFiles(): string[] {
+  const coreRoot = join(REPO_ROOT, "core", "aidlc-common", "stages");
+  const core = readdirSync(coreRoot, { withFileTypes: true })
+    .filter((phase) => phase.isDirectory())
+    .flatMap((phase) =>
+      readdirSync(join(coreRoot, phase.name), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map(
+          (entry) =>
+            `core/aidlc-common/stages/${phase.name}/${entry.name}`,
+        ),
+    );
+  const pluginsRoot = join(REPO_ROOT, "plugins");
+  const plugins = readdirSync(pluginsRoot, { withFileTypes: true })
+    .filter((plugin) => plugin.isDirectory())
+    .flatMap((plugin) => {
+      const stagesRoot = join(pluginsRoot, plugin.name, "stages");
+      if (!existsSync(stagesRoot)) return [];
+      return readdirSync(stagesRoot, { withFileTypes: true })
+        .filter((phase) => phase.isDirectory())
+        .flatMap((phase) =>
+          readdirSync(join(stagesRoot, phase.name), {
+            withFileTypes: true,
+          })
+            .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+            .map(
+              (entry) =>
+                `plugins/${plugin.name}/stages/${phase.name}/${entry.name}`,
+            ),
+        );
+    });
+  return [...core, ...plugins].sort();
+}
+
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
 // predicate as t174's `--init` scan.
@@ -58,7 +93,7 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
-  "intent-create", // run-then-continue birth verb (replaced `init`)
+  "intent-create", // run-then-continue creation verb (replaced `init`)
   "stage-protocol-swarm.md", // conditional swarm transport + --repo contract
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
@@ -118,6 +153,27 @@ const KIRO_TASK_LIST_TOKEN =
 const KIRO_SUBAGENT_TOKEN =
   '{mode:"blocking", task:"...", stages:[{name:"...", role:"aidlc-...", prompt_template:"..."}]}';
 
+const KIRO_DIARY_TOKENS = [
+  "**Kiro diary write discipline.**",
+  "output-only targets, never context",
+  "NEVER call a read tool or shell read/existence command on them at any point",
+  "replace only the exact canonical heading line",
+  "This preserves all existing entries without reading them",
+  "Do not use a shell append that creates a duplicate heading",
+  "do not read back to verify an update",
+  "Do not probe, bootstrap, or initialize it",
+  "`directive.memory_path` stays engine-created and output-only on this path",
+  "`directive.memory_path` is engine-created and output-only",
+  "include the Kiro diary write discipline verbatim",
+  "Every `entry.unit_memory_path` is engine-created and output-only",
+];
+
+const RETIRED_KIRO_DIARY_TOKENS = [
+  "initializing the diary",
+  "initialize the diary at `directive.memory_path`",
+  "First checking the diary exists",
+];
+
 const SUMMARY_STOP_SKILL_TOKENS = [
   "before running the stage body or writing `produces`",
   "checkpoint-specific `aidlc-log.ts decision` / `answer` pair with `--single`",
@@ -143,6 +199,13 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   "checkpoint-specific `aidlc-log.ts answer`",
   '**"What should change?"**',
 ];
+
+const P3_EVIDENCE_DIR = join(
+  REPO_ROOT,
+  "tests",
+  "evidence",
+  "p3-kiro-routing",
+);
 
 const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   claude: ["/clear", "`/aidlc`"],
@@ -242,7 +305,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
-  test("every shipped conductor SKILL stops new-intent births and names its fresh-session flow", () => {
+  test("every shipped conductor SKILL stops after new-intent creation and names its fresh-session flow", () => {
     const failures: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
@@ -364,6 +427,89 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("Kiro conductor SKILLs never read, probe, or initialize engine-created stage diaries", () => {
+    const persona = readFileSync(
+      join(REPO_ROOT, "core", "aidlc-common", "conductor.md"),
+      "utf-8",
+    );
+    expect(persona).toContain("The engine creates `memory.md`");
+    expect(persona).toContain("NEVER probe for `memory.md`");
+    expect(persona).toContain("append timestamped bullets");
+
+    const failures: string[] = [];
+    const bodies = new Map<string, string>();
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      bodies.set(harness, body);
+      for (const token of KIRO_DIARY_TOKENS) {
+        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+      for (const token of RETIRED_KIRO_DIARY_TOKENS) {
+        if (body.includes(token)) failures.push(`${rel}  retired: ${token}`);
+      }
+    }
+    expect(failures).toEqual([]);
+
+    const cli = bodies.get("kiro") as string;
+    const ide = bodies.get("kiro-ide") as string;
+    for (const anchor of [
+      "**Isolated stage-runner branch.**",
+      "| `run-stage` |",
+      "**Per-unit batch waves (optional).**",
+    ]) {
+      const nextAnchor =
+        anchor === "**Isolated stage-runner branch.**"
+          ? "For an isolated run's reviewer"
+          : anchor === "| `run-stage` |"
+            ? "| `ask` |"
+            : "`directive.mode` selects";
+      const cliStart = cli.indexOf(anchor);
+      const ideStart = ide.indexOf(anchor);
+      expect(cliStart, `Kiro CLI missing ${anchor}`).toBeGreaterThan(-1);
+      expect(ideStart, `Kiro IDE missing ${anchor}`).toBeGreaterThan(-1);
+      expect(
+        cli.slice(cliStart, cli.indexOf(nextAnchor, cliStart)).trim(),
+        `${anchor} diary contract drifted between Kiro CLI and IDE`,
+      ).toBe(ide.slice(ideStart, ide.indexOf(nextAnchor, ideStart)).trim());
+    }
+  });
+
+  test("stage definitions preserve the centralized engine-owned diary boundary", () => {
+    const failures: string[] = [];
+    const protocol = readFileSync(
+      join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"),
+      "utf-8",
+    );
+    for (const required of [
+      "created by the engine from the shipped template",
+      "Treat this path as an output-only target",
+      "the orchestrator never reads, probes, creates, or initializes it",
+    ]) {
+      if (!protocol.includes(required)) {
+        failures.push(`stage-protocol.md §13 missing: ${required}`);
+      }
+    }
+
+    for (const rel of stageDefinitionFiles()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("memory.md")) continue;
+      if (
+        !body.includes("engine-created") &&
+        !body.includes("stage-protocol.md §13")
+      ) {
+        failures.push(`${rel} missing centralized diary contract reference`);
+      }
+      for (const retired of [
+        "create on stage start if absent",
+        "Before the approval gate, read memory.md",
+      ]) {
+        if (body.includes(retired)) failures.push(`${rel} retired: ${retired}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
     for (const rel of skills) {
@@ -375,6 +521,45 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every conductor distinguishes its rendered escape from an unmatched reply", () => {
+    const missing: string[] = [];
+    for (const harness of HARNESS_MATRIX) {
+      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (harness.name === "codex") {
+        const token =
+          "native **None of the above** escape (including its notes-field text) or the numbered-prose **Other** escape";
+        if ((body.match(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length < 2) {
+          missing.push(`${rel}  missing native/prose Codex escape branches`);
+        }
+        if (!body.includes("active track supplies exactly one escape")) {
+          missing.push(`${rel}  missing Codex de-duplication rule`);
+        }
+      } else if ((body.match(/If the reply is \*\*Other\*\*/g) ?? []).length < 2) {
+        missing.push(`${rel}  missing summary/approval Other branches`);
+      }
+      if (!body.includes("semantic choice")) {
+        missing.push(`${rel}  missing semantic-choice distinction`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("Codex conductor names both renderer-defined escape response shapes", () => {
+    const skill = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/SKILL.md"),
+      "utf-8",
+    );
+    const annex = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/question-rendering.md"),
+      "utf-8",
+    );
+    expect(annex).toContain('"None of the above" escape with a notes field');
+    expect(skill).toContain("native **None of the above** escape");
+    expect(skill).toContain("numbered-prose **Other** escape");
+    expect(skill).toContain("active track supplies exactly one escape");
   });
 
   test("every question renderer pins the mandatory summary checkpoint", () => {
@@ -401,6 +586,133 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(annex).toContain('ask_type: "new-work-routing"');
     expect(annex).toContain("routes through `next`");
     expect(annex).toContain("never through `report`");
+  });
+
+  test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
+    const missing: string[] = [];
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
+      const annexRel = `harness/${harness}/skills/aidlc/question-rendering.md`;
+      const skill = readFileSync(join(REPO_ROOT, skillRel), "utf-8");
+      const annex = readFileSync(join(REPO_ROOT, annexRel), "utf-8");
+      for (const token of [
+        "sole route authority",
+        "including `intent --json`",
+        "add a recommendation",
+        "then END THE TURN",
+        "unselected-intent clone",
+        "Only before the first engine response",
+        '"or tell me" does not satisfy this required option',
+        "With `available_intents`",
+        "directive.available_intents",
+        "directive.numbered_prose_question",
+        "do not render, paraphrase, or reconstruct",
+        "If continuation or reshape is chosen without a record",
+        "**Typed new-work Other response.**",
+        'ask exactly **"What would you like me to do instead?"**',
+        '`next "<human alternative>"`',
+        "with their words unchanged",
+      ]) {
+        if (!skill.includes(token)) missing.push(`${skillRel}  missing: ${token}`);
+      }
+      for (const token of [
+        "## Engine-emitted ask directives",
+        "Untyped asks use `directive.question`",
+        'For `ask_type: "new-work-routing"`',
+        "`directive.numbered_prose_question` verbatim",
+        "`4. **Other** — describe what you want instead`",
+        "older and newer Kiro",
+        "untyped intent-picker ask",
+        "Every engine-ask render is invalid",
+        '**"What would you like me to do instead?"**',
+        '`next "<human alternative>"`',
+        "never use `report` for this response route",
+      ]) {
+        if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("retained native Windows evidence proves completed CLI and IDE routing", () => {
+    const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
+    const hashes: Record<string, string> = {
+      "windows-kiro-routing-cli.log":
+        "465b2cb860a748d4af7189a16409914f6a134d62b7824e75bd39d390450324f7",
+      "windows-kiro-routing-cli.ndjson":
+        "034b783b3389ab002dc8f5714023d618363600bb4205e826a2314631ce89a600",
+      "windows-kiro-routing-ide.log":
+        "f76c3e7ba1a8b4bb8ea9d313dca33d072baa6ea95826391115900da98c6b4ceb",
+      "windows-kiro-routing-ide.ndjson":
+        "d776cbe91f870fcda0b558657e1fcafeccd8f32190793bfb9e7cd5ce18937252",
+    };
+    for (const [file, expected] of Object.entries(hashes)) {
+      const body = readFileSync(join(P3_EVIDENCE_DIR, file));
+      expect(createHash("sha256").update(body).digest("hex"), file).toBe(
+        expected,
+      );
+      expect(manifest).toContain(`${expected}  ${file}`);
+    }
+
+    const cliLog = readFileSync(
+      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.log"),
+      "utf-8",
+    );
+    expect(cliLog).toContain(" 2 pass");
+    expect(cliLog).toContain(" 0 fail");
+    const cliEvents = readFileSync(
+      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.ndjson"),
+      "utf-8",
+    )
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const cliResults = cliEvents.filter((event) => event.event === "result");
+    expect(cliResults).toHaveLength(2);
+    for (const result of cliResults) {
+      expect(result.stopReason).toBe("end_turn");
+      expect(result.toolCalls).toBe(1);
+    }
+    const cliToolCalls = cliEvents.filter((event) => event.event === "tool_call");
+    expect(cliToolCalls).toHaveLength(2);
+    expect(
+      cliToolCalls.every((event) =>
+        String(event.title).includes("aidlc-orchestrate.ts next")
+      ),
+    ).toBe(true);
+    expect(
+      cliToolCalls.some((event) => String(event.title).includes("intent --json")),
+    ).toBe(false);
+
+    const ideLog = readFileSync(
+      join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.log"),
+      "utf-8",
+    );
+    expect(ideLog).toContain(" 1 pass");
+    expect(ideLog).toContain(" 0 fail");
+    const ide = JSON.parse(
+      readFileSync(
+        join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.ndjson"),
+        "utf-8",
+      ),
+    ) as {
+      platform?: string;
+      completed_turn?: boolean;
+      intent_query_present?: boolean;
+      directive?: {
+        ask_type?: string;
+        numbered_prose_question?: string;
+      };
+      ordered_lists?: string[][];
+    };
+    expect(ide.platform).toBe("win32");
+    expect(ide.completed_turn).toBe(true);
+    expect(ide.intent_query_present).toBe(false);
+    expect(ide.directive?.ask_type).toBe("new-work-routing");
+    expect(ide.directive?.numbered_prose_question).toContain("4. **Other**");
+    expect(ide.ordered_lists).toHaveLength(1);
+    expect(ide.ordered_lists?.[0]).toHaveLength(4);
+    expect(ide.ordered_lists?.[0]?.[3]).toContain("Other");
   });
 
   test("prose renderers remap file-backed source letters to numbered prose", () => {

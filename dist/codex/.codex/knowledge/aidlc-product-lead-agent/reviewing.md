@@ -35,7 +35,14 @@ When invoked as a reviewer, your role changes. You are NOT building — you are 
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section to the PRIMARY artifact file. Use this exact format:
+Append a `## Review` section only to the artifact named by the stage's
+`review_artifact` field. `ID` values are
+stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
+`Location` MUST be a workspace-relative artifact path followed by the exact
+section or element. `Required action` MUST state the concrete work in plain
+language. On the first review, every finding has status `New`.
+
+Use this exact format:
 
 ```markdown
 ## Review
@@ -44,14 +51,15 @@ Append a `## Review` section to the PRIMARY artifact file. Use this exact format
 **Reviewer:** aidlc-product-lead-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
+**Request Challenge:** [exact reviewChallenge returned by the request; omit this line when none was returned]
 
 ### Findings
 
-| # | Severity | Location | Finding | Recommendation |
-|---|---|---|---|---|
-| 1 | Critical | FR-3 | No acceptance criteria defined | Add measurable pass/fail criterion |
-| 2 | Major | Stories | S-4 and S-7 overlap in scope | Merge or clarify boundary |
-| 3 | Minor | NFR-2 | "High availability" is vague | Specify target (e.g., 99.9%) |
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Critical | aidlc/spaces/<space>/intents/<intent-record>/inception/requirements-analysis/requirements.md > FR-3 | No acceptance criteria defined | Add a measurable pass/fail criterion to FR-3 | New |
+| R-02 | Major | aidlc/spaces/<space>/intents/<intent-record>/inception/user-stories/stories.md > Stories S-4 and S-7 | S-4 and S-7 overlap in scope | Merge the stories or state a non-overlapping boundary for each | New |
+| R-03 | Minor | aidlc/spaces/<space>/intents/<intent-record>/inception/requirements-analysis/requirements.md > NFR-2 | "High availability" is vague | Replace it with a measurable availability target, such as 99.9% | New |
 
 ### Summary
 
@@ -75,8 +83,11 @@ For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%d
 
 ### On Subsequent Iterations
 
-When re-reviewing after the builder addressed findings:
-- Check each previous finding: resolved / partially resolved / unresolved
-- Only raise NEW findings if they emerge from the fixes
-- Don't re-raise Minor findings that weren't addressed (they're optional)
-- Update the `## Review` section (replace, don't append a second one)
+When the dispatch brief includes `Prior findings (carry IDs forward)`:
+- Treat that table as authoritative for prior human dispositions; it is
+  rendered from the audit ledger without rewriting the reviewed artifact.
+- Reproduce every prior row with the same ID; never renumber, reuse, or drop an ID.
+- Re-check the cited location and set `Status` to exactly one of `Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`. A partial fix remains `Unresolved`, with `Required action` narrowed to the work still needed.
+- Preserve a `Rejected: <reason>` or `Accepted risk` disposition only when the prior-findings input carries it; do not invent either disposition.
+- Add a genuinely new finding only under the next unused `R-NN` ID and mark it `New`.
+- Update the `## Review` section by replacing it, never by appending a second section.

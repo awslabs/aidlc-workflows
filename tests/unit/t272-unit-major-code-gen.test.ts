@@ -37,7 +37,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -106,6 +112,13 @@ const PRODUCES: Record<string, string[]> = {
     "code-summary",
     "traceability",
   ],
+};
+const REVIEW_ARTIFACTS: Record<string, string> = {
+  "functional-design": "functional-spec",
+  "nfr-requirements": "security-requirements",
+  "nfr-design": "security-design",
+  "infrastructure-design": "cicd-pipeline",
+  "code-generation": "code-generation-plan",
 };
 // The widened walk block, graph order: design stages then code-generation.
 const BLOCK = [
@@ -230,7 +243,7 @@ function runReport(proj: string, args: string[]): Directive {
       const e: NodeJS.ProcessEnv = {
         ...process.env,
         // This routing fixture is intentionally not a Git checkout. Source
-        // freshness is exercised end to end by t304; keep this test scoped to
+        // freshness is exercised end to end by t314; keep this test scoped to
         // the unit-major cascade instead of minting unbindable review receipts.
         AIDLC_SKIP_SOURCE_FRESHNESS: "1",
       };
@@ -265,6 +278,17 @@ function runStatusSync(proj: string, stage: string): void {
 }
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const iteration = 1;
+  const reviewArtifact = REVIEW_ARTIFACTS[stage];
+  if (!reviewArtifact) throw new Error(`no review artifact fixture for ${stage}`);
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    stage,
+    artifactFilename(reviewArtifact),
+  );
   if (stage === "code-generation") {
     const dir = join(seededRecordDir(proj), "construction", unit, stage);
     writeFileSync(
@@ -276,16 +300,34 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     LOG,
     "review",
     "--stage", stage,
-    "--reviewer", "aidlc-architecture-reviewer-agent",
+    "--reviewer", reviewer,
     "--unit", unit,
-    "--iteration", "1",
+    "--iteration", String(iteration),
     "--project-dir", proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
+  const env = {
+    ...process.env,
+    AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+  };
+  const request = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 
@@ -405,7 +447,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("code-generation");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
+    expect(d.message).toContain("work items are not complete");
   }, 30000);
 
   // 4: revision re-entry through the widened block. From a fully-covered

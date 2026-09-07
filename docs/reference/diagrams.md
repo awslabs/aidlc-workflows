@@ -40,7 +40,7 @@ graph LR
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
         C1["Functional Design"]
         C7["CI Pipeline"]
-        C1 -.->|"3.1-3.5 per Bolt; 3.6-3.7 once after all Bolts"| C7
+        C1 -.->|"3.1–3.5 stage-major per Unit; 3.6–3.7 once after all Units"| C7
     end
 
     subgraph OPERATION["OPERATION (4.1-4.7)"]
@@ -55,11 +55,11 @@ graph LR
     C7 -->|"Verification Gate 3"| O1
     O7 -.->|"Feedback Loop"| I1
 
-    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
-    style INCEPTION fill:#e3f2fd,stroke:#2196f3
-    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800
-    style OPERATION fill:#fce4ec,stroke:#e91e63
+    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
+    style INCEPTION fill:#e3f2fd,stroke:#2196f3,color:#000
+    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800,color:#000
+    style OPERATION fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 ---
@@ -91,14 +91,14 @@ flowchart TD
     S16 -.->|CONDITIONAL| S17
     S17 ==>|ALWAYS| VG1
 
-    style S11 fill:#c8e6c9,stroke:#388e3c
-    style S14 fill:#c8e6c9,stroke:#388e3c
-    style S17 fill:#c8e6c9,stroke:#388e3c
-    style S12 fill:#fff9c4,stroke:#f9a825
-    style S13 fill:#fff9c4,stroke:#f9a825
-    style S15 fill:#fff9c4,stroke:#f9a825
-    style S16 fill:#fff9c4,stroke:#f9a825
-    style VG1 fill:#ef9a9a,stroke:#c62828
+    style S11 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S14 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S17 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S12 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S13 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S15 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S16 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG1 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 ---
@@ -149,34 +149,34 @@ flowchart TD
     S28 -.->|CONDITIONAL| S27
     S27 ==>|ALWAYS| VG2
 
-    style S21 fill:#bbdefb,stroke:#1565c0
-    style S22 fill:#c8e6c9,stroke:#388e3c
-    style S27 fill:#c8e6c9,stroke:#388e3c
-    style S22a fill:#fff9c4,stroke:#f9a825
-    style S23 fill:#fff9c4,stroke:#f9a825
-    style S24 fill:#fff9c4,stroke:#f9a825
-    style S25 fill:#fff9c4,stroke:#f9a825
-    style S26 fill:#fff9c4,stroke:#f9a825
-    style VG2 fill:#ef9a9a,stroke:#c62828
-    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5
+    style S21 fill:#bbdefb,stroke:#1565c0,color:#000
+    style S22 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S27 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S22a fill:#fff9c4,stroke:#f9a825,color:#000
+    style S23 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S24 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S25 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S26 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG2 fill:#ef9a9a,stroke:#c62828,color:#000
+    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5,color:#000
 ```
 
 ---
 
 ## 4. Construction Flow
 
-The Construction phase executes Bolt-by-Bolt per `bolt-plan.md`. Each Bolt covers a coherent slice of one or more Units of Work and runs stages 3.1–3.5 once. The walking-skeleton Bolt always runs first as a single-Bolt batch; subsequent Bolts may run in parallel batches as the dependency graph allows. After the final Bolt, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across all Bolts. Stage 3.5 (Code Generation) runs as a subagent and is shown in a hexagonal shape.
+The Construction phase's **default walk is stage-major**: one in-scope stage runs for every Unit, then the next stage. Runtime batches come from `unit-of-work-dependency.md` (2.7). `bolt-plan.md` is the 2.9 planning artifact — not the walk source. The walking-skeleton gate is the first in-scope Construction EXECUTE stage; later Units may run in parallel batches as the DAG allows. After every per-unit stage settles, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once. Stage 3.5 (Code Generation) runs as a subagent and is shown in a hexagonal shape.
 
 ```mermaid
 flowchart TD
     START(["Begin Construction"])
 
-    subgraph PER_BOLT["Per-Bolt Loop (walking skeleton first; later Bolts may parallelise)"]
-        S31["3.1 Functional Design\n(aidlc-architect-agent)\nCONDITIONAL"]
-        S32["3.2 NFR Requirements\n(aidlc-architect-agent)\nCONDITIONAL"]
-        S33["3.3 NFR Design\n(aidlc-architect-agent)\nCONDITIONAL"]
-        S34["3.4 Infrastructure Design\n(aidlc-aws-platform-agent)\nCONDITIONAL"]
-        S35{{"3.5 Code Generation\n(aidlc-developer-agent)\nsubagent: aidlc-developer-agent\nALWAYS per unit in Bolt"}}
+    subgraph PER_STAGE["Stage-major walk (a stage for every Unit, then the next stage)"]
+        S31["3.1 Functional Design\n(aidlc-architect-agent)\nCONDITIONAL — every Unit"]
+        S32["3.2 NFR Requirements\n(aidlc-architect-agent)\nCONDITIONAL — every Unit"]
+        S33["3.3 NFR Design\n(aidlc-architect-agent)\nCONDITIONAL — every Unit"]
+        S34["3.4 Infrastructure Design\n(aidlc-aws-platform-agent)\nCONDITIONAL — every Unit"]
+        S35{{"3.5 Code Generation\n(aidlc-developer-agent)\nsubagent: aidlc-developer-agent\nALWAYS per Unit"}}
 
         S31 -.-> S32
         S32 -.-> S33
@@ -185,9 +185,8 @@ flowchart TD
         S31 -.->|"skip if not\nin plan"| S35
     end
 
-    START --> PER_BOLT
-    PER_BOLT -->|"More Bolts?"| PER_BOLT
-    PER_BOLT -->|"All Bolts done"| S36
+    START --> PER_STAGE
+    PER_STAGE --> S36
 
     S36["3.6 Build and Test\n(aidlc-quality-agent)\nALWAYS"]
     S37["3.7 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL"]
@@ -197,22 +196,22 @@ flowchart TD
     S36 -.->|"skip CI if\nnot in scope"| VG3
     S37 -.-> VG3
 
-    style PER_BOLT fill:#fff3e0,stroke:#e65100
-    style S35 fill:#bbdefb,stroke:#1565c0
-    style S31 fill:#fff9c4,stroke:#f9a825
-    style S32 fill:#fff9c4,stroke:#f9a825
-    style S33 fill:#fff9c4,stroke:#f9a825
-    style S34 fill:#fff9c4,stroke:#f9a825
-    style S36 fill:#c8e6c9,stroke:#388e3c
-    style S37 fill:#fff9c4,stroke:#f9a825
-    style VG3 fill:#ef9a9a,stroke:#c62828
+    style PER_STAGE fill:#fff3e0,stroke:#e65100,color:#000
+    style S35 fill:#bbdefb,stroke:#1565c0,color:#000
+    style S31 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S32 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S33 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S34 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S36 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S37 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG3 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 ---
 
 ## 5. Operation Flow
 
-The Operation phase covers deployment, environment provisioning, observability, incident response, performance validation, and feedback. All seven stages are CONDITIONAL (the entire phase may be skipped for poc and bugfix scopes). All stages run inline. Stage 4.7 is the terminal stage; upon approval, the workflow is complete or a new Ideation cycle can begin.
+The Operation phase covers deployment, environment provisioning, observability, incident response, performance validation, and feedback. All seven stages are CONDITIONAL (the entire phase may be skipped for mvp and poc scopes). All stages run inline. Stage 4.7 is the terminal stage; upon approval, the workflow is complete or a new Ideation cycle can begin.
 
 ```mermaid
 flowchart TD
@@ -234,15 +233,15 @@ flowchart TD
     S47 -->|"Approve"| DONE(["Workflow Complete"])
     S47 -->|"Start New Cycle"| IDEATION(["Return to Ideation 1.1"])
 
-    style S41 fill:#fce4ec,stroke:#c62828
-    style S42 fill:#fce4ec,stroke:#c62828
-    style S43 fill:#fce4ec,stroke:#c62828
-    style S44 fill:#fce4ec,stroke:#c62828
-    style S45 fill:#fce4ec,stroke:#c62828
-    style S46 fill:#fce4ec,stroke:#c62828
-    style S47 fill:#fce4ec,stroke:#c62828
-    style DONE fill:#a5d6a7,stroke:#2e7d32
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
+    style S41 fill:#fce4ec,stroke:#c62828,color:#000
+    style S42 fill:#fce4ec,stroke:#c62828,color:#000
+    style S43 fill:#fce4ec,stroke:#c62828,color:#000
+    style S44 fill:#fce4ec,stroke:#c62828,color:#000
+    style S45 fill:#fce4ec,stroke:#c62828,color:#000
+    style S46 fill:#fce4ec,stroke:#c62828,color:#000
+    style S47 fill:#fce4ec,stroke:#c62828,color:#000
+    style DONE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
 ```
 
 ---
@@ -308,11 +307,11 @@ flowchart TD
     DLA -->|"delivery plan"| DEVA
     OA ==>|"feedback loop:\noperational insights"| PA
 
-    style ORCH fill:#e1bee7,stroke:#7b1fa2
-    style PA fill:#c8e6c9,stroke:#388e3c
-    style OA fill:#fce4ec,stroke:#c62828
-    style DEVA fill:#fff3e0,stroke:#e65100
-    style AA fill:#bbdefb,stroke:#1565c0
+    style ORCH fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style PA fill:#c8e6c9,stroke:#388e3c,color:#000
+    style OA fill:#fce4ec,stroke:#c62828,color:#000
+    style DEVA fill:#fff3e0,stroke:#e65100,color:#000
+    style AA fill:#bbdefb,stroke:#1565c0,color:#000
 ```
 
 ---
@@ -366,17 +365,17 @@ flowchart LR
         MB1 --> MB2 --> MB3 --> MB4 --> MB5 --> MB6
     end
 
-    style INLINE fill:#e8f5e9,stroke:#4caf50
-    style SUBAGENT fill:#e3f2fd,stroke:#2196f3
-    style TWOSTEP fill:#fff3e0,stroke:#ff9800
-    style MOB fill:#f3e5f5,stroke:#9c27b0
+    style INLINE fill:#e8f5e9,stroke:#4caf50,color:#000
+    style SUBAGENT fill:#e3f2fd,stroke:#2196f3,color:#000
+    style TWOSTEP fill:#fff3e0,stroke:#ff9800,color:#000
+    style MOB fill:#f3e5f5,stroke:#9c27b0,color:#000
 ```
 
 ---
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it births the first intent. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
 
 ```mermaid
 flowchart TD
@@ -399,7 +398,7 @@ flowchart TD
     KNOWN_SCOPE["Use explicit scope"]
     FREEFORM["Auto-detect scope\nfrom keywords"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
-    BIRTH["Birth the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
+    CREATE["Create the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 
     START --> ARG_CHECK
     ARG_CHECK -->|Yes| STATUS_CHECK
@@ -421,16 +420,16 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
-    OPT_FRESH -->|"archive + confirm"| BIRTH
+    OPT_FRESH -->|"archive + confirm"| CREATE
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
-    CONFIRM_SCOPE --> BIRTH
+    CONFIRM_SCOPE --> CREATE
 
-    style START fill:#e1bee7,stroke:#7b1fa2
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style BIRTH fill:#c8e6c9,stroke:#388e3c
-    style WARN fill:#ffcdd2,stroke:#c62828
+    style START fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
+    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
 ---
@@ -445,7 +444,7 @@ flowchart TD
 
 Each stage loads knowledge in a strict 6-step order. This ensures guardrails take precedence, followed by shared methodology, then agent-specific knowledge, then team customizations, and finally prior stage artifacts. The sequence diagram below shows the loading order for any stage activation.
 
-> **Note:** Steps 1-5 are agent knowledge loading (defined in each agent file); Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
 
 ```mermaid
 sequenceDiagram
@@ -530,16 +529,16 @@ flowchart TD
 
     ADD_STAGE --> ADD_EXEC
 
-    style COMPLETE fill:#e8f5e9,stroke:#388e3c
-    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
-    style ASK fill:#bbdefb,stroke:#1565c0
-    style APPROVE fill:#a5d6a7,stroke:#2e7d32
-    style CHANGES fill:#fff9c4,stroke:#f9a825
-    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00
-    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0
-    style ACCEPT fill:#ffccbc,stroke:#bf360c
-    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2
-    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
+    style COMPLETE fill:#e8f5e9,stroke:#388e3c,color:#000
+    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ASK fill:#bbdefb,stroke:#1565c0,color:#000
+    style APPROVE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style CHANGES fill:#fff9c4,stroke:#f9a825,color:#000
+    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00,color:#000
+    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ACCEPT fill:#ffccbc,stroke:#bf360c,color:#000
+    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c,color:#000
 ```
 
 ---
@@ -618,10 +617,10 @@ flowchart TD
         NS4 -->|"begin target stage"| IP4B
     end
 
-    style NORMAL fill:#e8f5e9,stroke:#4caf50
-    style SKIP fill:#fff9c4,stroke:#f9a825
-    style REDO fill:#e3f2fd,stroke:#2196f3
-    style JUMP fill:#fce4ec,stroke:#e91e63
+    style NORMAL fill:#e8f5e9,stroke:#4caf50,color:#000
+    style SKIP fill:#fff9c4,stroke:#f9a825,color:#000
+    style REDO fill:#e3f2fd,stroke:#2196f3,color:#000
+    style JUMP fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 ---

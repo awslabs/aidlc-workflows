@@ -14,6 +14,9 @@
 //   guard-tool-call deny → a guard block (core exit 2 + stderr) converts to the
 //                    {"hookSpecificOutput":{"permissionDecision":"deny"}}
 //                    stdout JSON with exit 0 — Copilot's only deny channel.
+//   guard-tool-call picker → native question pickers deny only while the
+//                    session-selected workflow is Running; absent, terminal,
+//                    unusable, and foreign-tool cases remain silent.
 //   guard-tool-call remap → Copilot's `path` file-tool key reaches the core hooks
 //                    as `file_path` (the shim re-keys).
 //   post-tool      → a Write into the record lands ARTIFACT_CREATED in the
@@ -49,6 +52,10 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  markSubagentInflight,
+  subagentInflightMarkerPath,
+} from "../../core/tools/aidlc-lib.ts";
+import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
@@ -56,6 +63,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const COPILOT_TREE = join(REPO_ROOT, "dist", "copilot", ".aidlc");
@@ -74,6 +82,20 @@ function ledgerPath(projectDir: string): string {
     tmpdir(),
     `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
   );
+}
+
+function seedUnapprovedCodeGeneration(projectDir: string): void {
+  const statePath = seededStateFile(projectDir);
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(projectDir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
 }
 
 afterAll(() => {
@@ -202,6 +224,7 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
@@ -212,9 +235,11 @@ function runAdapter(
       encoding: "utf-8",
       env: {
         ...process.env,
+        AIDLC_UNATTENDED: undefined,
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         AIDLC_COMPILED_EXECUTABLE: COMPILED_BINARY ?? undefined,
+        ...envOverrides,
       } as NodeJS.ProcessEnv,
       timeout: 30_000,
     },
@@ -276,12 +301,27 @@ function rewrittenCommand(pre: { stdout: string }): string {
   return (JSON.parse(pre.stdout) as { modifiedArgs?: { command?: string } }).modifiedArgs?.command ?? "";
 }
 
+function runShell(
+  dir: string,
+  command: string,
+  timeout = 30_000,
+) {
+  const shell = process.platform === "win32"
+    ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+    : "/bin/sh";
+  return spawnSync(
+    shell,
+    [process.platform === "win32" ? "-lc" : "-c", command],
+    { cwd: dir, encoding: "utf-8", timeout },
+  );
+}
+
 function runLifecycle(dir: string, session: string, form: CommandForm, args: string[], attempt: string) {
   const spec = commandSpec(dir, form, args);
   const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
   const rewritten = rewrittenCommand(pre);
   expect(rewritten, `${form}: ${spec.text}`).toContain(`--aidlc-attempt-id ${attempt}`);
-  const executed = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8", timeout: 30_000 });
+  const executed = runShell(dir, rewritten);
   expect(executed.status, executed.stderr).toBe(0);
   const post = runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
   return { directive: JSON.parse(executed.stdout.trim()) as Record<string, unknown>, post, spec };
@@ -308,9 +348,7 @@ function executeNoId(
   _spec: ReturnType<typeof commandSpec>,
   claim: ReturnType<typeof noIdClaim>,
 ) {
-  const executed = spawnSync("/bin/sh", ["-c", claim.updated], {
-    cwd: dir, encoding: "utf-8", timeout: 30_000,
-  });
+  const executed = runShell(dir, claim.updated);
   expect(executed.status, executed.stderr).toBe(0);
   runAdapter(dir, "post-tool", commandPayload(dir, session, claim.updated, undefined, true, executed.stdout));
   return executed;
@@ -343,6 +381,47 @@ function driveToRunStage(dir: string, session: string) {
 }
 
 describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
+  test("0: native write, shell, and Agent paths enforce Plan Approval", () => {
+    const dir = scratchProject(true);
+    seedUnapprovedCodeGeneration(dir);
+    for (const payload of [
+      withCwd(
+        {
+          ...FIXTURES.preToolUse_write,
+          tool_input: { path: join(dir, "src", "blocked.ts") },
+        },
+        dir,
+      ),
+      withCwd(
+        {
+          ...FIXTURES.preToolUse_bash,
+          tool_input: { command: "git diff --output=src/blocked.diff" },
+        },
+        dir,
+      ),
+      withCwd(
+        {
+          ...FIXTURES.preToolUse_write,
+          tool_name: "Agent",
+          tool_input: {
+            subagent_type: "aidlc-developer-agent",
+            prompt:
+              "AIDLC-STAGE: code-generation\n" +
+              `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+          },
+        },
+        dir,
+      ),
+    ]) {
+      const result = runAdapter(dir, "guard-tool-call", payload);
+      expect(result.code).toBe(0);
+      expect(
+        (JSON.parse(result.stdout) as {
+          hookSpecificOutput?: { permissionDecision?: string };
+        }).hookSpecificOutput?.permissionDecision,
+      ).toBe("deny");
+    }
+  });
   test("1: stop with active workflow blocks in both CLI and VS Code output shapes", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
@@ -413,6 +492,84 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     };
     expect(parsed.hookSpecificOutput?.permissionDecision).toBe("deny");
     expect(parsed.hookSpecificOutput?.permissionDecisionReason?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  test("4a: ask_user is denied while workflow state is active", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
+    expect(r.stdout).toContain("numbered prose");
+  });
+
+  test("4b: VS Code vscode/askQuestions camel payload is denied with active state", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      toolName: "vscode/askQuestions",
+      toolInput: { questions: [{ prompt: "Continue?" }] },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  test("4c: native question picker fails open without workflow state", () => {
+    const dir = scratchProject(false);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4d: native question picker fails open for a completed workflow", () => {
+    const dir = scratchProject(true);
+    writeFileSync(
+      seededStateFile(dir),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-completed.md"), "utf-8"),
+    );
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4e: native question picker fails open for unusable workflow state", () => {
+    const dir = scratchProject(true);
+    writeFileSync(seededStateFile(dir), "- **Status**:\n", "utf-8");
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4f: unrelated foreign tool stays silent with active workflow state", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "foreign_question_tool",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
   });
 
   test("5: guard-tool-call allows an ordinary command silently", () => {
@@ -540,8 +697,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("8: log-subagent lands SUBAGENT_COMPLETED from the snake_case capture", () => {
     const dir = scratchProject(true);
-    const r = runAdapter(dir, "log-subagent", withCwd(FIXTURES.subagentStop, dir));
+    const sessionId = String(FIXTURES.subagentStop.session_id);
+    expect(markSubagentInflight(dir, sessionId)).toBe(true);
+    const r = runAdapter(
+      dir,
+      "log-subagent",
+      withCwd(FIXTURES.subagentStop, dir),
+    );
     expect(r.code).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
     const audit = readAudit(dir);
     expect(audit).toContain("SUBAGENT_COMPLETED");
     expect(audit).toContain(String(FIXTURES.subagentStop.agent_name));
@@ -846,6 +1010,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("19: correlated support agents cannot conduct workflow lifecycle", () => {
     const dir = scratchProject(true);
+    const foreignProject = join(dir, "foreign-project");
     const identity = {
       session_id: "22222222-3333-4444-8555-666666666666",
       agent_type: "aidlc-design-agent",
@@ -868,7 +1033,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ">/tmp/aidlc-output aidlc next --resume",
       "if aidlc next --resume; then :; fi",
       "bun .aidlc/tools/aidlc.ts --resume",
-      "bun .aidlc/tools/aidlc.ts --project-dir /tmp next --resume",
+      `bun .aidlc/tools/aidlc.ts --project-dir ${JSON.stringify(foreignProject)} next --resume`,
       "bun .aidlc/tools/aidlc.ts intent other-intent",
       "bun .aidlc/tools/aidlc.ts space other-space",
       "bun .aidlc/tools/aidlc-utility.ts intent other-intent",
@@ -892,7 +1057,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         command,
       ).toBe("deny");
       expect(blocked.stdout, command).toContain(
-        command.includes("--project-dir /tmp") ? "different physical project" : "conductor-owned",
+        command.includes("--project-dir /tmp")
+          ? "different physical project"
+          : "only the main workflow session can change stage status or routing",
       );
     }
 
@@ -1000,6 +1167,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("12: record-human-turn records HUMAN_TURN only when workflow state exists", () => {
+    const unattendedDir = scratchProject(true);
+    runAdapter(
+      unattendedDir,
+      "record-human-turn",
+      withCwd(FIXTURES.userPromptSubmit, unattendedDir),
+      { AIDLC_UNATTENDED: "1" },
+    );
+    expect(readAudit(unattendedDir)).not.toContain("HUMAN_TURN");
+
     const withStateDir = scratchProject(true);
     runAdapter(withStateDir, "record-human-turn", withCwd(FIXTURES.userPromptSubmit, withStateDir));
     expect(readAudit(withStateDir)).toContain("HUMAN_TURN");
@@ -1047,7 +1223,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const spec = commandSpec(dir, form, ["continue", token1]);
       const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, `reuse-${form}`));
       const rewritten = rewrittenCommand(pre);
-      const replay = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8" });
+      const replay = runShell(dir, rewritten);
       expect(replay.status, replay.stderr).toBe(0);
       expect(JSON.parse(replay.stdout)).toMatchObject({ kind: "error" });
       expect(replay.stdout).toContain("no longer current");
@@ -1091,9 +1267,20 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     const report = runLifecycle(
       reported, "report-owner", "source",
-      ["report", "--stage", "requirements-analysis", "--result", "rejected", "--reason", "test rejection"], "report-result",
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "test rejection",
+      ],
+      "report-result",
     );
-    expect(report.directive.kind).toBe("print");
+    expect(report.directive.kind, JSON.stringify(report.directive)).toBe("print");
     expect(marker(reported)).toMatchObject({ kind: "print", delivery: "superseded" });
 
     const terminal = orchestrationProject();
@@ -1126,6 +1313,39 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(runAdapter(repeated, "continue-workflow", { ...FIXTURES.stop, cwd: repeated, session_id: "same-owner", stop_hook_active: true }).stdout).toBe("");
     expect(marker(repeated).stop_count).toBe(2);
   }, 60000);
+
+  test("21a: terminal notice output is captured, retained, and allows Copilot Stop", () => {
+    const dir = orchestrationProject();
+    const session = "notice-owner";
+    const attempt = "notice-attempt";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const pre = runAdapter(
+      dir,
+      "guard-tool-call",
+      commandPayload(dir, session, spec.text, attempt),
+    );
+    const rewritten = rewrittenCommand(pre);
+    expect(rewritten).toContain(`--aidlc-attempt-id ${attempt}`);
+    const notice = '{"kind":"notice","message":"Team Construction board"}';
+    const post = runAdapter(
+      dir,
+      "post-tool",
+      commandPayload(dir, session, rewritten, attempt, true, notice),
+    );
+    expect(post.code).toBe(0);
+    expect(marker(dir)).toMatchObject({
+      kind: "notice",
+      delivery: "delivered",
+      active_attempt: { id: attempt, status: "settled" },
+    });
+    expect(
+      runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop,
+        cwd: dir,
+        session_id: session,
+      }).stdout,
+    ).toBe("");
+  });
 
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();
@@ -1231,7 +1451,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
       const executeStaleA = (expectedBytes: string): void => {
         for (let duplicate = 0; duplicate < 2; duplicate++) {
-          const delayed = spawnSync("/bin/sh", ["-c", commandA], { cwd: dir, encoding: "utf-8" });
+          const delayed = runShell(dir, commandA);
           expect(delayed.status, delayed.stderr).toBe(0);
           expect(JSON.parse(delayed.stdout)).toMatchObject({ kind: "error" });
           expect(delayed.stdout).toContain("stale or superseded");
@@ -1240,7 +1460,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       };
       if (order === "stale-before-owner") executeStaleA(claimedBBytes);
 
-      const executedB = spawnSync("/bin/sh", ["-c", commandB], { cwd: dir, encoding: "utf-8" });
+      const executedB = runShell(dir, commandB);
       expect(executedB.status, executedB.stderr).toBe(0);
       const directiveB = JSON.parse(executedB.stdout) as Record<string, unknown>;
       expect(directiveB.kind).toBe("load-steering");
@@ -1288,7 +1508,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
           claim_revision: continueClaim.revision,
         },
       });
-      const continued = spawnSync("/bin/sh", ["-c", continueCommand], { cwd: dir, encoding: "utf-8" });
+      const continued = runShell(dir, continueCommand);
       expect(continued.status, continued.stderr).toBe(0);
       const continuedDirective = JSON.parse(continued.stdout) as Record<string, unknown>;
       expect(["load-steering", "run-stage"]).toContain(String(continuedDirective.kind));
@@ -1320,7 +1540,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       dir, "guard-tool-call", commandPayload(dir, "tracked-owner", spec.text, "pending-tracked-next"),
     ));
     const pendingRevision = Number(marker(dir).revision);
-    const untracked = spawnSync("/bin/sh", ["-c", spec.text], { cwd: dir, encoding: "utf-8" });
+    const untracked = runShell(dir, spec.text);
     expect(untracked.status, untracked.stderr).toBe(0);
     const directive = JSON.parse(untracked.stdout) as Record<string, unknown>;
     expect(directive.kind).toBe("load-steering");
@@ -1369,7 +1589,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(marker(dir)).toMatchObject({
         active_attempt: { id: firstAttempt, command_kind: "continue", status: "pending" },
       });
-      const winner = spawnSync("/bin/sh", ["-c", firstCommand], { cwd: dir, encoding: "utf-8" });
+      const winner = runShell(dir, firstCommand);
       expect(winner.status, winner.stderr).toBe(0);
       runAdapter(dir, "post-tool", commandPayload(dir, session, firstCommand, firstAttempt, true, winner.stdout));
       const deliveredBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
@@ -1412,8 +1632,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(third.attemptId).toBe(first.attemptId);
       expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(sharedBytes);
 
-      const firstRun = () => spawnSync("/bin/sh", ["-c", first.updated], { cwd: dir, encoding: "utf-8" });
-      const secondRun = () => spawnSync("/bin/sh", ["-c", second.updated], { cwd: dir, encoding: "utf-8" });
+      const firstRun = () => runShell(dir, first.updated);
+      const secondRun = () => runShell(dir, second.updated);
       const runs = scenario.engine === "first" ? [firstRun(), secondRun()] : [secondRun(), firstRun()];
       for (const run of runs) expect(run.status, run.stderr).toBe(0);
       const winner = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error");
@@ -1494,7 +1714,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(failed.status).not.toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, second.updated, undefined, true));
     expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(pendingBytes);
-    const winner = spawnSync("/bin/sh", ["-c", first.updated], { cwd: dir, encoding: "utf-8" });
+    const winner = runShell(dir, first.updated);
     expect(winner.status, winner.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, first.updated, undefined, true, winner.stdout));
     expect(marker(dir)).toMatchObject({
@@ -1508,10 +1728,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const session = "bounded-attempt-owner";
     const first = commandSpec(dir, "direct", ["next"]);
     const firstCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, first.text, "attempt-a")));
-    const firstRun = spawnSync("/bin/sh", ["-c", firstCommand], { cwd: dir, encoding: "utf-8" });
+    const firstRun = runShell(dir, firstCommand);
     const second = commandSpec(dir, "source", ["next"]);
     const secondCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, second.text, "attempt-b")));
-    const secondRun = spawnSync("/bin/sh", ["-c", secondCommand], { cwd: dir, encoding: "utf-8" });
+    const secondRun = runShell(dir, secondCommand);
     runAdapter(dir, "post-tool", commandPayload(dir, session, firstCommand, "attempt-a", true, firstRun.stdout));
     expect((marker(dir).active_attempt as Record<string, unknown>).id).toBe("attempt-b");
     runAdapter(dir, "post-tool", commandPayload(dir, session, secondCommand, "attempt-b", true, secondRun.stdout));
@@ -1524,7 +1744,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
     const third = commandSpec(dir, "direct", ["next"]);
     const thirdCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, third.text, "attempt-c")));
-    const thirdRun = spawnSync("/bin/sh", ["-c", thirdCommand], { cwd: dir, encoding: "utf-8" });
+    const thirdRun = runShell(dir, thirdCommand);
     const beforeCompact = Number(marker(dir).context_epoch);
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, "copied-id-foreign", third.text, "attempt-c")).stdout)
       .toContain('"permissionDecision":"deny"');
@@ -1576,7 +1796,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const compacted = noIdClaim(dir, session, spec);
     runAdapter(dir, "validate-state", { cwd: dir, session_id: session });
     const compactedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
-    const compactedRun = spawnSync("/bin/sh", ["-c", compacted.updated], { cwd: dir, encoding: "utf-8" });
+    const compactedRun = runShell(dir, compacted.updated);
     expect(JSON.parse(compactedRun.stdout)).toMatchObject({ kind: "error" });
     expect(compactedRun.stdout).toContain("stale or superseded");
     runAdapter(dir, "post-tool", commandPayload(dir, session, compacted.updated, undefined, true, compactedRun.stdout));
@@ -1632,7 +1852,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const session = "vscode-result-owner";
     const spec = commandSpec(dir, "source", ["next"]);
     const rewritten = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "vscode-attempt")));
-    const executed = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8" });
+    const executed = runShell(dir, rewritten);
     runAdapter(dir, "post-tool", {
       hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-attempt", cwd: dir,
       toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
@@ -1649,7 +1869,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     symlinkSync("aidlc-orchestrate.ts", directAlias);
     const nextCommand = "bun .aidlc/tools/aidlc-alias.ts next";
     const rewrittenNext = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, nextCommand, "alias-next")));
-    const next = spawnSync("/bin/sh", ["-c", rewrittenNext], { cwd: dir, encoding: "utf-8" });
+    const next = runShell(dir, rewrittenNext);
     expect(next.status, next.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenNext, "alias-next", true, next.stdout));
     const nextDirective = JSON.parse(next.stdout) as { kind?: string; continue_token?: string };
@@ -1657,11 +1877,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const token = String(nextDirective.continue_token);
     const continueCommand = `bun .aidlc/tools/orchestrate-alias.ts continue ${JSON.stringify(token)}`;
     const rewrittenContinue = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-continue")));
-    const continued = spawnSync("/bin/sh", ["-c", rewrittenContinue], { cwd: dir, encoding: "utf-8" });
+    const continued = runShell(dir, rewrittenContinue);
     expect(continued.status, continued.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenContinue, "alias-continue", true, continued.stdout));
     const replay = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-replay")));
-    const replayed = spawnSync("/bin/sh", ["-c", replay], { cwd: dir, encoding: "utf-8" });
+    const replayed = runShell(dir, replay);
     expect(replayed.stdout).toContain("no longer current");
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, "bun .aidlc/tools/aidlc.ts-missing next", "lookalike")).stdout)
       .toBe("");
@@ -1764,7 +1984,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       runAdapterAsync(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }),
     ]);
     expect(stops.filter((result) => result.stdout.includes('"decision":"block"'))).toHaveLength(1);
-    expect(marker(dir).stop_count).toBe(2);
+    // Lock contention fails open, so the released Stop may not persist its count.
+    const concurrentStopCount = marker(dir).stop_count;
+    expect(concurrentStopCount === 1 || concurrentStopCount === 2).toBe(true);
     rewriteMarker(dir, (value) => { value.unit = "unit-b"; });
     expect((JSON.parse(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout) as { decision?: string }).decision).toBe("block");
     expect(marker(dir).stop_count).toBe(1);
@@ -1877,7 +2099,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const pre = runAdapter(dir, "guard-tool-call", redirected);
     const rewritten = (JSON.parse(pre.stdout) as { modifiedArgs?: { command?: string } }).modifiedArgs?.command ?? "";
     expect(rewritten).toEndWith("--aidlc-attempt-id redirect-attempt 2>&1");
-    const executed = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8" });
+    const executed = runShell(dir, rewritten);
     expect(executed.status, executed.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, "redirect-owner", rewritten, "redirect-attempt", true, executed.stdout));
     expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: "redirect-attempt" } });

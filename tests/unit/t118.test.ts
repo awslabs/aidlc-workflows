@@ -3,7 +3,7 @@
 // CLI-contract port of tests/unit/t118-engine-differential.sh (TAP plan 38),
 // mechanism = cli. The differential corpus — the WAVE CLOSE GATE for the
 // v0.6.0 Wave 1 engine (aidlc-orchestrate.ts next), extended in Wave 2 milestone 9
-// with the classified-stance anchor + the no-state workflow-birth trio. It
+// with the classified-stance anchor + the no-state workflow creation trio. It
 // proves the deterministic engine emits, FOR EACH OF THE 9 SCOPES, the same
 // scope-shaped directive the prose orchestrator (skills/aidlc/SKILL.md)
 // produces today — WITH NO MODEL IN THE LOOP. It NEVER calls the LLM (the .sh
@@ -76,21 +76,21 @@
 //     and assert gate is the sentinel STRING (a regression that emitted a boolean
 //     gate here would slip a two-field-only diff but reds the string equality).
 //
-//   No-state workflow-birth trio (4 .sh asserts -> 3 test() cases):
+//   No-state workflow creation trio (4 .sh asserts -> 3 test() cases):
 //     Every diff above seeds state then jumps; these three drive a NO-STATE
 //     invocation (createTestProject makes aidlc-docs/ but NO aidlc-state.md —
-//     same as the .sh's create_test_project), the workflow-birth paths the Wave
+//     same as the .sh's create_test_project), the workflow creation paths the Wave
 //     2 cutover leans on, which sat outside the close gate (Wave-1 audit findings
 //     2 & 3 slipped through here). Post-hardening, an EXPLICITLY NAMED scope on
-//     a fresh workspace BIRTHS the workflow (a run-then-continue print naming
+//     a fresh workspace CREATES the workflow (a run-then-continue print naming
 //     `init --scope <scope>`) rather than relaying the old circular no-state
 //     error; the trio's cases:
 //       (1) `next bugfix` — bare KNOWN-SCOPE positional, NOT freeform: kind ===
 //           "print" AND message names `intent-create --scope bugfix` (the engine
 //           recognises bugfix as the scope, finding 2, and emits the SAME
-//           workflow-birth print `next --scope bugfix` emits; pre-finding-2 it
+//           workflow creation print `next --scope bugfix` emits; pre-finding-2 it
 //           mis-read the literal scope as prose and emitted an `ask` defaulting
-//           to "feature"). P4: the named birth move is `intent-create`, not the
+//           to "feature"). P4: the named creation move is `intent-create`, not the
 //           retired `init`. One test() bundles both observables.
 //       (2) `next add dark mode toggle` — genuine freeform (<=5-word) intent,
 //           NOT a scope name: kind === "ask" (the control proving the finding-2
@@ -98,10 +98,10 @@
 //           the human via ask). One ok line -> one test().
 //       (3) bare `next`, no state, no target, no explicitly named scope:
 //           kind === "error" (no position to advance from; creating one is
-//           init's mutating job; env/default scope resolution is not a birth
+//           init's mutating job; env/default scope resolution is not a creation
 //           signal). One ok -> one test().
 //     STRONGER: case (1) additionally pins the run-then-continue shape of the
-//     birth print, and case (3) re-pins the post-hardening guidance wording
+//     creation print, and case (3) re-pins the post-hardening guidance wording
 //     verbatim, so a regression to the WRONG cause or the old circular clause
 //     reds.
 //
@@ -316,16 +316,16 @@ function emitNext(fixtureFile: string): EmitResult {
 
 // emitNextNoState (t118.sh:289-315): spawn `next [...args]` against a FRESH
 // project that has aidlc-docs/ but NO aidlc-state.md (createTestProject seeds
-// neither) — the no-state workflow-birth paths of the trio. Pass zero args for
+// neither) - the no-state workflow creation paths of the trio. Pass zero args for
 // bare `next`, one for a known-scope positional (`next bugfix`), or several for
 // freeform intent (`next add dark mode toggle`). Mirrors the .sh's bare
 // `bun "$TOOL" next <args> --project-dir "$proj"` over an unseeded project.
 function emitNextNoState(...args: string[]): EmitResult {
   const proj = createTestProject();
   tempDirs.push(proj);
-  // P9: createTestProject seeds a default intent record; the no-state birth path
+  // P9: createTestProject seeds a default intent record; the no-state creation path
   // requires a GENUINELY empty workspace (zero intents), else the engine asks to
-  // SELECT the existing intent instead of birthing. Strip the seeded record.
+  // SELECT the existing intent instead of creating. Strip the seeded record.
   removeWorkspaceRecord(proj);
   const res = spawnSync(BUN, [TOOL, "next", ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -480,36 +480,36 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     });
   });
 
-  // --- No-state workflow-birth trio (3 cases) --- (t118.sh:276-315). Every diff
+  // --- No-state workflow creation trio (3 cases) --- (t118.sh:276-315). Every diff
   // above seeds state then jumps; these drive a NO-STATE invocation
   // (createTestProject makes aidlc-docs/ but NO aidlc-state.md), the
-  // workflow-birth paths the Wave 2 cutover leans on. They sat outside the close
+  // workflow creation paths the Wave 2 cutover leans on. They sat outside the close
   // gate, which is how the engine's known-scope / no-state defects (Wave-1 audit
   // findings 2 & 3) slipped through. Each pins the resolved scope / directive
   // kind the engine emits for a fresh workspace.
-  describe("no-state workflow-birth trio — fresh workspace, no aidlc-state.md", () => {
+  describe("no-state workflow creation trio - fresh workspace, no aidlc-state.md", () => {
     // (1) Bare KNOWN-SCOPE positional: `next bugfix` — the literal scope name is
     // NOT freeform intent. The engine recognises it as the scope (finding 2) and
-    // emits the SAME workflow-birth print `next --scope bugfix` emits: a
+    // emits the SAME workflow creation print `next --scope bugfix` emits: a
     // run-then-continue directive naming `init --scope bugfix` (an explicitly
     // named scope on a fresh workspace is a request to START a workflow; the
     // pre-hardening engine relayed a circular no-state error here that told the
     // user to do exactly what they had just done). Pre-finding-2 this mis-read
     // the scope as prose and emitted an `ask` defaulting to "feature".
-    test("no-state bare known-scope 'bugfix' -> birth print naming intent-create (recognised as scope, not freeform) [finding 2]", () => {
+    test("no-state bare known-scope 'bugfix' -> creation print naming intent-create (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
       // The print names the intent-create move for the EXPLICITLY NAMED scope
-      // (P4: --init retired; the engine NAMES the deterministic birth handler).
+      // (P4: --init retired; the engine NAMES the deterministic creation handler).
       expect(r.directive.message ?? "").toContain("intent-create --scope bugfix");
-      // Run-then-continue shape: the conductor births, then re-enters the loop.
+      // Run-then-continue shape: the conductor creates, then re-enters the loop.
       expect(r.directive.message ?? "").toContain("re-run `next` to continue");
       // STRONGER: a regression that mis-read bugfix as freeform would emit an
       // `ask` (the pre-fix bug) — assert it is NOT an ask, pinning finding 2.
       expect(r.directive.kind).not.toBe("ask");
     });
 
-    test("no-state positional scope plus description -> direct birth with preserved arguments, never ask", () => {
+    test("no-state positional scope plus description -> direct creation with preserved arguments, never ask", () => {
       const r = emitNextNoState(
         "bugfix",
         "Fix",
@@ -538,11 +538,11 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     });
 
     // (3) Bare `next`, no state and NO explicitly named scope (env/default
-    // resolution is not a birth signal): the engine cannot read a position to
+    // resolution is not a creation signal): the engine cannot read a position to
     // advance from and creating one is init's (mutating) job, so it emits the
     // no-state error rather than guessing. The wording names the two explicit
     // moves that DO start a workflow — it must never be the circular "Start a
-    // workflow with /aidlc <scope>" clause (an explicitly named scope births
+    // workflow with /aidlc <scope>" clause (an explicitly named scope creates
     // via print now, so telling the user to retype it would be a lie).
     test("no-state bare next -> error directive (no position to advance from)", () => {
       const r = emitNextNoState();
@@ -552,7 +552,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       // regression emitting an error of a DIFFERENT cause reds.
       expect(r.directive.message ?? "").toContain("No workflow state found");
       // RE-PIN the post-P4 guidance wording exactly: describe-what-to-build or
-      // name-a-scope both birth; there is no --init. A regression back to the
+      // describe-what-to-build and name-a-scope both create intents; there is no
+      // --init. A regression back to the
       // circular clause (or a re-introduced --init) reds here.
       expect(r.directive.message ?? "").toContain(
         'Start one by describing what to build (/aidlc "build the auth service") or by naming a scope (/aidlc --scope <scope>).',
@@ -561,13 +562,13 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
 
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO
     // scopes at once. The precedence ladder's top rung is the explicit --scope
-    // flag, so the birth must name the FLAG's scope — a positional that silently
-    // outranked the flag would birth a workflow the user didn't ask for. And
+    // flag, so the creation must name the FLAG's scope - a positional that silently
+    // outranked the flag would create a workflow the user didn't ask for. And
     // with --scope routing explicitly, the positional text is pure description:
     // the parser must NOT peel its leading word, or an intent that happens to
     // OPEN with a scope word (`--scope feature "feature flags for billing"`)
     // silently loses it.
-    test("no-state positional+flag conflict -> birth print names the FLAG's scope", () => {
+    test("no-state positional+flag conflict -> creation print names the FLAG's scope", () => {
       const r = emitNextNoState(
         "bugfix",
         "Fix",
@@ -604,11 +605,11 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       );
     });
 
-    // (5) --resume never births: resuming is a claim that a workflow already
+    // (5) --resume never creates: resuming is a claim that a workflow already
     // exists, so with no state it must land on the no-state error even when a
     // scope is explicitly named (flag or positional) — not start a NEW workflow
     // the user didn't ask for.
-    test("no-state --resume with a named scope -> error, never a birth print", () => {
+    test("no-state --resume with a named scope -> error, never a creation print", () => {
       for (const args of [["--resume", "--scope", "mvp"], ["mvp", "--resume"], ["--resume"]]) {
         const r = emitNextNoState(...args);
         expect(r.directive.kind).toBe("error");

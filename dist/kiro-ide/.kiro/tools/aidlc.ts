@@ -9,7 +9,12 @@ import {
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import {
+  isCompiledExecutable,
+  packagedDistributionRoot,
+  runtimeHarnessDir,
+  runtimeHarnessName,
+} from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -71,12 +76,15 @@ export const TOOLS = {
   sensorUpstreamCoverage: "aidlc-sensor-upstream-coverage.ts",
   state: "aidlc-state.ts",
   swarm: "aidlc-swarm.ts",
+  unit: "aidlc-unit.ts",
   utility: "aidlc-utility.ts",
   validate: "aidlc-validate.ts",
   worktree: "aidlc-worktree.ts",
 } as const;
 
 export const SLASH_FLAG_ALIASES: readonly Alias[] = [
+  { from: "--claim", to: "unit claim", irregular: true },
+  { from: "--release", to: "unit release", irregular: true },
   { from: "--status", to: "status" },
   { from: "--doctor", to: "doctor" },
   { from: "--help", to: "help" },
@@ -95,14 +103,51 @@ export const ROUTES: readonly Route[] = [
     group: "top",
     kind: "top-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park"],
+    verbs: ["next", "continue", "report", "park", "team-board"],
     tool: TOOLS.orchestrate,
     human: [
       { command: "next [args]", summary: "run the next orchestrator action" },
       { command: "report [args]", summary: "render the orchestrator report" },
       { command: "park [args]", summary: "park the current workflow" },
     ],
-    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
+    all: [
+      "next [args]",
+      "continue <token>",
+      "report [args]",
+      "park [args]",
+      "team-board [--snapshot]",
+    ],
+  },
+  {
+    id: "unit",
+    group: "unit",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: [
+      "adopt",
+      "claim",
+      "gate",
+      "land",
+      "merge-status",
+      "participate",
+      "pin",
+      "publish",
+      "release",
+      "status",
+    ],
+    tool: TOOLS.unit,
+    all: [
+      "unit adopt <unit>",
+      "unit claim <unit>",
+      "unit gate <unit> --decision <approve|reject> --user-input <text>",
+      "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
+      "unit merge-status <unit>",
+      "unit participate",
+      "unit pin <unit>",
+      "unit publish <unit>",
+      "unit release <unit>",
+      "unit status",
+    ],
   },
   {
     id: "top-compose",
@@ -369,15 +414,22 @@ export const ROUTES: readonly Route[] = [
     group: "plugin",
     kind: "custom",
     classification: "translation",
-    verbs: ["select", "sync", "list"],
+    verbs: ["select", "sync", "list", "validate", "build"],
     custom: "plugin",
-    targets: { select: "select-plugins", sync: "plugin-sync", list: "plugin-list" },
+    targets: {
+      select: "select-plugins",
+      sync: "plugin-sync",
+      list: "plugin-list",
+      validate: "plugin-validate",
+      build: "plugin-build",
+    },
     human: [
-      { command: "plugin select [names]", summary: "set enabled plugins" },
-      { command: "plugin list", summary: "list installed plugin enablement" },
-      { command: "plugin sync", summary: "compose installed plugins" },
+      {
+        command: "plugin <select|list|sync|validate|build> [args]",
+        summary: "manage installed and authored plugins",
+      },
     ],
-    all: ["select [names]", "sync", "list"],
+    all: ["select [names]", "sync", "list", "validate [path]", "build <harness> [outDir]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -399,7 +451,7 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"],
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"],
     tool: TOOLS.knowledge,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
     // for a person deciding what to type, not the surface. Every verb still
@@ -411,6 +463,7 @@ export const ROUTES: readonly Route[] = [
       "onboard [path]", "sync", "list", "show <id>",
       "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
       "rebind <id> --to <path>",
+      "summarize <id> --text-file <path> --source-revision <sha256>",
     ],
   },
   {
@@ -753,6 +806,8 @@ function resolveAlias(argv: string[]): Action | undefined {
       : topLevelError(argv.slice(0, 2).join(" "));
   }
   if (head === "--status") return { type: "delegate", tool: TOOLS.utility, args: ["status", ...argv.slice(1)] };
+  if (head === "--claim") return { type: "delegate", tool: TOOLS.utility, args: ["claim", ...argv.slice(1)] };
+  if (head === "--release") return { type: "delegate", tool: TOOLS.utility, args: ["release", ...argv.slice(1)] };
   if (head === "--doctor") return { type: "delegate", tool: TOOLS.utility, args: ["doctor", ...argv.slice(1)] };
   if (head === "--version") return { type: "version" };
   if (head === "--resume") return { type: "delegate", tool: TOOLS.orchestrate, args: ["next", "--resume", ...argv.slice(1)] };
@@ -959,6 +1014,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-sensor-upstream-coverage.ts");
     case TOOLS.state:
       return import("./aidlc-state.ts");
+    case TOOLS.unit:
+      return import("./aidlc-unit.ts");
     case TOOLS.swarm:
       return import("./aidlc-swarm.ts");
     case TOOLS.utility:
@@ -1085,7 +1142,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   const previousHarness = process.env.AIDLC_HARNESS_DIR;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
-  if (import.meta.url.includes("/$bunfs/")) {
+  if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
@@ -1102,7 +1159,9 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "log-subagent" ||
       action.target === "rebuild-stage-graph" ||
       action.target === "session-start" ||
-      action.target === "continue-workflow"
+      action.target === "continue-workflow" ||
+      action.target === "verb-intercept" ||
+      action.target === "terminal-command-guard"
     ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
@@ -1161,7 +1220,7 @@ async function runSensorScriptFile(
 }
 
 async function execute(action: Action): Promise<number> {
-  const isCompiled = import.meta.url.includes("/$bunfs/");
+  const isCompiled = isCompiledExecutable();
   if (action.type === "delegate") {
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.
@@ -1203,13 +1262,16 @@ export async function main(argv: string[]): Promise<void> {
     await metrics.sendMetricFromStdin();
     return;
   }
-  if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
-    // Compiled, no explicit harness: probe the project install (.claude /
-    // .kiro / .codex by tools/data/harness.json) rather than assuming
-    // .claude — module-relative derivation can't work from $bunfs, and every
-    // delegate and sibling tool reads this env, so pin the probe's answer
-    // once here. Falls back to .claude when no install is present.
-    process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+  if (isCompiledExecutable()) {
+    // Compiled modules cannot derive the installed harness from their bundled
+    // path, and embedded data may be Claude-flavoured. Pin both identifiers
+    // before lazy delegate imports so same-directory harnesses retain identity.
+    if (!process.env.AIDLC_HARNESS_DIR) {
+      process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+    }
+    if (!process.env.AIDLC_HARNESS_NAME) {
+      process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();
+    }
   }
   const code = await execute(resolveAction(argv));
   process.exitCode = code;

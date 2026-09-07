@@ -9,7 +9,7 @@
 // conditional Construction protocol module.
 // Five surfaces carry the contract:
 //   1. dist/claude/.claude/aidlc-common/stages/construction/build-and-test.md
-//      — Step 10's 4-rung failure-escalation ladder, the `## Loop-Back Log`
+//      — Step 9's 4-rung failure-escalation ladder, the `## Loop-Back Log`
 //      artifact shape, and the single-stage (--single) carve-out.
 //   2. dist/claude/.claude/aidlc-common/protocols/
 //      stage-protocol-construction.md — the loop-back subsection as a sibling
@@ -74,10 +74,11 @@ const CODE_GENERATION = readFileSync(
   "utf-8",
 );
 
-describe("t305 build-and-test.md — Step 10 failure-escalation ladder", () => {
+describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
   test("On-failure block is the ladder, not the old flat retry list", () => {
     expect(STAGE).toContain(
-      "**On failure**: If build or tests fail, run the failure-escalation ladder:",
+      "**On failure**: Run the same failure-escalation ladder for command failures,\n" +
+        "`Not Met` targets, and `Unverified` targets:",
     );
     // The retired flat prose must be gone (replaced, not duplicated).
     expect(STAGE).not.toContain(
@@ -230,24 +231,24 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain("checklist item\n   6");
   });
 
-  test("plan approval remains authoritative across the repair replay", () => {
+  test("plan approval is re-minted for the replay directive epoch", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "The recorded Plan Approval answer remains\nauthoritative: the conductor MUST NOT blank its `[Answer]:` for the loop-back\nrevision",
-    );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
-      "the human's \"Retry with fix\" answer IS the re-approval of the\nrevised approach",
+      "The jump creates a new directive authority epoch",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "The plan-approval guard's evidence survives\nthe jump because the non-empty plan and its approved questions file are\npreserved.",
+      "blank `[Answer]:`, regenerate the target-bound fingerprint",
+    );
+    expect(CONSTRUCTION_PROTOCOL).toContain(
+      "Plan Approval decision/human-turn/answer receipt\nsequence again before generation",
     );
     expect(CODE_GENERATION).toContain(
-      "**Build-and-Test loop-back exception:** The loop-back in the construction",
+      "**Build-and-Test loop-back:** The construction protocol module",
     );
     expect(CODE_GENERATION).toContain(
-      "Do not blank the Plan Approval `[Answer]:`",
+      "reset the Plan\n> Approval `[Answer]:`",
     );
     expect(CODE_GENERATION).toContain(
-      "The plan-approval guard's evidence survives the jump",
+      "run the full decision/human-turn/answer receipt",
     );
   });
 
@@ -261,14 +262,15 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(STAGE).toContain(modulePath);
     expect(CODE_GENERATION).toContain(modulePath);
     expect(RECOVERY).toContain(modulePath);
-    expect(STAGE).not.toContain("stage-protocol.md §1");
-    expect(CODE_GENERATION).not.toContain("stage-protocol.md §1");
-    expect(RECOVERY).not.toContain("stage-protocol.md\n§1");
+    const retiredMainProtocolReference = /stage-protocol\.md\s+§1(?!\d)/;
+    expect(STAGE).not.toMatch(retiredMainProtocolReference);
+    expect(CODE_GENERATION).not.toMatch(retiredMainProtocolReference);
+    expect(RECOVERY).not.toMatch(retiredMainProtocolReference);
   });
 
-  test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 10", () => {
+  test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 9", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain("choose Modify\n   at its own Artifact Re-use prompt");
-    expect(CONSTRUCTION_PROTOCOL).toContain("re-execute Step 10 fresh");
+    expect(CONSTRUCTION_PROTOCOL).toContain("re-execute Step 9 fresh");
   });
 
   test("re-entry is settlement-aware and every path refreshes per-unit reviews", () => {

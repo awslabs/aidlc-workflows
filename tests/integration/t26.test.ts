@@ -171,7 +171,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         // ideation state). Read straight off the seeded file. P4: the jump tool
         // does NOT migrate (only intent-create does, aidlc-utility.ts:2022) — the
         // seed stays at the flat layout, so stateFilePathFor resolves it via the
-        // flat fallback (no intent born yet).
+        // flat fallback (no intent created yet).
         const seedState = readFileSync(stateFilePathFor(proj), "utf8");
         expect(readStateField(seedState, "Lifecycle Phase")).toBe("CONSTRUCTION");
         expect(readStateField(seedState, "Completed")).toBe("20");

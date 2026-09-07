@@ -4,7 +4,7 @@
 // live). t194 pins the deterministic verb; this proves the CONDUCTOR arc the
 // SKILL.md composer block names, over a real running workflow:
 //
-//   seed:      an active mid-ideation feature workflow (the born shape).
+//   seed:      an active mid-ideation feature workflow (the post-creation shape).
 //   drive:     `/aidlc compose "drop market research and team formation"`.
 //   engine:    Branch 4c WITH-STATE dispatch (t198 pins it does not advance).
 //   conductor: dispatches the composer -> proposal (SKIP flips for the two
@@ -41,7 +41,7 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
   test(
     "mid-flow compose proposes SKIP flips, approve lands them via the recompose verb, cursor untouched",
     async () => {
-      // A real BORN workflow (not a fixture): birth feature scope, so
+      // A real created workflow (not a fixture): create a feature-scope intent, so
       // market-research + team-formation are pending grid-EXECUTE stages
       // ahead of the cursor (intent-capture).
       const proj = setupIntegrationProject({
@@ -49,7 +49,7 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
         stripEnvScope: true,
       });
       try {
-        const birth = Bun.spawnSync({
+        const creation = Bun.spawnSync({
           cmd: [
             process.execPath,
             join(proj, ".claude", "tools", "aidlc-utility.ts"),
@@ -58,7 +58,7 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
           stdout: "pipe",
           stderr: "pipe",
         });
-        expect(birth.exitCode).toBe(0);
+        expect(creation.exitCode).toBe(0);
         const before = readStateFile(proj) ?? "";
         expect(before).toMatch(/- \[ \] market-research — EXECUTE/);
         expect(before).toMatch(/- \[ \] team-formation — EXECUTE/);

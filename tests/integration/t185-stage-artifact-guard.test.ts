@@ -38,10 +38,25 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -56,16 +71,29 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  pipelineAttemptStartedAt,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   sourceBaselineAuditFields,
   summaryConfirmationContentHash,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
+setDefaultTimeout(30_000);
+
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
+let handoffClock = 0;
+
+function ensurePipelineAttemptStarted(proj: string): void {
+  if (pipelineAttemptStartedAt(proj, "reverse-engineering")) return;
+  appendAuditEntry(
+    "STAGE_STARTED",
+    { Stage: "reverse-engineering", Agent: "aidlc-developer-agent" },
+    proj,
+  );
+}
 
 function reviewStage(
   proj: string,
@@ -73,6 +101,34 @@ function reviewStage(
   reviewer: string,
   unit?: string,
 ): void {
+  const artifact =
+    stage === "intent-capture"
+      ? join(
+          seededRecordDir(proj),
+          "ideation",
+          stage,
+          "intent-statement.md",
+        )
+      : join(
+          seededRecordDir(proj),
+          "construction",
+          ...(unit ? [unit] : []),
+          stage,
+          "code-generation-plan.md",
+        );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : `# ${basename(artifact)}\n`;
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   if (stage === "code-generation" && unit) {
     let unitIsResolved = false;
     try {
@@ -121,11 +177,37 @@ function reviewStage(
   // cannot be computed there, so isolate the artifact-guard contract with the
   // documented freshness switch while still requiring a valid manifest.
   env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(`reviewStage failed: ${result.stdout}${result.stderr}`);
-    }
+  // These fixtures assert the artifact guard, not review admission: the
+  // documented switches keep Plan Approval and summary confirmation out of it.
+  env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD = "1";
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(
+      `reviewStage request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(
+      `reviewStage verdict failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 
@@ -459,6 +541,7 @@ function writeCodekbSet(
 }
 
 function completePipelineReceipts(proj: string, repos: string[] = []): void {
+  ensurePipelineAttemptStarted(proj);
   const chains = repos.length > 0 ? repos : [undefined];
   for (const repo of chains) {
     for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
@@ -473,6 +556,36 @@ function completePipelineReceipts(proj: string, repos: string[] = []): void {
         proj,
       ];
       if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      if (link === "aidlc-developer-agent") {
+        const handoff = join(
+          seededRecordDir(proj),
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        mkdirSync(dirname(handoff), { recursive: true });
+        writeFileSync(
+          handoff,
+          "## Developer Code Scan Results\n\n## Handoff Summary\n\nFixture scan.\n",
+        );
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          proj,
+          "reverse-engineering",
+        );
+        const attemptMs = Date.parse(attemptStartedAt);
+        const writtenAt = new Date(
+          Math.max(Date.now(), Number.isNaN(attemptMs) ? 0 : attemptMs) +
+            1_000 +
+            handoffClock++,
+        );
+        utimesSync(handoff, writtenAt, writtenAt);
+        args.splice(
+          args.length - 2,
+          0,
+          "--artifact",
+          relative(proj, handoff),
+        );
+      }
       const env = { ...process.env };
       delete env.AIDLC_SKIP_ARTIFACT_GUARD;
       delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
@@ -505,7 +618,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["gate-start", slug]);
     const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     // State untouched: the stage is NOT marked completed.
     expect(field(proj, "Current Stage")).toBe(slug);
   });
@@ -514,7 +629,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to present the approval gate");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot present "feasibility" for approval: none of its declared artifacts exist',
+    );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
@@ -525,7 +642,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["checkbox", `${slug}=revising`]);
     const r = guarded(proj, ["revise", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to present the approval gate");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot present "feasibility" for approval: none of its declared artifacts exist',
+    );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [R] ${slug}`,
     );
@@ -535,7 +654,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["advance", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -547,7 +668,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     const r = guarded(proj, ["finalize", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -556,7 +679,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     const r = guarded(proj, ["complete-workflow", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -601,7 +726,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       confirmSummary(proj, questions);
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no recorded native-tool write after");
+      expect(result.out).toContain("was not saved after the confirmed answers");
     });
 
     test("allows Assumption Confirmation after generation and terminal review", () => {
@@ -1606,6 +1731,40 @@ X. Other (please specify)
       expect(field(proj, "Current Stage")).not.toBe("feasibility");
     });
 
+    test("accepts a legacy pre-move absolute artifact write after the workspace moves", () => {
+      const questions = writeSummaryQuestions(proj);
+      confirmSummary(proj, questions);
+      const artifact = join(
+        seededRecordDir(proj),
+        "ideation",
+        "feasibility",
+        "feasibility-assessment.md",
+      );
+      writeRecordDoc(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      appendFileSync(
+        seededAuditShard(proj),
+        [
+          "",
+          "## ARTIFACT_CREATED",
+          `**Timestamp**: ${new Date().toISOString()}`,
+          "**Event**: ARTIFACT_CREATED",
+          `**File**: ${artifact}`,
+          "**Tool**: Write",
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      const moved = `${proj}-moved`;
+      renameSync(proj, moved);
+      proj = moved;
+
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
     test("normalizes line endings in a scoped receipt", () => {
       const questions = writeSummaryQuestions(proj);
       confirmSummary(proj, questions);
@@ -1651,6 +1810,7 @@ X. Other (please specify)
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
 
     test("REFUSES code-generation with planning docs but no source code", () => {
@@ -1710,7 +1870,9 @@ X. Other (please specify)
       bypassed(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot complete "reverse-engineering": none of its declared artifacts exist',
+      );
     });
 
     test("PASSES reverse-engineering once the complete codekb artifact set exists", () => {
@@ -1734,7 +1896,9 @@ X. Other (please specify)
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to present the approval gate");
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot present "reverse-engineering" for approval: none of its declared artifacts exist',
+      );
     });
 
     test("PASSES multi-repo codekb when every registered repo has the full set", () => {
@@ -1757,6 +1921,7 @@ X. Other (please specify)
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
       writeCodekbSet(proj, "repo-a");
       writeCodekbSet(proj, "repo-b");
+      ensurePipelineAttemptStarted(proj);
       const reused = guarded(proj, [
         "reuse-artifact",
         "reverse-engineering",
@@ -1771,7 +1936,7 @@ X. Other (please specify)
       completePipelineReceipts(proj, ["repo-b"]);
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     });
   });
 
@@ -1813,6 +1978,7 @@ X. Other (please specify)
       while (Math.floor(Date.now() / 1000) === boundarySecond) {}
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
     function approveCodeGen(): { rc: number; out: string } {
       reviewCodeGen(proj, UNIT);
@@ -1945,7 +2111,10 @@ X. Other (please specify)
     }
 
     test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
-      seedSwarm(UNITS); // all converged; nothing written to the record dir
+      // The migrated review flow writes each converged unit's reviewed plan
+      // into the record dir, but the exemption is still granted from the
+      // convergence ledger before any produces walk.
+      seedSwarm(UNITS); // all converged
       bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(
         proj,
@@ -1960,7 +2129,16 @@ X. Other (please specify)
       gateSetupBypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      // The converged unit's reviewed plan exists in the record dir (the
+      // request -> appendix -> verdict flow writes it), so the refusal falls
+      // through the produces walk to the workspace_requires source-work
+      // guard - still fail-closed, no state mutation.
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot complete "code-generation"',
+      );
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        "no source work is evident",
+      );
     });
 
     test("unexpected settled-swarm probe failures are controlled and leave state unchanged", () => {
@@ -1980,7 +2158,7 @@ X. Other (please specify)
       expect(r.rc).toBe(1);
       const refusal = JSON.parse(r.out) as { error: string };
       expect(refusal.error).toContain(
-        'Refusing to present the approval gate for "code-generation"',
+        'Cannot present "code-generation" for approval: the settled-swarm probe failed unexpectedly',
       );
       expect(refusal.error).toContain("settled-swarm probe failed unexpectedly");
       expect(refusal.error).toContain("Scope file missing frontmatter");

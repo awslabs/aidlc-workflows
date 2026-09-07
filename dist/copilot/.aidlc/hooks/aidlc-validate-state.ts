@@ -20,6 +20,7 @@ import {
   recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -36,8 +37,9 @@ if (!existsSync(stateFile)) return 0;
 const content = readFileSync(stateFile, "utf-8");
 try {
   const payload = JSON.parse(input) as { session_id?: unknown; sessionId?: unknown };
-  const sessionId = typeof payload.session_id === "string" ? payload.session_id :
-    typeof payload.sessionId === "string" ? payload.sessionId : "";
+  const rawSessionId = typeof payload.session_id === "string" ? payload.session_id :
+    typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+  const sessionId = validSessionId(rawSessionId) ?? "";
   invalidateActiveDirectiveContext(projectDir, content, sessionId);
 } catch {
   // Missing/malformed or foreign compaction is coordination-neutral.

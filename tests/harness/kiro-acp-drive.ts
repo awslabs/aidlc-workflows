@@ -329,11 +329,11 @@ export class AcpSession {
   }
 }
 
-// P4: birth writes the workflow record per-intent — state at
+// P4: creation writes the workflow record per-intent - state at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md, audit as per-clone
 // shards at <record>/audit/<host>-<clone>.md — NOT the flat aidlc-docs/. Resolve
-// the born record from the active-space + active-intent cursors, falling back to
-// the flat layout for a not-yet-born (pre-migration) fixture.
+// the created record from the active-space + active-intent cursors, falling back to
+// the flat layout for a not-yet-created (pre-migration) fixture.
 function recordDirOf(projectDir: string): string {
   const spaceCursor = join(projectDir, "aidlc", "active-space");
   const space = existsSync(spaceCursor)

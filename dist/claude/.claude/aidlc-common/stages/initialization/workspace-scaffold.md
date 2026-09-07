@@ -28,9 +28,7 @@ outputs: the per-intent record tree (one dir per in-scope phase + verification d
 
 # Workspace Scaffold
 
-Runs deterministically inside `aidlc-utility intent-create`. The workspace shell ships in `dist/` (the SEED); creation only ensure-exists the per-intent record and its in-scope phase dirs (creates them on demand, idempotent). Kept as reference for audit event semantics.
-
-MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
+Runs deterministically inside `aidlc-utility intent-create`. The workspace shell ships in `dist/` (the SEED); intent creation only ensures the per-intent record and its in-scope phase dirs exist (created on demand, idempotently). Kept as reference for audit event semantics.
 
 ## Steps
 
@@ -39,7 +37,13 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 1. Update `<record>/aidlc-state.md`: set `Current Stage` to `scaffolding workspace`
 2. Mark workspace-scaffold as `[-]` in progress
 
-### Step 2: Ensure the Space Knowledge Directory
+### Step 2: Ensure the Space Shared Directories
+
+Ensure-exists the empty space-level CodeKB parent
+`aidlc/spaces/<space>/codekb/`. This makes the shared store safe to inspect
+before Reverse Engineering runs. Repository directories remain lazy:
+`codekb/<repo>/` appears only when Reverse Engineering writes that repo's
+artifacts.
 
 Ensure-exists the space-level domain-knowledge directory
 `aidlc/spaces/<space>/knowledge/` (shorthand `aidlc/knowledge/`). It is
@@ -48,8 +52,8 @@ subdirectories, no seeded READMEs. A team adds its own markdown here over time;
 the directory is a sibling of `memory/`, `codekb/`, and `intents/`, so domain
 knowledge accumulates across every intent in the space rather than being trapped
 in one intent's record. The agent personas read team knowledge from
-`aidlc/knowledge/aidlc-shared/` and `aidlc/knowledge/<agent>/` if those exist —
-the team creates them; birth does not. (The engine's per-agent METHODOLOGY
+`aidlc/knowledge/aidlc-shared/` and `aidlc/knowledge/<agent>/` if those exist.
+The team creates them; the intent-creation step does not. (The engine's per-agent METHODOLOGY
 knowledge ships separately and read-only under `.claude/knowledge/`.)
 
 ### Step 3: Ensure Phase Artifact Directories
@@ -100,26 +104,16 @@ it ensure-exists the per-intent record and its in-scope phase dirs and emits sta
 agent-authored markdown lands here, so the frontmatter `sensors:` list
 is empty.
 
-If a fork later customises this stage to write markdown reports, import
-the relevant manifests via `sensors:` in this file's frontmatter; the
-resolver will populate `sensors_applicable` at the next compile.
+Imports: none.
+
+A customised setup report should import the relevant manifests here.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-This is an auto-proceeding bootstrap stage (`gate: false`), so it has no
-approval gate. Keep `memory.md` as the stage's permanent execution record, but
-do not surface or persist §13 learnings and do not ask the mandatory
-"Anything to add for next time?" question here. The gate-bound learnings ritual
-begins with the first post-initialization stage.
+Follow stage-protocol.md §13 by maintaining
+`<record>/<phase>/<stage>/memory.md` under the four standard headings; the
+memory file stays in the artefact directory and the stage file remains
+immutable. This auto-proceeding bootstrap stage (`gate: false`) has no
+approval gate, so skip surfacing and persisting learnings and the mandatory
+"Anything to add for next time?" question; the gate-bound ritual begins with
+the first post-initialization stage.

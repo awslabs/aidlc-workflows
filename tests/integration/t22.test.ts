@@ -26,7 +26,7 @@
 //   - hook check label:   "<hook>.ts present"                 (utility.ts:356)
 //   - settings label:     "settings.json present"            (utility.ts:365)
 //   - shell-ready label:  "workspace shell ready"            (utility.ts:597; P4: the
-//                         old "aidlc-docs/ directory exists" row was retired — auto-birth
+//                         old "aidlc-docs/ directory exists" row was retired - auto-create
 //                         needs no scaffolded aidlc-docs/, so doctor checks the SHIPPED SHELL
 //                         (.claude/ + aidlc/spaces/default/memory/) instead)
 //   - footer shape:       "N passed, M failed"               (utility.ts:1371)
@@ -166,7 +166,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   // Without the shipped shell. Re-expresses .sh test 10 (already deterministic),
   // migrated to the P4 readiness row.
   //
-  // P4 retired the "aidlc-docs/ directory exists" row: with auto-birth there is
+  // P4 retired the "aidlc-docs/ directory exists" row: with auto-create there is
   // no scaffolded aidlc-docs/ to verify. Readiness is the SHIPPED SHELL — the
   // harness engine dir (.claude/) AND the default space's memory dir
   // (aidlc/spaces/default/memory/) BOTH present (utility.ts:586-599). The row

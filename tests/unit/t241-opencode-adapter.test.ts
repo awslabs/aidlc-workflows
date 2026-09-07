@@ -4,10 +4,12 @@
 // covers: function:KNOWN_HARNESS_DIRS, hook:aidlc-rebuild-stage-graph
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -16,7 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import createAdapter, {
   type PluginInput,
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
@@ -28,6 +30,12 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import {
+  inspectSubagentInflight,
+  subagentInflightMarkerPath,
+  writeSessionBinding,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TEST_ENTRYPOINTS = new Set([
@@ -60,6 +68,21 @@ function freshInstalledProject(): string {
     { recursive: true },
   );
   return root;
+}
+
+function seedUnapprovedCodeGeneration(root: string): void {
+  seedStateFile(root, "state-construction.md");
+  const statePath = join(seededRecordDir(root), "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(root, {
+    kind: "run-stage",
+    stage: "code-generation",
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
 }
 
 function readAudit(root: string): string {
@@ -279,7 +302,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
         { tool: "read", sessionID: "reviewer", callID: "sibling" },
         { args: { filePath: sibling } },
       ),
-    ).rejects.toThrow(/reviewer read-scope:/i);
+    ).rejects.toThrow(/This review cannot open/i);
     await expect(
       before(
         { tool: "read", sessionID: "reviewer", callID: "current" },
@@ -291,7 +314,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
         { tool: "list", sessionID: "reviewer", callID: "sibling-list" },
         { args: { path: dirname(sibling) } },
       ),
-    ).rejects.toThrow(/reviewer read-scope:/i);
+    ).rejects.toThrow(/This review cannot open/i);
   });
 });
 
@@ -320,7 +343,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
       );
     await expect(
       invoke("blocked", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
-    ).rejects.toThrow(/stage status is changed by the workflow tools/i);
+    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
     await expect(
       invoke("readonly", "bun .aidlc/tools/aidlc-state.ts show"),
     ).resolves.toBeUndefined();
@@ -357,7 +380,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
         { tool: "bash", sessionID: "worker", callID: "worker-route" },
         { args: { command } },
       ),
-    ).rejects.toThrow(/conductor-owned/i);
+    ).rejects.toThrow(/only the main workflow session can change stage status or routing/i);
     await expect(
       before(
         { tool: "bash", sessionID: "main", callID: "main-route" },
@@ -371,6 +394,7 @@ describe("t241 OpenCode adapter dispatch rules", () => {
   test("task input is rewritten with exact active-stage rules", async () => {
     const root = freshInstalledProject();
     seedAidlcMemory(root);
+    seedStateFile(root, "state-mid-inception.md");
     const { client } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });
     const output = {
@@ -378,6 +402,7 @@ describe("t241 OpenCode adapter dispatch rules", () => {
         subagent_type: "aidlc-product-agent",
         prompt:
           "Run .aidlc/aidlc-common/stages/inception/user-stories.md.",
+        run_in_background: true,
       },
     };
 
@@ -390,6 +415,52 @@ describe("t241 OpenCode adapter dispatch rules", () => {
     expect(prompt).toContain("first-class");
     expect(prompt).toContain("Given/When/Then");
     expect(prompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    expect(inspectSubagentInflight(root).freshCount).toBe(1);
+
+    await adapter["tool.execute.after"]({
+      tool: "task",
+      sessionID: "main",
+      callID: "rules",
+      args: output.args,
+    });
+    expect(existsSync(subagentInflightMarkerPath(root))).toBe(false);
+  });
+});
+
+describe("t241 OpenCode native plan-approval payloads", () => {
+  test("write, bash, and developer task paths block before a human-owned receipt", async () => {
+    const root = freshInstalledProject();
+    seedAidlcMemory(root);
+    seedUnapprovedCodeGeneration(root);
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const before = adapter["tool.execute.before"];
+
+    await expect(
+      before(
+        { tool: "write", sessionID: "main", callID: "write" },
+        { args: { filePath: join(root, "src", "blocked.ts") } },
+      ),
+    ).rejects.toThrow(/plan|approval/i);
+    await expect(
+      before(
+        { tool: "bash", sessionID: "main", callID: "bash" },
+        { args: { command: "sort input.txt -o src/blocked.txt" } },
+      ),
+    ).rejects.toThrow(/plan|approval/i);
+    await expect(
+      before(
+        { tool: "task", sessionID: "main", callID: "task" },
+        {
+          args: {
+            subagent_type: "aidlc-developer-agent",
+            prompt:
+              "AIDLC-STAGE: code-generation\n" +
+              `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+          },
+        },
+      ),
+    ).rejects.toThrow(/plan|approval/i);
   });
 });
 
@@ -595,7 +666,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     expect(payload.session_id).toBe("main");
   });
 
-  test("turn-one idle reaches the real Stop hook when workflow state is born during the turn", async () => {
+  test("turn-one idle reaches the real Stop hook when workflow state is created during the turn", async () => {
     const root = freshInstalledProject();
     const { client, prompts } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });
@@ -605,6 +676,14 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       { parts: [{ type: "text", text: "start a workflow" }] },
     );
     seedStateFile(root, "state-init-active.md");
+    // The direct fixture write stands in for intent-create, so mirror the
+    // production writer that replaces the cold intent:null binding.
+    writeSessionBinding(
+      root,
+      "main",
+      "default",
+      basename(seededRecordDir(root)),
+    );
     await adapter.event({
       event: {
         type: "session.idle",

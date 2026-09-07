@@ -76,6 +76,138 @@ export interface KiroIdeDomSnapshot {
     text: string;
     ariaLabel: string;
   }>;
+  orderedLists: string[][];
+}
+
+export interface KiroIdeBlockingOverlay {
+  text: string;
+  className: string;
+  role: string;
+  ariaModal: string;
+  rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface KiroIdeBlockedHitPoint {
+  x: number;
+  y: number;
+  hitTag: string;
+  hitClassName: string;
+  hitText: string;
+}
+
+export interface KiroIdeChatSurfaceState {
+  chatFrameCount: number;
+  blockedHitPoints: KiroIdeBlockedHitPoint[];
+  blockingOverlays: KiroIdeBlockingOverlay[];
+}
+
+export interface KiroIdeChatPreparation {
+  dismissed: string | null;
+  surface: KiroIdeChatSurfaceState;
+}
+
+export interface KiroIdeNumberedListSnapshot {
+  targetType: string;
+  targetUrl: string;
+  context: ExecContext;
+  href: string;
+  listStyleType: string;
+  start: number;
+  items: Array<{
+    ordinal: number;
+    text: string;
+    display: string;
+    listStyleType: string;
+    visibility: string;
+    opacity: string;
+    markerContent: string;
+    markerColor: string;
+    markerFontSize: string;
+    markerOpacity: string;
+  }>;
+}
+
+function normalizedOptionText(value: string): string {
+  return value.replaceAll(/[‘’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Find a fully rendered numbered list whose items match every expected label
+ * in order. A streaming prefix is intentionally not a match. */
+export function findCompleteNumberedListByLabels(
+  lists: KiroIdeNumberedListSnapshot[],
+  labels: string[],
+): KiroIdeNumberedListSnapshot | null {
+  const expected = labels.map(normalizedOptionText);
+  return (
+    lists.find(
+      (list) =>
+        list.items.length === expected.length &&
+        list.items.every((item, index) =>
+          normalizedOptionText(item.text).startsWith(expected[index]),
+        ),
+    ) ?? null
+  );
+}
+
+function positiveCssNumber(value: string): boolean {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function transparentCssColor(value: string): boolean {
+  const color = value.replace(/\s+/g, "").toLowerCase();
+  return (
+    color === "transparent" ||
+    /,\s*0(?:\.0+)?\)$/.test(color) ||
+    /\/\s*0(?:\.0+)?\)$/.test(color)
+  );
+}
+
+function markerContentMatchesOrdinal(
+  item: KiroIdeNumberedListSnapshot["items"][number],
+): boolean {
+  const markerContent = item.markerContent.trim();
+  if (markerContent.toLowerCase() === "normal") {
+    return item.listStyleType === "decimal";
+  }
+  const first = markerContent[0];
+  const last = markerContent.at(-1);
+  const unquoted =
+    markerContent.length >= 2 &&
+    (first === '"' || first === "'") &&
+    last === first
+      ? markerContent.slice(1, -1)
+      : markerContent;
+  const visibleText = unquoted.replace(/\s+/g, " ").trim();
+  return new RegExp(`^${item.ordinal}(?:[.)])?$`).test(visibleText);
+}
+
+/** Prove each option has a visible marker that renders its actual ordinal. */
+export function numberedListMarkersAreVisible(
+  list: KiroIdeNumberedListSnapshot,
+): boolean {
+  if (list.listStyleType === "none" || list.items.length === 0) return false;
+  return list.items.every((item) => {
+    const markerContent = item.markerContent.trim().toLowerCase();
+    return (
+      item.display === "list-item" &&
+      item.listStyleType !== "none" &&
+      item.visibility === "visible" &&
+      positiveCssNumber(item.opacity) &&
+      markerContent !== "" &&
+      markerContent !== "none" &&
+      markerContent !== '""' &&
+      markerContentMatchesOrdinal(item) &&
+      !transparentCssColor(item.markerColor) &&
+      positiveCssNumber(item.markerFontSize) &&
+      positiveCssNumber(item.markerOpacity)
+    );
+  });
 }
 
 /** One CDP connection to a single page/iframe target. JSON-RPC over a Bun-native
@@ -216,6 +348,11 @@ export class CdpTarget {
 // committing or copying any real profile - nothing sensitive ever touches the repo. The
 // two extra rows + settings only mute cosmetic notification toasts (MCP tools, Builder
 // steering, git-repo prompt); the onboarding row is what unblocks chat.
+//
+// Current Kiro versions can additionally show a session-storage migration carousel.
+// Its "Remind me later" action does not persist a durable global-state key, so it is
+// handled after launch by prepareKiroIdeChat(). The seed stays version-neutral and
+// credential-free instead of copying a mutable Kiro profile or guessing private state.
 const SEED_STATE_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["kiroAgent.onboarding.onboardingCompleted", "true"], // load-bearing: skips the import wall
   ["releaseNotes/lastVersion", "0.0.0"], // mute the release-notes popup (version-agnostic stub)
@@ -433,6 +570,162 @@ export async function waitForChatInput(port: number, timeoutMs = 60_000): Promis
     await sleep(800);
   }
   return false;
+}
+
+// A chat editor can be live inside its nested webview while a top-level overlay
+// intercepts the visible UI. Probe the real top-level hit-testing surface: only the
+// chat iframe itself proves the sampled point is unobstructed. ARIA metadata is useful
+// diagnostics, but is not trusted as the condition for deciding whether a hit blocks.
+export function inspectKiroIdeChatSurfaceDocument(
+  doc: Document = document,
+  styleOf: typeof getComputedStyle = getComputedStyle,
+): KiroIdeChatSurfaceState {
+  const norm = (s: unknown): string => String(s || "").replace(/\s+/g, " ").trim();
+  const visible = (e: Element): boolean => {
+    const r = e.getBoundingClientRect?.();
+    if (!r || !(r.width > 0 && r.height > 0)) return false;
+    const s = styleOf(e);
+    return (
+      s.display !== "none" &&
+      s.visibility !== "hidden" &&
+      Number.parseFloat(s.opacity || "1") > 0
+    );
+  };
+  const rectOf = (e: Element): KiroIdeBlockingOverlay["rect"] => {
+    const r = e.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  };
+  const modalSelector = "[aria-modal='true']";
+  const blockingOverlays = [...doc.querySelectorAll(modalSelector)]
+    .filter((e) => visible(e) && styleOf(e).pointerEvents !== "none")
+    .map((e) => ({
+      text: norm((e as HTMLElement).innerText || e.textContent).slice(0, 1000),
+      className: String(e.className || ""),
+      role: String(e.getAttribute("role") || ""),
+      ariaModal: String(e.getAttribute("aria-modal") || ""),
+      rect: rectOf(e),
+    }));
+  const chatFrames = [
+    ...new Set([
+      ...doc.querySelectorAll("iframe.webview.ready"),
+      ...doc.querySelectorAll("iframe[src*='extensionId=kiro.kiroAgent']"),
+    ]),
+  ].filter(visible);
+  const blockedHitPoints: KiroIdeBlockedHitPoint[] = [];
+  for (const frame of chatFrames) {
+    const r = frame.getBoundingClientRect();
+    const points = [
+      [r.left + r.width / 2, r.top + r.height / 2],
+      [r.left + r.width / 2, r.bottom - Math.min(80, r.height / 4)],
+    ];
+    for (const [x, y] of points) {
+      const hit = doc.elementFromPoint(x, y);
+      const clear = hit === frame || (hit && frame.contains(hit));
+      if (clear) continue;
+      blockedHitPoints.push({
+        x,
+        y,
+        hitTag: String(hit?.tagName || ""),
+        hitClassName: String(hit?.className || ""),
+        hitText: norm((hit as HTMLElement | null)?.innerText || hit?.textContent).slice(0, 500),
+      });
+    }
+  }
+  return {
+    chatFrameCount: chatFrames.length,
+    blockedHitPoints,
+    blockingOverlays,
+  };
+}
+
+const CHAT_SURFACE_STATE_EXPR = `(${inspectKiroIdeChatSurfaceDocument.toString()})()`;
+
+/** Inspect the visible top-level workbench surface, not just the nested chat DOM. */
+export async function inspectKiroIdeChatSurface(port: number): Promise<KiroIdeChatSurfaceState> {
+  const t = await pageTarget(port);
+  try {
+    return await t.evaluate<KiroIdeChatSurfaceState>(CHAT_SURFACE_STATE_EXPR);
+  } finally {
+    t.close();
+  }
+}
+
+const SESSION_MIGRATION_TITLE = "upgraded how sessions are stored";
+const SESSION_MIGRATION_BODY = "migrate your previous sessions";
+
+function hasSessionMigrationOverlay(surface: KiroIdeChatSurfaceState): boolean {
+  return surface.blockingOverlays.some((overlay) => {
+    const text = overlay.text.toLowerCase();
+    return text.includes(SESSION_MIGRATION_TITLE) && text.includes(SESSION_MIGRATION_BODY);
+  });
+}
+
+function chatSurfaceIsReady(surface: KiroIdeChatSurfaceState): boolean {
+  return (
+    surface.chatFrameCount > 0 &&
+    surface.blockingOverlays.length === 0 &&
+    surface.blockedHitPoints.length === 0
+  );
+}
+
+export interface KiroIdeChatSurfaceAdapter {
+  inspect: () => Promise<KiroIdeChatSurfaceState>;
+  dismissMigration: () => Promise<string | null>;
+  wait: (ms: number) => Promise<void>;
+  now: () => number;
+}
+
+/** Reconcile supported startup overlays and return only after the chat iframe is
+ * visibly unobstructed. The injected adapter keeps current/older/persistent-modal
+ * behavior deterministic in tests without launching Electron. */
+export async function settleKiroIdeChatSurface(
+  adapter: KiroIdeChatSurfaceAdapter,
+  timeoutMs = 15_000,
+  pollMs = 250,
+): Promise<KiroIdeChatPreparation> {
+  const deadline = adapter.now() + timeoutMs;
+  let dismissed: string | null = null;
+  let surface: KiroIdeChatSurfaceState = {
+    chatFrameCount: 0,
+    blockedHitPoints: [],
+    blockingOverlays: [],
+  };
+
+  for (;;) {
+    surface = await adapter.inspect();
+    if (chatSurfaceIsReady(surface)) return { dismissed, surface };
+
+    if (hasSessionMigrationOverlay(surface)) {
+      const clicked = await adapter.dismissMigration();
+      if (clicked) dismissed = clicked;
+    }
+
+    if (adapter.now() >= deadline) break;
+    await adapter.wait(pollMs);
+  }
+
+  throw new Error(
+    "kiro-ide-driver: blocking overlay remains over chat after startup reconciliation: " +
+      JSON.stringify(surface),
+  );
+}
+
+/** Dismiss the current Kiro session-migration carousel when present, while allowing
+ * older versions where it is absent. Success requires both zero aria-modal overlays
+ * and clear hit tests over the chat iframe. */
+export function prepareKiroIdeChat(
+  port: number,
+  timeoutMs = 15_000,
+): Promise<KiroIdeChatPreparation> {
+  return settleKiroIdeChatSurface(
+    {
+      inspect: () => inspectKiroIdeChatSurface(port),
+      dismissMigration: () => clickByText(port, ["remind me later"]),
+      wait: sleep,
+      now: Date.now,
+    },
+    timeoutMs,
+  );
 }
 
 /** Cmd+Shift+L on macOS or Ctrl+Shift+L on Windows focuses the Kiro chat input. */
@@ -698,13 +991,21 @@ const SNAPSHOT_DOM_EXPR = `(() => {
       ariaLabel: norm(e.getAttribute("aria-label")).slice(0, 240)
     }))
     .slice(-20);
+  const orderedLists = [...document.querySelectorAll("ol")]
+    .filter(visible)
+    .map((list) => [...list.querySelectorAll(":scope > li")]
+      .filter(visible)
+      .map((item) => norm(item.innerText||item.textContent).slice(0, 2000)))
+    .filter((items) => items.length > 0)
+    .slice(-20);
   const bodyText = norm(document.body && document.body.innerText);
   return {
     href: String(location.href),
     title: String(document.title||""),
     text: bodyText.slice(-12000),
     controls,
-    editors
+    editors,
+    orderedLists
   };
 })()`;
 
@@ -730,6 +1031,89 @@ export async function snapshotChatDom(port: number): Promise<KiroIdeDomSnapshot[
               targetUrl: tgt.url ?? "",
               context,
               ...view,
+            });
+          }
+        } catch {
+          /* context gone */
+        }
+      }
+    } catch {
+      /* target gone */
+    } finally {
+      t.close();
+    }
+  }
+  return snapshots;
+}
+
+const SNAPSHOT_NUMBERED_LISTS_EXPR = `(() => {
+  const norm = (s) => String(s||"").replace(/\\s+/g," ").trim();
+  const visible = (e) => {
+    const r = e.getBoundingClientRect && e.getBoundingClientRect();
+    return !r || (r.width > 0 && r.height > 0);
+  };
+  return [...document.querySelectorAll("ol")]
+    .filter(visible)
+    .map((list) => {
+      const children = [...list.children].filter((e) => e.tagName === "LI" && visible(e));
+      const reversed = list.hasAttribute("reversed");
+      const parsedStart = Number.parseInt(list.getAttribute("start") || "", 10);
+      const defaultStart = reversed ? children.length : 1;
+      let next = Number.isFinite(parsedStart) ? parsedStart : defaultStart;
+      const items = children.map((item) => {
+        const itemStyle = getComputedStyle(item);
+        const markerStyle = getComputedStyle(item, "::marker");
+        const parsedValue = Number.parseInt(item.getAttribute("value") || "", 10);
+        const ordinal = Number.isFinite(parsedValue) ? parsedValue : next;
+        next = ordinal + (reversed ? -1 : 1);
+        return {
+          ordinal,
+          text: norm(item.innerText || item.textContent).slice(0, 1000),
+          display: String(itemStyle.display || ""),
+          listStyleType: String(itemStyle.listStyleType || ""),
+          visibility: String(itemStyle.visibility || ""),
+          opacity: String(itemStyle.opacity || ""),
+          markerContent: String(markerStyle.content || ""),
+          markerColor: String(markerStyle.color || ""),
+          markerFontSize: String(markerStyle.fontSize || ""),
+          markerOpacity: String(markerStyle.opacity || "")
+        };
+      });
+      return {
+        href: String(location.href),
+        listStyleType: String(getComputedStyle(list).listStyleType || ""),
+        start: Number.isFinite(parsedStart) ? parsedStart : defaultStart,
+        items
+      };
+    })
+    .filter((list) => list.items.length > 0);
+})()`;
+
+/** Capture visible ordered-list structure from every live page/iframe context.
+ * Plain innerText omits CSS list markers in Kiro's chat webview, so live visual
+ * assertions inspect the rendered OL/LI ordinals and list style directly. */
+export async function snapshotNumberedLists(
+  port: number,
+): Promise<KiroIdeNumberedListSnapshot[]> {
+  const snapshots: KiroIdeNumberedListSnapshot[] = [];
+  const targets = await listTargets(port);
+  for (const tgt of targets) {
+    if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+    const t = new CdpTarget(tgt.webSocketDebuggerUrl);
+    try {
+      await t.connect();
+      const contexts = await t.enableContexts(600);
+      for (const context of contexts) {
+        try {
+          const lists = await t.evaluateInContext<
+            Array<Omit<KiroIdeNumberedListSnapshot, "targetType" | "targetUrl" | "context">>
+          >(context.id, SNAPSHOT_NUMBERED_LISTS_EXPR);
+          for (const list of lists) {
+            snapshots.push({
+              targetType: tgt.type,
+              targetUrl: tgt.url ?? "",
+              context,
+              ...list,
             });
           }
         } catch {

@@ -1,4 +1,4 @@
-// covers: file:skills/aidlc/SKILL.md, file:tools/aidlc-audit.ts, file:knowledge/aidlc-shared/audit-format.md, file:knowledge/aidlc-shared/state-template.md, file:aidlc-common/protocols/stage-protocol.md, file:aidlc-common/stages/construction/code-generation.md
+// covers: file:skills/aidlc/SKILL.md, file:tools/aidlc-audit.ts, file:knowledge/aidlc-shared/audit-format.md, file:knowledge/aidlc-shared/state-template.md, file:aidlc-common/protocols/stage-protocol.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:aidlc-common/stages/construction/code-generation.md
 //
 // In-process port of tests/integration/t47-construction-bolts.sh (TAP plan 12),
 // mechanism = none. The .sh is a Construction Bolt-by-Bolt vocabulary check: it
@@ -7,7 +7,9 @@
 // N" sub-step labels (must be GONE from SKILL.md), the four Bolt audit events
 // registered in aidlc-audit.ts, the BOLT_STARTED row in audit-format.md, the
 // Construction Autonomy Mode state field in state-template.md, the stage-protocol
-// Glossary entry tying a Bolt to stages 3.1-3.5 (with 3.6/3.7 once at the end),
+// Terminology **Bolt** row (sprint-like iteration planned in 2.9 over one or
+// more Units; distinct from runtime grouping; 3.6/3.7 once after all Bolts;
+// walk-order and walking-skeleton facts alongside),
 // and the orchestrator-managed gating note in code-generation.md.
 //
 // The .sh carried NO `# covers:` header, so it joined to zero enumerated registry
@@ -43,7 +45,9 @@
 //   dist/claude/.claude/knowledge/aidlc-shared/state-template.md             (STATE_TEMPLATE)
 //     :93 **Construction Autonomy Mode**: [unset/autonomous/gated]
 //   dist/claude/.claude/aidlc-common/protocols/stage-protocol.md             (STAGE_PROTOCOL)
-//     :716 Glossary **Bolt** row: stages 3.1-3.5; 3.6 & 3.7 run once after all Bolts
+//     Terminology **Bolt** row: sprint-like iteration planned in 2.9 over one
+//     or more Units; default stage-major runtime does not consume bolt-plan.md;
+//     3.6 & 3.7 once after all Bolts
 //   dist/claude/.claude/aidlc-common/stages/construction/code-generation.md  (CODE_GEN)
 //     :176 "orchestrator-managed gating" / "suppressed by the orchestrator" note
 //
@@ -58,7 +62,7 @@
 //                   merely anywhere in the file.
 //   .sh test 9     (audit-format.md documents BOLT_STARTED)     -> "audit-format.md documents BOLT_STARTED"
 //   .sh test 10    (state-template.md has Construction Autonomy Mode) -> "state-template.md exposes Construction Autonomy Mode"
-//   .sh test 11    (stage-protocol Glossary ties Bolt to 3.1-3.5 + 3.6/3.7 once) -> "stage-protocol.md Glossary ..."
+//   .sh test 11    (stage-protocol Terminology: planned-slice Bolt + 3.6/3.7 once) -> "stage-protocol.md Terminology ..."
 //   .sh test 12    (code-generation.md notes orchestrator-managed gating) -> "code-generation.md notes orchestrator-managed gating"
 
 import { describe, expect, test } from "bun:test";
@@ -85,6 +89,15 @@ const STATE_TEMPLATE = readFileSync(
 );
 const STAGE_PROTOCOL = readFileSync(
   join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),
+  "utf-8",
+);
+const CONSTRUCTION_PROTOCOL = readFileSync(
+  join(
+    AIDLC_SRC,
+    "aidlc-common",
+    "protocols",
+    "stage-protocol-construction.md",
+  ),
   "utf-8",
 );
 const CODE_GEN = readFileSync(
@@ -144,8 +157,19 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
   // =========================================================================
   // Test 9 — audit-format.md documents BOLT_STARTED (.sh assert_grep).
   // =========================================================================
-  test("audit-format.md documents BOLT_STARTED", () => {
-    expect(AUDIT_FORMAT.includes("BOLT_STARTED")).toBe(true);
+  test("audit-format.md documents per-Unit swarm-path Bolt events", () => {
+    const startedRow = AUDIT_FORMAT.split("\n").find((line) =>
+      line.startsWith("| `BOLT_STARTED` |"),
+    );
+    const completedRow = AUDIT_FORMAT.split("\n").find((line) =>
+      line.startsWith("| `BOLT_COMPLETED` |"),
+    );
+    expect(startedRow).toMatch(/Swarm \/ worktree path only/);
+    expect(startedRow).toMatch(/one Unit and its worktree/);
+    expect(startedRow).toMatch(/Not emitted on a default gated stage-major run/);
+    expect(startedRow).toMatch(/Base commit.*Base Source Listing/);
+    expect(completedRow).toMatch(/same Unit\/worktree/);
+    expect(completedRow).toMatch(/`SWARM_COMPLETED` does/);
   });
 
   // =========================================================================
@@ -157,28 +181,35 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
   });
 
   // =========================================================================
-  // Test 11 — stage-protocol.md Glossary ties a Bolt to stages 3.1-3.5, with
-  // 3.6/3.7 run once at the end. The .sh required BOTH greps to hit on the same
-  // file:
-  //   grep -q  "3\.1.*3\.5"           (the `.` matches the en-dash in "3.1-3.5")
-  //   grep -qi "3\.6.*3\.7.*once"
-  // Reproduce both as regex tests against the shipped bytes. STRONGER: assert
-  // both on a SINGLE line (the Glossary **Bolt** row), so a split across
-  // unrelated lines can't satisfy the guard.
+  // Test 11 — stage-protocol.md Terminology **Bolt** row: sprint-like
+  // Construction iteration whose intended grouping is planned in 2.9, while
+  // the stage-major runtime does not consume bolt-plan.md as a boundary;
+  // 3.6/3.7 run once after all Bolts. Pin the row so a split across unrelated
+  // lines cannot satisfy the guard. Walk-order / walking-skeleton runtime
+  // facts live on neighboring Terminology rows.
   // =========================================================================
-  test("stage-protocol.md Glossary ties Bolt to 3.1-3.5 with 3.6/3.7 once at end", () => {
-    // .sh grep half 1: "3.1<anything>3.5" — the literal `.` is any-char, which
-    // is how the .sh matched the en-dash form "3.1-3.5".
-    expect(/3.1.*3.5/.test(STAGE_PROTOCOL)).toBe(true);
-    // .sh grep half 2 (case-insensitive): "3.6<...>3.7<...>once".
-    expect(/3.6.*3.7.*once/i.test(STAGE_PROTOCOL)).toBe(true);
-    // STRONGER: both halves co-located on one Glossary row. Find the line that
-    // carries the 3.1-3.5 span and assert the 3.6/3.7-once clause is on it too.
-    const boltRow = STAGE_PROTOCOL.split("\n").find((l) =>
-      /3.1.*3.5/.test(l),
+  test("stage-protocol.md distinguishes the planned Bolt iteration from stage-major runtime grouping", () => {
+    const lines = STAGE_PROTOCOL.split("\n");
+    const boltRow = lines.find((l) => l.startsWith("| **Bolt** |"));
+    const walkRow = lines.find((l) => l.startsWith("| **Walk order** |"));
+    const skeletonRow = lines.find((l) =>
+      l.startsWith("| **Walking skeleton** |"),
     );
     expect(boltRow).toBeDefined();
-    expect(/3.6.*3.7.*once/i.test(boltRow ?? "")).toBe(true);
+    expect(boltRow).toMatch(/sprint-like Construction iteration/i);
+    expect(boltRow).toMatch(/Delivery Planning/);
+    expect(boltRow).toMatch(/2\.9/);
+    expect(boltRow).toMatch(/one or more dependency-linked Units/i);
+    expect(boltRow).toMatch(/distinct from the Unit definition.*worktree.*swarm/i);
+    expect(boltRow).toMatch(/default stage-major runtime/i);
+    expect(boltRow).toMatch(/does not consume `bolt-plan\.md`/i);
+    expect(boltRow).toMatch(/3\.6.*3\.7.*once/i);
+    expect(walkRow).toBeDefined();
+    expect(walkRow).toMatch(/stage-major/);
+    expect(walkRow).toMatch(/unit-major/);
+    expect(skeletonRow).toBeDefined();
+    expect(skeletonRow).toMatch(/first in-scope Construction EXECUTE stage/);
+    expect(skeletonRow).not.toMatch(/first design stage/i);
   });
 
   // =========================================================================
@@ -198,6 +229,17 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
     );
     expect(CODE_GEN).toContain(
       "Only the Step 7 completion approval gate is suppressed",
+    );
+  });
+
+  test("construction protocol destages Bolt-major ceremony as non-executable", () => {
+    expect(CONSTRUCTION_PROTOCOL).toContain("Non-executable future-state");
+    expect(CONSTRUCTION_PROTOCOL).toContain("**Planned (non-executable).**");
+    expect(CONSTRUCTION_PROTOCOL).toMatch(
+      /shipped walk does not present subsequent Bolt-level gates/,
+    );
+    expect(CONSTRUCTION_PROTOCOL).not.toMatch(
+      /That Bolt always presents a Bolt-level\napproval gate/,
     );
   });
 });

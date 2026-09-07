@@ -29,10 +29,11 @@ existing agent knows* through team knowledge rather than editing the file (see
 move: a new file, owned by you, that survives upgrades.
 
 The frontmatter is the part the framework parses. The body is prose the agent
-reads about itself when it activates — its responsibilities, the stages it
-owns, how it loads knowledge, its working principles. Only the frontmatter is
-machine-read; the body is for the agent's own framing, and you write it to
-match the structure of the shipped files.
+reads about itself when it activates — its responsibilities, collaboration,
+memory focus, and working principles. Only the frontmatter is machine-read;
+the body is for the agent's own framing, and you write it to match the
+structure of the shipped files. The packager adds the mandatory delegated
+knowledge preflight to every harness projection.
 
 Here is the frontmatter from a real agent, authored at
 `core/agents/aidlc-architect-agent.md`:
@@ -98,9 +99,11 @@ never silently downgraded. Pick `balanced` for reviewer-shaped personas that
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding -- templated is the one tier that steps effort down (on
-Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit
-the session model and effort, so the tier changes nothing there). When
+runbook scaffolding. `balanced` and `templated` both step effort down to
+`medium` (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all
+tiers inherit the session model and effort, so the tier changes nothing there),
+and they currently project identically -- only `judgment` inherits the session
+effort. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the
@@ -166,7 +169,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    agents ship it today (see the reviewer personas' `## Turn Budget` section
    for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
-   Stages Owned, Collaboration, Knowledge Loading, Key Principles).
+   Collaboration, optional Memory Focus, Key Principles).
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
@@ -197,7 +200,7 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
   the missing field.
 - Agents are returned alphabetically sorted by slug, so discovery order is
   identical on every platform.
-- Intent birth creates the empty space-level `aidlc/knowledge/` directory; it
+- Intent creation creates the empty space-level `aidlc/knowledge/` directory; it
   does not seed per-agent subdirectories or READMEs.
 - The statusline renders the display name from the derived metadata.
 

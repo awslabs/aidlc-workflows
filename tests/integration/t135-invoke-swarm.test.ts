@@ -65,8 +65,16 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -83,10 +91,18 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  toPosix,
+  writeActiveDirectiveMarker,
+  writePlanApprovalReceipt,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  legacyPlanApprovalGuardState,
   renderTestingContract,
+  resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
@@ -289,8 +305,22 @@ function setAutonomous(proj: string): void {
   writeFileSync(statePath, state);
 }
 
-function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
+function seedApprovedCodeGenerationPlan(
+  proj: string,
+  unit: string,
+  publishMarker = true,
+): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  if (publishMarker) {
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      unit,
+      state_sha256: createHash("sha256").update(state).digest("hex"),
+    });
+  }
   const contract = resolveTestingPosture(proj);
+  const authority = resolveCodeGenerationAuthority(proj, { unit });
   const dir = join(
     seededRecordDir(proj),
     "construction",
@@ -307,6 +337,7 @@ function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
     plan,
     instructions,
     contract.contract_sha256,
+    authority,
   );
   writeFileSync(
     join(dir, "code-generation-questions.md"),
@@ -315,10 +346,36 @@ function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
       `[Approval Fingerprint]: ${fingerprint}`,
       "A. Approve Plan",
       "B. Request Changes",
-      "[Answer]: A. Approve Plan",
+      "[Answer]: Approve Plan",
       "",
     ].join("\n"),
   );
+  const questionsPath = join(dir, "code-generation-questions.md");
+  const questions = readFileSync(questionsPath, "utf-8");
+  writePlanApprovalReceipt(proj, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(proj, questionsPath)),
+    promptSha256: createHash("sha256")
+      .update(
+        `${questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+      )
+      .digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    session: "fixture-session",
+    challengeId: "fixture-challenge",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
 }
 
 function logWorktreeReview(
@@ -330,8 +387,21 @@ function logWorktreeReview(
 ): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
   const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
+  mkdirSync(dir, { recursive: true });
+  const reviewArtifact = join(dir, "code-generation-plan.md");
+  if (!existsSync(reviewArtifact)) {
+    writeFileSync(reviewArtifact, "# code-generation-plan\n");
+  } else {
+    const current = readFileSync(reviewArtifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        reviewArtifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      );
+    }
+  }
   if (seedArtifacts) {
-    mkdirSync(dir, { recursive: true });
     for (const name of [
       "code-generation-plan",
       "unit-test-instructions",
@@ -358,25 +428,43 @@ function logWorktreeReview(
       writes: [{ path: `${unit}.txt` }],
     }, null, 2)}\n`,
   );
-  for (const terminal of [false, true]) {
-    const args = [
-      LOG_TOOL,
-      "review",
-      "--stage",
-      "code-generation",
-      "--unit",
-      unit,
-      "--reviewer",
-      "aidlc-architecture-reviewer-agent",
-      "--iteration",
-      String(iteration),
-    ];
-    if (terminal) args.push("--verdict", verdict);
-    args.push("--project-dir", wt);
-    const logged = spawnSync(BUN, args, { encoding: "utf-8" });
-    if (logged.status !== 0) {
-      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
-    }
+  const args = [
+    LOG_TOOL,
+    "review",
+    "--stage",
+    "code-generation",
+    "--unit",
+    unit,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    String(iteration),
+    "--project-dir",
+    wt,
+  ];
+  const env = {
+    ...process.env,
+    AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+  };
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if (requested.status !== 0) {
+    throw new Error(
+      `worktree review request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    reviewArtifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+  );
+  const completed = spawnSync(
+    BUN,
+    [...args.slice(0, -2), "--verdict", verdict, ...args.slice(-2)],
+    { encoding: "utf-8", env },
+  );
+  if (completed.status !== 0) {
+    throw new Error(
+      `worktree review completion failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 
@@ -579,8 +667,30 @@ afterAll(() => {
 
 describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from t135-invoke-swarm.sh, plan 8)", () => {
   test("1: autonomy granted + eligible batch -> engine emits invoke-swarm", () => {
-    const { directive } = runNext(seedCodegenProject("autonomous"));
+    const proj = seedCodegenProject("autonomous");
+    const { directive } = runNext(proj);
     expect(directive.kind).toBe("invoke-swarm");
+    const marker = JSON.parse(
+      readFileSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        "utf-8",
+      ),
+    ) as { kind?: string; stage?: string; code_generation_source_sha256?: string };
+    expect(marker.kind).toBe("invoke-swarm");
+    expect(marker.stage).toBe("code-generation");
+    expect(marker.code_generation_source_sha256).toMatch(/^[0-9a-f]{64}$/);
+  }, 30000);
+
+  test("1a: legacy swarm planning selects concrete units from the real marker", () => {
+    const proj = seedCodegenProject("autonomous");
+    const { directive } = runNext(proj);
+    expect(directive.kind).toBe("invoke-swarm");
+    expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "a" });
+    seedApprovedCodeGenerationPlan(proj, "a", false);
+    const reentry = runNext(proj).directive;
+    expect(reentry.kind).toBe("invoke-swarm");
+    expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "b" });
+    expect(evaluateCodeGenerationApproval(proj, { unit: "a" }).ok).toBe(true);
   }, 30000);
 
   test("1b: invoke-swarm names the batch units off the compiled bolt_dag (order-preserved)", () => {
@@ -669,6 +779,30 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     setupReferee();
     expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
     expect(finalizeOut).toContain('"converged": 1');
+  }, 60000);
+
+  test("6d: finalize lands reviewed record artifacts and the bound source manifest", () => {
+    setupReferee();
+    if (wtproj === undefined) throw new Error("referee fixture was not created");
+    const unitRecord = join(
+      seededRecordDir(wtproj),
+      "construction",
+      "win",
+      "code-generation",
+    );
+    expect(readFileSync(join(unitRecord, "code-summary.md"), "utf-8")).toBe(
+      "# code-summary\n",
+    );
+    expect(
+      JSON.parse(readFileSync(join(unitRecord, "source-manifest.json"), "utf-8")),
+    ).toMatchObject({
+      stage: "code-generation",
+      unit: "win",
+      version: 1,
+    });
+    // Application source still lands only through the later, correlated
+    // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
+    expect(existsSync(join(wtproj, "win.txt"))).toBe(false);
   }, 60000);
 });
 

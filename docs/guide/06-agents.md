@@ -72,11 +72,11 @@ flowchart TD
     DLA -->|"delivery plan"| DEVA
     OA ==>|"feedback loop:\noperational insights"| PA
 
-    style ORCH fill:#e1bee7,stroke:#7b1fa2
-    style PA fill:#c8e6c9,stroke:#388e3c
-    style OA fill:#fce4ec,stroke:#c62828
-    style DEVA fill:#fff3e0,stroke:#e65100
-    style AA fill:#bbdefb,stroke:#1565c0
+    style ORCH fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style PA fill:#c8e6c9,stroke:#388e3c,color:#000
+    style OA fill:#fce4ec,stroke:#c62828,color:#000
+    style DEVA fill:#fff3e0,stroke:#e65100,color:#000
+    style AA fill:#bbdefb,stroke:#1565c0,color:#000
 ```
 
 <!-- Text fallback: The SKILL.md conductor delegates to all 11 agents. Key flows: aidlc-product-agent sends requirements/stories to aidlc-architect-agent, who sends specs to aidlc-developer-agent. aidlc-developer-agent sends code to aidlc-quality-agent, who sends test results back. aidlc-aws-platform-agent provisions infrastructure for aidlc-pipeline-deploy-agent, who deploys for aidlc-operations-agent. The feedback loop: aidlc-operations-agent sends operational insights back to aidlc-product-agent, closing the cycle. -->

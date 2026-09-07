@@ -88,6 +88,7 @@ import {
   resolveSpaceFlag,
   sha256Hex,
   spaceAuditShardPath,
+  summarizeDocument,
   walkDocuments,
   writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
@@ -216,12 +217,23 @@ describe("t289 containment is re-checked AFTER realpath", () => {
     doc(p, join("nested", "c.md"));
     const anchor = documentsDir(p, SPACE);
     expect(resolveContainedPath(anchor, "nested/c.md")).toContain(`nested${sep}c.md`);
+    expect(resolveContainedPath(anchor, "nested\\c.md")).toContain(`nested${sep}c.md`);
   });
 
   test("lexical escapes are refused before touching the disk", () => {
     const p = scratchProject();
     const anchor = documentsDir(p, SPACE);
-    for (const bad of ["../escape", "../../etc/passwd", "a/../../b", "/etc/passwd"]) {
+    for (const bad of [
+      "../escape",
+      "..\\escape",
+      "../../etc/passwd",
+      "a/..\\../b",
+      "/etc/passwd",
+      "\\Windows\\System32",
+      "C:\\outside",
+      "C:drive-relative",
+      "\\\\server\\share\\outside",
+    ]) {
       expect(() => resolveContainedPath(anchor, bad), bad).toThrow(/escapes its anchor/);
     }
   });
@@ -995,6 +1007,8 @@ const DISK_TOUCHING_CALLS: Record<string, (p: string) => unknown> = {
     setIntentAssociation(p, SPACE, "any-id", "any-uuid", "associate"),
   rebindDocument: (p) =>
     rebindDocument(p, SPACE, "any-id", "documents/x.md", "2026-08-07T00:00:00Z"),
+  summarizeDocument: (p) =>
+    summarizeDocument(p, SPACE, "any-id", "a summary", "a".repeat(64)),
   journalDir: (p) => journalDir(p, SPACE),
   journalTxnDir: (p) => journalTxnDir(p, SPACE, "txn"),
   documentDir: (p) => documentDir(p, SPACE, "document-id"),

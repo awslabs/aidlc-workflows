@@ -154,6 +154,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "GATE_APPROVED",
     "GATE_REJECTED",
     "QUESTION_ANSWERED",
+    "PLAN_APPROVAL_RECORDED",
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
     "PIPELINE_LINK_COMPLETED",
@@ -162,6 +163,8 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "SWARM_UNIT_CONVERGED",
     "SWARM_SOURCE_MERGED",
     "AUTONOMY_MODE_SET",
+    "UNIT_OWNERSHIP_SET",
+    "UNIT_GATE_RHYTHM_SET",
     "UNIT_STARTED",
     "UNIT_PAUSED",
     "UNIT_RESUMED",
@@ -495,7 +498,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     for (const details of ["Cancelled", "cancelled", "user dismissed", "Timed out", "   "]) {
       const r = guarded(LOG, ["answer", "--stage", "feasibility", "--details", details], proj);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("received reply");
+      expect(r.out).toContain("Cannot record reply");
     }
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
   });
@@ -519,11 +522,11 @@ describe("t261 cancellation boilerplate is not a decision", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain('received reply \\"Use the defaults ');
+    expect(r.out).toContain('reply \\"Use the defaults ');
     expect(r.out).toContain('...\\"');
     expect(r.out).not.toContain(invalid);
     expect(r.out).toContain(
-      'Valid choices are \\"Looks correct\\" or \\"Request changes\\"',
+      'Present \\"Looks correct\\" and \\"Request changes\\"',
     );
     expect(readAllAuditShards(proj)).not.toContain("SUMMARY_CONFIRMATION_RECORDED");
   });
@@ -548,9 +551,9 @@ describe("t261 cancellation boilerplate is not a decision", () => {
 
     const ap = guarded(STATE, ["approve", "feasibility", "--user-input", "cancelled"], proj, direct);
     expect(ap.rc).not.toBe(0);
-    expect(ap.out).toContain('received reply \\"cancelled\\"');
+    expect(ap.out).toContain('the reply \\"cancelled\\"');
     expect(ap.out).toContain("cancellation boilerplate");
-    expect(ap.out).toContain("original held gate with every offered choice");
+    expect(ap.out).toContain("original question with every choice again");
 
     const rj = guarded(
       STATE,
@@ -594,6 +597,51 @@ describe("t261 explicit decision self-attribution tripwire", () => {
     mintHumanTurn(p);
   }
 
+  test("solo approve/reject preserve state-precondition error precedence", () => {
+    proj = ideationProject();
+    const approve = guarded(
+      STATE,
+      ["approve", "scope-definition"],
+      proj,
+      DIRECT,
+    );
+    expect(approve.rc).not.toBe(0);
+    expect(approve.out).toContain(
+      "Stage scope-definition is in state 'pending'",
+    );
+    expect(approve.out).not.toContain("--user-input must contain");
+
+    const reject = guarded(
+      STATE,
+      ["reject", "scope-definition", "--feedback", "change it"],
+      proj,
+      DIRECT,
+    );
+    expect(reject.rc).not.toBe(0);
+    expect(reject.out).toContain(
+      "Stage scope-definition is in state 'pending'",
+    );
+    expect(reject.out).not.toContain("a real human has not acted");
+
+    mintHumanTurn(proj);
+    const attributed = guarded(
+      STATE,
+      [
+        "reject",
+        "scope-definition",
+        "--feedback",
+        "I, the conductor, am rejecting this.",
+      ],
+      proj,
+      DIRECT,
+    );
+    expect(attributed.rc).not.toBe(0);
+    expect(attributed.out).toContain(
+      "Stage scope-definition is in state 'pending'",
+    );
+    expect(attributed.out).not.toContain("decision self-attribution blocked");
+  });
+
   // This is deliberately a high-confidence tripwire, not proof of human
   // authorship. It rejects explicit self-attribution observed in issue 742 and
   // closely equivalent decision-noun variants.
@@ -626,7 +674,7 @@ describe("t261 explicit decision self-attribution tripwire", () => {
       DIRECT,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("decision self-attribution blocked");
+    expect(r.out).toContain("--feedback says it was written by the assistant");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(stateBefore);
     const shards = readAllAuditShards(proj);
     expect(shards).not.toContain("GATE_REJECTED");
@@ -649,7 +697,7 @@ describe("t261 explicit decision self-attribution tripwire", () => {
       DIRECT,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("decision self-attribution blocked");
+    expect(r.out).toContain("--user-input says the choice came from the assistant");
     expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
   });
 
@@ -668,7 +716,7 @@ describe("t261 explicit decision self-attribution tripwire", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("decision self-attribution blocked");
+    expect(r.out).toContain("--details says it was chosen by the assistant");
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
   });
 

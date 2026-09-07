@@ -1,0 +1,119 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the sections below so we can reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: Describe what went wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Set up ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: AI-DLC Version
+      description: Which version of AI-DLC are you using?
+      options:
+        - v2 (current on main)
+        - v1 (maintenance)
+    validations:
+      required: true
+
+  - type: input
+    id: version-detail
+    attributes:
+      label: Release / Commit
+      description: The release number or git commit hash if running from source.
+      placeholder: e.g., 2.6.124 or abc1234
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: AI-DLC Phase
+      description: Which workflow phase were you in when the bug occurred?
+      options:
+        - Initialization
+        - Ideation
+        - Inception
+        - Construction
+        - Operation
+        - Not phase-specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Harness
+      description: Which harness are you using with AI-DLC?
+      multiple: true
+      options:
+        - Claude Code
+        - Kiro IDE
+        - Kiro CLI
+        - Codex CLI
+        - Cursor
+        - opencode
+        - GitHub Copilot
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: AI Model
+      description: Which AI model were you using?
+      placeholder: e.g., Claude Opus 4.8
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Any other relevant environment details, such as OS and harness version.
+      placeholder: |
+        - OS: macOS 15.x
+        - Harness: Codex CLI 0.145.0
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or log output about the problem here.

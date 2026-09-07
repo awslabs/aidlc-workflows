@@ -92,6 +92,11 @@ const SENSOR_NAMES = [
 
 const manifestPath = (name: string): string =>
   join(SENSORS_DIR, `aidlc-${name}.md`);
+const GATE_SENSORS = new Set([
+  "claim-sources",
+  "required-sections",
+  "upstream-coverage",
+]);
 
 /**
  * Reproduce the .sh's has_frontmatter_field for `applies_to` (L67-83): does a
@@ -157,6 +162,7 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
       // .sh check 5: default_severity AND description present (and non-empty —
       // the validator already enforced non-empty description; pin both here).
       expect(obj.default_severity).toBe("advisory");
+      expect(obj.fire_on).toBe(GATE_SENSORS.has(name) ? "gate" : "write");
       expect(typeof obj.description).toBe("string");
       expect((obj.description ?? "").length).toBeGreaterThan(0);
     });
@@ -211,9 +217,71 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
     ).toThrow(/missing required field: id/);
   });
 
-  // Re-count the extended assertion budget so a silently dropped manifest or
-  // negative case is caught (7 existence + 6×5 frontmatter + 3 negatives = 40).
-  test("covers EXACTLY 40 assertions", () => {
+  test("fire_on defaults to write when omitted", () => {
+    const raw = [
+      "---",
+      "id: default-fire",
+      "kind: deterministic",
+      "command: bun .claude/tools/aidlc-sensor-default-fire.ts",
+      "default_severity: advisory",
+      "description: default fire mode",
+      "---",
+    ].join("\n");
+    const obj = parseSensorManifest(raw);
+    expect(obj.fire_on).toBe("write");
+    expect(() =>
+      validateSensorManifest(obj, "aidlc-default-fire.md", "default-fire"),
+    ).not.toThrow();
+  });
+
+  test("fire_on accepts gate and rejects unknown values", () => {
+    const valid = parseSensorManifest([
+      "---",
+      "id: gate-fire",
+      "kind: deterministic",
+      "command: bun .claude/tools/aidlc-sensor-gate-fire.ts",
+      "default_severity: advisory",
+      "fire_on: gate",
+      "description: gate fire mode",
+      "---",
+    ].join("\n"));
+    expect(() =>
+      validateSensorManifest(valid, "aidlc-gate-fire.md", "gate-fire"),
+    ).not.toThrow();
+
+    const invalid = { ...valid, fire_on: "later" } as unknown as typeof valid;
+    expect(() =>
+      validateSensorManifest(invalid, "aidlc-gate-fire.md", "gate-fire"),
+    ).toThrow(/fire_on must be one of: "write", "gate"/);
+  });
+
+  test("default_severity accepts blocking and rejects unknown values", () => {
+    const blocking = parseSensorManifest([
+      "---",
+      "id: blocking",
+      "kind: deterministic",
+      "command: bun .claude/tools/aidlc-sensor-blocking.ts",
+      "default_severity: blocking",
+      "fire_on: gate",
+      "description: blocking gate sensor",
+      "---",
+    ].join("\n"));
+    expect(() =>
+      validateSensorManifest(blocking, "aidlc-blocking.md", "blocking"),
+    ).not.toThrow();
+
+    const invalid = {
+      ...blocking,
+      default_severity: "critical",
+    } as unknown as typeof blocking;
+    expect(() =>
+      validateSensorManifest(invalid, "aidlc-blocking.md", "blocking"),
+    ).toThrow(/default_severity must be one of: "advisory", "blocking"/);
+  });
+
+  // Re-count the original migrated assertion budget. The fire/severity enum
+  // cases above are additive coverage for the expanded schema.
+  test("covers EXACTLY 40 migrated assertions", () => {
     const PART1 = 1 + SENSOR_NAMES.length; // dir + 6 files = 7
     const PART2 = SENSOR_NAMES.length * 5; // 6 manifests × 5 checks = 30
     const PART3 = 3; // 3 negative-case fixtures

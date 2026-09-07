@@ -1,0 +1,54 @@
+# GitHub requires this path on the default branch before tag-on-merge.yml can
+# dispatch the full v1 workflow with `gh workflow run codebuild.yml --ref
+# <tag>`. Manual default-branch runs are forwarded to the requested v1 ref.
+
+name: Dispatch v1 CodeBuild
+run-name: Dispatch-only v1 CodeBuild request for ${{ inputs.ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'v1 branch or v1 release tag to build'
+        required: false
+        default: v1
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch-v1:
+    name: Dispatch request only
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_REF: ${{ inputs.ref }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Run the v1 workflow
+        run: |
+          if [ "$INPUT_REF" != "v1" ] && [[ ! "$INPUT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::CodeBuild ref must be v1 or a vMAJOR.MINOR.PATCH release tag."
+            exit 1
+          fi
+          if ! gh api \
+              --method GET \
+              "repos/$REPO/contents/.github/workflows/codebuild.yml" \
+              -f "ref=$INPUT_REF" \
+              >/dev/null; then
+            echo "::error::$INPUT_REF does not contain the v1 CodeBuild workflow."
+            exit 1
+          fi
+          gh workflow run codebuild.yml \
+            --ref "$INPUT_REF" \
+            --repo "$REPO"
+          echo "::notice::Dispatch accepted. This run does not report the child CodeBuild result."
+          {
+            echo "## Dispatch accepted"
+            echo
+            echo "GitHub accepted the request for \`codebuild.yml\` on \`$INPUT_REF\`."
+            echo "This run does not report the outcome of the child CodeBuild workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

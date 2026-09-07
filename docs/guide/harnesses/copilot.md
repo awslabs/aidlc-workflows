@@ -52,12 +52,11 @@ hand-edit it (the drift guard fails CI).
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+`main` branch:
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
+git clone --branch main https://github.com/awslabs/aidlc-workflows.git
 cd aidlc-workflows
-git checkout v2
 ```
 
 1. Copy the distribution into your project:
@@ -89,6 +88,10 @@ git checkout v2
 - **Questions render as numbered prose options.** Although both surfaces expose
   native picker tools, picker answers return as tool results and do not fire
   the trusted `UserPromptSubmit` event required by the human-presence guard.
+  While the session-selected workflow has valid `Status: Running` state, the
+  matcher-free PreToolUse guard denies those picker calls and directs the model
+  to render numbered prose and end the turn; without a running workflow,
+  including completed or unusable state, it leaves native pickers untouched.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
 - **Hooks enforce natively.** The adapter

@@ -114,31 +114,53 @@ function runInit(proj: string, scope: string): RunResult {
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
 }
 
+function reviewAppendix(reviewer: string, iteration: number): string {
+  return (
+    "\n## Review\n\n" +
+    "**Verdict:** READY\n" +
+    `**Reviewer:** ${reviewer}\n` +
+    `**Iteration:** ${iteration}\n\n` +
+    "### Findings\n\nNo blocking findings.\n"
+  );
+}
+
 function recordRequirementsReview(proj: string): void {
+  const reviewer = "aidlc-product-lead-agent";
+  const iteration = 1;
+  const dir = join(recordDirOf(proj), "inception", "requirements-analysis");
+  const artifact = join(dir, "requirements.md");
+  mkdirSync(dir, { recursive: true });
+  if (!existsSync(artifact)) writeFileSync(artifact, "# Requirements\n");
   const args = [
     LOG,
     "review",
     "--stage",
     "requirements-analysis",
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const res = spawnSync(BUN, [...args, ...suffix], {
-      encoding: "utf-8",
-      cwd: proj,
-    });
-    if ((res.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${res.stdout}${res.stderr}`);
-    }
+  const request = spawnSync(BUN, args, {
+    encoding: "utf-8",
+    cwd: proj,
+  });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+  }
+  appendFileSync(artifact, reviewAppendix(reviewer, iteration), "utf-8");
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    cwd: proj,
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);
   }
 }
 
-// P4: intent-create (which runInit triggers) writes state into the born intent's
+// P4: intent-create (which runInit triggers) writes state into the created intent's
 // per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat
 // aidlc-docs/. Resolve the record dir from the active-space + active-intent
 // cursors, falling back to the flat layout for a seeded-flat project (the many
@@ -159,11 +181,11 @@ function recordDirOf(proj: string): string {
   return join(proj, "aidlc-docs");
 }
 const stateMd = (proj: string) => join(recordDirOf(proj), "aidlc-state.md");
-// Audit path for appending: a born record has per-clone shards under
+// Audit path for appending: a created record has per-clone shards under
 // <record>/audit/<host>-<clone-id>.md. The fixture pins a stable clone-id, so a
 // spawned tool resolves the DETERMINISTIC shard seededAuditShard() returns — a
 // test that pre-seeds a shard header must target that same path so the tool's
-// own append lands in it. Prefer an already-present shard (a born record may
+// own append lands in it. Prefer an already-present shard (a created record may
 // carry one) but default to the deterministic fixture shard.
 function auditMd(proj: string): string {
   const auditDir = join(recordDirOf(proj), "audit");
@@ -177,7 +199,7 @@ function auditMd(proj: string): string {
   return seededAuditShard(proj);
 }
 const readState = (proj: string) => readFileSync(stateMd(proj), "utf-8");
-// Concatenate every audit shard under the born record's audit/ dir (Stage B);
+// Concatenate every audit shard under the created record's audit/ dir (Stage B);
 // fall back to the flat aidlc-docs/audit.md for a seeded-flat / pre-migration
 // project. Matches the tool's own readAllAuditShards resolution.
 function readAudit(proj: string): string {
@@ -568,8 +590,8 @@ describe("t17 advance validation", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     runState(proj, ["set", "Scope=bugfix"]);
-    // bugfix's last in-scope stage is build-and-test.
-    const r = runState(proj, ["advance", "build-and-test"]);
+    // bugfix's last in-scope stage is deployment-execution.
+    const r = runState(proj, ["advance", "deployment-execution"]);
     expect(r.rc).toBe(1);
     expect(r.combined).toContain("complete-workflow");
   });
@@ -1194,7 +1216,10 @@ describe("t17 approve artifact guard (#366)", () => {
     runState(proj, ["gate-start", "feasibility"]);
     const r = guarded(["approve", "feasibility", "--user-input", "ok"]);
     expect(r.rc).not.toBe(0);
-    expect(r.combined).toContain("Refusing to complete");
+    const refusal = JSON.parse(r.combined) as { error: string };
+    expect(refusal.error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     // State untouched: not marked [x].
     expect(readState(proj)).not.toContain("[x] feasibility");
   });

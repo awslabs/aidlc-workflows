@@ -3,27 +3,63 @@
 // a canonical audit event.
 //
 // Receives JSON on stdin with subagent info. No-op unless a workflow is running.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   type ClaudeCodeHookInput,
+  completeSubagentInflight,
   errorMessage,
   getField,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
-  readStateFile,
   recordHookDrop,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
+  stateFilePathForSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
+  // Read JSON before workflow resolution: completion must remove only the
+  // finishing session's in-flight entry, even when that session no longer has a
+  // running workflow to audit.
+  if (process.stdin.isTTY) return 0;
+
+  let parsed: ClaudeCodeHookInput;
+  try {
+    const raw: unknown = JSON.parse(input);
+    if (!isClaudeCodeHookInput(raw)) return 0;
+    parsed = raw;
+  } catch {
+    return 0;
+  }
+
+  const rawSessionId = parsed.session_id;
+  const sessionId =
+    typeof rawSessionId === "string" && rawSessionId.length > 0
+      ? validSessionId(rawSessionId)
+      : null;
+
+  let completionError = "";
+  try {
+    completeSubagentInflight(projectDir, rawSessionId);
+  } catch (error) {
+    completionError = errorMessage(error);
+  }
+
   let stateContent: string;
   try {
-    stateContent = readStateFile(projectDir);
+    const selection = resolveWorkflowSelection(projectDir, {
+      sessionId: sessionId ?? undefined,
+    });
+    stateContent = readFileSync(
+      stateFilePathForSelection(projectDir, selection),
+      "utf-8",
+    );
   } catch {
     return 0;
   }
@@ -34,17 +70,12 @@ export async function run(input: string): Promise<number> {
   mkdirSync(healthDir, { recursive: true });
   writeFileSync(join(healthDir, "log-subagent.last"), isoTimestamp(), "utf-8");
 
-  // Read JSON from stdin. Exit cleanly if stdin is a TTY (no Claude Code JSON
-  // coming) — avoids blocking on terminal read in test / debug-mode contexts.
-  if (process.stdin.isTTY) return 0;
-
-  let parsed: ClaudeCodeHookInput;
-  try {
-    const raw: unknown = JSON.parse(input);
-    if (!isClaudeCodeHookInput(raw)) return 0;
-    parsed = raw;
-  } catch {
-    return 0;
+  if (completionError) {
+    recordHookDrop(
+      projectDir,
+      "log-subagent",
+      `could not update background-subagent in-flight ledger: ${completionError}`,
+    );
   }
 
   const agentType = parsed.agent_type ?? "unknown";

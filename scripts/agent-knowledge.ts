@@ -1,5 +1,5 @@
-// scripts/agent-knowledge.ts - build-time absorption of reviewer knowledge
-// into reviewer agent bodies.
+// scripts/agent-knowledge.ts - build-time knowledge delivery for delegated
+// agent definitions.
 //
 // The two review-only agents (product-lead, architecture-reviewer) are always
 // DISPATCHED (§12a), never inline, so their context is whatever the harness
@@ -85,6 +85,39 @@ export function absorbReviewerKnowledge(
     );
   });
   return `${content.trimEnd()}\n\n---\n\n${sections.join("\n\n---\n\n")}\n`;
+}
+
+const DELEGATED_KNOWLEDGE_PREFLIGHT =
+  "<!-- aidlc-delegated-knowledge-preflight -->";
+
+// Inject a compact, projection-owned preflight into every delegated agent
+// definition. Authored core/plugin personas stay focused on unique role
+// content, while each harness-native dispatch surface still carries the
+// mandatory methodology + team knowledge load that a dispatched worker cannot
+// inherit from the conductor's inline_context_paths.
+export function injectDelegatedKnowledgePreflight(
+  content: string,
+  agentName: string,
+  harnessDir: string,
+): string {
+  if (content.includes(DELEGATED_KNOWLEDGE_PREFLIGHT)) return content;
+  const block =
+    `${DELEGATED_KNOWLEDGE_PREFLIGHT}\n` +
+    `**Delegated knowledge preflight (mandatory):** Before substantive work, ` +
+    `ensure every readable Markdown file under these directories is loaded, in order: ` +
+    `\`${harnessDir}/knowledge/aidlc-shared/\`, ` +
+    `\`${harnessDir}/knowledge/${agentName}/\`, ` +
+    `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
+    `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +
+    `A native resource preload satisfies this requirement; otherwise read the files now. ` +
+    `The dispatch brief supplies rules and artifact paths separately.`;
+  const frontmatter = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (!frontmatter) return `${block}\n\n${content.trimStart()}`;
+  return (
+    content.slice(0, frontmatter[0].length) +
+    `${block}\n\n` +
+    content.slice(frontmatter[0].length)
+  );
 }
 
 // The agent slug for a projected agents/*.md path, or null when the path is

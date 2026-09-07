@@ -39,13 +39,24 @@ aidlc/spaces/*/intents/active-intent
 # The clone-id token names this clone's audit shard; it MUST stay machine-local
 # (gitignored) or every clone from a commit would share a shard and git-conflict.
 aidlc/.aidlc-clone-id
-# Cursor's reconstructed subagent identity registry; protected by the adapter
-# and recreated per install/session.
+aidlc/.aidlc-unit-scope.json
+aidlc/.aidlc-unit-parked
+aidlc/.aidlc-claim-generations.json
+aidlc/.aidlc-unit-participant
+aidlc/.aidlc-claim-registry.json
+aidlc/.aidlc-unit-releases/
+aidlc/.aidlc-unit-merges/
+# Cursor's reconstructed subagent identity registry and independent active
+# delegation witnesses; protected by the adapter and recreated per session.
 aidlc/.aidlc-cursor-subagents/
+aidlc/.aidlc-cursor-subagent-*.json
 # Per-conversation session→intent map (resume rebind, P8): per-user runtime
 # state keyed by Claude Code session_id, never shared truth.
 aidlc/.aidlc-sessions/
 aidlc/spaces/*/intents/.aidlc-*
+# Engine-shaped sensor caches at any depth, mirroring the #646 fingerprint glob;
+# also covers legacy pre-2.6.94 trees without ignoring every .aidlc-sensors leaf.
+**/aidlc/spaces/*/intents/**/.aidlc-sensors/
 # DocumentKB staged-transaction scratch: `onboard` stages a document into
 # `.journal/<txn-id>/` and renames it into place under the audit lock. Per-clone
 # and transient -- a committed journal would be a merge conflict on every

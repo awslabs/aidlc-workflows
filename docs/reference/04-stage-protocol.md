@@ -31,7 +31,7 @@ conductor based on workflow context:
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
 | `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
 | `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
-| `stage-protocol-construction.md` | Bolt gates, the Build-and-Test failure loop-back, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
+| `stage-protocol-construction.md` | Planned Bolt-major ceremony (labeled non-executable future-state), the shipped per-unit walk, Build-and-Test loop-back, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
@@ -92,7 +92,7 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. Gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc-log.ts answer`. |
 | 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
@@ -240,16 +240,16 @@ flowchart TD
 
     ADD_STAGE --> ADD_EXEC
 
-    style COMPLETE fill:#e8f5e9,stroke:#388e3c
-    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
-    style ASK fill:#bbdefb,stroke:#1565c0
-    style APPROVE fill:#a5d6a7,stroke:#2e7d32
-    style CHANGES fill:#fff9c4,stroke:#f9a825
-    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00
-    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0
-    style ACCEPT fill:#ffccbc,stroke:#bf360c
-    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2
-    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
+    style COMPLETE fill:#e8f5e9,stroke:#388e3c,color:#000
+    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ASK fill:#bbdefb,stroke:#1565c0,color:#000
+    style APPROVE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style CHANGES fill:#fff9c4,stroke:#f9a825,color:#000
+    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00,color:#000
+    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ACCEPT fill:#ffccbc,stroke:#bf360c,color:#000
+    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c,color:#000
 ```
 
 ---
@@ -356,9 +356,12 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   "Select 'Other' on any question to discuss it before answering."
 - After each batch, IMMEDIATELY write answers to the questions file
 - Log each batch with fresh ISO timestamp
-- Present a consolidated answer summary, then a structured confirmation with
-  **Looks correct** and **Request changes** options. Do not ask for confirmation
-  as bare prose. Before presenting it, append or reset a dedicated
+- Present a consolidated answer summary, then print
+  `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
+  the structured **Looks correct** / **Request changes** confirmation. The
+  deterministic brief names the stage, questions file, generated artifacts,
+  why the decision is required now, and the exact effect of both choices. Do
+  not ask for confirmation as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
   `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
@@ -433,7 +436,9 @@ ask targeted follow-up. Do NOT proceed until resolved.
 **Overconfidence prevention:**
 - Default to asking, not assuming. Never proceed with ambiguity.
 - Red flags requiring follow-up: single-word answers to open-ended questions;
-  "whatever you think" / "up to you"; contradictory signals; question-dodging
+  "whatever you think" / "up to you"; contradictory signals; question-dodging;
+  relaxing, lowering, or disabling a previously defined quality target (for
+  example, a test coverage threshold) instead of meeting it
 - When user defers to AI: "I want to make sure the design reflects YOUR
   priorities. Could you tell me [specific aspect]?"
 
@@ -822,8 +827,8 @@ and problem complexity.
 | feature | Standard | Standard | 33 | All stages |
 | mvp | Standard | Standard | 23 | Skip all Operation |
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
-| bugfix | Minimal | Minimal | ~8 | Targeted |
-| refactor | Minimal | Minimal | 8 | Targeted |
+| bugfix | Minimal | Minimal | 9 | Targeted |
+| refactor | Minimal | Minimal | 10 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |
@@ -988,16 +993,39 @@ omits the reviewer block entirely and the stage runs reviewless.
 
 1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
    re-review after a Part 0 gate-rejection revision - the conductor first
-   deletes any existing `## Review` section on the primary artifact: review
-   history lives in the audit ledger, and a leftover section (in the worst
-   case a pre-revision `READY`) is exactly what a re-review that is itself
-   cut off before writing would be misread against. With the delete rule,
-   "no current `## Review` section" means "incomplete review" uniformly on
-   every path. The conductor then delegates to the agent named in
-   `directive.reviewer`, passing the stage definition path, the Q&A file, the
-   produced artifact paths, and any validation tools from frontmatter - never
-   the builder's `memory.md` or plan, so the reviewer forms independent
-   judgment.
+   records the review request. The directive's `review_artifact` field names
+   the required Markdown output that owns the appendix; output ordering and
+   plugin additions cannot change it. If a terminal appendix already exists,
+   the request binds the exact bytes before that appendix and returns a
+   `reviewChallenge` in its successful JSON; the conductor passes that exact
+   value to the reviewer, so deleting the old appendix does not rebaseline the
+   dispatched content and replaying it cannot become fresh authority through an
+   unrelated mutation. For stale-source recovery this
+   request-first
+   order is what suspends the review freeze for exactly the named stage/Unit,
+   while its stale condition still exists, in the session that recorded or
+   retried it; source staleness alone never does. Restoring the reviewed
+   workspace source, recording the verdict, or starting/resuming another
+   session re-arms the freeze; restoring output-document bytes does not clear
+   audit-recorded artifact staleness. After a session restart, use
+   `--retry-pending` to reopen the scoped
+   suspension if the stale condition remains. Restoring source mid-recovery
+   closes the write window immediately: record the completed verdict against
+   the restored state, or obtain Request Changes before editing again. After
+   the request succeeds, on a re-dispatch the conductor first runs
+   `aidlc-review-brief.ts context --stage <slug>` (plus `--unit` where
+   applicable) and retains its hydrated findings as the prior-review context.
+   It then deletes any existing `## Review` section and its separator bytes
+   from `review_artifact`, restoring the request-bound pre-append bytes, and
+   delegates to the agent named in
+   `directive.reviewer`. Review history lives in the audit ledger, so a leftover
+   section cannot be mistaken for a fresh verdict. The gate and completion
+   remain blocked while the request is unmatched. The reviewer receives the
+   stage definition path, Q&A file,
+   produced artifact paths, and validation tools from frontmatter - never the
+   builder's `memory.md` or plan, so it forms independent judgment. A retry
+   reuses the original artifact/source binding and never rebaselines current
+   bytes.
 2. **Review.** An `adversarial` review runs under the adversarial review contract:
    the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
@@ -1006,8 +1034,12 @@ omits the reviewer block entirely and the stage runs reviewless.
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and appends exactly ONE `## Review` section to
-   the primary artifact with exactly one verdict line: **READY** or
-   **NOT-READY**. The reviewers run under a hard turn budget (`maxTurns: 60`),
+   `review_artifact`. The complete suffix contains one matching Verdict,
+   Reviewer, and Iteration line, plus exactly one matching Request Challenge
+   line when the request returned one, and no second H2 section. The request binds
+   artifact bytes and workspace source before dispatch; retry cannot rebaseline
+   either, and completion uses one stable file-identity snapshot. The reviewers
+   run under a hard turn budget (`maxTurns: 60`),
    authored once in the persona frontmatter and enforced natively where the
    harness has a lever: Claude Code reads the key verbatim (the sub-agent is
    stopped mid-task, no final-message turn) and the opencode packager projects
@@ -1016,16 +1048,23 @@ omits the reviewer block entirely and the stage runs reviewless.
    review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
    per-agent cap key, so there the budget is persona prose only (the personas'
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
-3. **Verdict.** On `advisory`, both verdicts are terminal in normal flow: the workflow proceeds
-   to the learnings ritual and the gate, where the findings are quoted verbatim
-   for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
+3. **Verdict and decision brief.** On `advisory`, both verdicts are terminal in
+   normal flow: the workflow proceeds to the learnings ritual and the gate.
+   Before that gate, `aidlc-review-brief.ts review --stage <slug> --why
+   <first|revision|stale>` renders the exact stage, ordinary-language outcome,
+   review artifact(s), hydrated findings, decision effects, and concrete
+   upstream/downstream invalidation paths (`reviewer_max_iterations` is 1,
+   engine-enforced). The final gate of a per-Unit stage renders every Unit
+   covered by that single approval; Unit filtering remains limited to reviewer
+   dispatch context.
    On `adversarial`: READY → proceed to the learnings ritual then the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
    re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
    unresolved findings noted.
-   A verdict only counts when it parses: exactly ONE current `## Review`
-   section with exactly one canonical verdict token. A missing section (a
+   A verdict only counts when the entire appended suffix parses as exactly ONE
+   owned `## Review` section with matching canonical identity fields. A missing
+   section (a
    capped or crashed reviewer is stopped without writing one - step 1 deletes
    any prior section before every dispatch, so a leftover can never stand in
    for it), a section without a canonical verdict line, or duplicated
@@ -1039,14 +1078,34 @@ omits the reviewer block entirely and the stage runs reviewless.
    On `adversarial` with iterations remaining the re-invoke skips the lead
    (the artifact was never reviewed; there is nothing for the builder to act
    on).
-   The recorded receipt is terminal whenever no further review pass follows it:
-   any later write to a `produces[]` artifact invalidates it and the engine
-   refuses the gate, so fixes happen inside the iteration loop, never after the
-   terminal receipt. Suggestions riding on a verdict are quoted at the gate for
-   the human, not applied.
+   The review request is accepted only after the consolidated answers are
+   confirmed, every verifiable required output document exists, and any
+   per-Unit stage with a resolvable authoritative Unit set names only Units
+   present in that set. An unresolvable set does not refuse the request:
+   named-Unit outputs remain mandatory, while a stage-level request skips the
+   all-Unit output enumeration it cannot verify. A stage-level request on a
+   per-Unit stage with a resolved set covers every authoritative Unit, so every
+   Unit's applicable required outputs must exist. The matching recovery verdict
+   ends the request-bound freeze suspension. The recorded receipt is terminal
+   whenever no further review pass follows it: any later output document write
+   means the review no longer covers the current document, so fixes happen
+   inside the iteration loop, never after the terminal receipt.
+   Suggestions riding on a verdict are quoted at the gate for the human, not
+   applied. If a final review already exists and the document genuinely needs
+   changes, Request Changes can be recorded while the stage is active or
+   awaiting approval; `[R]` restarts through `/aidlc --stage <slug>`, and `[x]`
+   requires restoring the reviewed source state or jumping back to redo it.
+
+Human finding dispositions never rewrite the terminally reviewed artifact.
+`GATE_APPROVED` atomically records `Accepted risk` for each current New or
+Unresolved finding. A Request Changes report records `Rejected: <reason>` only
+for explicit
+`--reject-finding <review-artifact>#R-NN=<exact human reason>` values; generic
+revision feedback leaves findings unresolved. The renderer folds these
+content-addressed audit records into later gates and re-review dispatches.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
-`REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so
+request whose `--iteration` exceeds the stage's effective budget, so
 a conductor that loses count cannot run unbounded review passes. The only
 exception is a terminal receipt invalidated by a later `produces[]` write: the
 first request after stale evidence is exactly one marked recovery request at
@@ -1059,8 +1118,8 @@ for stages without a `reviewer` field. See the `reviewer` /
 `reviewer_max_iterations` / `review_class` frontmatter fields in
 [Stage Definition](15-stage-definition.md).
 
-If reviewer dispatch fails, times out, ends the session after
-`REVIEW_REQUESTED` but before a verdict, or returns an incomplete attempt (no
+If reviewer dispatch fails, times out, ends the session after the request but
+before a verdict, or returns an incomplete attempt (no
 current `## Review` section, or no single canonical verdict), rerun the same
 request command with `--retry-pending` before dispatching again - at most once
 per request; a second incomplete attempt records the terminal `NOT-READY`

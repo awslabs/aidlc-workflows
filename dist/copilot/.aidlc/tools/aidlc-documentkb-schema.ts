@@ -105,12 +105,26 @@ export interface DocumentRow {
   // ARRAY IS INVALID — it is ambiguous between "space-wide" and "scoped to
   // nothing", and the two have different retrieval behaviour.
   related_intent_ids?: string[];
+  // OMITTED when the document has no tags. Present means LLM-authored tags
+  // exist. An EMPTY ARRAY IS INVALID, the same reasoning as
+  // `related_intent_ids` above: it is ambiguous between "not yet tagged" (the
+  // S1/pre-S3 state, spelled by omitting the key) and "tagged with nothing",
+  // and a reader cannot tell which without asking the writer.
+  tags?: string[];
   content?: string;
   /** Digest of the exact bytes stored at `content`. Readers verify this before
    * serving text so a failed multi-file publication cannot expose an older
    * derivative under a newer source revision. */
   content_sha256?: string;
   summary: SummaryRecord;
+  /** Digest of the exact bytes stored at `summary.path`, present iff
+   * `summary.state === "generated"` -- the same corroboration pattern as
+   * `content_sha256`, sibling to `summary` rather than a field inside
+   * `SummaryRecord` (S3a's shipped-and-reviewed type), so this is additive,
+   * not a rewrite of that contract. Readers verify this before serving a
+   * summary so a failed publish cannot expose stale bytes under a fresh
+   * `source_revision`. */
+  summary_sha256?: string;
   // A tombstone: the original is gone. Metadata-only by design, because a rule
   // promoted in S3 cites this id and the citation must not dangle.
   removed_at?: string;
@@ -161,6 +175,30 @@ export function isValidIsoTimestamp(raw: unknown): boolean {
       offsetHour > 23 || offsetMinute > 59) return false;
   const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   return day >= 1 && day <= maxDay;
+}
+
+// Bounds for the LLM-authored `tags` field (S3a). S1's precedent everywhere it
+// stores anything free-form (`EXTRACT_OUTPUT_CHAR_CAP`, `BOLT_SLUG_MAX_LENGTH`,
+// `UNIT_NAME_MAX_LENGTH` in aidlc-lib.ts) is: cap it, don't trust the producer
+// to self-limit. A tag is a short label, not prose, so the per-tag cap is the
+// same order of magnitude as those slug/name caps; the count cap keeps a
+// runaway generation from turning `tags` into an unbounded second body.
+export const MAX_TAGS_PER_DOCUMENT = 32;
+export const MAX_TAG_LENGTH = 64;
+
+// A tag is a short label, not prose and not a record separator. Measured
+// against the shipped S3a validator: `"\t"`, `"a\nb"`, and `"a\0b"` all
+// satisfied "non-empty string" literally while carrying no usable label —
+// the same defect class §8.13 names for `removed_at`. C0 controls (incl.
+// NUL/tab/newline) and DEL are refused outright. Charcode scan, not a regex
+// character class, because the lint config forbids a literal control
+// character range inside a regex.
+function hasTagControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 const SHA256_REGEX = /^[0-9a-f]{64}$/;
@@ -463,6 +501,75 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
       }
     }
   }
+  if ("tags" in raw && raw.tags !== undefined) {
+    const tags = raw.tags;
+    if (!Array.isArray(tags)) {
+      errors.push(`${where}.tags must be an array when present`);
+    } else if (tags.length === 0) {
+      // Same reasoning as related_intent_ids: OMIT the key for "no tags", do
+      // not spell it with an empty array — an empty array is ambiguous
+      // between "not yet tagged" and "deliberately tagged with nothing", and
+      // the two would need different remedies if this ever surfaces in retrieval.
+      errors.push(
+        `${where}.tags must be OMITTED when a document has no tags — an empty ` +
+          `list is invalid, because it is ambiguous between "not yet tagged" ` +
+          `and "tagged with nothing"`,
+      );
+    } else if (tags.length > MAX_TAGS_PER_DOCUMENT) {
+      errors.push(
+        `${where}.tags has ${tags.length} entries, over the ${MAX_TAGS_PER_DOCUMENT}-tag cap`,
+      );
+    } else {
+      // Trim contract: REJECT, never silently rewrite. This schema validates
+      // rather than normalises (see schema_version's comment at the top of
+      // this file) — a writer that stored `tag.trim()` on the caller's behalf
+      // would rewrite data the caller believes it wrote verbatim. So leading/
+      // trailing whitespace (and a whitespace-only tag, which trims to "") is
+      // refused with a message the caller can act on, not fixed for them.
+      const seen = new Map<string, number>(); // normalised key -> first index
+      for (const [i, tag] of tags.entries()) {
+        if (typeof tag !== "string" || tag.length === 0) {
+          errors.push(`${where}.tags[${i}] must be a non-empty string (got ${JSON.stringify(tag)})`);
+          continue;
+        }
+        if (hasTagControlChar(tag)) {
+          errors.push(
+            `${where}.tags[${i}] must not contain control characters (tab/newline/NUL/etc) — ` +
+              `a tag is a short label, not prose (got ${JSON.stringify(tag)})`,
+          );
+          continue;
+        }
+        if (tag.trim() !== tag || tag.trim().length === 0) {
+          errors.push(
+            `${where}.tags[${i}] must not have leading/trailing whitespace and must not be ` +
+              `whitespace-only (got ${JSON.stringify(tag)}) — trim it before writing, this ` +
+              `schema does not trim on your behalf`,
+          );
+          continue;
+        }
+        if (tag.length > MAX_TAG_LENGTH) {
+          errors.push(
+            `${where}.tags[${i}] is ${tag.length} chars, over the ${MAX_TAG_LENGTH}-char cap`,
+          );
+          continue;
+        }
+        // Duplicate detection: NFC-normalise then case-fold, so "A"/"a" and an
+        // NFC/NFD-lookalike `é` pair both collide even though `===` on the raw
+        // strings would not catch either.
+        const key = tag.normalize("NFC").toLowerCase();
+        const firstIndex = seen.get(key);
+        if (firstIndex !== undefined) {
+          errors.push(
+            `${where}.tags[${i}] duplicates tags[${firstIndex}] (${JSON.stringify(tag)} and ` +
+              `${JSON.stringify(tags[firstIndex])} are the same tag once case-folded and ` +
+              `Unicode-normalised)`,
+          );
+        } else {
+          seen.set(key, i);
+        }
+      }
+    }
+  }
   if (raw.content !== undefined) {
     if (!validDocumentPath(raw.content)) {
       errors.push(`${where}.content must be a relative POSIX path`);
@@ -484,6 +591,24 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
     }
   } else if (raw.content_sha256 !== undefined) {
     errors.push(`${where}.content_sha256 must be absent when content is absent`);
+  }
+  // A SIBLING of `summary` (S3a's shipped, reviewed, two-state union), not a
+  // field inside it -- this is additive, not a rewrite of that contract. Kept
+  // OPTIONAL even when summary.state is "generated": S3a's own pinned tests
+  // (t325) construct a valid `generated` summary carrying only path +
+  // source_revision, with no digest field at all, and that shape must keep
+  // validating. So this is corroboration when a writer supplies it (every
+  // write this release makes does), not a NEW requirement layered onto an
+  // already-shipped state -- the same asymmetry `related_intent_ids` has
+  // relative to `tags`: two similar-shaped fields, added at different times,
+  // are not obligated to share a strictness level.
+  const summaryState = isObject(raw.summary) ? raw.summary.state : undefined;
+  if (raw.summary_sha256 !== undefined) {
+    if (summaryState !== "generated") {
+      errors.push(`${where}.summary_sha256 must be absent when summary.state is not "generated"`);
+    } else if (typeof raw.summary_sha256 !== "string" || !SHA256_REGEX.test(raw.summary_sha256)) {
+      errors.push(`${where}.summary_sha256, when present, must be a lowercase sha256 digest`);
+    }
   }
   if ("removed_at" in raw && raw.removed_at !== undefined) {
     // A malformed tombstone must not read as LIVE. `isTombstoned()` treats
@@ -604,4 +729,31 @@ export function effectiveExtractionState(row: DocumentRow): ExtractionState {
 // listed and still citable.
 export function isTombstoned(row: DocumentRow): boolean {
   return typeof row.removed_at === "string" && row.removed_at.length > 0;
+}
+
+// Is the SUMMARY still valid for the row's CURRENT digest? Mirrors
+// `derivativeIsCurrent` exactly (S3 design §3.1c: "Extraction/summary
+// derivatives are revision-bound") -- a summary is an LLM-authored derivative
+// of the same source bytes extraction is, so it fails the same way: a summary
+// produced from a since-edited original describes a revision that no longer
+// exists and MUST NOT be served.
+export function summaryIsCurrent(row: DocumentRow): boolean {
+  if (isTombstoned(row)) return false;
+  if (row.summary.state !== "generated") return false;
+  return row.summary.source_revision === row.sha256;
+}
+
+// The effective summary state a READER should act on, distinct from the
+// stored one for the identical reason `effectiveExtractionState` is distinct
+// from `row.extraction.state`: storage records what was generated, this
+// reports whether it is still true of the current bytes. A `generated`
+// summary whose source_revision no longer matches is reported as
+// `invalidated` here even though `SummaryRecord`'s own two-state union (S3a,
+// shipped and reviewed) has no literal `"invalidated"` member -- this is a
+// DERIVED reader-facing state, exactly as `effectiveExtractionState` derives
+// `"invalidated"` from a `state: "extracted"` union member that also lacks it.
+export function effectiveSummaryState(row: DocumentRow): "absent" | "generated" | "invalidated" {
+  if (isTombstoned(row)) return "absent";
+  if (row.summary.state === "generated" && !summaryIsCurrent(row)) return "invalidated";
+  return row.summary.state;
 }

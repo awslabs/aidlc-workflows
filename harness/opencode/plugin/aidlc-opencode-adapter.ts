@@ -308,7 +308,7 @@ export default async ({
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
   // Main sessions that delivered a real human turn. Stop enforcement keys on
-  // this lighter latch because workflow state can be born during turn one.
+  // this lighter latch because workflow state can be created during turn one.
   const sawHumanTurn = new Set<string>();
   // Sessions confirmed as main (no parentID) — presence + continue-workflow enforcement
   // apply only to these; child (task-tool) sessions are workers, not humans.
@@ -356,7 +356,15 @@ export default async ({
         // Retry on later human turns until an active workflow is available.
         if (sessionStartHandled(result.stdout)) started.add(input.sessionID);
       }
-      await runCore("aidlc-record-human-turn.ts", { hook_event_name: "UserPromptSubmit" }, directory);
+      await runCore(
+        "aidlc-record-human-turn.ts",
+        {
+          hook_event_name: "UserPromptSubmit",
+          session_id: input.sessionID,
+          prompt: first?.text ?? "",
+        },
+        directory,
+      );
     },
 
     "tool.execute.before": async (
@@ -369,6 +377,7 @@ export default async ({
           "aidlc-deliver-stage-rules.ts",
           {
             hook_event_name: "PreToolUse",
+            session_id: input.sessionID,
             tool_name: "task",
             tool_input: args,
             cwd: directory,
@@ -471,13 +480,46 @@ export default async ({
         }
       }
 
-      // Plan-approval guard, parallel to the Claude Task-matcher wiring:
-      // opencode's delegation surface is the task tool, whose args carry the
-      // target agent (subagent_type or agent) plus the prompt/description.
-      // Only developer-agent dispatches consult the core hook; it decides
-      // from workflow state whether code-generation's plan-before-generation
-      // ordering is satisfied, and a block surfaces as a thrown error (the
-      // plugin's reject contract).
+      // Plan-approval guard: workspace mutations share the same normalized
+      // calls as review-freeze, while task dispatches carry the explicit
+      // approval target and Testing Contract markers.
+      if (
+        input.tool === "bash" ||
+        input.tool === "write" ||
+        input.tool === "edit" ||
+        input.tool === "apply_patch"
+      ) {
+        const planCalls =
+          input.tool === "bash"
+            ? [{ toolName: "Bash", toolInput: { command: (args.command as string) ?? "" } }]
+            : (input.tool === "apply_patch" ? applyPatchPaths(args) : [
+                (args.filePath as string) ?? (args.path as string) ?? "",
+              ])
+                .filter((filePath) => filePath.length > 0)
+                .map((filePath) => ({
+                  toolName: input.tool === "edit" ? "Edit" : "Write",
+                  toolInput: { file_path: filePath },
+                }));
+        for (const call of planCalls) {
+          const guard = await runCore(
+            "aidlc-plan-approval-guard.ts",
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: call.toolName,
+              tool_input: call.toolInput,
+              cwd: directory,
+            },
+            directory,
+          );
+          if (guard.code === 2) {
+            throw new Error(
+              guard.stderr.trim() ||
+                "code-generation requires an approved plan before workspace mutation",
+            );
+          }
+        }
+      }
+
       if (input.tool === "task") {
         const target =
           (args.subagent_type as string) ?? (args.agent as string) ?? "";
@@ -598,6 +640,7 @@ export default async ({
           "aidlc-log-subagent.ts",
           {
             hook_event_name: "SubagentStop",
+            session_id: input.sessionID,
             agent_type:
               (args.subagent_type as string) ?? (args.agent as string) ?? "unknown",
             agent_id: input.callID,
@@ -614,7 +657,7 @@ export default async ({
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties?.sessionID as string) ?? "";
-      // A workflow can be born during the first turn, after session-start saw
+      // A workflow can be created during the first turn, after session-start saw
       // no state. Let the core Stop hook's own state-file guard decide.
       if (!sessionID || !sawHumanTurn.has(sessionID)) return;
       if (!(await isMainSession(sessionID))) return;

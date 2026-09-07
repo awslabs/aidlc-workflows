@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
+// covers: subcommand:aidlc-state:approve, function:pipelineAttemptStartedAt, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
 //
 // t205 - approve-time gate-revision backstop (the reconciliation half of the
 // forwarding-reliability gap). Mechanism: cli. The subject is the deterministic
@@ -46,10 +46,24 @@
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -62,16 +76,22 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  pipelineAttemptStartedAt,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
+
+setDefaultTimeout(30_000);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility ([-])
+let handoffClock = 0;
 // feasibility declares produces: feasibility-assessment, constraint-register, ...
 const PRIMARY_ARTIFACT = "feasibility-assessment";
 
@@ -140,29 +160,79 @@ function recordStageStarted(proj: string, slug: string): void {
   }
 }
 
+// Each simulated reviewer pass writes distinct appendix bytes: completion
+// refuses an appendix that is byte-identical to the pre-request suffix, so a
+// repeated iteration ordinal (attempt reset) needs freshly authored content.
+let reviewPass = 0;
+
 function recordReview(proj: string, slug: string, iteration: number): void {
+  const reviewer = "aidlc-product-lead-agent";
+  const dir = join(seededRecordDir(proj), "inception", slug);
+  const artifact = join(dir, "requirements.md");
+  if (slug === "requirements-analysis") {
+    mkdirSync(dir, { recursive: true });
+    for (const name of [
+      "requirements.md",
+      "requirements-analysis-questions.md",
+    ]) {
+      const path = join(dir, name);
+      if (!existsSync(path)) writeFileSync(path, `# ${name}\n`);
+    }
+  }
   const args = [
     LOG,
     "review",
     "--stage",
     slug,
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
     String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env: process.env });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
+  const request = spawnSync(BUN, args, { encoding: "utf-8", env: process.env });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  const { reviewChallenge } = JSON.parse(request.stdout ?? "") as {
+    reviewChallenge?: string;
+  };
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) {
+    writeFileSync(
+      artifact,
+      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      "utf-8",
+    );
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n` +
+      (typeof reviewChallenge === "string"
+        ? `**Request Challenge:** ${reviewChallenge}\n\n`
+        : "\n") +
+      `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env: process.env,
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`recordReview verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 
 function recordPipelineLinks(proj: string, repos: string[] = []): void {
-  const chains = repos.length > 1 ? repos : [undefined];
+  if (!pipelineAttemptStartedAt(proj, "reverse-engineering")) {
+    recordStageStarted(proj, "reverse-engineering");
+  }
+  const chains = repos.length > 0 ? repos : [undefined];
   for (const repo of chains) {
     for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
       const args = [
@@ -176,6 +246,37 @@ function recordPipelineLinks(proj: string, repos: string[] = []): void {
         proj,
       ];
       if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      if (link === "aidlc-developer-agent") {
+        const artifact = join(
+          seededRecordDir(proj),
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        mkdirSync(dirname(artifact), { recursive: true });
+        writeFileSync(
+          artifact,
+          "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nCurrent attempt.\n",
+          "utf-8",
+        );
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          proj,
+          "reverse-engineering",
+        );
+        const attemptMs = Date.parse(attemptStartedAt);
+        const writtenAt = new Date(
+          Math.max(Date.now(), Number.isNaN(attemptMs) ? 0 : attemptMs) +
+            1_000 +
+            handoffClock++,
+        );
+        utimesSync(artifact, writtenAt, writtenAt);
+        args.splice(
+          args.length - 2,
+          0,
+          "--artifact",
+          relative(proj, artifact),
+        );
+      }
       const result = spawnSync(BUN, args, {
         encoding: "utf-8",
         env: process.env,
@@ -377,7 +478,7 @@ describe("t205: approve-time gate-revision backstop", () => {
 
     const refused = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+    expect(refused.out).toContain("has not reviewed the current output");
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Revision Count")).toBe("1");
@@ -643,7 +744,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     ]);
     expect(staleApproval.rc).toBe(0);
     expect(staleApproval.out).toContain('"kind":"error"');
-    expect(staleApproval.out).toContain("PIPELINE_LINK_COMPLETED");
+    expect(staleApproval.out).toContain("pipeline handoffs have not been recorded");
 
     expect(field(proj, "Revision Count")).toBe("1");
     const rejected = auditBlocks(proj).filter(
@@ -656,6 +757,12 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
 
     recordPipelineLinks(proj, ["repo-a", "repo-b"]);
+    const reentered = guardedReport(proj, [
+      "--result",
+      "revised",
+    ]);
+    expect(reentered.rc).toBe(0);
+    expect(reentered.out).toContain('"kind":"print"');
     const freshApproval = guardedReport(proj, [
       "--result",
       "approved",
@@ -679,7 +786,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    recordPipelineLinks(proj);
+    recordPipelineLinks(proj, ["repo-a"]);
     guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     const revisionCountBefore = field(proj, "Revision Count");

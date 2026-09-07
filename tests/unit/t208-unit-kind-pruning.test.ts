@@ -18,7 +18,14 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -61,6 +68,10 @@ const NFR_REQ_ALL = [
 const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions", "traceability"];
 
 const FD_PRODUCES = ["entities", "rules", "functional-spec", "traceability", "frontend-components"];
+const REVIEW_ARTIFACTS: Record<string, string> = {
+  "functional-design": "functional-spec",
+  "nfr-requirements": "security-requirements",
+};
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -132,8 +143,17 @@ function envNoScope(): NodeJS.ProcessEnv {
   return e;
 }
 
-function runNext(proj: string): Directive {
-  const r = runOrchestrateNext(ORCH, proj, [], { env: envNoScope() });
+function runNext(
+  proj: string,
+  enforceSummaryConfirmationGuard = false,
+): Directive {
+  const env = envNoScope();
+  if (enforceSummaryConfirmationGuard) {
+    delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+    env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  }
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
   if (r.directive === null) {
     throw new Error(`runNext no JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`);
   }
@@ -167,60 +187,95 @@ function runReport(
   }
 }
 
+function reviewArtifactPath(
+  proj: string,
+  stage: string,
+  unit?: string,
+): string {
+  const artifact = REVIEW_ARTIFACTS[stage];
+  if (!artifact) throw new Error(`no review artifact fixture for ${stage}`);
+  const construction = join(seededRecordDir(proj), "construction");
+  const targetUnit =
+    unit ??
+    readdirSync(construction)
+      .sort()
+      .find((name) =>
+        existsSync(join(construction, name, stage, artifactFilename(artifact))),
+      );
+  if (!targetUnit) throw new Error(`no review artifact target for ${stage}`);
+  return join(
+    construction,
+    targetUnit,
+    stage,
+    artifactFilename(artifact),
+  );
+}
+
+function recordReadyReview(
+  proj: string,
+  stage: string,
+  iteration: number,
+  unit?: string,
+): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const artifact = reviewArtifactPath(proj, stage, unit);
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) {
+    writeFileSync(
+      artifact,
+      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      "utf-8",
+    );
+  }
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    stage,
+    "--reviewer",
+    reviewer,
+    ...(unit ? ["--unit", unit] : []),
+    "--iteration",
+    String(iteration),
+    "--project-dir",
+    proj,
+  ];
+  const request = spawnSync(BUN, args, { encoding: "utf-8" });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
+  }
+}
+
 function logReviewReady(
   proj: string,
   unit: string,
   iteration = 1,
   stage = "functional-design",
 ): void {
-  const args = [
-    LOG,
-    "review",
-    "--stage",
-    stage,
-    "--reviewer",
-    "aidlc-architecture-reviewer-agent",
-    "--unit",
-    unit,
-    "--iteration",
-    String(iteration),
-    "--project-dir",
-    proj,
-  ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
-  }
+  recordReadyReview(proj, stage, iteration, unit);
 }
 
 function logStageReviewReady(
   proj: string,
   stage = "functional-design",
 ): void {
-  const args = [
-    LOG,
-    "review",
-    "--stage",
-    stage,
-    "--reviewer",
-    "aidlc-architecture-reviewer-agent",
-    "--iteration",
-    "1",
-    "--project-dir",
-    proj,
-  ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], {
-      encoding: "utf-8",
-    });
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(
-        `stage review log failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
-      );
-    }
-  }
+  recordReadyReview(proj, stage, 1);
 }
 
 function completeWave(proj: string, unit: string, stage: string): void {
@@ -329,7 +384,8 @@ describe("t208 engine unit-kind pruning", () => {
   test("4: a packaging unit on functional-design is vacuously covered", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "pack", kind: "packaging" }]);
-    const d = runNext(proj);
+    const d = runNext(proj, true);
+    expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
     // pack owes nothing; every unit is covered -> the all-covered re-entry
     // presents the real gate (true) on the last unit with an empty produces set.
@@ -397,7 +453,7 @@ describe("t208 engine unit-kind pruning", () => {
     );
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("2 of 2 applicable units");
-    expect(refused.message).toContain("Never reviewed: alpha, beta");
+    expect(refused.message).toContain("Not yet reviewed: alpha, beta");
   }, 30000);
 
   test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {
@@ -421,7 +477,7 @@ describe("t208 engine unit-kind pruning", () => {
     );
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("no fresh recorded review");
+    expect(d.message).toContain("do not have a current review");
   }, 30000);
 
   test("5d2: a valid stale DAG cannot hide an authored unit from review enforcement", () => {
@@ -446,7 +502,7 @@ describe("t208 engine unit-kind pruning", () => {
     );
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("no fresh recorded review");
+    expect(d.message).toContain("do not have a current review");
   }, 30000);
 
   test("5e: malformed dependency data fails closed instead of degrading to one review", () => {
@@ -508,8 +564,8 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(refused.kind).toBe("error");
-    expect(refused.message).toContain("Invalidated receipts: alpha");
-    expect(refused.message).toContain("Never reviewed: beta");
+    expect(refused.message).toContain("Changed after review: alpha");
+    expect(refused.message).toContain("Not yet reviewed: beta");
     expect(refused.message).toContain(
       "For invalidated units with recovery available (alpha)",
     );

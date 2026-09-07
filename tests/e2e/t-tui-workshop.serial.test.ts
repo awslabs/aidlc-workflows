@@ -38,7 +38,10 @@ import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -118,8 +121,8 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
       // setupTuiProject copies the distributable AND the sibling aidlc/ memory
       // shell (the rule layers live there post-P5) and seeds the per-intent
       // workspace shell; noAidlcDocs strips the seeded record so the live
-      // `/aidlc --scope classic` auto-births its own intent (the `ready`
-      // baseline below holds because no intent resolves until birth).
+      // `/aidlc --scope classic` auto-creates its own intent (the `ready`
+      // baseline below holds because no intent resolves until creation).
       const sandbox = setupTuiProject({ noAidlcDocs: true });
       // The render value-add: we tail the grid during the run to prove the
       // multi-tab strip + footer painted at least once (the SDK path can't see it).
@@ -267,8 +270,11 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         expect(sawSelectFooter).toBe(true);
       } finally {
         if (pollTimer) clearInterval(pollTimer);
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

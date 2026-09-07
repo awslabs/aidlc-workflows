@@ -27,7 +27,6 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   errorMessage,
-  activeIntent,
   findAllEvents,
   getField,
   loadStageGraph,
@@ -37,17 +36,20 @@ import {
   parseMemoryHeadings,
   parseStateStageSuffixes,
   readAllAuditShards,
-  activeSpace,
+  resolveWorkflowSelection,
   readStateFile,
   relativeMemoryPath,
   relativeRecordDir,
   resolveAuditWorktreePath,
+  requireLiveClaimForTeamUnit,
   resolveProjectDir,
   runtimeGraphPath,
   stateFilePath,
   unitDependencyPath,
   validateBoltSlug,
+  validateLiveUnitScope,
   withAuditLock,
+  worktreeClaimBoundaryMatches,
   worktreePath,
   worktreeRuntimeGraphPath,
   writeFileAtomic,
@@ -358,7 +360,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), so each row's memory_path resolves under the active intent
   // rather than the bare space prefix. null -> the bare space record prefix (a
-  // pre-birth shell with no intent). Resolved once: the active intent is stable
+  // pre-creation shell with no intent). Resolved once: the active intent is stable
   // across a single compile.
   const recordPrefix = relativeRecordDir(projectDir);
 
@@ -1135,6 +1137,7 @@ Learnings captured
 // fragment-fork takes no audit lock anywhere (L9 — no audit emit).
 function handleFragmentFork(rest: string[], projectDir: string): void {
   const flags: Record<string, string> = {};
+  const walkingSkeletonMain = rest.includes("--walking-skeleton-main");
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--slug" && i + 1 < rest.length) {
@@ -1159,6 +1162,16 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     process.stderr.write(`aidlc-runtime fragment-fork: ${slugErr}\n`);
     process.exit(1);
   }
+  const wtPath = worktreePath(projectDir, flags.slug);
+  if (worktreeClaimBoundaryMatches(projectDir, wtPath, flags.slug)) {
+    validateLiveUnitScope(projectDir, flags.slug);
+  } else {
+    requireLiveClaimForTeamUnit(projectDir, flags.slug, {
+      intent: flags.intent,
+      space: flags.space,
+      walkingSkeletonMain,
+    });
+  }
 
   // Pin the worktree runtime-graph mirror AND the main read to ONE intent
   // (vision §5). recordPrefix -> the worktree mirror's relative record dir
@@ -1173,11 +1186,14 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
   // two cursors differ, the empty graph is written under the worktree-space path
   // but re-read under the main-space path → ENOENT, fragment-fork exits 1 despite
   // a successful write. One resolved space keeps both sides on the same segment.
-  const space = flags.space ?? activeSpace(projectDir);
+  const selection = resolveWorkflowSelection(projectDir, {
+    space: flags.space,
+    intent,
+  });
+  const space = selection.space;
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
-  const wtRecord = activeIntent(projectDir, space, intent) ?? undefined;
+  const wtRecord = selection.intent ?? undefined;
 
-  const wtPath = worktreePath(projectDir, flags.slug);
   const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
   const mainPath = runtimeGraphPath(projectDir, intent, space);
 
@@ -1264,11 +1280,16 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
     process.stderr.write(`aidlc-runtime fragment-merge: ${slugErr}\n`);
     process.exit(1);
   }
+  const wtPath = worktreePath(projectDir, flags.slug);
+  requireLiveClaimForTeamUnit(projectDir, flags.slug, {
+    intent: flags.intent,
+    space: flags.space,
+    walkingSkeletonMain: true,
+  });
 
   // Same selector the fork used -> the SAME intent record (vision §5).
   const recordPrefix = relativeRecordDir(projectDir, flags.intent, flags.space);
 
-  const wtPath = worktreePath(projectDir, flags.slug);
   const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
 
   if (!existsSync(wtFragmentPath)) {
@@ -1416,27 +1437,30 @@ function stripProjectDir(args: string[]): { projectDirArg: string | undefined; r
 }
 
 export function main(argv: string[]): void {
-  const { projectDirArg, rest: argsAfterStrip } = stripProjectDir(argv);
+  try {
+    const { projectDirArg, rest: argsAfterStrip } = stripProjectDir(argv);
 
-  const [cmd, ...subargs] = argsAfterStrip;
-  if (cmd === "--help" || cmd === "-h") {
-    printHelp();
-    return;
-  }
-  if (cmd === undefined) {
-    process.stderr.write(
-      "Usage: aidlc-runtime <subcommand>. Valid: compile, read, summary, fragment-fork, fragment-merge. Run with --help for detail.\n"
-    );
-    process.exit(1);
-  }
+    const [cmd, ...subargs] = argsAfterStrip;
+    if (cmd === "--help" || cmd === "-h") {
+      printHelp();
+      return;
+    }
+    if (cmd === undefined) {
+      throw new Error(
+        "Usage: aidlc-runtime <subcommand>. Valid: compile, read, summary, fragment-fork, fragment-merge. Run with --help for detail.",
+      );
+    }
 
-  const handler = SUBCOMMANDS[cmd];
-  if (!handler) {
-    process.stderr.write(`Unknown subcommand: ${cmd}. Run aidlc-runtime --help for usage.\n`);
-    process.exit(1);
-  }
+    const handler = SUBCOMMANDS[cmd];
+    if (!handler) {
+      throw new Error(`Unknown subcommand: ${cmd}. Run aidlc-runtime --help for usage.`);
+    }
 
-  handler(subargs, resolveProjectDir(projectDirArg));
+    handler(subargs, resolveProjectDir(projectDirArg));
+  } catch (error) {
+    process.stderr.write(`${errorMessage(error)}\n`);
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.main) main(process.argv.slice(2));

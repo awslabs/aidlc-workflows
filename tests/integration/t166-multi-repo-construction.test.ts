@@ -31,7 +31,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -214,6 +214,19 @@ function recordMainReview(
   if ((requested.status ?? -1) !== 0) {
     return { status: requested.status ?? -1, out: `${requested.stdout ?? ""}${requested.stderr ?? ""}`, stdout: requested.stdout ?? "" };
   }
+  appendFileSync(
+    join(dir, "code-generation-plan.md"),
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-architecture-reviewer-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
   const completed = spawnSync(BUN, [LOG_TOOL, ...args, "--verdict", "READY"], { encoding: "utf-8", cwd: proj });
   return { status: completed.status ?? -1, out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`, stdout: completed.stdout ?? "" };
 }
@@ -255,6 +268,19 @@ function recordWorktreeReview(
       stdout: requested.stdout ?? "",
     };
   }
+  appendFileSync(
+    join(dir, "code-generation-plan.md"),
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-architecture-reviewer-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
   const completed = spawnSync(
     BUN,
     [LOG_TOOL, ...args, "--verdict", "READY"],
@@ -472,7 +498,12 @@ function compositionScenario(
       ...(codeGeneration.consumes ?? []),
       { artifact: "composition-missing-producer", required: true },
     ];
-    const graphPath = join(proj, "composition-stage-graph.json");
+    // Framework-owned `.aidlc/` sits outside the bound source boundary, so
+    // this test-only graph cannot invalidate the recorded review's source
+    // fingerprint the way a workspace-roof file would.
+    const graphDir = join(proj, ".aidlc");
+    mkdirSync(graphDir, { recursive: true });
+    const graphPath = join(graphDir, "composition-stage-graph.json");
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
     stateEnv.AIDLC_STAGE_GRAPH = graphPath;
   }
@@ -503,11 +534,11 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    const birth = runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
+    const creation = runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const created = runWorktree(proj, "create", "--slug", "alpha", "--base", "main", "--repo", "repo-a");
 
-    test("birth records the two-repo set", () => {
-      expect(birth.status).toBe(0);
+    test("creation records the two-repo set", () => {
+      expect(creation.status).toBe(0);
     });
     test("create --repo repo-a exits 0 and produces the worktree dir", () => {
       expect(created.status).toBe(0);
@@ -742,7 +773,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("source refusal wins, validity failure stays advisory, and green completion emits both receipts", () => {
       expect(sourceRefusal.approved.status).not.toBe(0);
       expect(sourceRefusal.approved.out).toContain(
-        "source-fingerprint mismatch",
+        "project source changed after aidlc-architecture-reviewer-agent reviewed it",
       );
       expect(completedBlock(sourceRefusal.audit)).toBeUndefined();
       expect(sourceRefusal.audit).not.toContain("**Validation Basis**:");
@@ -772,7 +803,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       const basis = JSON.parse(
         basisLine?.slice("**Validation Basis**: ".length) ?? "{}",
       ) as { schema?: number };
-      expect(basis.schema).toBe(2);
+      expect(basis.schema).toBe(3);
       const reviewBlock = green.audit
         .split(/\n---\n/)
         .find((block) =>
@@ -1846,12 +1877,12 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     git(proj, "config", "user.email", "t@t");
     git(proj, "config", "user.name", "t");
     git(proj, "commit", "-q", "-m", "init", "--allow-empty");
-    // Birth with NO --repos and no sibling repos → no repos row recorded.
-    const birth = runUtil(proj, "intent-create", "--scope", "poc");
+    // Creation with NO --repos and no sibling repos → no repos row recorded.
+    const creation = runUtil(proj, "intent-create", "--scope", "poc");
     const created = runWorktree(proj, "create", "--slug", "legacy", "--base", "main");
 
-    test("birth records no repos row", () => {
-      expect(birth.status).toBe(0);
+    test("creation records no repos row", () => {
+      expect(creation.status).toBe(0);
     });
     test("create WITHOUT --repo works (cwd = projectDir, back-compat)", () => {
       expect(created.status).toBe(0);

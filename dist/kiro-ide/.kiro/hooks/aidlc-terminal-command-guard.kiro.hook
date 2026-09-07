@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-terminal-command-guard","description":"Runs deterministic AIDLC utility commands before the Windows shell transport when prompt text is unavailable.","when":{"type":"preToolUse","toolTypes":["shell"]},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts terminal-command-guard"}}

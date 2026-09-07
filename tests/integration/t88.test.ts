@@ -64,8 +64,9 @@
 //        stage's scope set contains "phase" (BOM stripped, frontmatter parsed)
 //        AND length 4 (STRONGER: full chain attaches, not just the phase tag).
 //
-// 11 .sh asserts -> 11 expect()-bearing test() cases here, one observable per
-// case, matching the .sh's 11 `ok` lines.
+// 11 .sh asserts -> 11 expect()-bearing migrated cases here, one observable per
+// case, matching the .sh's 11 `ok` lines, plus lifecycle compile rejection
+// coverage.
 //
 // FIXTURE DISCIPLINE: the resolution fixtures live on disk at
 // tests/fixtures/v05-mr7a-rule-resolution/<case>/ (the .sh's $FIXTURES) —
@@ -73,8 +74,8 @@
 // AIDLC_STAGE_GRAPH is pointed at the real shipped stage-graph.json (the
 // bootstrap source the .sh copied byte-for-byte into a tempfile so the
 // number/name harvest succeeds — identical contents, so no copy is needed
-// for a read-only bootstrap). The two cases that need a WRITABLE rules dir
-// (case 8's drift edit, case 10's bad-pairing file) and the empty-dir case
+// for a read-only bootstrap). The cases that need a WRITABLE rules dir
+// (case 8's drift edit, case 10's bad-pairing file, lifecycle validation) and the empty-dir case
 // (case 7) build throwaway temp dirs under tmpdir(), cleaned in afterAll —
 // nothing is written under tests/fixtures/**. __resetGraphCache() is called
 // before each compile (the documented test seam, aidlc-graph.ts:179) because
@@ -299,6 +300,35 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     expect(() => compileStageGraph()).toThrow(/pairing must be/);
     // STRONGER: the error names the offending file path (compile fails loud).
     expect(() => compileStageGraph()).toThrow(/org\.md/);
+  });
+
+  test("blank and block-scalar lifecycle declarations fail compile", () => {
+    const cases = [
+      ["blank status", "status:\n", /team\.md: status must be one of/],
+      [
+        "blank stale_after",
+        "stale_after:\n",
+        /team\.md: stale_after must be a real calendar date/,
+      ],
+      ["block status", "status: >\n  deprecated\n", /team\.md: status must be one of/],
+      [
+        "block stale_after",
+        "stale_after: |\n  2026-01-01\n",
+        /team\.md: stale_after must be a real calendar date/,
+      ],
+    ] as const;
+
+    for (const [name, declaration, diagnostic] of cases) {
+      const badRules = mkTemp("aidlc-t88-bad-lifecycle-");
+      writeFileSync(
+        join(badRules, "team.md"),
+        `---\n${declaration}---\n\n# Team rule with invalid lifecycle metadata\n`,
+        "utf-8",
+      );
+      process.env.AIDLC_RULES_DIR = badRules;
+      __resetGraphCache();
+      expect(() => compileStageGraph(), name).toThrow(diagnostic);
+    }
   });
 
   // --- Case 12: BOM-prefixed frontmatter parses correctly ------------------

@@ -50,16 +50,9 @@ outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, ext
 
 # Delivery Planning
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and knowledge from `.claude/knowledge/aidlc-delivery-agent/`.
-Load aidlc-architect-agent for build order validation.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
@@ -80,12 +73,12 @@ Use these affirmed practices when populating `bolt-plan.md`. If no narrower
 statement exists (including when practices-discovery was skipped), use the
 active space's `memory/org.md` defaults.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
-- **Bolt** — per `stage-protocol.md` Glossary: "a deployable unit of work within Construction — one pass through stages 3.1–3.7." A Bolt wraps one or more Units of Work and runs once through the Construction stages.
+- **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The engine does not consume `bolt-plan.md` for Unit grouping or walk order; runtime batches come from `unit-of-work-dependency.md`. A **Batch** is the group of Units that build concurrently (runtime; from that 2.7 artifact).
 
 These definitions are for YOU. They are not written to be read out, and the user
 has not seen them. Every one of them names something that is about to appear in
@@ -125,11 +118,11 @@ NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages 
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-architect-agent input). Flag any deviation from topological order so it can be justified in the rationale artifact.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create four artifacts in `<record>/inception/delivery-planning/`. These are
 documents the user opens and reads at the gate, so the same rule the questions
@@ -145,7 +138,7 @@ the explanation.
 - `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
 - `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 
-### Step 6: Phase Boundary Verification
+### Step 5: Phase Boundary Verification
 
 Run the Inception → Construction completeness audit. Read every
 `traceability.json` produced by the Inception stages that executed:
@@ -162,7 +155,7 @@ targets, or missing upstream IDs. Consolidate the tables into
 the top. If any finding remains, stop the transition and revisit the owning
 stage before Construction begins.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
@@ -186,7 +179,37 @@ code-generation serially, in Bolt build order), so opt in when the plan
 justifies per-unit coherence and early working code over parallel batch
 builds.
 
-### Step 8: Present Completion & Request Approval
+**Construction staffing.** After classifying iteration, ask:
+
+> "How do you want to staff Construction? I can build every unit right here,
+> one at a time, with you approving as we go - or, if you have several teams,
+> each team can own a unit and approve its work independently."
+
+The several-teams choice requires the unit-first order above. If the plan is not
+already unit-major, explain that prerequisite and confirm switching before
+recording:
+`bun .claude/tools/aidlc-state.ts set-construction-iteration unit-major`,
+then
+`bun .claude/tools/aidlc-state.ts set-unit-ownership team`. Team ownership
+requires the workspace root itself to be the source Git repository; intents with
+recorded sibling repos must remain solo.
+For the one-session choice, leave the field absent (the byte-identical default)
+or record `set-unit-ownership solo`.
+
+**Team check-in rhythm.** Only after team ownership is selected, ask:
+
+> "While a team builds their unit, how often should I check in for approval?
+> After each stage is the safer default: a wrong turn is caught before the next
+> stage builds on it. Once at the end means fewer interruptions: one review
+> after the unit's design and code are complete."
+
+Record the answer with
+`bun .claude/tools/aidlc-state.ts set-unit-gate-rhythm per-stage` or
+`... unit-end`. If the field is absent under team ownership, `per-stage` is the
+default. These names are tool vocabulary; present the plain-language choices,
+not the field or enum names.
+
+### Step 7: Present Completion & Request Approval
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`
@@ -196,38 +219,15 @@ Approval gate: Approve (proceed to Construction) / Request Changes.
 
 This stage's outputs are markdown artefacts under `<record>/inception/delivery-planning/`.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`.
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`).
+Upstream targets: `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.claude/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.

@@ -237,6 +237,17 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     expect(protocolHas("### Contradiction detection (MANDATORY)")).toBe(true);
   });
 
+  test("§3: answered-question reuse reads recursive files and paired audit events", () => {
+    expect(protocolHas("<record>/**/*-questions.md")).toBe(true);
+    expect(protocolHas("<record>/audit/*.md")).toBe(true);
+    expect(protocolHas("DECISION_RECORDED")).toBe(true);
+    expect(protocolHas("QUESTION_ANSWERED")).toBe(true);
+    expect(protocolHas("Stage`, `Unit`, `Attempt Generation`, and `Workflow`")).toBe(true);
+    expect(protocolHas("equal timestamps are causally unordered")).toBe(true);
+    expect(protocolHas("do not infer an answer")).toBe(true);
+    expect(protocolHas("Details` alone does not identify the question")).toBe(true);
+  });
+
   // =========================================================================
   // §4 — State tracking: each sed-referenced field exists in BOTH the protocol
   // guidance AND the state template (.sh 88-96). The .sh required
@@ -363,6 +374,14 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
 
   test("§8: depth guidance includes Comprehensive range ~8-12", () => {
     expect(protocolHas("~8-12")).toBe(true);
+  });
+
+  test("§8: every generated question must be self-explanatory", () => {
+    expect(protocolHas("Questions must be self-explanatory")).toBe(true);
+    expect(protocolHas("Every question MUST stand on its own")).toBe(true);
+    expect(
+      protocolHas("Expand every identifier in each question that uses it"),
+    ).toBe(true);
   });
 
   // =========================================================================

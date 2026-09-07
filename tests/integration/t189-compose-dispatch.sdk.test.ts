@@ -9,7 +9,7 @@
 // names: on the dispatch print, the conductor Tasks the composer agent, the
 // composer runs the read-only `detect` scan and returns a structured proposal,
 // and the conductor renders the approve/edit/reject gate WITHOUT writing scope
-// data or birthing before an approval.
+// data or creating before an approval.
 //
 // Journey (one interactive run, stopped at the gate):
 //   drive:     `/aidlc compose "<task>"` on a fresh project (no workspace).
@@ -18,7 +18,7 @@
 //              `detect --json` (its tool-result carries the scan payload);
 //              the conductor surfaces an AskUserQuestion gate.
 //   stop:      at the FIRST AskUserQuestion (stopAfterAskUserQuestion) - the
-//              gate itself is the P0 deliverable; no write, no birth.
+//              gate itself is the P0 deliverable; no write, no creation.
 //
 // Assertions stay at the JOURNEY level (tool results + disk), tolerant of
 // conversational variance, mirroring t143/t176 - NEVER on assistantText:
@@ -27,7 +27,7 @@
 //   (b) the composer was DISPATCHED (a Task tool call appeared) - the
 //       conductor did not improvise a grid inline;
 //   (c) a gate fired (askedQuestions >= 1) and the run stopped there;
-//   (d) NOTHING was written: no aidlc-state.md (no birth), no composed scope
+//   (d) NOTHING was written: no aidlc-state.md (no creation), no composed scope
 //       file in .claude/scopes/ beyond the 11 stock ones, scope-grid.json
 //       still has exactly 10 keys. P0 stops at render - the write is P2.
 //   (e) the composer's returned proposal carries the ARS contract: the
@@ -101,7 +101,7 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
         // turn-stop the composer block mandates).
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
-        // (d) NOTHING landed on disk before approval. No birth:
+        // (d) NOTHING landed on disk before approval. No creation:
         const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
         const intentDirs = existsSync(intentsDir)
           ? readdirSync(intentsDir).filter((d) => !d.startsWith("."))

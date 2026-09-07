@@ -32,7 +32,46 @@ command -v bun    >/dev/null && echo "✓ bun installed"          || echo "✗ I
 
 ## AWS Bedrock Setup
 
-This implementation ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
+The Claude Code distribution ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
+
+### Why Claude Code ships with Bedrock by default
+
+This rationale is specific to the Claude Code distribution. Provider setup is
+harness-specific: [Codex also defaults to Bedrock](harnesses/codex-cli.md#prerequisites),
+while [opencode takes its session model from global configuration but pins its
+tiered personas to a Bedrock model](harnesses/opencode.md#prerequisites).
+
+The Claude Code distribution needs a predictable runtime baseline across the
+orchestrator and its tier-pinned subagents. Bedrock lets the distribution pin
+exact global inference-profile IDs. Claude Code separately interprets model
+context selectors such as `[1m]` and strips them before sending the model ID to
+Bedrock. Together, those pins prevent a workflow from silently selecting
+different model aliases or context windows on different machines. Bedrock also
+uses the standard AWS SDK credential chain and IAM controls, which lets teams
+manage access without committing provider keys to a project. The repository's
+live Claude test environment uses the same provider and model/context baseline.
+
+This is a distribution default, not an AI-DLC methodology requirement. AI-DLC
+does not call the Bedrock API directly. To use the direct Anthropic API or
+another Claude Code-supported provider:
+
+1. In the installed `.claude/settings.json`, remove or replace
+   `env.CLAUDE_CODE_USE_BEDROCK`, `env.AWS_REGION`,
+   `env.ANTHROPIC_DEFAULT_FABLE_MODEL`,
+   `env.ANTHROPIC_DEFAULT_OPUS_MODEL`,
+   `env.ANTHROPIC_DEFAULT_SONNET_MODEL`,
+   `env.ANTHROPIC_DEFAULT_HAIKU_MODEL`, and the top-level `model`.
+2. Check `.claude/settings.local.json` and remove or replace any corresponding
+   overrides there. Local settings take precedence over the shared
+   `.claude/settings.json`.
+3. Run `claude` and select the target provider at the login prompt. If Claude
+   Code is already authenticated, run `/login` first. Complete the provider's
+   authentication flow as described in the
+   [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
+
+The AI-DLC stage protocol is provider-independent, but the repository ships and
+tests the Bedrock model/context baseline documented below. Alternate models
+still need enough context for the orchestrator and delegated agents.
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
@@ -153,13 +192,12 @@ instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
 [AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
 and post-copy steps that differ.
 
-The `cp` commands below run from a clone of this repository on the `v2`
+The `cp` commands below run from a clone of this repository on the `main`
 branch:
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
+git clone --branch main https://github.com/awslabs/aidlc-workflows.git
 cd aidlc-workflows
-git checkout v2
 ```
 
 ### Step 1: Copy the implementation
@@ -172,9 +210,25 @@ Expand your harness:
 ```bash
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/claude/.gitignore your-project/.gitignore
+fi
 ```
 
 The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
+
+The guarded block copies the complete starter `.gitignore` only when the project
+does not already have one. Otherwise, preserve every project-owned rule and
+merge only the section from `# AI-DLC` through the end of the shipped file; do
+not copy its generic starter rules. Without the AI-DLC section, your first
+commit picks up the per-user cursors (`aidlc/active-space`,
+`aidlc/spaces/*/intents/active-intent`) and machine-local runtime
+(`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor caches,
+`spaces/*/knowledge/.sources.local.json`), which the `## Git Integration`
+section of the installed `.claude/CLAUDE.md` states are already excluded.
+
+Start (or fully restart) Claude Code from the project root, approve the project hooks when prompted or through `/hooks`, then fully restart Claude Code again so the approval takes effect; `/clear` is not enough. On managed fleets, if `/hooks` says hooks are restricted by policy, follow [Claude managed policy blocks project hooks](15-troubleshooting.md#claude-managed-policy-blocks-project-hooks).
 
 </details>
 
@@ -186,7 +240,16 @@ mkdir -p your-project/.kiro your-project/aidlc
 cp -R dist/kiro/.kiro/. your-project/.kiro/
 cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro/AGENTS.md your-project/AGENTS.md  # merge if you already have one
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/kiro/.gitignore your-project/.gitignore
+fi
 ```
+
+The guarded block copies the complete starter `.gitignore` only when the project
+does not already have one. Otherwise, preserve every project-owned rule and
+merge only the section from `# AI-DLC` through the end of the shipped file; do
+not copy its generic starter rules.
 
 Then continue in [Running AI-DLC on Kiro CLI](harnesses/kiro-cli.md): prerequisites (Kiro CLI ≥ 2.6, a paid plan for Opus 4.8) and the shipped default-agent setting.
 
@@ -246,6 +309,14 @@ Then continue in [AI-DLC on opencode](harnesses/opencode.md): the split `.aidlc/
 
 </details>
 
+> **Upgrading an install that uses plugins:** copying a fresh
+> `dist/<harness>/` engine over an existing project restores the shipped stage
+> graph and core stage sources, which removes composed plugin graph entries and
+> contribution merges. After every engine reinstall or upgrade, run
+> `/aidlc plugin sync`. Claude, Codex, Cursor, and Kiro IDE can also self-heal
+> through their plugin compose hook on the next session start; Kiro CLI requires
+> the explicit sync.
+
 ### Step 2: Navigate to your project
 
 ```bash
@@ -264,7 +335,7 @@ holding the memory layer (`aidlc/spaces/default/memory/`, where team-affirmed
 practices and learnings live). You do not run any init command.
 
 The first time you run `/aidlc` (or describe what to build), the engine
-**auto-births** the first intent into the active space. Each intent gets its own
+**auto-creates** the first intent into the active space. Each intent gets its own
 record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, which holds:
 
 - `aidlc-state.md` — the per-intent workflow state
@@ -301,17 +372,21 @@ Run the health check to confirm everything is in place:
 | Check | What It Validates |
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on `$PATH` |
-| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 16 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 17 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hooks enabled (Claude Code) | No inspected settings file globally disables hooks. Fails loudly when `"disableAllHooks": true` is resolved from enterprise managed settings (the platform file plus alphabetical `managed-settings.d/` fragments), `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json`. Follows Claude Code's layer precedence, so a higher-precedence `false` suppresses a lower `true` |
 | Project structure | `.claude/settings.json` exists with expected configuration |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
-| Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
+| Hook heartbeats | `.aidlc-hooks-health/` contains timestamps from hook executions; zero heartbeats fail once workflow progresses, and heartbeats more than five minutes older than the latest stage/gate event fail as stopped |
+| Claude managed hook policy | On Claude Code, effective managed `allowManagedHooksOnly: true` is reported because it blocks every project hook in `.claude/settings.json`; it uses the same platform paths, fragment ordering, and `AIDLC_MANAGED_SETTINGS_PATH` override as the global-disable check |
 | Graph integrity | No cycles in `stage-graph.json`; every slug has a matching stage file |
 | Scope validation | All 11 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
 | Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
+| Duplicate producers | Reports consumed artifacts with multiple producers and the stage slugs involved (advisory - never fails) |
 | Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
 | Plugin checks | Optional `tools/<plugin>-doctor.ts` checks from enabled plugins; error findings fail doctor, advisory findings remain visible without changing the exit code |
 | Pending-compose marker | Reports a present `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age. Fresh (under 24h, the normal state at an open compose gate) passes as advisory; stale (a crashed compose gate stranded it) fails. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
+| Background-subagent ledger | Reports the fresh and stale entry counts in `aidlc/.aidlc-subagent-inflight`. Each accepted background dispatch adds one session-scoped entry and each completion removes one matching entry. Fresh entries (under 2h) pass as advisory; stale or malformed entries fail. Silent when absent. Remediation: delete it if no background subagent is running |
 
 ### Example output
 
@@ -324,6 +399,7 @@ Run the health check to confirm everything is in place:
 ✓ aidlc-session-start.ts present
 ✓ aidlc-session-end.ts present
 ✓ aidlc-statusline.ts present
+✓ Hooks enabled (resolved disableAllHooks is not true)
 ✓ settings.json present
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
 ✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
@@ -334,6 +410,7 @@ Run the health check to confirm everything is in place:
 ✓ Scope validation: 11 scopes valid
 ✓ Schema validation: 33/33 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
+✓ Duplicate producers: every consumed artifact has a single producer
 ✓ Keyword overlap: no conflicts
 ```
 
@@ -343,6 +420,8 @@ Run the health check to confirm everything is in place:
 |---------|-----|
 | `bun` not installed | Install via `curl -fsSL https://bun.sh/install \| bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"`. Ensure it is on PATH for non-interactive shells. |
 | Hook not present | Re-copy the `.claude/` directory from the distribution |
+| Hooks registered but never executed | Doctor names how many stages have progressed. Run `/hooks` to check approval and policy state; approve pending hooks and fully restart the CLI. If `/hooks` says hooks are restricted by policy, only the Claude Code administrator can lift managed `allowManagedHooksOnly`; use the two attended-session bypass variables below only as an interim. |
+| `allowManagedHooksOnly=true` | Ask the Claude Code administrator to lift the setting in managed `managed-settings.json`; project settings cannot override it. For attended recovery only, launch the CLI with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`. |
 | `settings.json` missing | Re-copy from the distribution: `cp dist/claude/.claude/settings.json .claude/settings.json` |
 | Workspace shell missing | Re-copy the workspace shell from `dist/claude/` into your project root |
 | State file issues | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and run `/aidlc` to start fresh |
@@ -382,10 +461,14 @@ In your shell:
 command -v claude >/dev/null && echo "✓ Claude Code" || echo "✗ Claude Code"
 command -v bun    >/dev/null && echo "✓ bun"          || echo "✗ bun"
 
-# From your aidlc-workflows clone (v2 branch) - see Installation above
+# From your aidlc-workflows clone (main branch) - see Installation above
 # Install (engine + the workspace shell sibling)
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/claude/.gitignore your-project/.gitignore
+fi
 
 # Launch Claude Code in your project
 cd your-project && claude

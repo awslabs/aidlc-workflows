@@ -71,7 +71,7 @@ function pinnedShardName(): string {
   return `${host}-${PINNED_CLONE_ID}.md`;
 }
 
-/** Birth an intent and create the audit shard the HOOK will resolve, returning
+/** Create an intent and create the audit shard the HOOK will resolve, returning
  *  the audit DIR + record root. The clone-id token (aidlc/.aidlc-clone-id) is
  *  PINNED on disk so the freshly-spawned hook subprocess (which reads the token
  *  from disk, not the test process's memoized one) resolves a predictable shard
@@ -79,13 +79,13 @@ function pinnedShardName(): string {
  *  passes. Assertions glob-read every shard in the dir (clone-id-name-agnostic,
  *  mirroring readAllAuditShards) to tolerate any extra shard. */
 function seedIntentWithShard(p: string, slug: string): { auditDir: string; recordRoot: string } {
-  const born = createIntent(p, slug, "default", "feature");
+  const created = createIntent(p, slug, "default", "feature");
   // Pin the clone-id BEFORE the hook runs (the hook reads it from disk).
   writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = join(docsRoot(p), "audit");
   mkdirSync(auditDir, { recursive: true });
   writeFileSync(join(auditDir, pinnedShardName()), "", "utf-8");
-  void born;
+  void created;
   return { auditDir, recordRoot: docsRoot(p) };
 }
 

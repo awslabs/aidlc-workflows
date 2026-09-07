@@ -19,10 +19,10 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   currentStageSourceBaseline,
@@ -388,7 +388,7 @@ describe("t305 strict source-manifest validation", () => {
     }
     expect(
       workspaceSourceListing(project)?.has("\0force-dir/key.secret"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("validates fully resolved symlink targets for exact and directory claims", () => {
@@ -563,13 +563,7 @@ describe("t305 strict source-manifest validation", () => {
       "code-generation",
       "alpha",
     );
-    expect(linkedDirectoryExact.ok).toBe(false);
-    if (!linkedDirectoryExact.ok) {
-      expect(linkedDirectoryExact.reason).toContain("linked-directory");
-      expect(linkedDirectoryExact.reason).toContain(
-        'directory claims must end with "/"',
-      );
-    }
+    expect(linkedDirectoryExact.ok).toBe(true);
 
     manifest(record, "alpha", {
       stage: "code-generation",
@@ -670,7 +664,7 @@ describe("t305 content-addressed source review evidence", () => {
     expect(sourceListingEntriesEqual(`100644 ${oid}`, `100755 ${oid}`)).toBe(false);
   });
 
-  test("an unchanged no-Git greenfield binds to empty source while raw application files fail closed", () => {
+  test("a no-Git workspace binds both empty and populated source listings", () => {
     const project = createTestProject();
     dirs.push(project);
     const empty = workspaceSourceState(project);
@@ -679,13 +673,18 @@ describe("t305 content-addressed source review evidence", () => {
     expect(empty?.fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
     writeFileSync(join(project, "untracked-without-git.ts"), "unbound\n");
-    expect(workspaceSourceState(project)).toBeNull();
+    const populated = workspaceSourceState(project);
+    expect(populated).not.toBeNull();
+    expect(populated?.listing.get("\0untracked-without-git.ts")).toMatch(
+      /^100644 [0-9a-f]{64}$/,
+    );
+    expect(populated?.fingerprint).not.toBe(empty?.fingerprint);
   });
 
-  test("no-Git workflow birth and jump both emit empty modern unit-major baselines", () => {
-    const born = createTestProject();
-    dirs.push(born);
-    const created = spawnSync(
+  test("no-Git workflow creation is empty while a jump preserves populated source", () => {
+    const project = createTestProject();
+    dirs.push(project);
+    const creationResult = spawnSync(
       process.execPath,
       [
         UTILITY,
@@ -695,37 +694,40 @@ describe("t305 content-addressed source review evidence", () => {
         "--label",
         "empty-baseline",
         "--project-dir",
-        born,
+        project,
       ],
       {
         encoding: "utf-8",
         env: {
           ...process.env,
-          AIDLC_WORKFLOW_INTENT: "empty baseline birth",
+          AIDLC_WORKFLOW_INTENT: "empty baseline creation",
         },
       },
     );
-    expect(created.status, `${created.stdout ?? ""}${created.stderr ?? ""}`)
-      .toBe(0);
-    const birthAudit = readAllAuditShards(born);
-    const birthField = /\*\*Event\*\*: WORKFLOW_STARTED[\s\S]*?\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})/
-      .exec(birthAudit)?.[1];
-    expect(birthField).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(
+      creationResult.status,
+      `${creationResult.stdout ?? ""}${creationResult.stderr ?? ""}`,
+    ).toBe(0);
+    const creationAudit = readAllAuditShards(project);
+    const creationField =
+      /\*\*Event\*\*: WORKFLOW_STARTED[\s\S]*?\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})/
+        .exec(creationAudit)?.[1];
+    expect(creationField).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(
       readBaselineSourceSnapshot(
-        born,
+        project,
         "code-generation",
-        birthField as string,
+        creationField as string,
       )?.size,
     ).toBe(0);
-    const bornBaseline = currentStageSourceBaseline(
-      born,
+    const creationBaseline = currentStageSourceBaseline(
+      project,
       "code-generation",
       true,
     );
-    expect(bornBaseline.state).toBe("ready");
-    if (bornBaseline.state === "ready") {
-      expect(bornBaseline.listing.size).toBe(0);
+    expect(creationBaseline.state).toBe("ready");
+    if (creationBaseline.state === "ready") {
+      expect(creationBaseline.listing.size).toBe(0);
     }
 
     const jumped = createTestProject();
@@ -782,21 +784,21 @@ describe("t305 content-addressed source review evidence", () => {
       /^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m,
     )?.[1];
     expect(jumpField).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(jumpField).not.toBe(initial);
+    expect(jumpField).toBe(initial);
     expect(
       readBaselineSourceSnapshot(
         jumped,
         "code-generation",
         jumpField as string,
       )?.size,
-    ).toBe(0);
+    ).toBe(1);
     const selected = currentStageSourceBaseline(
       jumped,
       "code-generation",
       true,
     );
     expect(selected.state).toBe("ready");
-    if (selected.state === "ready") expect(selected.listing.size).toBe(0);
+    if (selected.state === "ready") expect(selected.listing.size).toBe(1);
     const selectedStageMajor = currentStageSourceBaseline(
       jumped,
       "code-generation",
@@ -804,7 +806,7 @@ describe("t305 content-addressed source review evidence", () => {
     );
     expect(selectedStageMajor.state).toBe("ready");
     if (selectedStageMajor.state === "ready") {
-      expect(selectedStageMajor.listing.size).toBe(0);
+      expect(selectedStageMajor.listing.size).toBe(1);
     }
     const opening = currentSwarmSourceOpeningFingerprint(
       jumped,
@@ -917,6 +919,36 @@ function seedArtifacts(record: string, unit: string): string {
   return dir;
 }
 
+function reviewArtifact(record: string, unit?: string): string {
+  const dir = unit
+    ? join(record, "construction", unit, "code-generation")
+    : join(record, "construction", "code-generation");
+  return join(dir, "code-generation-plan.md");
+}
+
+function stripReviewAppendix(artifact: string): void {
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart === -1) return;
+  writeFileSync(
+    artifact,
+    `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+    "utf-8",
+  );
+}
+
+function appendReviewAppendix(
+  artifact: string,
+  iteration: string,
+  verdict: "READY" | "NOT-READY" = "READY",
+): void {
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`,
+    "utf-8",
+  );
+}
+
 function writeManifest(record: string, unit: string, writes: Array<{ path: string; repo?: string }>): void {
   const dir = seedArtifacts(record, unit);
   writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`);
@@ -938,8 +970,12 @@ function review(
 ): { request: {rc:number;out:string}; verdict: {rc:number;out:string} } {
   writeManifest(record, unit, writes);
   const prior = (readAllAuditShards(project).match(new RegExp(`\\*\\*Event\\*\\*: REVIEW_REQUESTED[\\s\\S]*?\\*\\*Unit\\*\\*: ${unit}`, "g")) ?? []).length;
-  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", iteration ?? String(prior + 1)];
+  const reviewIteration = iteration ?? String(prior + 1);
+  const artifact = reviewArtifact(record, unit);
+  stripReviewAppendix(artifact);
+  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", reviewIteration];
   const request = cli(LOG, args, project, env);
+  if (request.rc === 0) appendReviewAppendix(artifact, reviewIteration);
   const verdict = request.rc === 0 ? cli(LOG, [...args, "--verdict", "READY"], project, env) : { rc: request.rc, out: request.out };
   return { request, verdict };
 }
@@ -1170,16 +1206,27 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_REQUESTED");
   }, 30000);
 
-  test("REVIEW_COMPLETED refuses source edited after dispatch and retry-pending refreshes the binding", () => {
+  test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
     writeManifest(record, "alpha", [{ path: "app.ts" }]);
     const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
     expect(cli(LOG, args, project).rc).toBe(0);
+    appendReviewAppendix(reviewArtifact(record, "alpha"), "1");
     writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
 
     const refused = cli(LOG, [...args, "--verdict", "READY"], project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("workspace source changed after REVIEW_REQUESTED");
+    const retryWhileChanged = cli(
+      LOG,
+      [...args, "--retry-pending"],
+      project,
+    );
+    expect(retryWhileChanged.rc).toBe(1);
+    expect(retryWhileChanged.out).toContain(
+      "cannot rebaseline source changed while review was pending",
+    );
+    writeFileSync(join(project, "app.ts"), "export const app = 1;\n");
     expect(cli(LOG, [...args, "--retry-pending"], project).rc).toBe(0);
     expect(cli(LOG, [...args, "--verdict", "READY"], project).rc).toBe(0);
   }, 30000);
@@ -1189,6 +1236,7 @@ describe("t305 real receipt and guard flows", () => {
     writeManifest(record, "alpha", [{ path: "app.ts" }]);
     const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
     expect(cli(LOG, args, project).rc).toBe(0);
+    appendReviewAppendix(reviewArtifact(record, "alpha"), "1");
     const path = join(
       record,
       "construction",
@@ -1236,7 +1284,7 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(project, "beta.ts"), "export const b=2\n");
     // Refresh the global outer binding with alpha while beta remains stale.
     review(project, record, "alpha", [{ path: "alpha.ts" }]);
-    const refused = approve(project); expect(refused.rc).toBe(1); expect(refused.out).toContain("Invalidated receipts: beta"); expect(refused.out).not.toContain("Invalidated receipts: alpha");
+    const refused = approve(project); expect(refused.rc).toBe(1); expect(refused.out).toContain("Changed after review: beta"); expect(refused.out).not.toContain("Changed after review: alpha");
     const recovered = review(project, record, "beta", [{ path: "beta.ts" }]); expect(recovered.verdict.rc).toBe(0); expect(approve(project).rc).toBe(0);
   }, 30000);
 
@@ -1252,7 +1300,7 @@ describe("t305 real receipt and guard flows", () => {
     review(project, record, "beta", []);
     const refused = approve(project);
     expect(refused.rc).toBe(1);
-    expect(refused.out).toContain("Invalidated receipts: alpha");
+    expect(refused.out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("retargeting a reviewed in-repo symlink invalidates its owning receipt", () => {
@@ -1280,7 +1328,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(beta.verdict.rc, beta.verdict.out).toBe(0);
     const refused = approve(project);
     expect(refused.rc).toBe(1);
-    expect(refused.out).toContain("Invalidated receipts: alpha");
+    expect(refused.out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("4 newest claimant shields overlap, but a stale newer claimant invalidates both", () => {
@@ -1288,8 +1336,8 @@ describe("t305 real receipt and guard flows", () => {
     review(pass.project, pass.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(pass.project, "shared.ts"), "export const s=2\n"); review(pass.project, pass.record, "beta", [{ path: "shared.ts" }]); expect(approve(pass.project).rc).toBe(0);
     const fail = runtimeFixture(); writeFileSync(join(fail.project, "shared.ts"), "export const s=1\n");
     review(fail.project, fail.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=2\n"); review(fail.project, fail.record, "beta", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=3\n");
-    const r=approve(fail.project); expect(r.rc).toBe(1); expect(r.out).toContain("source-fingerprint mismatch");
-    const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
+    const r=approve(fail.project); expect(r.rc).toBe(1); expect(r.out).toContain("project source changed after aidlc-architecture-reviewer-agent reviewed it");
+    const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
   }, 30000);
 
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
@@ -1328,20 +1376,21 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(late.project,"late.ts"),"export const late=1\n");
     const now=workspaceSourceListing(late.project)!; appendAuditEntry("STAGE_STARTED",{Workflow:"single-stage:code-generation",Stage:"code-generation",Agent:"aidlc-developer-agent","Source Baseline":writeBaselineSourceSnapshot(late.project,"code-generation",now)},late.project);
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
-    review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
+    review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
     const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
   }, 30000);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
-    const tamper=runtimeFixture(); review(tamper.project,tamper.record,"alpha",[{path:"app.ts"}]); review(tamper.project,tamper.record,"beta",[]); writeManifest(tamper.record,"alpha",[]); expect(approve(tamper.project).out).toContain("Invalidated receipts: alpha");
-    const deleted=runtimeFixture(); writeFileSync(join(deleted.project,"alpha.ts"),"a\n"); review(deleted.project,deleted.record,"alpha",[{path:"alpha.ts"}]); review(deleted.project,deleted.record,"beta",[]); rmSync(join(deleted.project,"alpha.ts")); review(deleted.project,deleted.record,"beta",[]); expect(approve(deleted.project).out).toContain("Invalidated receipts: alpha");
+    const tamper=runtimeFixture(); review(tamper.project,tamper.record,"alpha",[{path:"app.ts"}]); review(tamper.project,tamper.record,"beta",[]); writeManifest(tamper.record,"alpha",[]); expect(approve(tamper.project).out).toContain("Changed after review: alpha");
+    const deleted=runtimeFixture(); writeFileSync(join(deleted.project,"alpha.ts"),"a\n"); review(deleted.project,deleted.record,"alpha",[{path:"alpha.ts"}]); review(deleted.project,deleted.record,"beta",[]); rmSync(join(deleted.project,"alpha.ts")); review(deleted.project,deleted.record,"beta",[]); expect(approve(deleted.project).out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("9 fieldless per-unit bindings preserve legacy global policy and 11 zero-unit stays manifest-free", () => {
     const legacy=runtimeFixture(); review(legacy.project,legacy.record,"alpha",[{path:"app.ts"}]); review(legacy.project,legacy.record,"beta",[]); stripUnitBindings(legacy.project); expect(approve(legacy.project).rc).toBe(0);
     const zero=runtimeFixture(); rmSync(join(zero.record,"inception"),{recursive:true,force:true});
-    const args=["review","--stage","code-generation","--reviewer",REVIEWER,"--iteration","1"]; expect(cli(LOG,args,zero.project).rc).toBe(0); expect(cli(LOG,[...args,"--verdict","READY"],zero.project).rc).toBe(0); expect(approve(zero.project).rc).toBe(0);
+    const zeroArtifact=reviewArtifact(zero.record); mkdirSync(join(zeroArtifact,".."),{recursive:true}); writeFileSync(zeroArtifact,"# code-generation-plan.md\n");
+    const args=["review","--stage","code-generation","--reviewer",REVIEWER,"--iteration","1"]; expect(cli(LOG,args,zero.project).rc).toBe(0); appendReviewAppendix(zeroArtifact,"1"); expect(cli(LOG,[...args,"--verdict","READY"],zero.project).rc).toBe(0); expect(approve(zero.project).rc).toBe(0);
   }, 30000);
 
   test("missing baseline fields fail closed after modern evidence but pure legacy stays open", () => {
@@ -1360,6 +1409,7 @@ describe("t305 real receipt and guard flows", () => {
         phase: "construction",
         for_each: "unit-of-work",
         reviewer: REVIEWER,
+        review_artifact: "code-generation-plan",
         reviewer_max_iterations: 2,
         workspace_requires: true,
         produces: [
@@ -1415,6 +1465,7 @@ describe("t305 real receipt and guard flows", () => {
         phase: "construction",
         for_each: "unit-of-work",
         reviewer: REVIEWER,
+        review_artifact: "code-generation-plan",
         reviewer_max_iterations: 2,
         workspace_requires: true,
         produces: [
@@ -1533,6 +1584,7 @@ describe("t305 real receipt and guard flows", () => {
       phase: "construction",
       for_each: "unit-of-work",
       reviewer: REVIEWER,
+      review_artifact: "code-generation-plan",
       reviewer_max_iterations: 2,
       workspace_requires: true,
       produces: [
@@ -2049,7 +2101,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(refused.rc).toBe(1);
     const refusal = JSON.parse(refused.out) as { error: string };
     expect(refusal.error).toContain(
-      'Refusing to present the approval gate for "code-generation"',
+      'Cannot present "code-generation" for approval',
     );
     expect(refusal.error).toContain(
       "mixes fieldless and field-bearing Unit obligations",
@@ -2064,11 +2116,11 @@ describe("t305 real receipt and guard flows", () => {
 
   test("12 two recorded repos invalidate only the owning repo and unit", () => {
     const base=runtimeFixture(); const project=base.project; const record=base.record; rmSync(join(project,".git"),{recursive:true,force:true}); for (const repo of ["repo-a","repo-b"]) { const path=join(project,repo); mkdirSync(path,{recursive:true}); git(path,["init","-q"]); git(path,["config","user.email","t@test"]); git(path,["config","user.name","t"]); writeFileSync(join(path,`${repo}.ts`),`export const ${repo.replace(/-/g,"_")}=1\n`); git(path,["add","-A"]); git(path,["commit","-qm","seed"]); } const registry=join(project,"aidlc","spaces","default","intents","intents.json"); const rows=JSON.parse(readFileSync(registry,"utf-8")); rows[0].repos=["repo-a","repo-b"]; writeFileSync(registry,`${JSON.stringify(rows)}\n`); const initial=workspaceSourceListing(project)!; appendAuditEntry("STAGE_JUMPED",{Target:"code-generation","Source Baseline":writeBaselineSourceSnapshot(project,"code-generation",initial)},project); const multiBoundary=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===multiBoundary){}
-    review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); review(project,record,"beta",[{repo:"repo-b",path:"repo-b.ts"}]); writeFileSync(join(project,"repo-b","repo-b.ts"),"export const repo_b=2\n"); review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); const r=approve(project); expect(r.out).toContain("Invalidated receipts: beta"); expect(r.out).not.toContain("Invalidated receipts: alpha");
+    review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); review(project,record,"beta",[{repo:"repo-b",path:"repo-b.ts"}]); writeFileSync(join(project,"repo-b","repo-b.ts"),"export const repo_b=2\n"); review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); const r=approve(project); expect(r.out).toContain("Changed after review: beta"); expect(r.out).not.toContain("Changed after review: alpha");
   }, 30000);
 
   test("absent exact claim becomes stale when the path appears before an unrelated review", () => {
-    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"future.ts"}]); writeFileSync(join(project,"future.ts"),"future\n"); review(project,record,"beta",[{path:"app.ts"}]); expect(approve(project).out).toContain("Invalidated receipts: alpha");
+    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"future.ts"}]); writeFileSync(join(project,"future.ts"),"future\n"); review(project,record,"beta",[{path:"app.ts"}]); expect(approve(project).out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("ghost/non-applicable units cannot mint review authority or cover unclaimed source", () => {
@@ -2079,7 +2131,7 @@ describe("t305 real receipt and guard flows", () => {
     const ghost=cli(LOG,["review","--stage","code-generation","--reviewer",REVIEWER,"--unit","ghost","--iteration","1"],project);
     expect(ghost.rc).toBe(1); expect(ghost.out).toContain("not present in the authoritative unit DAG");
     const forgedState=readFileSync(join(record,"aidlc-state.md"),"utf-8");
-    const receipts=freshReviewReceipts(project,forgedState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]});
+    const receipts=freshReviewReceipts(project,forgedState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]});
     expect(receipts.freshUnitClaims.has("ghost")).toBe(false);
   }, 30000);
 
@@ -2132,7 +2184,7 @@ describe("t305 real receipt and guard flows", () => {
   }, 30000);
 
   test("calls freshReviewReceipts directly for a modern unit chain", () => {
-    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
+    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
   }, 30000);
 });
 
@@ -2427,6 +2479,266 @@ describe("t305 healthy settled-swarm source completion", () => {
 });
 
 describe("t305 post-merge source authority failure", () => {
+  test("historical source authority does not block a reused Unit in a later attempt", () => {
+    const project = swarmFixture();
+    const unit = "reused-unit";
+    const source = `${unit}.ts`;
+    seedBoltDag(project, [unit]);
+
+    const runCycle = (batch: string, value: string): void => {
+      const prepared = runSwarm(project, [
+        "prepare",
+        "--batch",
+        batch,
+        "--units",
+        unit,
+        "--base",
+        "main",
+      ]);
+      expect(prepared.rc, prepared.out).toBe(0);
+      const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+      writeFileSync(join(wt, source), `export const value = ${JSON.stringify(value)};\n`);
+      const reviewed = review(
+        wt,
+        seededRecordDir(wt),
+        unit,
+        [{ path: source }],
+        {},
+        "1",
+      );
+      expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+      expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+      const finalized = runSwarm(project, [
+        "finalize",
+        "--batch",
+        batch,
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+      ]);
+      expect(finalized.rc, finalized.out).toBe(0);
+      const merged = spawnSync(
+        process.execPath,
+        [
+          WORKTREE,
+          "merge",
+          "--slug",
+          unit,
+          "--target",
+          "main",
+          "--strategy",
+          "squash",
+          "--project-dir",
+          project,
+        ],
+        { cwd: project, encoding: "utf-8" },
+      );
+      expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    };
+
+    runCycle("1", "first");
+    const firstChain = currentSwarmSourceMergeChain(project, "code-generation");
+    if (firstChain.state !== "ready") {
+      throw new Error("first source merge did not form a ready chain");
+    }
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: "code-generation",
+        Feedback: "repeat",
+        "Prior Accepted Source Fingerprint": firstChain.fingerprint,
+      },
+      project,
+    );
+    runCycle("2", "second");
+    expect(readFileSync(join(project, source), "utf-8")).toContain("second");
+  }, 120000);
+
+  test("a post-authority branch cleanup failure is idempotently reconcilable", () => {
+    const project = swarmFixture();
+    const unit = "cleanup-retry";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(join(wt, source), "export const cleanupRetry = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const marker = join(project, ".aidlc", "cleanup-branch-blocked");
+    const hook = join(project, ".git", "hooks", "reference-transaction");
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        '[ "$1" = "prepared" ] || exit 0',
+        "while read old new ref; do",
+        `  if [ "$ref" = "refs/heads/bolt-${unit}" ]; then`,
+        '    case "$new" in',
+        "      000000*)",
+        `        if [ ! -e "${marker}" ]; then`,
+        `          touch "${marker}"`,
+        "          exit 1",
+        "        fi",
+        "        ;;",
+        "    esac",
+        "  fi",
+        "done",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(hook, 0o755);
+
+    const first = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    const firstOutput = `${first.stdout ?? ""}${first.stderr ?? ""}`;
+    expect(first.status).not.toBe(0);
+    expect(firstOutput).toContain("[merge-succeeded:");
+    expect(firstOutput).toContain(`branch -D bolt-${unit} failed`);
+    expect(existsSync(join(project, source))).toBe(true);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+
+    const authorityBlocks = readAllAuditShards(project)
+      .split(/\n---\n/)
+      .filter(
+        (block) =>
+          block.includes(`**Unit name**: ${unit}`) &&
+          (
+            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
+            block.includes("**Event**: SWARM_SOURCE_MERGED")
+          ),
+      );
+    const decoyAudit = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "cleanup-decoy",
+      "audit",
+    );
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
+    );
+    const ambiguous = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(ambiguous.status).not.toBe(0);
+    expect(`${ambiguous.stdout}${ambiguous.stderr}`).toContain(
+      "multiple durable SWARM_SOURCE_MERGED authorities",
+    );
+
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: "code-generation", Agent: "aidlc-developer-agent" },
+      project,
+    );
+    const originalIntent = basename(seededRecordDir(project));
+    const headAfterLanding = spawnSync(
+      "git",
+      ["-C", project, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const retried = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--space",
+        "default",
+        "--intent",
+        originalIntent,
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(retried.status, `${retried.stdout ?? ""}${retried.stderr ?? ""}`).toBe(0);
+    expect(retried.stdout).toContain('"cleanup_reconciled":true');
+    expect(
+      spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        encoding: "utf-8",
+      }).stdout.trim(),
+    ).toBe(headAfterLanding);
+    expect(
+      spawnSync(
+        "git",
+        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${unit}`],
+        { encoding: "utf-8" },
+      ).status,
+    ).toBe(1);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+  }, 120000);
+
   test("durable modern worktree evidence prevents field-deletion branch fallback", () => {
     const project = swarmFixture();
     const unit = "modern-downgrade";
@@ -2505,7 +2817,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(existsSync(join(project, "unreviewed.ts"))).toBe(false);
   }, 120000);
 
-  test("an unrelated source write during merge is not folded into aggregate authority", () => {
+  test("a post-merge hook cannot stage unrelated source into aggregate authority", () => {
     const project = swarmFixture();
     const unit = "merge-interleave";
     seedBoltDag(project, [unit]);
@@ -2544,10 +2856,15 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
 
-    const hook = join(project, ".git", "hooks", "post-commit");
+    const hook = join(project, ".git", "hooks", "post-merge");
     writeFileSync(
       hook,
-      "#!/bin/sh\nprintf '%s\\n' 'export const unreviewed = true;' > merge-interleaved.ts\n",
+      [
+        "#!/bin/sh",
+        "printf '%s\\n' 'export const unreviewed = true;' > merge-interleaved.ts",
+        "git add -- merge-interleaved.ts",
+        "",
+      ].join("\n"),
     );
     chmodSync(hook, 0o755);
     const merged = spawnSync(
@@ -2567,21 +2884,17 @@ describe("t305 post-merge source authority failure", () => {
       { cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
-    expect(merged.status).not.toBe(0);
-    expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain(
-      "post-merge source does not match landed merge commit",
-    );
-    expect(output).toContain("Do not retry this merge");
+    expect(merged.status, output).toBe(0);
+    expect(output).not.toContain("[merge-succeeded:");
     expect(existsSync(join(project, source))).toBe(true);
-    expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(true);
-    expect(existsSync(wt)).toBe(true);
-    expect(readAllAuditShards(project)).not.toContain(
+    expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(false);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
   }, 120000);
 
-  test("an interleaved write to a reviewed path is not folded into aggregate authority", () => {
+  test("a post-merge hook cannot replace the reviewed source path", () => {
     const project = swarmFixture();
     const unit = "merge-interleave-same-path";
     seedBoltDag(project, [unit]);
@@ -2620,10 +2933,15 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
 
-    const hook = join(project, ".git", "hooks", "post-commit");
+    const hook = join(project, ".git", "hooks", "post-merge");
     writeFileSync(
       hook,
-      `#!/bin/sh\nprintf '%s\\n' 'export const tampered = true;' >> ${source}\n`,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' 'export const tampered = true;' >> ${source}`,
+        `git add -- ${source}`,
+        "",
+      ].join("\n"),
     );
     chmodSync(hook, 0o755);
     const merged = spawnSync(
@@ -2643,22 +2961,18 @@ describe("t305 post-merge source authority failure", () => {
       { cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
-    expect(merged.status).not.toBe(0);
-    expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain(
-      "post-merge source does not match landed merge commit",
+    expect(merged.status, output).toBe(0);
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(readFileSync(join(project, source), "utf-8")).toBe(
+      "export const reviewed = true;\n",
     );
-    expect(output).toContain("Do not retry this merge");
-    expect(readFileSync(join(project, source), "utf-8")).toContain(
-      "tampered",
-    );
-    expect(existsSync(wt)).toBe(true);
-    expect(readAllAuditShards(project)).not.toContain(
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
   }, 120000);
 
-  test("a second commit created by a post-commit hook is refused", () => {
+  test("a post-commit hook cannot create a second source commit", () => {
     const project = swarmFixture();
     const unit = "merge-second-commit";
     seedBoltDag(project, [unit]);
@@ -2728,13 +3042,11 @@ describe("t305 post-merge source authority failure", () => {
       { cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
-    expect(merged.status).not.toBe(0);
-    expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain(
-      "unexpected commit or tree change landed during the source merge",
-    );
-    expect(existsSync(wt)).toBe(true);
-    expect(readAllAuditShards(project)).not.toContain(
+    expect(merged.status, output).toBe(0);
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(existsSync(join(project, "hook-commit.ts"))).toBe(false);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
   }, 120000);
@@ -2828,9 +3140,10 @@ describe("t305 post-merge source authority failure", () => {
 
 describe("t305 stage and protocol source-attribution requirements", () => {
   test("pins schema, Bolt-relative paths, review freeze, and workspace_requires semantics", () => {
-    const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const construction=readFileSync(join(PROTOCOL,"stage-protocol-construction.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8");
+    const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const construction=readFileSync(join(PROTOCOL,"stage-protocol-construction.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8"); const swarm=readFileSync(join(PROTOCOL,"stage-protocol-swarm.md"),"utf-8");
     expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths\nblock stage completion"); expect(stage).toContain("engine-validated against its strict schema");
     expect(reviewer).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewer).toContain("claimed source paths");
     expect(construction).toContain("before the in-Bolt review"); expect(construction).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
+    expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
   });
 });

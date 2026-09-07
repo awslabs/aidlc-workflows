@@ -130,6 +130,7 @@ function invokeSwarm(): Record<string, unknown> {
     stage: "code-generation",
     stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
     reviewer: "aidlc-architecture-reviewer-agent",
+    review_artifact: "code-generation-plan",
     reviewer_max_iterations: 2,
   };
 }
@@ -153,8 +154,28 @@ function newWorkRoutingAsk(): Record<string, unknown> {
     ask_type: "new-work-routing",
     response_route: "next",
     question: "Continue, start separate work, or reshape the plan?",
+    numbered_prose_question:
+      "1. Continue\n2. Separate\n3. Reshape\n4. Other",
     new_work_description: "build a standalone metrics dashboard",
     proposed_scope: "feature",
+  };
+}
+
+function unselectedNewWorkRoutingAsk(): Record<string, unknown> {
+  return {
+    ...newWorkRoutingAsk(),
+    available_intents: ["fixture", "auth-refresh"],
+  };
+}
+
+function legacyPlanApprovalRecoveryAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    question:
+      "Recover the current legacy Code Generation Plan Approval capability?",
+    ask_type: "legacy-plan-approval-recovery",
+    response_route: "next",
+    recovery_choice: "Recover Plan Approval",
   };
 }
 
@@ -194,6 +215,45 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("run-stage well-formed -> VALID", () => {
     expect(validateDirective(runStage()).valid).toBe(true);
+  });
+
+  test("Code Generation directives validate matching legacy Plan Approval choices", () => {
+    const choices = {
+      approve: "Approve Plan [0123456789ab]",
+      request_changes: "Request Changes [0123456789ab]",
+    };
+    expect(
+      errs({
+        ...runStage(),
+        stage: "code-generation",
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toBe("VALID");
+    expect(
+      errs({
+        ...invokeSwarm(),
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toBe("VALID");
+    expect(
+      errs({
+        ...runStage(),
+        legacy_plan_approval_choices: {
+          ...choices,
+          request_changes: "Request Changes [fedcba987654]",
+        },
+      }),
+    ).toContain(
+      "legacy_plan_approval_choices must carry matching protected choice labels",
+    );
+    expect(
+      errs({
+        ...dispatchSubagent(),
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toContain(
+      "dispatch-subagent: unknown key: legacy_plan_approval_choices",
+    );
   });
 
   test("run-stage accepts validated protocol module hints", () => {
@@ -275,6 +335,25 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
   });
 
+  test("new-work-routing ask accepts engine-listed unselected intents", () => {
+    expect(validateDirective(unselectedNewWorkRoutingAsk()).valid).toBe(true);
+    expect(
+      errs({ ...unselectedNewWorkRoutingAsk(), available_intents: ["fixture", 42] }),
+    ).toContain("ask: available_intents[1] must be string");
+  });
+
+  test("legacy Plan Approval recovery ask carries one exact human takeover choice", () => {
+    expect(validateDirective(legacyPlanApprovalRecoveryAsk()).valid).toBe(true);
+    expect(
+      errs({
+        ...legacyPlanApprovalRecoveryAsk(),
+        recovery_choice: "Approve Plan",
+      }),
+    ).toContain(
+      'legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"',
+    );
+  });
+
   test("new-work-routing ask rejects a report response route", () => {
     expect(
       errs({ ...newWorkRoutingAsk(), response_route: "report" }),
@@ -288,6 +367,8 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         response_route: "next",
         new_work_description: "standalone dashboard",
         proposed_scope: "feature",
+        available_intents: ["fixture"],
+        numbered_prose_question: "1. Continue\n2. Separate\n3. Reshape\n4. Other",
       }),
     ).toContain('ask: response_route requires ask_type "new-work-routing"');
   });
@@ -458,6 +539,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: 1,
         review_class: "advisory",
       }),
@@ -620,6 +702,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-architecture-reviewer-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: 3,
       }),
     ).toBe("VALID");
@@ -636,6 +719,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-architecture-reviewer-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: "two",
       }),
     ).toContain(

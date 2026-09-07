@@ -711,8 +711,8 @@ export function setupIntegrationProject(
 //
 // The live multi-repo·intent·space journey needs a workspace whose shape the
 // per-intent fixtures above never model: TWO sibling code repos under one
-// workspace root, the shipped harness shell, and NO pre-born intent (the
-// journey's step 1 auto-births it live). setupWorkspaceJourney() builds that.
+// workspace root, the shipped harness shell, and NO pre-created intent (the
+// journey's step 1 auto-creates it live). setupWorkspaceJourney() builds that.
 //
 // Why a fresh tmpdir root (not createTestProject's reuse): the journey's
 // construction beat forks git worktrees INSIDE the sibling repos, and
@@ -767,7 +767,7 @@ function gitInit(dir: string, seedFile: string): void {
  * shipped dist/<harness>/ shell (engine dir + the sibling aidlc/ memory shell)
  * into a fresh os.tmpdir() root, then git-init's two sibling repos (repo-a,
  * repo-b) as immediate children so discoverSiblingRepos finds them sorted. Does
- * NOT auto-birth an intent — the journey's step 1 does that live; the shell ships
+ * NOT auto-create an intent - the journey's step 1 does that live; the shell ships
  * the default space's memory only.
  *
  * Each repo gets a tiny brownfield-ish source file + an initial commit so a

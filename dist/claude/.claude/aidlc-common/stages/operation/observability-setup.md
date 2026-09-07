@@ -46,15 +46,9 @@ outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config
 
 # Observability Setup
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and knowledge from `.claude/knowledge/aidlc-operations-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read NFR design (observability strategy) from `<record>/construction/nfr-design/`
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
@@ -68,7 +62,7 @@ retention, or escalation decision that cannot be observed from those sources;
 never invent a missing design artifact. If no deployed target exists, this
 CONDITIONAL stage reports skipped.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - What are the golden signals to track (latency, traffic, errors, saturation)?
@@ -79,17 +73,17 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Generate Artifacts
+### Step 3: Generate Artifacts
 
 Create CloudWatch dashboard configurations, alarm definitions (with severity, SNS routing, escalation), SLO/SLI tracking configuration, CloudWatch Logs Insights saved queries, X-Ray tracing configuration, and anomaly detection configuration.
 
-### Step 5: Completion Handoff
+### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage observability-setup --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :eyes:
 Review path: `<record>/operation/observability-setup/`
@@ -99,38 +93,15 @@ Standard 2-option approval (Approve / Request Changes).
 
 This stage's outputs are markdown artefacts under `<record>/operation/observability-setup/`.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`.
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `performance-design`, `security-design`, `reliability-design`, `monitoring-design`, `infrastructure-specification`).
+Upstream targets: `performance-design`, `security-design`, `reliability-design`, `monitoring-design`, `infrastructure-specification`.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.claude/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.

@@ -49,6 +49,7 @@ import {
   mechanismRank,
   mechanismsOf,
   parseCoversHeader,
+  parseIfDispatchCases,
   parseObjectDispatchKeys,
   parseSwitchDispatchCases,
   ratchetFromRows,
@@ -87,6 +88,19 @@ describe("enumeration is non-empty for every unit class (anti-rot guard a)", () 
     expect(counts.hook).toBeGreaterThanOrEqual(7); // 9 hooks today
     expect(counts.subcommand).toBeGreaterThanOrEqual(60); // 74 today
     expect(counts["render-surface"]).toBe(7); // statusline render branches (incl. agent display)
+  });
+
+  test("enumerated identities are unique, including overloaded functions", () => {
+    const units = enumerateAllUnits();
+    const identities = units.map((u) => `${u.unitClass}\0${u.unitId}`);
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(
+      units.filter(
+        (u) =>
+          u.unitClass === "function" &&
+          u.unitId === "function:readRegularFileNoFollowOrThrow",
+      ),
+    ).toHaveLength(1);
   });
 
   test("every row carries a valid status and a minMechanism matching its class", () => {
@@ -469,6 +483,24 @@ const COMMANDS: Record<string, Handler> = {
     expect(keys).toEqual(["artifacts", "topo", "validate-scope"]);
     expect(keys).not.toContain("nested");
   });
+
+  test("the if-chain parser reads aidlc-unit-style direct command comparisons", () => {
+    const src = `
+export function main(argv: string[]): void {
+  const command = argv.shift();
+  if (command === "claim") claim();
+  else if (command === "release") release();
+  else if (command === "participate") participate();
+  else if (command === "status") status();
+  if (other === "nested") ignore();
+}`;
+    expect(parseIfDispatchCases(src, "command")).toEqual([
+      "claim",
+      "release",
+      "participate",
+      "status",
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -634,6 +666,20 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
+  test("spawning the root aidlc.ts dispatcher derives cli", () => {
+    const src = [
+      "// covers: subcommand:aidlc-utility:plugin-validate",
+      'import { spawnSync } from "node:child_process";',
+      "const BUN = process.execPath;",
+      'const DISPATCHER = "../../dist/claude/.claude/tools/aidlc.ts";',
+      'test("x", () => {',
+      '  const r = spawnSync(BUN, [DISPATCHER, "plugin", "validate"]);',
+      "  expect(r.status).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
   test("runOrchestrateNext derives cli through the shared spawned-engine helper", () => {
     const src = [
       "// covers: subcommand:aidlc-orchestrate:next",
@@ -761,7 +807,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
     "unit/t283-copilot-engine-cursor.test.ts",
+    "unit/t304-codekb-cumulative-merge.test.ts",
     "unit/t306-learnings-cid-collision-followup.test.ts",
+    "unit/t324-doctor-hooks-disabled.test.ts",
     "unit/t240-opencode-packaging.test.ts",
     "unit/t263-reviewer-terminal-ordering.test.ts",
     "unit/t264-review-freeze-hook.test.ts",
@@ -774,6 +822,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t276-cursor-adapter.test.ts",
     "unit/t277-validate-grid-nearest-stock.test.ts",
     "unit/t281-sensor-traceability.test.ts",
+    "unit/t324-team-unit-progress-gates.test.ts",
     // t289 spawns `bun test <driver>` to force a UUID collision in a SUBPROCESS.
     // Two rows can only collide if the id source is replaced, and an in-file
     // mock.module leaks the patched module into sibling tests -- so the patch is
@@ -796,7 +845,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // that behaviourally beats grepping the source for "--all", which matched the
     // comment explaining the flag does not exist.
     "unit/t292-knowledge-list-show.test.ts",
-    // t297 births real intents through the shipped tool, because a hand-written
+    // t297 creates real intents through the shipped tool, because a hand-written
     // intents.json would let the test agree with a fiction rather than with the
     // registry shape the code actually meets.
     "unit/t297-knowledge-intents.test.ts",
@@ -816,14 +865,40 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t293 spawns `aidlc.ts knowledge <verb>` -- the COMPILED dispatcher, not the
     // knowledge tool -- because that indirection is the defect it exists to catch:
     // every other knowledge test invoked `aidlc-knowledge.ts` directly, so the
-    // public command returned `unknown verb` for all seven verbs while 460 tests
-    // stayed green. A journey through the documented workflow cannot be run
-    // in-process without bypassing the exact layer under test.
+    // public command returned `unknown verb` for every verb (seven at the time
+    // this defect was found; an eighth, `summarize`, was added later) while 460
+    // tests stayed green. A journey through the documented workflow cannot be
+    // run in-process without bypassing the exact layer under test.
     "unit/t293-knowledge-journey.test.ts",
-    // t304 spawns the real directive-emitting CLI because memory bootstrap is
+    // t316 spawns the real directive-emitting CLI because memory bootstrap is
     // observable only at the process boundary where projectDir and the shipped
     // harness template are both present.
-    "unit/t304-run-stage-memory-bootstrap.test.ts",
+    "unit/t316-run-stage-memory-bootstrap.test.ts",
+    // t301 spawns `aidlc.ts knowledge summarize` through the compiled
+    // dispatcher (same §8.12 discipline as t293), and its two ACTION-only
+    // probes drive real concurrent subprocesses (a race between two
+    // `summarize` publications) and a pre-placed directory forcing a real
+    // filesystem write failure -- neither is observable from an in-process
+    // call.
+    "unit/t326-knowledge-summarize.test.ts",
+    // t314 spawns the shipped standalone validator to pin its process exit
+    // codes and exact JSON/human output contracts outside a framework project.
+    "unit/t314-plugin-validate.test.ts",
+    // t315 spawns a copied standalone builder from an isolated temp tree and
+    // byte-compares every emitted host projection with committed dist output.
+    "unit/t315-plugin-build.test.ts",
+    // t316 spawns the shipped compose-tier tool against copied plugin/install
+    // trees to prove candidate isolation, drops, graph checks, and idempotency.
+    "unit/t316-plugin-test.test.ts",
+    // t317 creates a deterministic plugin from copied tools, then proves the
+    // scaffold validates, builds, and composes without checkout paths.
+    "unit/t317-plugin-create.test.ts",
+    // t327 drives the real next/continue transport because stable authority
+    // publication is observable only across the emitted continuation cursor.
+    "unit/t327-code-generation-authority-publication.test.ts",
+    // t328 drives the shipped log, human-turn, and begin CLIs so protected
+    // challenge/response receipts and cross-process lock ordering are genuine.
+    "unit/t328-plan-approval-runtime-authority.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
@@ -834,6 +909,11 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t120-classify-roundtrip.test.ts",
     "integration/t121-stop-hook-enforce.test.ts",
     "integration/t195-stop-hook-compose-carveout.test.ts",
+    "integration/t311-gate-sensor-enforcement.test.ts",
+    // t327 spawns the public aidlc.ts dispatcher to prove the documented plugin
+    // authoring routes reach the standalone validator and shared builder.
+    "integration/t327-plugin-author-routes.test.ts",
+    "integration/t327-stop-hook-subagent-inflight.test.ts",
     "integration/t127-single-stage-invariant.test.ts",
     "integration/t128-custom-runner.test.ts",
     "integration/t130-scope-runners.test.ts",
@@ -848,7 +928,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t164-shard-ordering-and-lock-bucket.test.ts",
     "integration/t165-intent-create-p4.test.ts",
     "integration/t166-multi-repo-construction.test.ts",
-    "integration/t171-birth-gate-registry.test.ts",
+    "integration/t171-creation-gate-registry.test.ts",
     "integration/t172-migration-audit-trail.test.ts",
     "integration/t173-session-switch-restamp.test.ts",
     "integration/t175-space-create-memory-isolation.test.ts",
@@ -857,8 +937,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t224-plugin-selection.test.ts",
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
+    "integration/t314-plugin-reinstall-doctor.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
+    "integration/t325-team-unit-claims.test.ts",
+    "integration/t326-team-unit-merge.test.ts",
+    "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",
     "integration/t39.test.ts",
@@ -888,8 +972,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "smoke/t130-scope-runners.test.ts",
     "smoke/t148-kiro-file-structure.test.ts",
     "smoke/t86-stage-protocol-section-13.test.ts",
+    "e2e/t-acp-kiro-new-work-routing.serial.test.ts",
     "e2e/t-exec-codex-journey-workspace.serial.test.ts",
     "e2e/t-ide-kiro-checkpoint.serial.test.ts",
+    "e2e/t-ide-kiro-new-work-routing.serial.test.ts",
     "e2e/t-tui-custom-harness.serial.test.ts",
     "e2e/t-tui-render-colour.serial.test.ts",
     "unit/gen-coverage-registry.test.ts",
@@ -981,10 +1067,21 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
-    "unit/t304-pipeline-link-receipts.test.ts",
+    "unit/t304-review-brief.test.ts",
+    "unit/t317-gate-pending-doctor.test.ts",
+    "unit/t319-doctor-hooks-blocked.test.ts",
+    "unit/t315-pipeline-link-receipts.test.ts",
+    "unit/t329-document-input.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
+    "unit/t320-review-confirmation-deadlock.test.ts",
+    "unit/t321-source-recovery-freeze.test.ts",
+    "unit/t322-fix-round-hardening.test.ts",
+    "unit/t323-review-verdict-closure.test.ts",
+    "unit/t328-nodag-per-unit-continuity.test.ts",
+    "unit/t312-orchestrate-session-binding.test.ts",
     "unit/t255-workspace-sync.test.ts",
-    "unit/t304-source-freshness-receipts.test.ts",
+    "unit/t314-minimal-scope-performance.test.ts",
+    "unit/t314-source-freshness-receipts.test.ts",
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.
     "unit/t305-per-unit-attribution-receipts.test.ts",
@@ -1019,10 +1116,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t94-sensor-fire-hook.test.ts",
     "unit/t96.test.ts",
     "unit/t97.test.ts",
+    "integration/t311-session-binding-writers.test.ts",
     "e2e/t113.test.ts",
     "e2e/t122-stop-hook-e2e.test.ts",
     "e2e/t126-emitter-pairing-cofire.test.ts",
     "e2e/t301-express-scope-routing.test.ts",
+    "e2e/t302-deployment-pipeline-skip-fallback.test.ts",
     "e2e/t53.test.ts",
     "e2e/t60-construction-worktrees-enterprise.test.ts",
     "e2e/t61-construction-worktrees-feature.test.ts",

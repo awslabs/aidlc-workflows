@@ -51,7 +51,14 @@ If the stage definition lists validation tools, **run them via shell** before wr
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section to the PRIMARY artifact file. Use this exact format:
+Append a `## Review` section only to the artifact named by the stage's
+`review_artifact` field. `ID` values are
+stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
+`Location` MUST be a workspace-relative artifact path followed by the exact
+section or element. `Required action` MUST state the concrete work in plain
+language. On the first review, every finding has status `New`.
+
+Use this exact format:
 
 ```markdown
 ## Review
@@ -60,20 +67,21 @@ Append a `## Review` section to the PRIMARY artifact file. Use this exact format
 **Reviewer:** aidlc-architecture-reviewer-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
+**Request Challenge:** [exact reviewChallenge returned by the request; omit this line when none was returned]
 
 ### Findings
 
-| # | Severity | Location | Finding | Recommendation |
-|---|---|---|---|---|
-| 1 | Critical | components.yaml | CMP-003 depends on CMP-001 which depends on CMP-003 — circular | Break cycle: extract shared concern into new component |
-| 2 | Major | entities.yaml | ENT-005 references entity "Payment" not defined in this file | Add Payment entity or reference upstream |
-| 3 | Minor | nfr-spec | No cost estimate for the caching layer | Add estimate or mark as TBD |
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Critical | aidlc/spaces/<space>/intents/<intent-record>/inception/domain-design/components.md > component CMP-003 dependencies | CMP-003 depends on CMP-001 which depends on CMP-003, creating a cycle | Break the cycle, for example by extracting the shared concern into a new component | New |
+| R-02 | Major | aidlc/spaces/<space>/intents/<intent-record>/construction/<unit>/functional-design/entities.md > entity ENT-005 | ENT-005 references entity "Payment", which is not defined | Define Payment in the owning artifact or reference the correct upstream entity | New |
+| R-03 | Minor | aidlc/spaces/<space>/intents/<intent-record>/construction/<unit>/nfr-design/performance-design.md > Caching layer cost | No cost estimate exists for the caching layer | Add a cost estimate or explicitly record it as TBD with an owner | New |
 
 ### Validation Tool Results
 
 | Tool | Result | Interpretation |
 |---|---|---|
-| validate-domain-model | FAIL: circular dep CMP-003↔CMP-001 | Confirms finding #1 — must fix |
+| validate-domain-model | FAIL: circular dep CMP-003↔CMP-001 | Confirms finding R-01 — must fix |
 | validate-entities | PASS | All IDs unique, refs valid |
 
 ### Summary
@@ -98,7 +106,11 @@ For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%d
 
 ### On Subsequent Iterations
 
-- Check each previous finding: resolved / partially resolved / unresolved
-- Only raise NEW findings if they emerge from fixes
-- Don't re-raise Minor findings that weren't addressed
-- Update the `## Review` section (replace, don't append a second one)
+When the dispatch brief includes `Prior findings (carry IDs forward)`:
+- Treat that table as authoritative for prior human dispositions; it is
+  rendered from the audit ledger without rewriting the reviewed artifact.
+- Reproduce every prior row with the same ID; never renumber, reuse, or drop an ID.
+- Re-check the cited location and set `Status` to exactly one of `Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`. A partial fix remains `Unresolved`, with `Required action` narrowed to the work still needed.
+- Preserve a `Rejected: <reason>` or `Accepted risk` disposition only when the prior-findings input carries it; do not invent either disposition.
+- Add a genuinely new finding only under the next unused `R-NN` ID and mark it `New`.
+- Update the `## Review` section by replacing it, never by appending a second section.

@@ -10,6 +10,7 @@ support_agents:
 mode: inline
 summary_confirmation: required
 reviewer: aidlc-architecture-reviewer-agent
+review_artifact: components
 reviewer_max_iterations: 2
 review_class: advisory
 produces:
@@ -48,27 +49,19 @@ outputs: components.md (fenced ```yaml component catalogue plus a human-readable
 
 # Domain Design
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 Identify and detail the **logical building blocks** of the system — the components you will write code for. A component is a bounded piece of software with its own business logic, entities, and lifecycle: **code you write, not infrastructure you deploy.** Databases, caches, queues, and third-party services are dependencies OF components, not components themselves.
 
 This stage does NOT decide deployment topology (monolith, microservices, serverless, etc.) — that is Units Generation's job. Domain Design produces the building blocks so the team can then decide how to group them into deployable units. It also does not choose the tech stack or NFR patterns — those belong to the NFR and infrastructure stages.
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` and knowledge from `.claude/knowledge/aidlc-architect-agent/`.
-Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.claude/knowledge/aidlc-aws-platform-agent/` for dependency-service awareness (a component may depend on a managed service — that dependency is captured, but the service itself is not a component).
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.claude/knowledge/aidlc-design-agent/` for UI component specifications and UX-informed design constraints.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read `<record>/inception/requirements-analysis/requirements.md`
 - Read `<record>/inception/user-stories/stories.md` (if produced)
 - If brownfield: Read relevant RE artifacts (especially architecture.md, component-inventory.md, dependencies.md)
 
-### Step 3: Create Design Plan with Questions
+### Step 2: Create Design Plan with Questions
 
 Create `<record>/inception/domain-design/domain-design-questions.md` with context-appropriate questions using [Answer]: tag format:
 - Component boundary decisions (what is a distinct building block, and why)
@@ -78,14 +71,14 @@ Create `<record>/inception/domain-design/domain-design-questions.md` with contex
 - Integration approach with existing components (brownfield)
 - UI component structure (if user-facing, informed by UX designer perspective)
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file).
 - MANDATORY ambiguity analysis: scan for vague language, contradictions, missing details
 - Create follow-up questions if ANY ambiguity found
 - Resolve all ambiguities before proceeding
 
-### Step 5: Generate the Component Catalogue
+### Step 4: Generate the Component Catalogue
 
 Create `<record>/inception/domain-design/components.md`. This single artifact carries both a machine-readable catalogue and the human-readable view.
 
@@ -147,7 +140,7 @@ section of components.md.
 
 When only one decomposition is viable, state why and skip the block.
 
-### Step 6: Record Architecture Decisions (ADRs)
+### Step 5: Record Architecture Decisions (ADRs)
 
 Create `<record>/inception/domain-design/decisions.md`. The `components.md` Rationale table is a quick per-component justification; `decisions.md` is the durable Architecture Decision Record log that the Inception phase rule requires. Record one ADR for every **significant** design choice made here — component-boundary decompositions, entity-ownership calls, cross-component interaction styles, and any deliberate dependency cycle.
 
@@ -159,9 +152,9 @@ Each ADR MUST follow this structure (per the Inception phase guardrails):
   - **Consequences** — the resulting trade-offs, both positive and negative
   - **Alternatives Rejected** — the other viable options considered and why they were not chosen
 
-Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from a Step 5 component-boundary option block, its rejected options populate that ADR's **Alternatives Rejected**. If no significant decision was made (a single obvious decomposition with no trade-offs), state that explicitly in a single ADR rather than leaving the file empty.
+Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from a Step 4 component-boundary option block, its rejected options populate that ADR's **Alternatives Rejected**. If no significant decision was made (a single obvious decomposition with no trade-offs), state that explicitly in a single ADR rather than leaving the file empty.
 
-### Step 7: Record Traceability
+### Step 6: Record Traceability
 
 Create `<record>/inception/domain-design/traceability.json`. When
 `stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`
@@ -182,13 +175,13 @@ Functional Design):
 }
 ```
 
-### Step 8: Completion Handoff
+### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage domain-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 9: Present Completion & Request Approval
+### Step 8: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :building_construction:
 - Summary of components identified (count, key boundaries, entity ownership)
@@ -207,39 +200,18 @@ before re-entering the approval flow.
 
 This stage's outputs are markdown artefacts under `<record>/inception/domain-design/` (`components.md` and `decisions.md`) plus `traceability.json`.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`, `traceability`.
 
-- **`required-sections`** verifies each output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `team-practices`, and — on a brownfield workspace — `architecture` and `component-inventory`).
-- **`traceability`** validates `traceability.json` and checks every story, or every fallback functional requirement, is declared and covered.
+Upstream targets: `requirements`, `stories`, `architecture`, `component-inventory`, `team-practices`.
+
+`traceability` owns `traceability.json` and checks every story, or every
+fallback functional requirement, is declared and covered.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.claude/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.
