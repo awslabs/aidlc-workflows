@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-04
+
+Subagent completion audit rows now always carry a usable agent type without rewriting valid harness identities. **Upgrade:** replace your `dist/<harness>/` tree so every harness receives the corrected completion hook.
+
+* `SUBAGENT_COMPLETED` normalizes absent, non-string, empty, and whitespace-only agent types to `unknown`, while preserving the exact nonblank value and the existing optional Agent ID and Message fields.
+* Real hook-to-audit regression coverage pins malformed JSON, malformed identity fields, blank variants, and exact valid identity output.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

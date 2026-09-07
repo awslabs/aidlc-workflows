@@ -18,8 +18,9 @@
 // appendAuditEntryUnlocked renders each as `**<key>**: <value>` under a
 // `## Subagent Completed` heading with `**Event**: SUBAGENT_COMPLETED`. Message
 // is sliced to the first 200 chars — the truncation the .sh's
-// test 6 asserts. agentType defaults to "unknown", agentId defaults to ""
-// (omitted when falsy).
+// test 6 asserts. agentType defaults to "unknown" when absent, malformed, or
+// blank without rewriting nonblank values; agentId defaults to "" (omitted
+// when falsy).
 //
 // SEED BASELINE (load-bearing for parity strength). The .sh seeds audit-sample.md
 // (fixtures.sh seed_audit_file) which ALREADY CONTAINS one SUBAGENT_COMPLETED
@@ -279,6 +280,81 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh + 
     expect(blk.Message).toBeUndefined();
   });
 
+  for (const {
+    label,
+    payload,
+    expectedType,
+    expectedId,
+    expectedMessage,
+  } of [
+    {
+      label: "absent",
+      payload: {},
+      expectedType: "unknown",
+      expectedId: undefined,
+      expectedMessage: undefined,
+    },
+    {
+      label: "malformed non-string",
+      payload: {
+        agent_type: 28,
+        agent_id: "agent-28",
+        last_assistant_message: "malformed identity",
+      },
+      expectedType: "unknown",
+      expectedId: "agent-28",
+      expectedMessage: "malformed identity",
+    },
+    {
+      label: "empty",
+      payload: { agent_type: "" },
+      expectedType: "unknown",
+      expectedId: undefined,
+      expectedMessage: undefined,
+    },
+    {
+      label: "whitespace-only",
+      payload: {
+        agent_type: " \t ",
+        agent_id: "agent-whitespace",
+        last_assistant_message: "done",
+      },
+      expectedType: "unknown",
+      expectedId: "agent-whitespace",
+      expectedMessage: "done",
+    },
+    {
+      label: "exact nonblank identity",
+      payload: {
+        agent_type: "  aidlc-developer-agent  ",
+        agent_id: "agent-valid",
+        last_assistant_message: "complete",
+      },
+      expectedType: "  aidlc-developer-agent  ",
+      expectedId: "agent-valid",
+      expectedMessage: "complete",
+    },
+  ]) {
+    test(`2 identity normalization: ${label}`, () => {
+      const p = proj();
+      const before = subagentCompletedCount(readShards(p));
+      runHook(JSON.stringify(payload), p);
+      expect(subagentCompletedCount(readShards(p))).toBe(before + 1);
+      const blk = lastSubagentBlock(readShards(p));
+      expect(blk["Agent Type"]).toBe(expectedType);
+      if (expectedId === undefined) {
+        expect(blk["Agent ID"]).toBeUndefined();
+      } else {
+        expect(blk["Agent ID"]).toBe(expectedId);
+      }
+      if (expectedMessage === undefined) {
+        expect(blk.Message).toBeUndefined();
+      } else {
+        expect(blk.Message).toBe(expectedMessage);
+      }
+    });
+  }
+
   test("3a: no state leaves an existing audit shard byte-identical", () => {
     const p = proj({ state: false });
     const shard = join(auditDirOf(p), pinnedShardName());
@@ -373,6 +449,14 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh + 
     expect(r.status).toBe(0);
     // STRONGER: empty stdin -> JSON.parse("") throws -> exit 0 before any append,
     // so the audit must be byte-identical (the .sh captured BEFORE but never diffed).
+    expect(readShards(p)).toBe(before);
+  });
+
+  test("5b: handles malformed JSON gracefully (exit 0, audit unchanged)", () => {
+    const p = proj();
+    const before = readShards(p);
+    const r = runHook('{"agent_type":', p);
+    expect(r.status).toBe(0);
     expect(readShards(p)).toBe(before);
   });
 
