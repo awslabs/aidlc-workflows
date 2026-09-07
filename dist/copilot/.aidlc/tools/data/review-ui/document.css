@@ -144,11 +144,8 @@
   padding-left: 12px;
 }
 
-/* Focused but untouched: a quiet rule says "you can type here"; the source
-   appears (and the tint) only once the reader actually edits. */
-.blk.editing .blk-content {
-  border-left-color: #d7c3ff;
-}
+/* Focus alone shows nothing: clicking or selecting to comment is reading, not
+   editing. The edge, source view, and tint appear once the reader types. */
 
 .blk.editing.armed .blk-content {
   min-height: 1.65em;
