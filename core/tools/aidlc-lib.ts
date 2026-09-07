@@ -16690,6 +16690,180 @@ interface GitPathModeIndex {
 
 type GitPathModeIndexCache = Map<string, GitPathModeIndex | null>;
 
+interface GitSourceClaimValidationRepoCache {
+  head: string | null;
+  headAndTreeLoaded: boolean;
+  ignored: Map<string, boolean>;
+  ignoredBatchAttempted: boolean;
+  ignoredPathspecs: Set<string>;
+  treeModes: Map<string, string> | null;
+}
+
+type GitSourceClaimValidationCache =
+  Map<string, GitSourceClaimValidationRepoCache>;
+
+function gitSourceClaimRepoKey(sourceRepoDir: string): string {
+  try {
+    return realpathSync(sourceRepoDir);
+  } catch {
+    return resolvePath(sourceRepoDir);
+  }
+}
+
+function gitSourceClaimRepoCache(
+  sourceRepoDir: string,
+  cache: GitSourceClaimValidationCache,
+): GitSourceClaimValidationRepoCache {
+  const repoKey = gitSourceClaimRepoKey(sourceRepoDir);
+  let repoCache = cache.get(repoKey);
+  if (repoCache === undefined) {
+    repoCache = {
+      head: null,
+      headAndTreeLoaded: false,
+      ignored: new Map(),
+      ignoredBatchAttempted: false,
+      ignoredPathspecs: new Set(),
+      treeModes: null,
+    };
+    cache.set(repoKey, repoCache);
+  }
+  return repoCache;
+}
+
+function seedGitSourceClaimIgnorePath(
+  sourceRepoDir: string,
+  literalPath: string,
+  cache: GitSourceClaimValidationCache,
+): void {
+  gitSourceClaimRepoCache(sourceRepoDir, cache)
+    .ignoredPathspecs.add(`./${literalPath.replace(/\/+$/, "")}`);
+}
+
+function gitSourceClaimHeadAndTree(
+  sourceRepoDir: string,
+  cache: GitSourceClaimValidationCache,
+): {
+  head: string | null;
+  treeModes: Map<string, string> | null;
+} {
+  const repoCache = gitSourceClaimRepoCache(sourceRepoDir, cache);
+  if (!repoCache.headAndTreeLoaded) {
+    const head = spawnSync(
+      "git",
+      ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    repoCache.head =
+      head.status === 0 && head.stdout.trim() ? head.stdout.trim() : null;
+    if (repoCache.head === null) {
+      repoCache.treeModes = new Map();
+    } else {
+      const listed = spawnSync(
+        "git",
+        [
+          "-C",
+          sourceRepoDir,
+          "ls-tree",
+          "-r",
+          "-t",
+          "-z",
+          "--full-tree",
+          repoCache.head,
+        ],
+        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (listed.status !== 0) {
+        repoCache.treeModes = null;
+      } else {
+        const treeModes = new Map<string, string>();
+        for (const record of listed.stdout.split("\0")) {
+          const tab = record.indexOf("\t");
+          if (tab === -1) continue;
+          const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1];
+          if (mode !== undefined) treeModes.set(record.slice(tab + 1), mode);
+        }
+        repoCache.treeModes = treeModes;
+      }
+    }
+    repoCache.headAndTreeLoaded = true;
+  }
+  return { head: repoCache.head, treeModes: repoCache.treeModes };
+}
+
+function seedGitSourceClaimIgnoredPaths(
+  sourceRepoDir: string,
+  repoCache: GitSourceClaimValidationRepoCache,
+): void {
+  if (repoCache.ignoredBatchAttempted) return;
+  repoCache.ignoredBatchAttempted = true;
+  const pathspecs = [...repoCache.ignoredPathspecs];
+  if (pathspecs.length === 0) return;
+  const checked = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-z",
+      "--stdin",
+      "-n",
+      "-v",
+      "--no-index",
+      "--",
+    ],
+    {
+      encoding: "utf-8",
+      input: `${pathspecs.join("\0")}\0`,
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (checked.status !== 0 && checked.status !== 1) return;
+  const fields = checked.stdout.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  if (fields.length % 4 !== 0) return;
+  const ignored = new Map<string, boolean>();
+  for (let index = 0; index < fields.length; index += 4) {
+    const pattern = fields[index + 2];
+    const pathname = fields[index + 3];
+    const value = pattern.length > 0 && !pattern.startsWith("!");
+    ignored.set(pathname, value);
+    if (!pathname.startsWith("./")) ignored.set(`./${pathname}`, value);
+  }
+  for (const [pathspec, value] of ignored) {
+    repoCache.ignored.set(pathspec, value);
+  }
+}
+
+function gitSourceClaimIgnored(
+  sourceRepoDir: string,
+  literalPathspec: string,
+  cache: GitSourceClaimValidationCache,
+): { ok: boolean; ignored: boolean } {
+  const repoCache = gitSourceClaimRepoCache(sourceRepoDir, cache);
+  seedGitSourceClaimIgnoredPaths(sourceRepoDir, repoCache);
+  const cached = repoCache.ignored.get(literalPathspec);
+  if (cached !== undefined) return { ok: true, ignored: cached };
+  const checked = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-q",
+      "--no-index",
+      "--",
+      literalPathspec,
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (checked.status === 0 || checked.status === 1) {
+    const ignored = checked.status === 0;
+    repoCache.ignored.set(literalPathspec, ignored);
+    return { ok: true, ignored };
+  }
+  return { ok: false, ignored: false };
+}
+
 function currentGitPathMode(
   sourceRepoDir: string,
   literalPath: string,
@@ -16848,6 +17022,7 @@ function ignoredSourceClaimReason(
   path: string,
   prefix: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  sourceClaimValidation: GitSourceClaimValidationCache,
   carriesWorkspaceShell: boolean,
 ): string | null {
   if (!isGitRepoDir(sourceRepoDir)) return null;
@@ -16872,32 +17047,17 @@ function ignoredSourceClaimReason(
   }
 
   let headTracked = false;
-  const head = spawnSync(
-    "git",
-    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const headState = gitSourceClaimHeadAndTree(
+    sourceRepoDir,
+    sourceClaimValidation,
   );
-  if (head.status === 0 && head.stdout.trim()) {
-    const listed = spawnSync(
-      "git",
-      [
-        "-C",
-        sourceRepoDir,
-        "ls-tree",
-        "-z",
-        "--full-tree",
-        head.stdout.trim(),
-        "--",
-        literalPathspec,
-      ],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-    );
-    if (listed.status !== 0) {
+  if (headState.head !== null) {
+    if (headState.treeModes === null) {
       return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
     }
-    const entry = listed.stdout.split("\0").find(Boolean);
-    if (entry) {
-      const headIsDirectory = /^040000 /.test(entry);
+    const mode = headState.treeModes.get(literalPath);
+    if (mode !== undefined) {
+      const headIsDirectory = mode === "040000";
       if (!prefix && !currentExists && headIsDirectory) {
         return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
       }
@@ -16905,20 +17065,15 @@ function ignoredSourceClaimReason(
     }
   }
 
-  const ignored = spawnSync(
-    "git",
-    [
-      "-C",
-      sourceRepoDir,
-      "check-ignore",
-      "-q",
-      "--no-index",
-      "--",
-      literalPathspec,
-    ],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const ignored = gitSourceClaimIgnored(
+    sourceRepoDir,
+    literalPathspec,
+    sourceClaimValidation,
   );
-  if (ignored.status === 0) {
+  if (!ignored.ok) {
+    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (ignored.ignored) {
     if (
       sourcePathIsRegistered(
         sourceRepoDir,
@@ -16930,9 +17085,6 @@ function ignoredSourceClaimReason(
     }
     if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
-  }
-  if (ignored.status !== 1) {
-    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
   }
   if (!prefix && currentIsDirectory) {
     const currentMode = currentGitPathMode(
@@ -16961,8 +17113,8 @@ function ignoredSourceClaimReason(
         "-C",
         sourceRepoDir,
         "read-tree",
-        ...(head.status === 0 && head.stdout.trim()
-          ? [head.stdout.trim()]
+        ...(headState.head !== null
+          ? [headState.head]
           : ["--empty"]),
       ],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
@@ -17048,6 +17200,7 @@ function symlinkClaimTargetReason(
   prefix: boolean,
   carriesWorkspaceShell: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  sourceClaimValidation: GitSourceClaimValidationCache,
 ): string | null {
   const links = manifestClaimSymlinkPaths(
     sourceRepoDir,
@@ -17154,6 +17307,7 @@ function symlinkClaimTargetReason(
         repoRelative,
         false,
         pathModeIndexes,
+        sourceClaimValidation,
         carriesWorkspaceShell,
       );
       if (ignored !== null) {
@@ -17237,6 +17391,42 @@ export function readUnitSourceManifest(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const pathModeIndexes: GitPathModeIndexCache = new Map();
+  const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
+
+  for (const candidate of value.writes) {
+    if (!isPlainObject(candidate) || typeof candidate.path !== "string") {
+      continue;
+    }
+    if ("repo" in candidate && typeof candidate.repo !== "string") continue;
+    const declaredRepo =
+      typeof candidate.repo === "string" ? candidate.repo : undefined;
+    let canonicalRepo = declaredRepo;
+    if (canonicalRepo !== undefined) {
+      if (
+        !isValidRepoName(canonicalRepo) ||
+        !recordedRepoSet.has(canonicalRepo)
+      ) {
+        continue;
+      }
+    } else if (recordedRepos.length > 1) {
+      continue;
+    } else if (recordedRepos.length === 1) {
+      canonicalRepo = recordedRepos[0];
+    }
+    const normalized = normalizeManifestSourcePath(candidate.path);
+    if ("reason" in normalized) continue;
+    const sourceRepoDir =
+      worktreeRelative
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    seedGitSourceClaimIgnorePath(
+      sourceRepoDir,
+      normalized.path,
+      sourceClaimValidation,
+    );
+  }
 
   try {
   for (let index = 0; index < value.writes.length; index++) {
@@ -17285,6 +17475,7 @@ export function readUnitSourceManifest(
       normalized.path,
       normalized.prefix,
       pathModeIndexes,
+      sourceClaimValidation,
       carriesWorkspaceShell,
     );
     if (ignoredReason !== null) {
@@ -17296,6 +17487,7 @@ export function readUnitSourceManifest(
       normalized.prefix,
       carriesWorkspaceShell,
       pathModeIndexes,
+      sourceClaimValidation,
     );
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
