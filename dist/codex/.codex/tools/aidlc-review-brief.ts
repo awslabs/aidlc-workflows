@@ -1018,8 +1018,34 @@ export function renderSummaryConfirmationBrief(
     "**Decision options:**",
     "- **Looks correct (Recommended)** - record this confirmation and generate the named artifacts; the summary restates each recorded answer verbatim.",
     `- **Request changes** - leave the artifacts ungenerated and return to \`${questions}\`.`,
+    "",
+    SUMMARY_CONFIRMATION_RENDER_SEPARATOR,
+    SUMMARY_CONFIRMATION_QUESTION_SPEC,
   ].join("\n");
 }
+
+/**
+ * Everything above this line is the brief the conductor prints verbatim; the
+ * fenced spec below it is INPUT to the harness's structured-question renderer
+ * and is never printed. Emitting the spec here - with the recommended option
+ * first and marked - means the conductor copies a marked label from a tool
+ * instead of composing one from the (deliberately unmarked) questions file.
+ */
+export const SUMMARY_CONFIRMATION_RENDER_SEPARATOR =
+  "--- render the spec below through the harness question renderer; never print it ---";
+
+export const SUMMARY_CONFIRMATION_QUESTION_SPEC = [
+  "```question",
+  'prompt: "Does this all look correct before I generate the artifact?"',
+  "header: Confirm",
+  "multiSelect: false",
+  "options:",
+  "  - label: Looks correct (Recommended)",
+  "    description: Generate the artifact from these answers - the summary restates each recorded answer verbatim",
+  "  - label: Request changes",
+  "    description: Revise one or more answers before generation",
+  "```",
+].join("\n");
 
 function parseCliFlags(args: string[]): Record<string, string> {
   const flags: Record<string, string> = {};

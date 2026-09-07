@@ -498,17 +498,20 @@ Log the mode to `<record>/audit/<host>-<clone>.md` using the Question interactio
 - **Consolidated summary before generation**: After all questions have been
   answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). Then run
   `bun .cursor/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
-  add `--unit "<directive.unit>"` on a per-unit stage. Print its compact
-  decision brief verbatim before presenting this structured question. The brief
-  names the stage, the questions file and artifacts being confirmed, why
-  confirmation is required now, and the exact effect of both choices:
+  add `--unit "<directive.unit>"` on a per-unit stage. Its output has two
+  parts split by a `--- render the spec below … ---` line: print everything
+  above the line verbatim (the brief names the stage, the questions file and
+  artifacts being confirmed, why confirmation is required now, and the exact
+  effect of both choices); the fenced spec below the line is this structured
+  question — render it exactly as emitted (recommended option first, marked)
+  and never print it:
   ```question
   prompt: "Does this all look correct before I generate the artifact?"
   header: Confirm
   multiSelect: false
   options:
     - label: Looks correct (Recommended)
-      description: Generate the artifact from these answers — the summary restates each recorded answer verbatim
+      description: Generate the artifact from these answers - the summary restates each recorded answer verbatim
     - label: Request changes
       description: Revise one or more answers before generation
   ```

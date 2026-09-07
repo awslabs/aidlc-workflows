@@ -38,6 +38,7 @@ import {
   renderReviewBrief,
   renderSummaryConfirmationBrief,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
+  SUMMARY_CONFIRMATION_QUESTION_SPEC,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import {
   AIDLC_SRC,
@@ -921,6 +922,25 @@ describe("t304 executable review brief scenarios", () => {
     expect(result.status, result.out).toBe(0);
     expect(result.stdout).toContain("**Stage:** Requirements Analysis");
     expect(result.stdout).toContain("**Decision options:**");
+    // The widget spec rides along, marked, below the render separator, so the
+    // conductor copies a recommended label instead of composing one.
+    const [brief, spec] = result.stdout.split("--- render the spec below");
+    expect(brief).not.toContain("```question");
+    expect(spec).toContain("```question");
+    expect(spec).toContain("- label: Looks correct (Recommended)");
+    expect(spec.indexOf("Looks correct (Recommended)")).toBeLessThan(spec.indexOf("Request changes"));
+  });
+});
+
+describe("t304 the emitted confirmation spec is the protocol's spec", () => {
+  test("the tool's fenced question equals the one authored in stage-protocol.md", () => {
+    const protocol = readFileSync(join(import.meta.dir, "..", "..", "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
+    const start = protocol.indexOf("**Consolidated summary before generation**");
+    expect(start).toBeGreaterThan(0);
+    const fence = /```question\n[\s\S]*?```/.exec(protocol.slice(start));
+    expect(fence).not.toBeNull();
+    const authored = fence![0].split("\n").map((line) => line.replace(/^ {2}/, "")).join("\n");
+    expect(authored).toBe(SUMMARY_CONFIRMATION_QUESTION_SPEC);
   });
 });
 
