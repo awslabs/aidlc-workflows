@@ -18,6 +18,9 @@ export {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
+import type {
+  commitCarriesContentTransformation as CommitCarriesContentTransformation,
+} from "./aidlc-guard-kernel.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -11185,6 +11188,35 @@ export function gitCommitSourceListing(
       false,
     );
     if (source === null) return null;
+    const regularTreePaths = new Set(
+      entries
+        .filter(
+          (entry) =>
+            entry.mode === "100644" || entry.mode === "100755",
+        )
+        .map((entry) => entry.path),
+    );
+    const regularSourcePaths = [...source.listing.keys()].filter((path) =>
+      regularTreePaths.has(path)
+    );
+    // Lazy load keeps aidlc-lib.ts independently importable in hook fixtures
+    // that copy only the shared library. Committed-source consumers ship the
+    // complete tools directory and resolve the kernel at this proof boundary.
+    const { commitCarriesContentTransformation } = require(
+      "./aidlc-guard-kernel.ts"
+    ) as {
+      commitCarriesContentTransformation:
+        typeof CommitCarriesContentTransformation;
+    };
+    if (
+      commitCarriesContentTransformation(
+        repoDir,
+        commit,
+        regularSourcePaths,
+      ) !== false
+    ) {
+      return null;
+    }
     return prefixedSourceListing(source.listing);
   } finally {
     rmSync(root, { recursive: true, force: true });

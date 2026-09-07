@@ -2144,6 +2144,41 @@ function refuseConfiguredCheckoutFilters(
   );
 }
 
+function combinedMergeProofCommit(
+  repoCwd: string,
+  targetCommit: string,
+  reviewedCommit: string,
+): string | null {
+  const tree = runGit(
+    ["merge-tree", "--write-tree", targetCommit, reviewedCommit],
+    repoCwd,
+  );
+  if (!tree.ok) return null;
+  const treeOid = tree.stdout.trim().split(/\s+/, 1)[0] ?? "";
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(treeOid)) return null;
+  const committed = runGit(
+    [
+      "-c",
+      "user.name=AI-DLC",
+      "-c",
+      "user.email=aidlc@invalid",
+      "commit-tree",
+      treeOid,
+      "-p",
+      targetCommit,
+      "-p",
+      reviewedCommit,
+      "-m",
+      "AI-DLC merge proof",
+    ],
+    repoCwd,
+  );
+  const commit = committed.stdout.trim();
+  return committed.ok && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)
+    ? commit
+    : null;
+}
+
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -2288,6 +2323,34 @@ function handleMerge(args: string[]): void {
   }
   refuseConfiguredMergeDrivers(slug, repoCwd, sourceRecord);
   refuseConfiguredCheckoutFilters(slug, repoCwd, sourceRecord);
+  const preMergeTargetHead = currentSha(repoCwd);
+  if (sourceRecord?.kind === "bound") {
+    const combinedCommit = combinedMergeProofCommit(
+      repoCwd,
+      preMergeTargetHead,
+      sourceRecord.commit,
+    );
+    for (const [label, commit] of [
+      ["target", preMergeTargetHead],
+      ["reviewed", sourceRecord.commit],
+      ...(combinedCommit === null
+        ? []
+        : [["combined", combinedCommit] as const]),
+    ] as const) {
+      if (
+        gitCommitSourceListing(
+          repoCwd,
+          commit,
+          repoTarget.repo === null,
+        ) === null
+      ) {
+        errorWithSlug(
+          slug,
+          `refusing to merge: ${label} commit ${commit} has no provable immutable source listing; restore transformation-free source attributes or use AIDLC_SKIP_SOURCE_FRESHNESS=1 only with human approval`,
+        );
+      }
+    }
+  }
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
@@ -2345,7 +2408,7 @@ function handleMerge(args: string[]): void {
   }
 
   let commitSha = "";
-  const priorTargetHead = currentSha(repoCwd);
+  const priorTargetHead = preMergeTargetHead;
   const disabledHooksPath = join(
     tmpdir(),
     `aidlc-disabled-hooks-${process.pid}-${randomUUID()}`,

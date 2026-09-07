@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 817,
+    "total": 823,
     "enumeratedByClass": {
-      "function": 519,
+      "function": 525,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 299,
+      "function": 305,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1863,6 +1863,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:commitCarriesContentTransformation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -2773,6 +2785,42 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableBlobBytes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableBlobSha256",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableCommitSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3919,6 +3967,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:protectedStoreBarrier",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-kernel-write-barrier.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
@@ -4635,6 +4695,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveProtectedStore",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-kernel-write-barrier.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8185,6 +8257,10 @@
         {
           "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-guard-kernel-call-sites.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9900,6 +9976,10 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-guard-kernel-call-sites.test.ts",
           "mechanism": "cli"
         }
       ],

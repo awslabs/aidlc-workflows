@@ -1090,6 +1090,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t30-hook-session-end.test.ts",
     "unit/t31.test.ts",
     "unit/t33.test.ts",
+    "unit/t333-guard-kernel-call-sites.test.ts",
     "unit/t34.test.ts",
     "unit/t35.test.ts",
     "unit/t36.test.ts",

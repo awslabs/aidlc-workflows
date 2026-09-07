@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.3] - 2026-09-03
+
+Evidence and attribution guards now share one kernel: allow decisions rest only on canonically resolved real paths, raw Git object reads, and evidence already sealed in the audit ledger, while anything unproven fails closed. **Upgrade:** refresh your complete `dist/<harness>/` shell so the guard kernel, migrated Cursor adapter, and committed-source tooling are installed together.
+
+* Delegated-agent access to reviewer-attribution state on the Cursor harness retains the POSIX/Windows path, witness, executable, and shell protections from 2.6.123, while kernel allow decisions require canonical real-path proof.
+* Committed-source listings retain the bounded filesystem and external-target semantics introduced in 2.6.122 while transformation attributes are proven from commit-owned metadata. Worktree creation and source-bound merge refuse included paths declaring `filter`, `ident`, `text`, `eol`, or `working-tree-encoding` before target mutation; `AIDLC_SKIP_SOURCE_FRESHNESS=1` remains the documented, human-approved escape where supported.
+* Guard authors have one mechanism/policy contract: names may add denials, while only canonical paths, immutable Git objects, or append-only ledger fields can establish an allow.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
@@ -31,6 +39,7 @@ Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project R
 * `Project Root` template + writer emit project-relative `.` instead of an absolute `${projectDir}`.
 * `Worktree Path` writer emits `relative(projectDir, worktreePath)` (forward-slashed), matching the audit log's existing relative form.
 * Regression coverage: `t78` pins a forked worktree's `Worktree Path` to the project-relative `.aidlc/worktrees/bolt-<slug>` (never an absolute path); `t70` and the `t152` Windows-portability guard pin `Project Root` = `.`.
+||||||| parent of 614caf9a6 (feat: centralize guard provenance proofs)
 
 ## [2.6.123] - 2026-08-28
 
