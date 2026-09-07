@@ -268,6 +268,28 @@ function stageAuditRows(rows: readonly AuditShardEvent[], stage: string, event: 
   );
 }
 
+/**
+ * The terminal checkpoint the human is being asked, as the CLI recorded it
+ * before rendering (`aidlc-log.ts decision --checkpoint …`): the exact prompt
+ * and options. This is what the browser shows while a checkpoint is open, so
+ * the two surfaces say the same words.
+ */
+export function openCheckpointPrompt(
+  projectDir: string,
+  intent: string,
+  space: string,
+  stage: string,
+): { checkpoint: string; decision: string; options: string[] } | null {
+  const rows = sortedAudit(projectDir, intent, space);
+  const decisions = stageAuditRows(rows, stage, "DECISION_RECORDED").filter((row) => auditBlockField(row.block, "Checkpoint"));
+  const latest = decisions.at(-1);
+  if (!latest) return null;
+  const checkpoint = auditBlockField(latest.block, "Checkpoint") ?? "";
+  const decision = auditBlockField(latest.block, "Decision") ?? "";
+  const options = (auditBlockField(latest.block, "Options") ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  return { checkpoint, decision, options };
+}
+
 function skipReasonFromSuffix(suffix: string): string | null {
   const match = /\(([^()]*)\)\s*$/.exec(suffix);
   return match?.[1]?.trim() || null;

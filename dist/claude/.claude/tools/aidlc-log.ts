@@ -217,6 +217,18 @@ function ensureSummaryConfirmationSection(absolute: string): void {
   writeFileAtomic(absolute, `${body.replace(/\s*$/, "\n")}${section}`);
 }
 
+/** Fill the confirmation section's blank `[Answer]:` tag with `choice` (undecorated). */
+function confirmSummarySection(body: string, choice: string): string {
+  const heading = new RegExp(`^\\s{0,3}##[ \\t]+${SUMMARY_CONFIRMATION_CHECKPOINT}\\s*$`, "m").exec(body);
+  if (!heading || heading.index === undefined) return body;
+  const start = heading.index;
+  const rest = body.slice(start);
+  const next = /\n\s{0,3}##[ \t]/.exec(rest.slice(1));
+  const end = next ? start + 1 + next.index : body.length;
+  const section = body.slice(start, end).replace(/^\[Answer\]:[ \t]*$/m, `[Answer]: ${choice}`);
+  return body.slice(0, start) + section + body.slice(end);
+}
+
 function summaryQuestionEvidence(
   pd: string,
   flags: Record<string, string>,
@@ -1202,6 +1214,33 @@ function handleAnswersApply(args: string[]): void {
     if (flags.unit) fields.Unit = flags.unit;
     emitAudit(pd, "QUESTION_ANSWERED", fields);
 
+    // A browser round is its own confirmation: every answer was shown with its
+    // recommendation and chosen explicitly, then saved as one submission. So
+    // the consolidated-summary checkpoint is recorded here from that act -
+    // the conductor states the summary and generates, it does not ask again.
+    // Terminal rounds (file edits, chat) keep the interactive checkpoint.
+    const allAnswered = parseQuestionsMarkdown(updated)
+      .filter((question) => !question.confirmation)
+      .every((question) => question.answer !== null && question.answer.trim() !== "");
+    if (allAnswered) {
+      ensureSummaryConfirmationSection(questions.absolute);
+      const withEntry = readFileSync(questions.absolute, "utf-8");
+      const confirmed = confirmSummarySection(withEntry, "Looks correct");
+      writeFileAtomic(questions.absolute, confirmed);
+      const confirmationFields: Record<string, string> = {
+        Stage: flags.stage,
+        Details: "Looks correct",
+        Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT,
+        "Questions File": questions.relative,
+        "Questions SHA-256": summaryConfirmationContentHash(confirmed),
+        "Hash Scope": SUMMARY_CONFIRMATION_HASH_SCOPE,
+        Source: "review-ui",
+        Submissions: files.join(", "),
+      };
+      if (flags.unit) confirmationFields.Unit = flags.unit;
+      emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", confirmationFields);
+    }
+
     const consumed = readConsumed(stageDir);
     const consumedAt = new Date().toISOString();
     const entries: ConsumedEntry[] = pending.map((item) => ({
@@ -1222,6 +1261,7 @@ function handleAnswersApply(args: string[]): void {
       applied: answers.size,
       files,
       questions_file: questions.relative,
+      confirmed: allAnswered,
     }));
   });
 }

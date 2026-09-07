@@ -1771,7 +1771,7 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
       `browser answers saved for ${round.slug}; blocking the stop so the conductor applies them (browser-wait)`,
     );
     return blockStop(
-      `The human saved answers in the review UI for ${round.slug}. Run \`bun ${harnessDir()}/tools/aidlc-log.ts answers-apply --stage ${round.slug} --questions-file ${round.questionsFile}${activeUnit ? ` --unit ${activeUnit}` : ""}\`, then continue the stage from the consolidated summary. Do not ask the human to type done.`,
+      `The human saved answers in the review UI for ${round.slug}. Run \`bun ${harnessDir()}/tools/aidlc-log.ts answers-apply --stage ${round.slug} --questions-file ${round.questionsFile}${activeUnit ? ` --unit ${activeUnit}` : ""}\`, then generate the stage artifacts. The browser round is its own confirmation (answers-apply records the summary checkpoint): state the consolidated answers as a short summary and proceed - do not ask "Looks correct", and do not ask the human to type done.`,
     );
   }
   recordHookDrop(

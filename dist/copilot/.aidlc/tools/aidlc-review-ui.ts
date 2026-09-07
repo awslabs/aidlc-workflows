@@ -91,7 +91,7 @@ import {
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
 import { handleDecision } from "./aidlc-review-ui-decision.ts";
-import { questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
+import { openCheckpointPrompt, questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -623,6 +623,10 @@ function statePayload(projectDir: string): Record<string, unknown> {
     phase: humanPhase(context, questions),
     /** Which terminal checkpoint a `confirming` phase refers to. */
     checkpoint: context.current?.state === "confirming" ? context.current.checkpoint ?? "summary-confirmation" : null,
+    /** The checkpoint's exact prompt and options, as the CLI recorded them before rendering. */
+    checkpoint_prompt: context.current?.state === "confirming" && context.current.stage && context.intent
+      ? openCheckpointPrompt(projectDir, context.intent, context.space, context.current.stage)
+      : null,
     /** The decision already recorded for the open gate ("approve" | "request-changes"), until the hook delivers it. */
     decision_sent: decisionSent,
     space: context.space,

@@ -84,9 +84,10 @@ Reply with a number (or just tell me).
 
 ## Mandatory consolidated-summary checkpoint
 
-After guided or chat file-backed Q&A (and whenever a stage definition requires
-it explicitly, such as Requirements Analysis), the stage protocol requires a
-separate confirmation before any stage artifact is generated. Run
+After a terminal file-backed Q&A (Guide me, I'll edit the file, Chat), the stage
+protocol requires a separate confirmation before any stage artifact is
+generated. Not after a browser round: `answers-apply` records that checkpoint
+itself, so state the summary and generate. Run
 `aidlc-review-brief.ts summary` (print the brief above its separator; the fenced
 spec below it is the widget) and the checkpoint `aidlc-log.ts decision`, which
 writes the `## Consolidated Summary Confirmation` entry in the questions file

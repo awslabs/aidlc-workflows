@@ -230,10 +230,13 @@ function buildReadOnlyBanner(doc, view) {
   if (stage?.state === "current" && store.state?.phase === "confirming") {
     banner.classList.add("in-progress-banner");
     const plan = store.state?.checkpoint === "plan-approval";
+    const prompt = store.state?.checkpoint_prompt;
     banner.innerHTML = `<b>${plan ? "Plan approval" : "Confirmation"}</b><span></span>`;
-    banner.querySelector("span").textContent = plan
-      ? "· the terminal is asking you to approve this plan - read it here, decide there"
-      : "· the terminal is asking you to confirm the answers before this is generated";
+    banner.querySelector("span").textContent = prompt?.decision
+      ? `· the terminal is asking: "${prompt.decision}" (${prompt.options.join(" / ")}) - answer there`
+      : plan
+        ? "· the terminal is asking you to approve this plan - read it here, decide there"
+        : "· the terminal is asking you to confirm the answers before this is generated";
     return banner;
   }
   if (stage?.state === "current") {

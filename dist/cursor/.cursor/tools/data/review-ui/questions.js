@@ -170,11 +170,15 @@ function renderCurrent() {
   visibleQuestions.forEach((question, index) => {
     column.append(renderQuestion(question, index, visibleQuestions.length, guide.get(question.id), draft, answered));
   });
-  if (confirmation && confirmation.answer === null) {
+  if (store.state?.phase === "confirming") {
+    // The terminal's own words, streamed from the checkpoint the CLI recorded.
+    const prompt = store.state?.checkpoint_prompt;
     const note = document.createElement("p");
     note.className = "confirmation-note";
-    note.textContent = "The confirmation happens in the terminal after your answers are applied.";
-    column.append(note);
+    note.textContent = prompt?.decision
+      ? `The terminal is asking: "${prompt.decision}" - ${prompt.options.join(" / ")}. Answer there.`
+      : "The terminal is asking you to confirm. Answer there.";
+    column.prepend(note);
   }
 
   elements.content.replaceChildren(column);
