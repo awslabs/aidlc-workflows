@@ -87,10 +87,10 @@ files** — the files you review or answer, grouped by stage: each stage's
 questions and produced artifacts, every row opening the same view the tree
 does. The stage diary (folded on the stage overview) and
 engine bookkeeping (graph caches, tokens, the explainer rendered inside
-Questions) are not listed. Beside it, a note points at the audit ledger,
-which stays in the terminal record and is never served; what the agent is doing
-is stated once, in the header. Use the rail's Workflow icon to hide the
-panel for a wider document view.
+Questions) are not listed, and neither is the audit ledger, which stays in the
+terminal record and is never served. What the agent is doing is stated once, in
+the header. Use the rail's Workflow icon to hide the panel for a wider document
+view.
 
 The header keeps the current workspace, intent, phase, and stage path beside a
 file-name dropdown. The dropdown switches among the stage's questions,

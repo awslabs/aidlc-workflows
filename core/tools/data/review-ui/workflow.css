@@ -177,7 +177,6 @@ button.workflow-child:hover { background: var(--panel); }
 .workflow-footer { min-height: 42px; display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-top: 1px solid var(--line2); color: var(--muted); background: var(--panel); font-size: 10.5px; }
 .workflow-footer button { color: var(--muted); font-size: 10.5px; }
 .workflow-footer button:hover { color: var(--ink); }
-.audit-note { cursor: help; color: var(--muted); }
 .workflow-placeholder,
 .workflow-tree-empty { display: grid; align-content: center; justify-items: center; gap: 5px; padding: 32px 20px; color: var(--muted); text-align: center; }
 .workflow-placeholder { min-height: 260px; }

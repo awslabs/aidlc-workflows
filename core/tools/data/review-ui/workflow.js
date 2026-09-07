@@ -313,7 +313,7 @@ function renderPanel() {
   </div>
   <div class="workflow-bar"><b>Stages</b><span>${stageTotal} · ${stageDone} done</span><button type="button" data-collapse-all>${collapseAll ? "Expand all" : "Collapse all"}</button></div>
   <div class="workflow-tree">${phaseList.length ? phaseList.map(renderPhase).join("") : '<div class="workflow-tree-empty">No stages reported yet. The terminal workflow remains available.</div>'}</div>
-  <footer class="workflow-footer"><button type="button" data-all-files>All files</button><span class="audit-note" title="The audit ledger stays in the terminal record: aidlc/spaces/${escapeHtml(workflow.space || "default")}/intents/${escapeHtml(workflow.intent || "…")}/audit/">Audit in record</span></footer>`;
+  <footer class="workflow-footer"><button type="button" data-all-files>All files</button></footer>`;
 }
 
 function overviewLead(stage) {
