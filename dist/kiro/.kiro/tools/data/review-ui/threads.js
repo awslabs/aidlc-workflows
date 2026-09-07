@@ -82,7 +82,7 @@ export function init() {
 function openComposer(payload = {}) {
   const selection = payload.selection && typeof payload.selection === "object" ? { ...payload, ...payload.selection } : payload;
   const id = uniqueAnnotationId(selection.id || payload.id);
-  drafts.push({
+  const draft = {
     id,
     kind: normalizeKind(payload.kind || "comment"),
     artifact: basename(selection.artifact || selection.path || store.document?.path || "artifact.md"),
@@ -93,10 +93,17 @@ function openComposer(payload = {}) {
     heading_path: stringList(selection.heading_path),
     css_path: typeof selection.css_path === "string" ? selection.css_path : undefined,
     reply_to: typeof payload.reply_to === "string" ? payload.reply_to : undefined,
-    body: "",
-  });
+    body: typeof payload.body === "string" ? payload.body : "",
+  };
+  drafts.push(draft);
   if (store.panel !== "threads") store.set({ panel: "threads" });
   else render();
+  // Written in the document's popover: it lands in the panel as a posted thread.
+  if (payload.post && draft.body) {
+    postDraft(id);
+    requestAnimationFrame(() => focusThread(id));
+    return;
+  }
   requestAnimationFrame(() => slot.querySelector(`[data-draft-id="${escapeSelector(id)}"] textarea`)?.focus());
 }
 

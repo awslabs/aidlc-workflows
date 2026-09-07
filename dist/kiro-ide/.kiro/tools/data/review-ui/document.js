@@ -25,10 +25,12 @@ export function init() {
     if (anchor) captureSelection({ target: anchor });
   });
   elements.viewer.addEventListener("click", handleViewerClick);
-  elements.viewer.addEventListener("focusin", handleBlockFocus);
+  elements.viewer.addEventListener("focusin", deferFocusDuringGesture);
+  document.addEventListener("mousedown", () => { pointerHeld = true; }, true);
+  document.addEventListener("mouseup", flushDeferredFocus, true);
   elements.viewer.addEventListener("beforeinput", handleBeforeInput);
   elements.viewer.addEventListener("input", handleBlockInput);
-  elements.viewer.addEventListener("focusout", handleBlockBlur);
+  elements.viewer.addEventListener("focusout", deferBlurDuringGesture);
   elements.viewer.addEventListener("keydown", handleEditorKey);
   document.addEventListener("keydown", handleSelectionKey);
   window.addEventListener("message", receiveHtmlAnchor);
@@ -37,6 +39,12 @@ export function init() {
   store.on("inlineDiff", (payload) => {
     inlineDiff = payload && payload.path === store.document?.path ? payload : null;
     applyInlineDiff();
+  });
+  store.on("before-refresh", ({ stageChanged } = {}) => {
+    // The revision moved on: an open typed edit belongs to the one it was
+    // made on, so it is recorded before the state swap. Same revision: leave
+    // the edit alone - loadArtifact keeps the DOM when the file is unchanged.
+    if (stageChanged && activeEdit) finishEdit(activeEdit);
   });
   store.on("refresh", () => {
     if (store.view.kind === "artifact") loadArtifact(store.view);
@@ -59,7 +67,11 @@ export function init() {
 }
 
 function renderView(view) {
+  // A typed edit still open when the view changes is a suggestion the
+  // reviewer made; record it rather than drop it with the DOM.
+  if (activeEdit) finishEdit(activeEdit);
   hideToolbar();
+  closeCommentPopover();
   activeEdit = null;
   htmlFrame = null;
   if (view.kind === "artifact" && view.path) {
@@ -75,11 +87,22 @@ function renderView(view) {
 
 async function loadArtifact(view) {
   const version = ++loadVersion;
-  elements.viewer.hidden = false;
-  elements.viewer.className = "viewer document-loading";
-  elements.viewer.textContent = "Rendering document…";
-  hideToolbar();
-  activeEdit = null;
+  // Re-rendering the same document is deferred until its content is known to
+  // have changed: a routine state push must not wipe the reader's caret, an
+  // open typed edit, or a comment being written.
+  const same = store.document?.path === view.path && elements.viewer.dataset.path === view.path && !elements.viewer.classList.contains("document-loading");
+  const reset = () => {
+    if (activeEdit) finishEdit(activeEdit);
+    hideToolbar();
+    closeCommentPopover();
+    activeEdit = null;
+  };
+  if (!same) {
+    reset();
+    elements.viewer.hidden = false;
+    elements.viewer.className = "viewer document-loading";
+    elements.viewer.textContent = "Rendering document…";
+  }
   try {
     const rendered = formatFromPath(view.path) === "html"
       ? await api.get("/api/artifact", {
@@ -91,6 +114,12 @@ async function loadArtifact(view) {
           intent: view.intent || undefined,
         });
     if (version !== loadVersion || store.view.kind !== "artifact" || store.view.path !== view.path) return;
+    if (same) {
+      const unchanged = store.document.sha256 === String(rendered.sha256 || "")
+        && elements.viewer.dataset.readOnly === String(isReadOnly(view));
+      if (unchanged) return;
+      reset();
+    }
     const outline = Array.isArray(rendered.headings)
       ? rendered.headings.map((heading) => ({
           level: Number(heading.level),
@@ -146,6 +175,7 @@ function renderMarkdown(doc, view) {
 // History's "show r0 → r1 inline": every hunk becomes a word diff under the
 // block it changed, in the reading column, instead of a raw patch in the rail.
 let inlineDiff = null;
+let activePopover = null;
 
 function applyInlineDiff() {
   for (const node of elements.viewer.querySelectorAll(".blk-diff")) node.remove();
@@ -298,33 +328,49 @@ function lineElementFor(node, block) {
 }
 
 function captureSelection(event) {
-  if (htmlFrame || event.target.closest(".gutter, .selection-add, .document-toolbar")) return;
+  if (htmlFrame || event.target.closest(".gutter, .selection-add, .comment-popover, .document-toolbar")) return;
   if (activeEdit?.armed && activeEdit.content.contains(event.target)) return;
+  const target = event.target;
+  // Focusing a block can tear down the previous edit and re-render, which the
+  // browser may do between mousedown and mouseup - destroying the selection
+  // this handler would read. Settle first, then read; if the selection was
+  // lost, the click's own target still says which line was meant.
+  requestAnimationFrame(() => captureSettled(target));
+}
+
+function captureSettled(target) {
+  if (!target?.isConnected && !target?.closest) return;
+  if (activePopover && !activePopover.isConnected) closeCommentPopover();
+  if (activePopover) return;
   const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) {
-    store.set({ selection: null });
-    return;
-  }
-  const range = selection.getRangeAt(0);
-  const start = elementForNode(range.startContainer)?.closest(".blk");
-  const end = elementForNode(range.endContainer)?.closest(".blk");
-  if (!start || start !== end || !start.contains(event.target)) {
-    store.set({ selection: null });
-    return;
+  let range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  let start = range ? elementForNode(range.startContainer)?.closest(".blk") : null;
+  const end = range ? elementForNode(range.endContainer)?.closest(".blk") : null;
+  const clickedBlock = target.closest?.(".blk");
+  if (!start || start !== end || (selection.isCollapsed && clickedBlock && start !== clickedBlock)) {
+    // Selection lost to the re-render: treat the click as a caret on its line.
+    const clicked = clickedBlock;
+    if (!clicked || !elements.viewer.contains(clicked)) {
+      store.set({ selection: null });
+      return;
+    }
+    start = clicked;
+    range = null;
   }
   const block = blockData(start);
   if (!block) return;
   // A caret placed in a line (no highlight) offers a comment on that line,
   // like a highlight does on its text. Marked `caret` so the C/D/G shortcuts
   // stay off - a keystroke there is the start of an edit, not a command.
-  const caret = selection.isCollapsed || !selection.toString().trim();
+  const caret = !range || selection.isCollapsed || !selection.toString().trim();
+  const caretNode = range ? range.startContainer : target;
   // A caret's line is the element's own text, not its nested lists.
   const ownText = (line) => {
     const clone = line.cloneNode(true);
     clone.querySelectorAll("ul, ol, table, blockquote, pre").forEach((nested) => nested.remove());
     return clone.textContent.replace(/\s+/g, " ").trim();
   };
-  const text = caret ? ownText(lineElementFor(range.startContainer, start)) : selection.toString().trim();
+  const text = caret ? ownText(lineElementFor(caretNode, start)) : selection.toString().trim();
   if (!text) {
     store.set({ selection: null });
     return;
@@ -332,7 +378,7 @@ function captureSelection(event) {
   const lines = selectedLines(block, text);
   // Where the affordance goes: the first line of the highlight (or the caret's
   // line), relative to the block, so it sits in the gutter beside that line.
-  const lineRect = (caret ? lineElementFor(range.startContainer, start).getBoundingClientRect() : (range.getClientRects()[0] || range.getBoundingClientRect()));
+  const lineRect = (caret ? lineElementFor(caretNode, start).getBoundingClientRect() : (range.getClientRects()[0] || range.getBoundingClientRect()));
   const blockRect = start.getBoundingClientRect();
   const descriptor = {
     anchor_left: Math.max(0, lineRect.left - blockRect.left),
@@ -360,7 +406,7 @@ function showSelectionAffordance(selection) {
   elements.viewer?.querySelectorAll(".selection-add").forEach((button) => {
     button.remove();
   });
-  if (!selection || store.view.kind !== "artifact" || selection.block === null || selection.block === undefined) return;
+  if (activePopover || !selection || store.view.kind !== "artifact" || selection.block === null || selection.block === undefined) return;
   const block = blockElement(selection.block);
   // `.editing` only means the block has focus; an ARMED edit (typing began) is
   // what hides the trigger, and armEdit clears the selection for that.
@@ -382,11 +428,79 @@ function showSelectionAffordance(selection) {
   }
   button.setAttribute("aria-label", button.title);
   button.addEventListener("mousedown", (event) => event.preventDefault());
-  button.addEventListener("click", () => {
-    const { caret: _caret, anchor_top: _t, anchor_height: _h, anchor_left: _l, ...anchored } = selection;
-    emitCompose("comment", anchored);
-  });
+  button.addEventListener("click", () => openCommentPopover(block, selection));
   block.append(button);
+}
+
+// The comment is written where the text is, as in the reference editor: a
+// 320px card whose left edge is the quoted text's left edge and which sits
+// over the line (quote above it, textarea on it). Only Comment turns it into
+// a thread in the side panel; Cancel (or Escape) discards it and the selection
+// bubble comes back. Clicking elsewhere leaves it open, as the reference does.
+const POPOVER_RISE = 45;
+const POPOVER_WIDTH = 320;
+
+function openCommentPopover(block, selection) {
+  closeCommentPopover();
+  const { caret: _caret, anchor_top, anchor_height: _height, anchor_left, ...anchored } = selection;
+  elements.viewer.querySelectorAll(".selection-add").forEach((node) => node.remove());
+  const content = block.querySelector(".blk-content");
+  if (content && anchored.text) markText(content, anchored.text, "composing", "composing");
+  const pop = document.createElement("form");
+  pop.className = "comment-popover";
+  pop.composing = content && anchored.text ? { content, text: anchored.text } : null;
+  // Never above the viewer's top edge: the first lines of the first block
+  // would otherwise open under the toolbar.
+  const viewerTop = elements.viewer.getBoundingClientRect().top + 8;
+  const blockTop = block.getBoundingClientRect().top;
+  const top = Math.max((anchor_top ?? 0) - POPOVER_RISE, viewerTop - blockTop);
+  pop.style.top = `${Math.round(top)}px`;
+  // Left edge on the quoted text, pulled back so the card stays inside the block.
+  const left = Math.min(Math.max(0, anchor_left ?? 0), Math.max(0, block.clientWidth - POPOVER_WIDTH - 8));
+  pop.style.left = `${Math.round(left)}px`;
+  pop.innerHTML = `
+    <div class="comment-popover-quote">${escapeHtml(anchored.text.length > 90 ? `${anchored.text.slice(0, 87)}…` : anchored.text)}</div>
+    <textarea rows="2" placeholder="Add a comment..." aria-label="Comment"></textarea>
+    <div class="comment-popover-actions"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary" disabled>Comment</button></div>`;
+  const textarea = pop.querySelector("textarea");
+  const submit = pop.querySelector("button[type=submit]");
+  const close = () => {
+    pop.remove();
+    activePopover = null;
+    for (const mark of elements.viewer.querySelectorAll(".mark.composing")) mark.replaceWith(...mark.childNodes);
+    content?.normalize();
+  };
+  pop.addEventListener("mousedown", (event) => event.stopPropagation());
+  pop.addEventListener("mouseup", (event) => event.stopPropagation());
+  pop.querySelector("[data-cancel]").addEventListener("click", () => {
+    close();
+    showSelectionAffordance(store.selection);
+  });
+  textarea.addEventListener("input", () => { submit.disabled = !textarea.value.trim(); });
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); close(); showSelectionAffordance(store.selection); }
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); pop.requestSubmit(); }
+  });
+  pop.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const body = textarea.value.trim();
+    if (!body) { textarea.focus(); return; }
+    const id = nextAnnotationId();
+    // Posted straight to the side panel as a thread, not as a draft to edit there.
+    store.emit("compose", { id, kind: "comment", ...anchored, selection: anchored, body, post: true });
+    store.set({ selection: null });
+    window.getSelection()?.removeAllRanges();
+    close();
+  });
+  block.append(pop);
+  activePopover = pop;
+  textarea.focus();
+}
+
+function closeCommentPopover() {
+  activePopover?.remove();
+  activePopover = null;
+  for (const mark of elements.viewer.querySelectorAll(".mark.composing")) mark.replaceWith(...mark.childNodes);
 }
 
 function handleSelectionKey(event) {
@@ -436,6 +550,11 @@ function applyAnnotations() {
   // marks without touching the text and clear the gutter. Every other block
   // is re-rendered from its HTML.
   const armedWrapper = activeEdit?.armed ? activeEdit.wrapper : null;
+  // Re-rendering must not eat the reader's selection or caret: a click into a
+  // block runs this (the previous edit closes) between mousedown and mouseup,
+  // and the highlight the reader is making lives in the DOM being replaced.
+  // Remember it as text offsets in its block and put it back afterwards.
+  const kept = liveSelectionOffsets();
   for (const block of doc.blocks) {
     const wrapper = blockElement(block.index);
     if (!wrapper) continue;
@@ -472,17 +591,25 @@ function applyAnnotations() {
     const kind = annotationKind(item.kind);
     const quote = remarkQuote(item, sent);
     const block = sent ? remarkBlock(item, quote) : annotationBlock(item);
-    if (!block || block === armedWrapper) continue;
+    if (!block) continue;
     const content = block.querySelector(".blk-content");
-    let marked = quote ? markText(content, quote, kind, item.id, sent) : false;
-    if (!marked && sent && kind === "suggestion") {
-      const blockText = content.textContent.trim();
-      marked = Boolean(blockText) && markText(content, blockText, kind, item.id, true);
+    // The armed edit's text is never wrapped while the human types in it, but
+    // its threads still get per-line bubbles: the quote is located with a
+    // read-only Range and only its rect is used, so the caret is untouched.
+    let marked = false;
+    let markRect = null;
+    if (block === armedWrapper) {
+      markRect = (quote ? rangeForText(content, quote) : null)?.getBoundingClientRect() ?? null;
+    } else {
+      marked = quote ? markText(content, quote, kind, item.id, sent) : false;
+      if (!marked && sent && kind === "suggestion") {
+        const blockText = content.textContent.trim();
+        marked = Boolean(blockText) && markText(content, blockText, kind, item.id, true);
+      }
+      if (!marked && kind === "suggestion") block.classList.add("has-suggestion");
+      markRect = block.querySelector(`.mark[data-${sent ? "remark" : "annotation"}="${cssEscape(item.id)}"]`)?.getBoundingClientRect() ?? null;
     }
-    if (!marked && kind === "suggestion") block.classList.add("has-suggestion");
-    const mark = block.querySelector(`.mark[data-${sent ? "remark" : "annotation"}="${cssEscape(item.id)}"]`);
     // Centre the bubble on the marked line, as the reference does.
-    const markRect = mark?.getBoundingClientRect();
     const top = markRect ? Math.max(0, markRect.top - block.getBoundingClientRect().top + (markRect.height - 22) / 2) : 0;
     const key = `${block.dataset.block}:${Math.round(top / 8)}`;
     if (!perLine.has(key)) perLine.set(key, { block, top, entries: [] });
@@ -503,6 +630,14 @@ function applyAnnotations() {
     block.querySelector(".gutter").append(bubble);
   }
   showSelectionAffordance(store.selection);
+  // A comment being written keeps its highlight through the re-render.
+  const composing = activePopover?.composing;
+  if (composing && composing.content.isConnected && !composing.content.querySelector(".mark.composing")) {
+    markText(composing.content, composing.text, "composing", "composing");
+  }
+  // Last: marks above extract and re-insert text nodes, which would move a
+  // range restored any earlier. Offsets are text offsets, unchanged by marks.
+  restoreSelectionOffsets(kept);
 }
 
 const fragmentCache = new Map();
@@ -648,7 +783,53 @@ function annotationBlock(annotation) {
   return null;
 }
 
-function markText(root, text, kind, id, sent = false) {
+/** A Range over the first occurrence of `text` in `root`'s text, or null. Reads only. */
+/** The live selection as text offsets inside its block's content, or null. */
+function liveSelectionOffsets() {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  const content = elementForNode(range.startContainer)?.closest(".blk-content");
+  if (!content || !elements.viewer.contains(content) || content !== elementForNode(range.endContainer)?.closest(".blk-content")) return null;
+  const before = document.createRange();
+  before.selectNodeContents(content);
+  before.setEnd(range.startContainer, range.startOffset);
+  const start = before.toString().length;
+  return { content, start, end: start + range.toString().length };
+}
+
+function restoreSelectionOffsets(kept) {
+  // Only into the block that has focus: selecting inside another editable
+  // block would move focus there and start an edit the reader never began.
+  if (!kept || !kept.content.isConnected || kept.content !== document.activeElement) return;
+  const range = rangeAtOffsets(kept.content, kept.start, kept.end);
+  if (!range) return;
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function rangeAtOffsets(root, start, end) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  let first = null;
+  let last = null;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const next = offset + node.data.length;
+    if (!first && start <= next) first = { node, at: start - offset };
+    if (end <= next) { last = { node, at: end - offset }; break; }
+    offset = next;
+  }
+  if (!first) return null;
+  if (!last) last = first;
+  const range = document.createRange();
+  range.setStart(first.node, Math.max(0, Math.min(first.node.data.length, first.at)));
+  range.setEnd(last.node, Math.max(0, Math.min(last.node.data.length, last.at)));
+  return range;
+}
+
+function rangeForText(root, text) {
   const nodes = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let whole = "";
@@ -658,14 +839,20 @@ function markText(root, text, kind, id, sent = false) {
     whole += node.data;
   }
   const start = whole.indexOf(text);
-  if (start < 0) return false;
+  if (start < 0) return null;
   const end = start + text.length;
   const first = nodes.find((item) => item.start <= start && item.end > start);
   const last = [...nodes].reverse().find((item) => item.start < end && item.end >= end);
-  if (!first || !last) return false;
+  if (!first || !last) return null;
   const range = document.createRange();
   range.setStart(first.node, start - first.start);
   range.setEnd(last.node, end - last.start);
+  return range;
+}
+
+function markText(root, text, kind, id, sent = false) {
+  const range = rangeForText(root, text);
+  if (!range) return false;
   const mark = document.createElement("mark");
   mark.className = `mark ${kind}${sent ? " sent" : ""}`;
   mark.dataset[sent ? "remark" : "annotation"] = id;
@@ -695,6 +882,48 @@ function scrollToHeading(value) {
   if (!id || !elements.viewer) return;
   const heading = elements.viewer.querySelector(`#${cssEscape(id)}`);
   heading?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// A click or drag into a block moves focus on mousedown. Reacting then -
+// closing the previous edit and re-rendering - runs in the middle of the
+// gesture and breaks the selection the reader is dragging out. So while the
+// button is held, the focus is only noted; the bookkeeping runs on mouseup,
+// before the selection is read (captureSelection waits a frame).
+let pointerHeld = false;
+let deferredFocus = null;
+let deferredBlur = false;
+
+function deferFocusDuringGesture(event) {
+  if (pointerHeld) {
+    deferredFocus = event.target;
+    return;
+  }
+  handleBlockFocus(event);
+}
+
+function deferBlurDuringGesture(event) {
+  if (pointerHeld) {
+    deferredBlur = true;
+    return;
+  }
+  handleBlockBlur(event);
+}
+
+function flushDeferredFocus() {
+  pointerHeld = false;
+  const target = deferredFocus;
+  const blurred = deferredBlur;
+  deferredFocus = null;
+  deferredBlur = false;
+  if (target?.isConnected) {
+    handleBlockFocus({ target });
+    return;
+  }
+  // Focus left the edited block for somewhere that is not a block (the rail,
+  // the page): close the edit now that the gesture is over.
+  if (blurred && activeEdit && !activeEdit.content.contains(document.activeElement) && !elements.toolbar.contains(document.activeElement)) {
+    finishEdit(activeEdit);
+  }
 }
 
 function handleBlockFocus(event) {
@@ -1004,7 +1233,7 @@ function handleBlockInput(event) {
 function handleBlockBlur(event) {
   const content = event.target.closest(".blk-content[contenteditable]");
   if (!activeEdit || content !== activeEdit.content) return;
-  if (elements.toolbar.contains(event.relatedTarget)) return;
+  if (elements.toolbar.contains(event.relatedTarget) || activePopover?.contains(event.relatedTarget)) return;
   finishEdit(activeEdit);
 }
 

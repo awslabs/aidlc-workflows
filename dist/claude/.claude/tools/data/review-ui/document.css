@@ -408,3 +408,25 @@
 .toolbar-button.paragraph { display: inline-flex; align-items: center; gap: 5px; }
 .toolbar-button.paragraph .toolbar-label { font-size: 12px; }
 .toolbar-button.paragraph svg:last-child { width: 12px; height: 12px; color: var(--muted); }
+
+/* Comment popover: written at the text, recorded in the panel on Comment. */
+.comment-popover {
+  position: absolute;
+  z-index: 4;
+  width: 320px;
+  max-width: calc(100% - 8px);
+  padding: 12px;
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(26, 32, 44, 0.16);
+  display: grid;
+  gap: 10px;
+}
+.comment-popover-quote { color: var(--muted); font-size: 11.5px; line-height: 1.4; font-style: italic; border-left: 2px solid var(--amber); padding-left: 8px; }
+.comment-popover textarea { width: 100%; min-height: 80px; resize: vertical; border: 1px solid var(--line2); border-radius: 7px; padding: 8px 9px; font: inherit; font-size: 13px; }
+.comment-popover textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--soft); }
+.comment-popover-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.comment-popover-actions .btn { font-size: 12px; padding: 5px 12px; }
+.comment-popover-actions .btn[disabled] { opacity: 0.55; cursor: default; }
+.mark.composing { background: var(--amber-soft); box-shadow: inset 0 -2px var(--amber); }

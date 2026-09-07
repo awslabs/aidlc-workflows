@@ -39,6 +39,9 @@ export async function refresh() {
         store.state.current?.stage !== state.current?.stage ||
         store.state.current?.revision !== state.current?.revision ||
         store.state.current?.unit !== state.current?.unit;
+      // Anything in flight against the current document (an open typed edit)
+      // is recorded against the revision it was made on, before the swap.
+      store.emit("before-refresh", { state, stageChanged });
       store.set({ state, workflow });
       if (stageChanged) store.set({ annotations: restoreAnnotations(state) });
       store.emit("refresh", { state, workflow });
