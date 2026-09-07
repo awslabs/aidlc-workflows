@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.70] - 2026-09-07
+
+Commit provenance: any git commit or diff range can now be traced back to the reviewed units of work that own its changed paths, from any clone — including a bare CI checkout — with no hooks, commit trailers, or session state involved. Per-unit review evidence is now committed into the intent record, and the new `aidlc attest` tool resolves attribution and drift from committed content alone. **Upgrade:** refresh your `dist/<harness>/` shell; records reviewed before this version have no committed evidence, so their paths resolve as `unverifiable` in fresh clones until their next per-unit review dual-writes it.
+
+* Per-unit source review now dual-writes the reviewed-source snapshot into the committed intent record at `construction/<unit>/<stage>/reviewed-source-<hash12>.tsv` alongside the existing machine-local copy. The receipt's `Unit Source Fingerprint` is the SHA-256 of exactly those bytes — no new fingerprint semantics — and rewrites are content-addressed (idempotent on match, refusing on `address collision or corruption`).
+* New read-only `aidlc attest resolve [<commit>] [--diff <base>..<head>]` attributes every changed path to its owning reviewed unit and classifies it as `verified`, `drifted`, `unattested`, `unverifiable`, `indeterminate`, or `excluded`, reporting JSON with per-path and per-unit detail. `--fail-on <statuses>` (comma-separated subset of the four failable statuses) exits 3 on a match — the CI-gate form. Missing or tampered evidence fails closed as `unverifiable`; ambiguous same-timestamp receipts fail closed as `indeterminate`. Multi-root workspaces select a recorded repository with `--repo <name>`.
+* New `aidlc attest anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` appends `SOURCE_COMMITTED` audit events for commits that landed reviewed claims — enrichment only, `resolve` never reads them. Anchors deduplicate per intent on (commit, repo), skip commits already bound by `SWARM_SOURCE_MERGED`, and `--reconcile` walks first-parent history bounded by `--max-commits` (default 100). `SOURCE_COMMITTED` joins the CLI-protected set: the audit CLI refuses to append it directly.
+* The audit taxonomy grows to 88 events (new Commit Provenance category); the new `docs/reference/19-commit-provenance.md` chapter documents the attribution model, evidence format, and fail-closed semantics.
+
 ## [2.6.69] - 2026-08-24
 
 Per-unit source review now binds the manifest and claimed source at dispatch, and sibling-repository Bolt worktrees preserve application source under root `aidlc/` and `.aidlc/` directories. **Upgrade:** refresh your `dist/<harness>/` shell; write a valid `source-manifest.json` before every per-unit workspace review request, and use `--retry-pending` to re-dispatch after any pre-verdict source change.

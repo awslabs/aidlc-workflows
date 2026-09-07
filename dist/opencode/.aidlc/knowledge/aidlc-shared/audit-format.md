@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (87 events, 22 categories)
+## Event Registry (88 events, 23 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -301,11 +301,19 @@ Six events emit from the swarm referee `aidlc-swarm.ts` — the deterministic ve
 | `SWARM_COMPLETED` | All Units in the batch finished (converged or failed); batch closed | Timestamp, Batch number, Converged count, Failed count | `tools/aidlc-swarm.ts` |
 | `SWARM_DEGRADED` | `AIDLC_USE_SWARM=1` was requested but the Workflow tool was unavailable, so the conductor ran the subagent floor (loud-degrade) | Timestamp, Batch number, Requested driver, Fallback driver | `tools/aidlc-swarm.ts` |
 
+### Commit Provenance (1 event)
+
+Emitted by `aidlc attest anchor` when a commit is observed to have landed reviewed source claims. Enrichment ONLY: `aidlc attest resolve` never reads these rows — attribution stays a pure function of committed content (REVIEW_COMPLETED receipts + committed `reviewed-source-<hash12>.tsv` evidence) — so a commit that was never anchored still resolves identically. One row per involved intent per (commit, repo); re-anchoring dedupes, and commits already carrying a `SWARM_SOURCE_MERGED` receipt for the same (commit, repo) are skipped rather than double-recorded.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `SOURCE_COMMITTED` | `anchor` attributed a commit's changed paths to reviewed units (session observation, or a bounded `--reconcile` first-parent history sweep) | Timestamp, Commit, Repo (recorded selector or `-` for the workspace root), Units, Attributed Paths, Observed (`session` \| `reconciled`) | `tools/aidlc-attest.ts anchor` |
+
 ## Hook-Generated Format
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

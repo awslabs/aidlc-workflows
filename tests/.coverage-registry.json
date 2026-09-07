@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 638,
+    "total": 646,
     "enumeratedByClass": {
-      "function": 375,
-      "audit": 87,
+      "function": 379,
+      "audit": 88,
       "scope": 11,
       "stage": 33,
       "hook": 17,
-      "subcommand": 108,
+      "subcommand": 111,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 194,
-      "audit": 45,
+      "function": 198,
+      "audit": 46,
       "scope": 11,
       "stage": 11,
       "hook": 17,
-      "subcommand": 96,
+      "subcommand": 99,
       "render-surface": 7
     }
   },
@@ -559,6 +559,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SOURCE_COMMITTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -2923,6 +2935,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:normalizeManifestSourcePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:numericStageOrder",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3106,6 +3130,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseUnitSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3775,6 +3811,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceEvidencePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewedSourceRef",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4120,6 +4168,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourcePathIsExcluded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5803,6 +5863,42 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest anchor",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest help",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest resolve",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

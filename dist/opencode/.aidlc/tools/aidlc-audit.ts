@@ -188,6 +188,11 @@ const VALID_EVENT_TYPES = new Set([
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
+  // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
+  // commit observed to land reviewed unit claims. Enrichment ONLY: attest
+  // resolve derives attribution purely from committed receipts + evidence and
+  // never reads these anchors, so an unanchored manual commit still resolves.
+  "SOURCE_COMMITTED",
 ]);
 // --- Event type to human-readable heading ---
 
@@ -279,6 +284,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
   SWARM_DEGRADED: "Swarm Degraded",
+  SOURCE_COMMITTED: "Source Committed",
 };
 
 // --- Helpers ---
@@ -379,6 +385,11 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Commit-provenance anchors: `aidlc-attest.ts anchor` derives attribution
+  // from receipts + evidence and deduplicates on (Commit, Repo). A CLI-forged
+  // row would suppress the genuine derived anchor the same way a forged
+  // DOCUMENT_INDEXED suppresses provenance repair.
+  "SOURCE_COMMITTED",
 ]);
 // Events a WORKTREE DELTA may never carry into the main intent shard. This is
 // deliberately an explicit enumeration, not prefix families: a Bolt/swarm

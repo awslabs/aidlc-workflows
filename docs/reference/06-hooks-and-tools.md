@@ -580,6 +580,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` | `aidlc-sensor.ts fire`, `aidlc-utility.ts doctor` (`GUARDRAIL_LOADED`) |
 | **Learning loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` | `aidlc-runtime.ts compile`, `aidlc-learnings.ts persist` |
 | **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` | `aidlc-swarm.ts` emits prepare/finalize rows; `aidlc-worktree.ts merge` emits the post-application-source aggregate binding |
+| **Commit Provenance** | 1 | `SOURCE_COMMITTED` | `aidlc-attest.ts anchor` (enrichment only; `resolve` never reads it) |
 
 ### Entry Format
 
@@ -617,7 +618,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | `session-start.ts` | `SESSION_STARTED` / `SESSION_RESUMED` | Per Claude Code SessionStart hook input `source` field |
 | `session-end.ts` | `SESSION_ENDED` | Claude Code SessionEnd hook |
 | `validate-state.ts` | `SESSION_COMPACTED` | Claude Code PreCompact hook |
-| CLI tools | All other events (stage/phase/workflow lifecycle, gates, decisions, bolts, sensors, learnings, recovery, …) | Lifecycle and gate rows come from the orchestration engine's internal state emitters after a conductor report; other rows come from their owning tools (`aidlc-log.ts`, `aidlc-bolt.ts`, `aidlc-learnings.ts`, `aidlc-utility.ts`). Never hand-appended from prose (see `SKILL.md`: "Never emit audit events from prose"). |
+| CLI tools | All other events (stage/phase/workflow lifecycle, gates, decisions, bolts, sensors, learnings, recovery, …) | Lifecycle and gate rows come from the orchestration engine's internal state emitters after a conductor report; other rows come from their owning tools (`aidlc-log.ts`, `aidlc-bolt.ts`, `aidlc-learnings.ts`, `aidlc-utility.ts`, `aidlc-attest.ts`). Never hand-appended from prose (see `SKILL.md`: "Never emit audit events from prose"). |
 
 ---
 
@@ -781,6 +782,17 @@ There is deliberately **no `remove` subcommand**: deletion is "delete the user-o
 
 > Extracted document text is **untrusted data, not instructions**. `show` ships that rule inline with the content so the two can never be separated.
 
+### `aidlc-attest.ts` — Commit provenance
+
+Resolves git commits/diffs back to the reviewed units of work that own each changed path — attribution is a pure function of committed content (committed `REVIEW_COMPLETED` receipts plus committed `reviewed-source-<hash12>.tsv` evidence), so manual commits resolve in a bare CI clone with no hooks, trailers, or pushed refs. See the [commit provenance chapter](19-commit-provenance.md) for the full model.
+
+| Subcommand | Purpose | Emits |
+|------------|---------|-------|
+| `resolve [<commit>] [--diff <base>..<head>] [--fail-on <statuses>]` | Read-only: classify each changed path as `verified` \| `drifted` \| `unattested` \| `unverifiable` \| `indeterminate` \| `excluded` against the owning unit's newest READY receipt. Exit 3 when `--fail-on` matches | — |
+| `anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` | Record that a commit landed reviewed claims (deduplicated per intent; `--reconcile` sweeps first-parent history, default bound 100). Enrichment only — `resolve` never reads anchors | `SOURCE_COMMITTED` |
+
+Both verbs accept `--repo <name>`, `--space <name>`, `--intent <dir>`, and `--project-dir <path>`.
+
 ---
 
 ## Token Usage and Cost Tracking
@@ -839,7 +851,7 @@ The transcript reader is **Claude-Code-format-specific**, and only the Claude ha
 
 ## Prerequisites
 
-1. **bun** -- Required for all 16 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
+1. **bun** -- Required for all 16 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-attest.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
 2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
 No other prerequisites: every hook and tool is TypeScript run via bun, so no `jq`, `sed`, `awk`, Git Bash, or WSL is required on any platform.

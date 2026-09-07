@@ -7125,7 +7125,7 @@ export function sourceListingSha256(serialized: string): string {
   return createHash("sha256").update(serialized, "utf-8").digest("hex");
 }
 
-function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
+export function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
   if (path.length === 0) return { reason: "writes[].path must be non-empty" };
   if (path.includes("\0")) return { reason: "writes[].path cannot contain a NUL byte" };
   if (path.includes("\\")) return { reason: "writes[].path must use POSIX '/' separators, not backslashes" };
@@ -7141,7 +7141,7 @@ function normalizeManifestSourcePath(path: string): { path: string; prefix: bool
   return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
 }
 
-function sourcePathIsExcluded(
+export function sourcePathIsExcluded(
   path: string,
   carriesWorkspaceShell: boolean,
   projectDir?: string,
@@ -7795,6 +7795,20 @@ export function unitSourceFingerprint(
   return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
 }
 
+/** Parse committed reviewed-source evidence bytes (the serializeUnitSourceListing
+ *  shape): a `manifest\t<sha256>\t-` header row binding the source-manifest bytes,
+ *  then the claim-restricted per-path listing. Null on any malformed row. */
+export function parseUnitSourceListing(
+  serialized: string,
+): { manifestSha256: string; listing: WorkspaceSourceListing } | null {
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
+  if (header === null) return null;
+  const listing = parseSourceListing(serialized.slice(newline + 1));
+  return listing === null ? null : { manifestSha256: header[1], listing };
+}
+
 function validSourceSnapshotFingerprint(fingerprint: string): string | null {
   const matched = /^sha256:([0-9a-f]{64})$/.exec(fingerprint);
   return matched?.[1] ?? null;
@@ -7878,6 +7892,16 @@ export function sourceBaselineAuditFields(
   };
 }
 
+/** Committed per-unit reviewed-listing evidence beside source-manifest.json. */
+export function reviewedSourceEvidencePath(
+  recordDirPath: string,
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return join(recordDirPath, "construction", unit, stageSlug, `reviewed-source-${hash12}.tsv`);
+}
+
 /** Write a content-addressed unit listing snapshot including its manifest header. */
 export function writeUnitSourceSnapshot(
   projectDir: string,
@@ -7888,10 +7912,20 @@ export function writeUnitSourceSnapshot(
   manifestSha256: string,
 ): string {
   const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const record = recordDir(projectDir);
   const unitError = validateUnitName(unit);
-  if (dir === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
+  if (dir === null || record === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
   const serialized = serializeUnitSourceListing(listing, claimModel, manifestSha256);
   const hash = sourceListingSha256(serialized);
+  // Dual-write the identical bytes into the COMMITTED record beside the unit's
+  // source-manifest.json. The receipt's Unit Source Fingerprint is the sha256
+  // of exactly these bytes, so the committed audit shards already tamper-bind
+  // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
+  // (aidlc-attest.ts) without the machine-local .aidlc-source-review/ copy.
+  writeSourceSnapshot(
+    reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
+    serialized,
+  );
   return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
 }
 

@@ -891,6 +891,24 @@ bun .claude/tools/aidlc-runtime.ts read requirements-analysis
 
 `runtime-graph.json` is gitignored. See [Artifacts Reference](14-artifacts-reference.md) for the artifact's shape and the [Runtime Graph](../reference/13-runtime-graph.md) reference chapter for the full schema.
 
+### `aidlc attest` — commit provenance
+
+Answers "which reviewed unit of work owns this commit's changes, and does the committed content still match what the reviewer approved?" Attribution is derived purely from committed content — the review receipts in the `audit/` shards plus the committed `reviewed-source-*.tsv` evidence files — so it works on plain manual `git commit`s, in a bare CI clone, with no hooks, no commit-message trailers, and no pushed refs.
+
+| Subcommand | What it does |
+|------------|--------------|
+| `resolve [<commit>]` | Read-only. Attribute the commit's first-parent delta (default `HEAD`) to reviewed units and classify each changed path: `verified` (committed content equals the reviewed content), `drifted` (reviewed but edited since), `unattested` (no unit claims it), `unverifiable` (evidence missing or tampered — fails closed), `indeterminate` (ambiguous receipts — fails closed), `excluded` (framework shell/record paths). JSON report on stdout |
+| `resolve --diff <base>..<head>` | Same classification over an arbitrary range (`...` uses the merge-base, matching PR semantics) |
+| `resolve … --fail-on drifted,unattested` | Exit 3 when any path matches one of the named statuses — the CI gate form. Accepts any subset of `drifted,unattested,unverifiable,indeterminate` |
+| `anchor [--commit <rev>]` | Append a `SOURCE_COMMITTED` audit row recording that the commit landed reviewed claims. Enrichment only — `resolve` never reads anchors, so unanchored manual commits lose nothing |
+| `anchor --reconcile [--max-commits <n>]` | Sweep first-parent history (default 100 commits) and backfill anchors for attributable commits; already-anchored and swarm-merged commits are skipped, unattributable ones reported |
+
+```
+bun .claude/tools/aidlc-attest.ts resolve --diff origin/main..HEAD --fail-on drifted,unattested
+```
+
+Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `--intent <dir>`. See the [Commit Provenance](../reference/19-commit-provenance.md) reference chapter for the evidence model and status semantics.
+
 ### Session skills — report on a workflow
 
 Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in readable output. Type them like commands:

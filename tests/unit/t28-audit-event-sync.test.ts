@@ -72,8 +72,9 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // +REVIEW_CLASS_CHANGED (the --review per-run override) takes it to 78.
 // +UNIT_STARTED, +UNIT_PAUSED, +UNIT_RESUMED, and +UNIT_COMPLETED take it to 82;
 // +DOCUMENT_INDEXED, +DOCUMENT_UPDATED, and +DOCUMENT_REMOVED (DocumentKB) take
-// it to 86; +SWARM_SOURCE_MERGED takes it to 87.
-const CANONICAL_COUNT = 87;
+// it to 86; +SWARM_SOURCE_MERGED takes it to 87;
+// +SOURCE_COMMITTED (aidlc-attest.ts anchor, commit provenance) takes it to 88.
+const CANONICAL_COUNT = 88;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

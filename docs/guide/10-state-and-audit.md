@@ -77,9 +77,9 @@ stateDiagram-v2
 
 The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
-### 87-event taxonomy
+### 88-event taxonomy
 
-Events are organized into 22 categories:
+Events are organized into 23 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
@@ -105,6 +105,7 @@ Events are organized into 22 categories:
 | **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
 | **Learning Loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` |
 | **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` |
+| **Commit Provenance** | 1 | `SOURCE_COMMITTED` (`aidlc attest anchor` — enrichment only; `resolve` never reads it) |
 
 ### What gets logged and when
 
@@ -120,7 +121,7 @@ Events are organized into 22 categories:
 Each entry follows a structured format with these fields:
 
 - **Timestamp** — ISO 8601 timestamp
-- **Event** - One of the 87 event types
+- **Event** - One of the 88 event types
 - **Details** — Event-specific data (stage name, decision, artifact path, etc.)
 
 Entries are appended chronologically. To review the history of a specific stage, search for its `STAGE_STARTED` and `STAGE_COMPLETED` entries and everything in between.

@@ -146,9 +146,13 @@ but do not yet have committed release versions.
   ([#299](https://github.com/awslabs/aidlc-workflows/issues/299)/[#300](https://github.com/awslabs/aidlc-workflows/pull/300)).
 - Preserve progressive enrichment as the North Star destination: downstream
   stages enrich upstream artefacts in place, with ADRs as a core design artefact.
-- Commit-level provenance remains an open design question; the current audit
-  chain does not provide a durable reverse lookup from an arbitrary source commit
-  to its intent and workflow.
+- Commit-level provenance is implemented as content-derived attribution:
+  reviewed-source evidence is committed into the intent record and
+  `aidlc attest resolve` maps any commit or diff range back to its owning
+  units, intents, and drift status — no hooks, trailers, or session state
+  required (see [Commit Provenance](reference/19-commit-provenance.md)).
+  Anchoring commits automatically during orchestration (rather than via the
+  explicit `attest anchor` verb) remains future work.
 
 ### Governed feedback loops
 

@@ -52,6 +52,7 @@ type Alias = {
 };
 
 export const TOOLS = {
+  attest: "aidlc-attest.ts",
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
@@ -205,6 +206,21 @@ export const ROUTES: readonly Route[] = [
     verbs: ["fork", "merge"],
     tool: TOOLS.audit,
     targets: { fork: "audit-fork", merge: "audit-merge" },
+  },
+  {
+    id: "attest",
+    group: "attest",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["resolve", "anchor"],
+    tool: TOOLS.attest,
+    human: [
+      { command: "attest <verb>", summary: "resolve commits/diffs to reviewed units; anchor commits" },
+    ],
+    all: [
+      "resolve [commit] [--diff <base>..<head>] [--fail-on <statuses>]",
+      "anchor [--commit <rev>] [--reconcile]",
+    ],
   },
   {
     id: "graph",
@@ -907,6 +923,8 @@ type DelegateModule = {
 
 async function loadDelegate(tool: string): Promise<DelegateModule | null> {
   switch (tool) {
+    case TOOLS.attest:
+      return import("./aidlc-attest.ts");
     case TOOLS.audit:
       return import("./aidlc-audit.ts");
     case TOOLS.bolt:

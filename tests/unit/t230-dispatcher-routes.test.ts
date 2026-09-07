@@ -575,6 +575,7 @@ describe("t230 dispatcher route completeness", () => {
 
   test("every main-exported tool is reachable from a route", () => {
     const mainExportedTools = [
+      "aidlc-attest.ts",
       "aidlc-audit.ts",
       "aidlc-bolt.ts",
       "aidlc-graph.ts",
@@ -613,7 +614,7 @@ describe("t230 dispatcher route completeness", () => {
 describe("t230 dispatcher help and errors", () => {
   test("human help stays short and hides plumbing nouns", () => {
     const text = renderHumanHelp();
-    expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(20);
+    expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(21);
     for (const noun of [
       "state",
       "audit",
