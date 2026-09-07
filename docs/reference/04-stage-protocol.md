@@ -1045,7 +1045,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    stopped mid-task, no final-message turn) and the opencode packager projects
    it to the native per-agent `steps: 60` (the runner grants one final
    text-only turn - a summary can return, but no tool call can write the
-   review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
+   review). Codex TOML personas, Cursor, Copilot, Devin, and Kiro CLI/IDE expose no
    per-agent cap key, so there the budget is persona prose only (the personas'
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
 3. **Verdict and decision brief.** On `advisory`, both verdicts are terminal in

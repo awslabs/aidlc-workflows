@@ -432,6 +432,15 @@ describe("t266 conversation-language rule layer", () => {
           surface = join(harness.engineRoot, "rules", "aidlc.mdc");
           required = `- ${MEMORY_DIR}/org.md`;
           break;
+        case "devin-rule-pointer":
+          // Devin's always-on surface is the project-root AGENTS.md. Unlike
+          // Copilot, Devin has no DOCUMENTED @-import expansion, so the lines
+          // are a named POINTER the conductor is instructed to read rather than
+          // content the host injects. The path must still be named here, and the
+          // read instruction below is what makes the pointer load-bearing.
+          surface = join(harness.distRoot, "AGENTS.md");
+          required = `@${MEMORY_DIR}/org.md`;
+          break;
         case "kiro-steering":
           // The IDE's real surface: an always-included steering file whose
           // #[[file:...]] references pull the live memory tree in verbatim.
@@ -473,6 +482,15 @@ describe("t266 conversation-language rule layer", () => {
         expect(
           /^---\n(?:.*\n)*?alwaysApply:\s*true\n(?:.*\n)*?---/.test(body),
           `${harness.name}'s standing rule declares alwaysApply: true`,
+        ).toBe(true);
+      }
+      // A pointer with no host expansion behind it is only load-bearing if the
+      // surface tells the conductor to read the files it names. Without this the
+      // paths would ship as inert text.
+      if (include === "devin-rule-pointer") {
+        expect(
+          body.includes("**Read these before acting on a development request**"),
+          `${harness.name}'s pointer instructs the conductor to read the method files`,
         ).toBe(true);
       }
 

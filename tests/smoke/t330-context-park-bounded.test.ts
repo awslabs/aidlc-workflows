@@ -1,4 +1,4 @@
-// covers: doc:harness/claude/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/codex/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/copilot/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/cursor/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/kiro/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/kiro-ide/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/opencode/skills/aidlc/SKILL.md(context-park-bounded)
+// covers: doc:harness/claude/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/codex/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/copilot/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/devin/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/cursor/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/kiro/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/kiro-ide/skills/aidlc/SKILL.md(context-park-bounded), doc:harness/opencode/skills/aidlc/SKILL.md(context-park-bounded)
 //
 // t330: regression guard for issue #547 — the conductor parking a workflow on
 // a SUBJECTIVE sense that "context is heavy". The orchestrator skill used to

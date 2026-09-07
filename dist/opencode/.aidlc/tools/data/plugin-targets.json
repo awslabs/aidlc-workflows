@@ -49,6 +49,18 @@
       "install.ts"
     ]
   },
+  "devin": {
+    "harnessName": "devin",
+    "manifestDir": ".devin-plugin",
+    "harnessLeaf": ".devin",
+    "kind": "store",
+    "installRoots": [
+      ".devin",
+      ".gitignore",
+      "AGENTS.md",
+      "aidlc"
+    ]
+  },
   "kiro": {
     "harnessName": "kiro",
     "manifestDir": ".kiro-plugin",

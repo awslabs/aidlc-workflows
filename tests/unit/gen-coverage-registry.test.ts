@@ -820,6 +820,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t250-copilot-adapter-security.test.ts",
     "unit/t275-cursor-packaging.test.ts",
     "unit/t276-cursor-adapter.test.ts",
+    "unit/t332-devin-adapter.test.ts",
     "unit/t277-validate-grid-nearest-stock.test.ts",
     "unit/t281-sensor-traceability.test.ts",
     "unit/t324-team-unit-progress-gates.test.ts",

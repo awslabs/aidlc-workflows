@@ -37,10 +37,15 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 // REPO_ROOT = <repo> (tests/harness/../..). The authored source trees sit
 // directly beneath it: core/ (harness-neutral) and harness/<h>/.
-const HARNESSES = ["claude", "codex", "kiro", "kiro-ide", "opencode", "cursor"] as const;
+// DISCOVERED, never hardcoded: a hardcoded roster silently stops covering the
+// next harness, which is exactly how devin shipped an annex that still said
+// "Claude Code harness annex". Deriving from HARNESS_MATRIX also picked up
+// copilot, which the old six-name list had been omitting.
+const HARNESSES = HARNESS_MATRIX.map((h) => h.name);
 
 function annexPath(harness: string): string {
   return join(

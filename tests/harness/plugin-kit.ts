@@ -29,6 +29,7 @@ import {
   execCodex,
   runCopilot,
   runCursor,
+  runDevin,
   runOpencode,
 } from "./exec-drive.ts";
 import { REPO_ROOT } from "./fixtures.ts";
@@ -331,7 +332,8 @@ export type InvokableHarness =
   | "codex"
   | "copilot"
   | "opencode"
-  | "cursor";
+  | "cursor"
+  | "devin";
 
 const LIVE_GATES: Record<InvokableHarness, string> = {
   claude: "AIDLC_CLAUDE_SDK_LIVE",
@@ -339,6 +341,7 @@ const LIVE_GATES: Record<InvokableHarness, string> = {
   codex: "AIDLC_CODEX_EXEC_LIVE",
   copilot: "AIDLC_COPILOT_EXEC_LIVE",
   opencode: "AIDLC_OPENCODE_RUN_LIVE",
+  devin: "AIDLC_DEVIN_EXEC_LIVE",
   cursor: "AIDLC_CURSOR_RUN_LIVE",
 };
 
@@ -426,6 +429,9 @@ export async function invokeHarness(
       break;
     case "cursor":
       result = runCursor(workingDir, prompt);
+      break;
+    case "devin":
+      result = runDevin(workingDir, prompt);
       break;
   }
   return { status: "completed", harness, liveGate, result };

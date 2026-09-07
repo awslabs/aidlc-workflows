@@ -1,0 +1,23 @@
+# Framework-default output-format templates (the resolution MIDDLE branch).
+#
+# This dir is the framework-shipped, READ-ONLY default tier in the templates
+# resolution order (vision §10):
+#
+#   1. team template      aidlc/spaces/<space>/memory/templates/<artifact>.md   (override)
+#   2. framework default   <harness>/tools/data/templates/<artifact>.md          (THIS dir)
+#   3. else                the generic >=2-H2 floor                              (fallthrough)
+#
+# The framework ships NO default template files at GA (the structure exists and
+# is extensible, but every artifact hits the generic floor until a team authors
+# its own template, OR a later PR drops a default <artifact>.md here). Resolution
+# falls through gracefully when this dir holds only this marker.
+#
+# Distinct from the TEAM override dir (aidlc/spaces/<space>/memory/templates/,
+# via memoryTemplatesDir()): that one a team hand-authors and it WINS over this
+# default. This one ships with the engine and is never edited by a user.
+#
+# A resolved template is used WHOLE-DOC (its ## headings become the expected set
+# the required-sections sensor verifies, expected ⊆ output) — no section merge.
+# Read by aidlc-sensor.ts (dispatcher → --framework-templates-dir) and
+# aidlc-sensor-required-sections.ts (the middle branch). The agent reads the same
+# resolution order via core/aidlc-common/protocols/stage-protocol.md.

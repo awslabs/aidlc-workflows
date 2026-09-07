@@ -78,5 +78,5 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
 | [Multi-Team Construction and Workshop Mode](workshop-mode.md) | Claim, build, pinned merge-back, release, and workshop flow for clone and sibling-worktree teams |
-| [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot, and what differs per harness |
+| [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, GitHub Copilot, or Devin, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

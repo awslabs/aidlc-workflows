@@ -106,6 +106,9 @@ const harnessLabels: Record<string, string> = {
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
+  // One label for both Devin surfaces (CLI + Desktop): they share a single
+  // `.devin/` tree, so the roster documents one harness, not two.
+  devin: "Devin",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
   opencode: "opencode",
@@ -207,6 +210,7 @@ describe("documentation parity derives current behavior from authored implementa
       "codex",
       "copilot",
       "cursor",
+      "devin",
       "kiro",
       "kiro-ide",
       "opencode",
@@ -250,6 +254,29 @@ describe("documentation parity derives current behavior from authored implementa
     ]) {
       for (const name of harnessNames) expect(doc).toContain(harnessLabels[name]);
     }
+  });
+
+  test("Devin documentation names only Devin-native question and config surfaces", () => {
+    // The devin annex shipped byte-identical to claude's, titled "Claude Code
+    // harness annex", naming a tool Devin does not have. Parity tests enforce
+    // SAMENESS across harnesses, so they structurally cannot catch a passage that
+    // is true for Claude and false for Devin -- these negative pins can.
+    const annex = read("harness", "devin", "skills", "aidlc", "question-rendering.md");
+    const skill = read("harness", "devin", "skills", "aidlc", "SKILL.md");
+
+    expect(annex).toContain("# Question Rendering — Devin harness annex");
+    expect(annex).toContain("ask_user_question");
+    for (const alien of ["AskUserQuestion", "Claude Code", "Copilot", "vscode/askQuestions"]) {
+      expect(annex, `devin annex must not name ${alien}`).not.toContain(alien);
+      expect(skill, `devin SKILL.md must not name ${alien}`).not.toContain(alien);
+    }
+    // Claude-only session mechanics that the token substitution carried over.
+    for (const alien of ["/clear", "companyAnnouncements", "statusLine"]) {
+      expect(skill, `devin SKILL.md must not name ${alien}`).not.toContain(alien);
+    }
+    // The annex and the orchestrator must agree on the mechanism; shipping the
+    // annex alone leaves the model reading "prose" here and "call the picker" there.
+    expect(skill).toContain("numbered prose per `question-rendering.md`");
   });
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
