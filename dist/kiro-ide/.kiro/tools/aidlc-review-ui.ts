@@ -625,7 +625,7 @@ function statePayload(projectDir: string): Record<string, unknown> {
     checkpoint: context.current?.state === "confirming" ? context.current.checkpoint ?? "summary-confirmation" : null,
     /** The checkpoint's exact prompt and options, as the CLI recorded them before rendering. */
     checkpoint_prompt: context.current?.state === "confirming" && context.current.stage && context.intent
-      ? openCheckpointPrompt(projectDir, context.intent, context.space, context.current.stage)
+      ? openCheckpointPrompt(projectDir, context.intent, context.space, context.current.stage, context.current.checkpoint ?? "summary-confirmation", context.current.questions_file ?? null)
       : null,
     /** The decision already recorded for the open gate ("approve" | "request-changes"), until the hook delivers it. */
     decision_sent: decisionSent,

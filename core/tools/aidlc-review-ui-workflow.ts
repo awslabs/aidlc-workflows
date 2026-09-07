@@ -22,6 +22,7 @@ import {
   parseCheckboxes,
   parseStateStageSuffixes,
   readAuditShardEvents,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
   readIntentRegistry,
   readStateFile,
   recordDir,
@@ -43,6 +44,7 @@ import {
   type ReviewManifest,
 } from "./aidlc-review-ui-shared.ts";
 import { parseQuestionsMarkdown } from "./aidlc-review-ui-render.ts";
+import { PLAN_APPROVAL_CHECKPOINT } from "./aidlc-testing-posture.ts";
 
 export type WorkflowStageState = "done" | "current" | "skipped" | "next" | "conditional" | "pending";
 export type WorkflowIntentStatus = "needs-you" | "in-progress" | "done" | "idle";
@@ -279,15 +281,21 @@ export function openCheckpointPrompt(
   intent: string,
   space: string,
   stage: string,
+  checkpoint: string,
+  questionsFile: string | null,
 ): { checkpoint: string; decision: string; options: string[] } | null {
   const rows = sortedAudit(projectDir, intent, space);
-  const decisions = stageAuditRows(rows, stage, "DECISION_RECORDED").filter((row) => auditBlockField(row.block, "Checkpoint"));
+  // Bound to the checkpoint the pointer says is open, so an older round's
+  // prompt is never shown for a newer checkpoint of another kind.
+  const wanted = checkpoint === "plan-approval" ? PLAN_APPROVAL_CHECKPOINT : SUMMARY_CONFIRMATION_CHECKPOINT;
+  const decisions = stageAuditRows(rows, stage, "DECISION_RECORDED").filter((row) =>
+    auditBlockField(row.block, "Checkpoint") === wanted &&
+    (!questionsFile || auditBlockField(row.block, "Questions File") === questionsFile));
   const latest = decisions.at(-1);
   if (!latest) return null;
-  const checkpoint = auditBlockField(latest.block, "Checkpoint") ?? "";
   const decision = auditBlockField(latest.block, "Decision") ?? "";
   const options = (auditBlockField(latest.block, "Options") ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-  return { checkpoint, decision, options };
+  return { checkpoint: wanted, decision, options };
 }
 
 function skipReasonFromSuffix(suffix: string): string | null {
