@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 825,
+    "total": 826,
     "enumeratedByClass": {
-      "function": 525,
+      "function": 526,
       "audit": 93,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 303,
+      "function": 304,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -2679,6 +2679,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hideAbandonedForListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
