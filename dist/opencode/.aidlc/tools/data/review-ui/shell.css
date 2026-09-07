@@ -114,10 +114,10 @@ svg.fi path { fill: currentColor; }
   text-align: left;
   font-size: 12.5px;
 }
+.header-picker-menu button.missing { color: var(--faint); }
 .header-picker-menu button:hover,
 .header-picker-menu button.on { background: var(--panel); }
 .header-picker-menu button.on { color: var(--accent); font-weight: 650; }
-.header-picker-menu button small { margin-left: auto; color: var(--muted); font-size: 10.5px; font-weight: 400; }
 .header-state {
   flex: 0 1 265px;
   min-width: 0;

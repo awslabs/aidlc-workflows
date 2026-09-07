@@ -271,8 +271,8 @@ function renderPicker(view, stage, title) {
     <div class="header-picker-menu" role="menu">
       ${items
         .map(
-          (item) => `<button type="button" role="menuitem" data-picker-kind="${item.kind}" data-picker-path="${escapeHtml(item.path)}" class="${item.kind === view.kind && (!item.path || item.path === view.path) ? "on" : ""}">
-            <span>${escapeHtml(item.label)}</span>${item.missing ? '<small>not written yet</small>' : ""}
+          (item) => `<button type="button" role="menuitem" data-picker-kind="${item.kind}" data-picker-path="${escapeHtml(item.path)}" class="${[item.kind === view.kind && (!item.path || item.path === view.path) ? "on" : "", item.missing ? "missing" : ""].filter(Boolean).join(" ")}">
+            <span>${escapeHtml(item.label)}</span>
           </button>`,
         )
         .join("")}

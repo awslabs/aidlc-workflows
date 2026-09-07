@@ -175,8 +175,8 @@ function artifactChild(stage, artifact) {
   const selected = isSelected(stage, "artifact", artifact.path);
   const revision = artifact.revision == null ? "" : `<b>r${artifact.revision}</b>`;
   const threads = artifact.threads ? `${artifact.threads} ${artifact.threads === 1 ? "thread" : "threads"}` : "";
-  const writtenAfter = !artifact.exists && stage.questions?.open ? "written after your answers" : "not written yet";
-  const meta = artifact.exists ? [revision, threads].filter(Boolean).join(" · ") : writtenAfter;
+  // A planned artifact is greyed out; that says "not yet" on its own.
+  const meta = artifact.exists ? [revision, threads].filter(Boolean).join(" · ") : "";
   return `<button type="button" class="workflow-child artifact ${selected ? "on" : ""} ${stage.state !== "current" ? "past" : ""} ${!artifact.exists ? "missing" : ""}" data-child-kind="artifact" data-stage="${escapeHtml(stage.slug)}" data-path="${escapeHtml(artifact.path)}" ${!artifact.exists ? 'title="Not written yet"' : ""}>
     <span class="child-icon">${FILE_ICON}</span><span class="child-label"><code>${escapeHtml(basename(artifact.path))}</code></span><span class="child-meta">${meta}</span>
   </button>`;
