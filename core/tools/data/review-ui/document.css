@@ -190,14 +190,13 @@
 .gutter {
   position: absolute;
   top: 0;
+  bottom: 0;
   right: calc(100% + 13px);
   width: 27px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
   pointer-events: none;
 }
+/* Each bubble sits beside the line it belongs to. */
+.gutter .bubble { position: absolute; right: 0; }
 
 .bubble {
   width: 22px;
@@ -257,8 +256,6 @@
 
 .selection-add {
   position: absolute;
-  right: calc(100% + 13px);
-  top: 0;
   width: 25px;
   height: 25px;
   transform: translateY(-50%);
@@ -272,11 +269,27 @@
   padding: 0;
 }
 .selection-add svg { width: 15px; height: 15px; }
-.selection-add.beside-bubble { right: calc(100% + 13px + 30px); }
+/* Caret in a line: a quiet trigger in the gutter beside that line. */
+.selection-add.gutter-trigger { right: calc(100% + 13px); top: 0; color: var(--muted); }
+.selection-add.gutter-trigger.beside-bubble { right: calc(100% + 13px + 30px); }
+/* Highlighted text: a dark floating bubble just above where the selection starts. */
+.selection-add.floating {
+  width: 28px;
+  height: 28px;
+  transform: translate(-2px, -100%);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  background: #1a202c;
+  box-shadow: 0 3px 10px rgba(26, 32, 44, 0.28);
+  z-index: 3;
+}
+.selection-add.floating svg { width: 15px; height: 15px; }
 .selection-add:hover {
   border-color: var(--accent);
   background: var(--soft);
 }
+.selection-add.floating:hover { background: #000; border-color: transparent; }
 
 .annotation-flash {
   animation: annotation-flash 1.4s ease-out;

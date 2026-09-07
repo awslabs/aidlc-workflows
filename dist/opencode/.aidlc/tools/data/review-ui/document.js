@@ -318,7 +318,13 @@ function captureSelection(event) {
   // like a highlight does on its text. Marked `caret` so the C/D/G shortcuts
   // stay off - a keystroke there is the start of an edit, not a command.
   const caret = selection.isCollapsed || !selection.toString().trim();
-  const text = caret ? lineElementFor(range.startContainer, start).textContent.trim() : selection.toString().trim();
+  // A caret's line is the element's own text, not its nested lists.
+  const ownText = (line) => {
+    const clone = line.cloneNode(true);
+    clone.querySelectorAll("ul, ol, table, blockquote, pre").forEach((nested) => nested.remove());
+    return clone.textContent.replace(/\s+/g, " ").trim();
+  };
+  const text = caret ? ownText(lineElementFor(range.startContainer, start)) : selection.toString().trim();
   if (!text) {
     store.set({ selection: null });
     return;
@@ -329,6 +335,7 @@ function captureSelection(event) {
   const lineRect = (caret ? lineElementFor(range.startContainer, start).getBoundingClientRect() : (range.getClientRects()[0] || range.getBoundingClientRect()));
   const blockRect = start.getBoundingClientRect();
   const descriptor = {
+    anchor_left: Math.max(0, lineRect.left - blockRect.left),
     artifact: basename(store.document?.path || store.view.path || ""),
     path: store.document?.path || store.view.path,
     block: Number(block.index),
@@ -344,8 +351,11 @@ function captureSelection(event) {
   store.set({ selection: descriptor });
 }
 
-// The add-comment trigger lives in the left gutter beside the selected line -
-// where the thread bubbles live - never on the block's far side.
+// Two affordances, as in the reference editor:
+//   - a highlight gets a dark floating comment bubble just above the start of
+//     the selected text;
+//   - a caret placed in a line gets a quiet trigger in the left gutter beside
+//     that line, where the thread bubbles live.
 function showSelectionAffordance(selection) {
   elements.viewer?.querySelectorAll(".selection-add").forEach((button) => {
     button.remove();
@@ -357,17 +367,23 @@ function showSelectionAffordance(selection) {
   if (!block) return;
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "selection-add";
   button.innerHTML = icon("commentAdd", { size: 15 });
-  button.title = selection.caret ? "Comment on this line" : "Comment on selection (C)";
+  if (selection.caret) {
+    button.className = "selection-add gutter-trigger";
+    button.title = "Comment on this line";
+    const top = (selection.anchor_top ?? 0) + (selection.anchor_height ?? 20) / 2;
+    button.style.top = `${Math.round(top)}px`;
+    if (block.querySelector(".gutter .bubble") && top < 30) button.classList.add("beside-bubble");
+  } else {
+    button.className = "selection-add floating";
+    button.title = "Comment on selection (C)";
+    button.style.left = `${Math.round(selection.anchor_left ?? 0)}px`;
+    button.style.top = `${Math.round((selection.anchor_top ?? 0) - 6)}px`;
+  }
   button.setAttribute("aria-label", button.title);
-  const top = (selection.anchor_top ?? 0) + (selection.anchor_height ?? 20) / 2;
-  button.style.top = `${Math.round(top)}px`;
-  // Beside an existing thread bubble on the same block, step further left.
-  if (block.querySelector(".gutter .bubble") && top < 30) button.classList.add("beside-bubble");
   button.addEventListener("mousedown", (event) => event.preventDefault());
   button.addEventListener("click", () => {
-    const { caret: _caret, anchor_top: _t, anchor_height: _h, ...anchored } = selection;
+    const { caret: _caret, anchor_top: _t, anchor_height: _h, anchor_left: _l, ...anchored } = selection;
     emitCompose("comment", anchored);
   });
   block.append(button);
@@ -415,13 +431,21 @@ function applyAnnotations() {
   if (!doc || store.view.kind !== "artifact" || doc.format === "html" || !elements.viewer) return;
   const annotations = pendingAnnotations();
   const remarks = sentRemarks();
+  // `.editing` is only focus. The one block that must keep its DOM is the
+  // ARMED edit (the human is typing into its source); there, strip obsolete
+  // marks without touching the text and clear the gutter. Every other block
+  // is re-rendered from its HTML.
+  const armedWrapper = activeEdit?.armed ? activeEdit.wrapper : null;
   for (const block of doc.blocks) {
     const wrapper = blockElement(block.index);
-    if (!wrapper || wrapper.classList.contains("editing")) continue;
-    const content = wrapper.querySelector(".blk-content");
-    content.innerHTML = String(block.html || "");
-    wrapper.classList.remove("has-suggestion");
+    if (!wrapper) continue;
     wrapper.querySelector(".gutter").replaceChildren();
+    wrapper.classList.remove("has-suggestion");
+    if (wrapper === armedWrapper) {
+      for (const mark of wrapper.querySelectorAll(".mark")) mark.replaceWith(...mark.childNodes);
+      continue;
+    }
+    wrapper.querySelector(".blk-content").innerHTML = String(block.html || "");
   }
   for (const annotation of annotations) reservedAnnotationIds.add(annotation.id);
   assignHeadingIds(doc);
@@ -439,14 +463,16 @@ function applyAnnotations() {
     ...annotations.filter((annotation) => !edits.includes(annotation)).map((annotation) => ({ item: annotation, sent: false })),
     ...remarks.map((remark) => ({ item: remark, sent: true })),
   ];
-  // The gutter shows one bubble per line with the number of threads on it,
-  // not a running index — so a block with three remarks reads "3".
-  const perBlock = new Map();
+  // The gutter shows one bubble per LINE with the number of threads on that
+  // line, sitting beside the marked text - so a block with remarks on three
+  // different lines shows three bubbles at those lines, and a line with three
+  // remarks reads "3".
+  const perLine = new Map();
   for (const { item, sent } of marks) {
     const kind = annotationKind(item.kind);
     const quote = remarkQuote(item, sent);
     const block = sent ? remarkBlock(item, quote) : annotationBlock(item);
-    if (!block || block.classList.contains("editing")) continue;
+    if (!block || block === armedWrapper) continue;
     const content = block.querySelector(".blk-content");
     let marked = quote ? markText(content, quote, kind, item.id, sent) : false;
     if (!marked && sent && kind === "suggestion") {
@@ -454,10 +480,15 @@ function applyAnnotations() {
       marked = Boolean(blockText) && markText(content, blockText, kind, item.id, true);
     }
     if (!marked && kind === "suggestion") block.classList.add("has-suggestion");
-    if (!perBlock.has(block)) perBlock.set(block, []);
-    perBlock.get(block).push({ item, sent, kind });
+    const mark = block.querySelector(`.mark[data-${sent ? "remark" : "annotation"}="${cssEscape(item.id)}"]`);
+    // Centre the bubble on the marked line, as the reference does.
+    const markRect = mark?.getBoundingClientRect();
+    const top = markRect ? Math.max(0, markRect.top - block.getBoundingClientRect().top + (markRect.height - 22) / 2) : 0;
+    const key = `${block.dataset.block}:${Math.round(top / 8)}`;
+    if (!perLine.has(key)) perLine.set(key, { block, top, entries: [] });
+    perLine.get(key).entries.push({ item, sent, kind });
   }
-  for (const [block, entries] of perBlock) {
+  for (const { block, top, entries } of perLine.values()) {
     const first = entries[0];
     const pending = entries.filter((entry) => !entry.sent).length;
     const bubble = document.createElement("button");
@@ -468,6 +499,7 @@ function applyAnnotations() {
     const summary = entries.map((entry) => `${kindLabel(entry.kind)}${entry.sent ? ` (r${entry.item.revision ?? "?"})` : " (pending)"}`).join(", ");
     bubble.title = `${entries.length} ${entries.length === 1 ? "thread" : "threads"} · ${summary}`;
     bubble.setAttribute("aria-label", bubble.title);
+    bubble.style.top = `${Math.round(top)}px`;
     block.querySelector(".gutter").append(bubble);
   }
   showSelectionAffordance(store.selection);
