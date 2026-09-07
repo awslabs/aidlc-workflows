@@ -192,15 +192,21 @@
   width: 27px;
   pointer-events: none;
 }
-/* Each bubble sits beside the line it belongs to. */
-.gutter /* The gutter badge, as in the reference: an outlined pill with the thread
-   count. Grey once sent (the agent has it); amber while still yours to send,
-   and amber while hovered or selected. Selecting a badge selects its thread in
-   the rail; the rail card carries the blue selection ring. */
+/* Each badge sits beside the line it belongs to, flush to the gutter's right
+   edge so a wider count grows away from the text. */
+.gutter .bubble { position: absolute; right: 0; }
+
+/* The gutter badge, as in the reference: an outlined pill with a speech bubble
+   and the thread count. Grey once sent (the agent has it); amber while still
+   yours to send, and amber while hovered or selected. Selecting a badge selects
+   its thread in the rail; the rail card carries the blue selection ring. */
 .bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   min-width: 22px;
   height: 22px;
-  padding: 0 5px;
+  padding: 0 6px;
   border: 1.5px solid var(--amber-deep);
   border-radius: 999px;
   color: var(--amber-deep);
@@ -210,7 +216,9 @@
   pointer-events: auto;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
-.bubble svg { vertical-align: -2px; }
+.bubble svg { flex: none; }
+.bubble-count { font: 600 11px/1 var(--font); }
+.bubble.pencil { padding: 0 4px; }
 .bubble.sent {
   color: #9ca3af;
   border-color: #9ca3af;

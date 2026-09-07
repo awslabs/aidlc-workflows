@@ -656,13 +656,15 @@ function applyAnnotations() {
     bubble.dataset[first.sent ? "remark" : "annotation"] = first.item.id;
     bubble.dataset.threads = entries.map((entry) => entry.item.id).join(" ");
     bubble.classList.toggle("selected", entries.some((entry) => selectedThreadIds(store.focusThread).includes(String(entry.item.id))));
-    bubble.textContent = String(entries.length);
+    // A speech bubble with the count beside it, as the reference draws it.
+    bubble.innerHTML = `${icon("comment", { size: 13 })}<span class="bubble-count">${entries.length}</span>`;
     const summary = entries.map((entry) => `${kindLabel(entry.kind)}${entry.sent ? ` (r${entry.item.revision ?? "?"})` : " (pending)"}`).join(", ");
     bubble.title = `${entries.length} ${entries.length === 1 ? "thread" : "threads"} · ${summary}`;
     bubble.setAttribute("aria-label", bubble.title);
     bubble.style.top = `${Math.round(top)}px`;
     block.querySelector(".gutter").append(bubble);
   }
+  layoutGutterBadges();
   showSelectionAffordance(store.selection);
   // A comment being written keeps its highlight through the re-render.
   const composing = activePopover?.composing;
@@ -919,6 +921,31 @@ function focusAnnotation(value) {
   match.classList.remove("annotation-flash");
   requestAnimationFrame(() => match.classList.add("annotation-flash"));
   setTimeout(() => match.classList.remove("annotation-flash"), 1400);
+}
+
+/**
+ * Badges on the same line (a suggested edit's pencil and the comments on the
+ * block's first line, say) sit side by side, growing away from the text,
+ * instead of drawing over each other.
+ */
+function layoutGutterBadges() {
+  for (const gutter of elements.viewer.querySelectorAll(".gutter")) {
+    const badges = [...gutter.querySelectorAll(".bubble")].sort((left, right) => parseFloat(left.style.top || "0") - parseFloat(right.style.top || "0"));
+    let rowTop = null;
+    let offset = 0;
+    for (const badge of badges) {
+      const top = parseFloat(badge.style.top || "0");
+      if (rowTop !== null && Math.abs(top - rowTop) < 12) {
+        badge.style.right = `${offset}px`;
+        badge.style.top = `${rowTop}px`;
+      } else {
+        rowTop = top;
+        offset = 0;
+        badge.style.right = "0px";
+      }
+      offset += badge.getBoundingClientRect().width + 4;
+    }
+  }
 }
 
 /** The badge whose threads include the selected one reads as selected. */
