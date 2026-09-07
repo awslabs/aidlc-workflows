@@ -104,6 +104,7 @@ import {
   RESERVED_RECORD_NAMES,
   scopePathCovered,
   gridCostSummary,
+  hideAbandonedForListing,
   listIntents,
   listSpaces,
   loadAgents,
@@ -4625,10 +4626,10 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     const danglingRows: string[] = []; // registry rows whose dir vanished
     const orphanDirs: string[] = []; // on-disk dirs with no registry row
     for (const sp of listSpaces(projectDir)) {
-      // includeAbandoned=true so an abandoned intent's row still claims its
-      // on-disk dir: without it the row is filtered out and its (still-present)
-      // record dir would be mis-reported as an orphan.
-      for (const i of listIntents(projectDir, sp.name, undefined, true)) {
+      // listIntents is status-neutral, so an abandoned intent's row still
+      // claims its on-disk dir and that (preserved) dir is never mis-reported
+      // as an orphan.
+      for (const i of listIntents(projectDir, sp.name)) {
         if (i.uuid !== "" && i.dirName === null) {
           danglingRows.push(`${sp.name}/${i.slug} (uuid ${i.uuid.slice(0, 8)}…)`);
         } else if (i.uuid === "" && i.status === "unknown") {
@@ -6090,7 +6091,7 @@ function resolveIntentTarget(
     die(`Usage: aidlc-utility intent ${verb} <name>`);
   }
   const t = target as string;
-  const intents = listIntents(projectDir, space, activeOverride, true);
+  const intents = listIntents(projectDir, space, activeOverride);
   let match = intents.find((i) => i.dirName === t);
   if (!match) {
     const bySlug = intents.filter((i) => i.slug === t && i.dirName !== null);
@@ -6260,7 +6261,8 @@ function printIntentListing(
 ): void {
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
-  const intents = listIntents(projectDir, space, selection.intent, includeAbandoned);
+  const all = listIntents(projectDir, space, selection.intent);
+  const intents = includeAbandoned ? all : hideAbandonedForListing(all);
   const active = intents.find((i) => i.active);
   if (asJson) {
     process.stdout.write(
@@ -6283,9 +6285,7 @@ function printIntentListing(
   // branch: a space whose only intents are abandoned is not an empty space, and
   // saying "no intents yet — start one" there would invite a duplicate of work
   // the operator deliberately retired. Cheap re-read of the same registry.
-  const hidden = includeAbandoned
-    ? 0
-    : listIntents(projectDir, space, selection.intent, true).length - intents.length;
+  const hidden = all.length - intents.length;
   const revealHint = `show with /aidlc intent list --all`;
   if (intents.length === 0) {
     process.stdout.write(
@@ -6388,7 +6388,7 @@ function handleIntent(
   // misleading "Unknown intent" just because the default listing hides it. The
   // switch itself is still refused: see the abandoned guard after the match.
   // The abandon/restore verbs resolve their own targets separately.
-  const intents = listIntents(projectDir, space, selection.intent, true);
+  const intents = listIntents(projectDir, space, selection.intent);
   // Exact record-dir match first; then a unique slug match.
   let match = intents.find((i) => i.dirName === target);
   if (!match) {

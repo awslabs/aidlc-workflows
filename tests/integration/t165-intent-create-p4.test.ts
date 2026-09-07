@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:clearActiveIntentCursor, function:isAbandonedStatus, function:isAbandonedRecord, function:recordDirMatches, function:activeIntent
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:clearActiveIntentCursor, function:hideAbandonedForListing, function:isAbandonedStatus, function:isAbandonedRecord, function:recordDirMatches, function:activeIntent
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -38,6 +38,7 @@ import {
   activeIntent,
   activeSpace,
   authoritativeProjectDescription,
+  hideAbandonedForListing,
   listIntents,
   listSpaces,
   PROJECT_DESCRIPTION_FILE,
@@ -946,11 +947,13 @@ describe("t164 intent status lifecycle", () => {
     expect(row?.status).toBe("abandoned");
     expect(existsSync(join(intentsDir(proj), authDir, "aidlc-state.md"))).toBe(true);
 
-    // Default listing hides it; --all reveals it.
-    expect(listIntents(proj).some((i) => i.dirName === authDir)).toBe(false);
-    expect(listIntents(proj, undefined, undefined, true).some((i) => i.dirName === authDir)).toBe(
-      true,
-    );
+    // listIntents is status-NEUTRAL: the shared reader still reports the row, so
+    // identity lookups, doctor, and the knowledge tool keep seeing it. Hiding is
+    // the listing's job, applied by hideAbandonedForListing.
+    expect(listIntents(proj).some((i) => i.dirName === authDir)).toBe(true);
+    expect(
+      hideAbandonedForListing(listIntents(proj)).some((i) => i.dirName === authDir),
+    ).toBe(false);
 
     // --json default hides it too.
     const listJson = JSON.parse(util(["intent", "list", "--json"]).stdout) as {

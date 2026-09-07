@@ -860,8 +860,9 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
   switch (command.kind) {
     case "list": {
       // `list` is implicit in the bare `[noun]` form the utility already treats
-      // as the listing; only the flags need forwarding.
-      const argv = [command.noun];
+      // as the listing; only the flags need forwarding. Typed as string[] because
+      // the flags widen it past WorkspaceNoun.
+      const argv: string[] = [command.noun];
       if (command.json) argv.push("--json");
       if (command.all) argv.push("--all");
       return argv;
@@ -2561,7 +2562,6 @@ export function listIntents(
   projectDir: string,
   space?: string,
   activeIntentOverride?: string | null,
-  includeAbandoned = false,
 ): IntentInfo[] {
   const sp = space ?? activeSpace(projectDir);
   const registry = readIntentRegistry(projectDir, sp);
@@ -2598,15 +2598,23 @@ export function listIntents(
       active: d === activeDir,
     });
   }
-  // Abandoned intents are terminal and, by default, hidden from the listing so
-  // it reflects only live work — the whole point of the abandon verb. Callers
-  // that want the full picture (the `--all` listing, the doctor reconciliation)
-  // pass includeAbandoned=true. An abandoned row that is somehow STILL active is
-  // never hidden: leaving the active intent invisible would strand the user.
-  // activeIntent() refuses to infer an abandoned record and the switch arm
-  // refuses to select one, so this only fires for an explicit override (a stale
-  // session binding, --intent) — exactly the case that must stay visible.
-  if (includeAbandoned) return infos;
+  // Deliberately status-NEUTRAL: every row is returned, abandoned included.
+  // This is the one shared reader behind identity lookups (findIntentByUuid,
+  // activeIntentUuid), the doctor registry/record-dir reconciliation, the
+  // knowledge tool's inactive-status refusal, and the statusline — all of which
+  // need the full picture. Hiding abandoned work is a LISTING concern, so it
+  // lives at the listing (see hideAbandonedForListing / printIntentListing),
+  // not here where it would silently change what every consumer sees.
+  return infos;
+}
+
+// The default `/aidlc intent` view: live work only. Abandoned intents are
+// terminal, so they drop out unless the caller asked for `--all`. An abandoned
+// row that is somehow STILL active is never hidden — leaving the active intent
+// invisible would strand the operator. activeIntent() refuses to infer an
+// abandoned record and the switch arm refuses to select one, so that only
+// happens for an explicit override (a stale session binding, --intent).
+export function hideAbandonedForListing(infos: IntentInfo[]): IntentInfo[] {
   return infos.filter((i) => !isAbandonedStatus(i.status) || i.active);
 }
 
