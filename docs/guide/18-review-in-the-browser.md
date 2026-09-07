@@ -79,11 +79,10 @@ the row reveals **Questions**, produced artifacts, and the stage memory when
 present. Current stages open by default, done stages stay folded, phase headings
 fold a whole phase, and **Collapse all** / **Expand all** folds or opens the
 tree. Skipped stages name the reason and show that nothing was produced;
-upcoming stages say what they will ask and produce. The footer shows the agent
-state read from the record (*Agent working*, *Agent waiting for you*, *Agent
-revising*, *Workflow complete*), an **All files** list of the intent's
-reviewable files, and a note pointing at the audit ledger, which stays in the
-terminal record and is never served. Use the rail's Workflow icon to hide the
+upcoming stages say what they will ask and produce. The footer holds an **All
+files** list of the intent's reviewable files and a note pointing at the audit
+ledger, which stays in the terminal record and is never served; what the agent
+is doing is stated once, in the header. Use the rail's Workflow icon to hide the
 panel for a wider document view.
 
 The header keeps the current workspace, intent, phase, and stage path beside a

@@ -321,7 +321,7 @@ function renderPanel() {
   </div>
   <div class="workflow-bar"><b>Stages</b><span>${stageTotal} · ${stageDone} done</span><button type="button" data-collapse-all>${collapseAll ? "Expand all" : "Collapse all"}</button></div>
   <div class="workflow-tree">${phaseList.length ? phaseList.map(renderPhase).join("") : '<div class="workflow-tree-empty">No stages reported yet. The terminal workflow remains available.</div>'}</div>
-  <footer class="workflow-footer"><span class="agent-dot ${escapeHtml(workflow.agent_status || "idle")}"></span><span>${escapeHtml(agentStatusLabel(workflow.agent_status))}</span><button type="button" data-all-files>All files</button><span class="audit-note" title="The audit ledger stays in the terminal record: aidlc/spaces/${escapeHtml(workflow.space || "default")}/intents/${escapeHtml(workflow.intent || "…")}/audit/">Audit in record</span></footer>`;
+  <footer class="workflow-footer"><button type="button" data-all-files>All files</button><span class="audit-note" title="The audit ledger stays in the terminal record: aidlc/spaces/${escapeHtml(workflow.space || "default")}/intents/${escapeHtml(workflow.intent || "…")}/audit/">Audit in record</span></footer>`;
 }
 
 function overviewLead(stage) {
@@ -544,10 +544,3 @@ export function init() {
   render();
 }
 
-function agentStatusLabel(status) {
-  if (status === "waiting") return "Agent waiting for you";
-  if (status === "revising") return "Agent revising";
-  if (status === "writing") return "Agent working";
-  if (status === "done") return "Workflow complete";
-  return "Agent idle";
-}

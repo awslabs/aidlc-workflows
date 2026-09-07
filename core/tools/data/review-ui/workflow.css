@@ -169,13 +169,7 @@ button.workflow-child:hover { background: var(--panel); }
 .workflow-child.missing { color: var(--faint); }
 .workflow-child.hint { grid-template-columns: 18px minmax(0, 1fr); color: var(--faint); font-size: 11px; line-height: 1.35; cursor: default; }
 .workflow-footer { min-height: 42px; display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-top: 1px solid var(--line2); color: var(--muted); background: var(--panel); font-size: 10.5px; }
-.agent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
-.agent-dot.waiting { background: var(--accent); }
-.agent-dot.revising,
-.agent-dot.writing { background: var(--amber); }
-.agent-dot.idle { background: var(--faint); }
-.agent-dot.done { background: var(--green); }
-.workflow-footer button { margin-left: auto; color: var(--muted); font-size: 10.5px; }
+.workflow-footer button { color: var(--muted); font-size: 10.5px; }
 .workflow-footer button:hover { color: var(--ink); }
 .audit-note { cursor: help; color: var(--muted); }
 .workflow-placeholder,
