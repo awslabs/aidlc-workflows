@@ -674,7 +674,7 @@ function bindThreads() {
   for (const card of slot.querySelectorAll("[data-thread-id]")) card.addEventListener("click", (event) => {
     if (event.target.closest("button")) return;
     const id = card.dataset.threadId;
-    store.set({ focusThread: id });
+    store.focusThread = id;
     // Clicking into the card's own inputs selects it without scrolling the
     // document away from where the reader is typing.
     store.emit("focus", event.target.closest("textarea, select") ? { id, source: "rail-input" } : id);
@@ -717,7 +717,11 @@ function bindThreads() {
 
 function focusThread(value, emit = true) {
   const ids = selectedThreadIds(value);
-  for (const card of slot.querySelectorAll("[data-thread-id]")) card.classList.toggle("focused", ids.includes(card.dataset.threadId));
+  for (const card of slot.querySelectorAll("[data-thread-id]")) {
+    const selected = ids.includes(card.dataset.threadId);
+    card.classList.toggle("focused", selected);
+    card.setAttribute("aria-selected", String(selected));
+  }
   const match = [...slot.querySelectorAll("[data-thread-id]")].find((card) => ids.includes(card.dataset.threadId));
   // Bring the selected card fully into the rail's view; "nearest" leaves a
   // card that is only partly visible where it is.

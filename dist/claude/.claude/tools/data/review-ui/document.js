@@ -72,6 +72,8 @@ function renderView(view) {
   if (activeEdit) finishEdit(activeEdit);
   hideToolbar();
   closeCommentPopover();
+  // A new document starts with nothing selected in the rail.
+  if (store.focusThread) store.set({ focusThread: null });
   activeEdit = null;
   htmlFrame = null;
   if (view.kind === "artifact" && view.path) {
@@ -563,7 +565,9 @@ function handleViewerClick(event) {
 function selectThreadFromDocument(value) {
   const ids = selectedThreadIds(value);
   if (!ids.length) return;
-  store.set({ focusThread: ids.length === 1 ? ids[0] : ids });
+  // Stored without its own notification: the single "focus" below is what
+  // the rail (ring + scroll) and the badges react to.
+  store.focusThread = ids.length === 1 ? ids[0] : ids;
   if (store.panel !== "threads") store.set({ panel: "threads" });
   store.emit("focus", { ids, source: "document" });
 }
@@ -906,7 +910,10 @@ function focusAnnotation(value) {
   // a card's input: the reader is where they want to be; only the rail moves.
   if (value?.source === "document" || value?.source === "rail-input") return;
   const escaped = cssEscape(id);
-  const match = elements.viewer.querySelector(`[data-annotation="${escaped}"], [data-remark="${escaped}"]`);
+  // The marked text itself when it exists; the gutter badge otherwise (edits,
+  // or a quote the current text no longer contains).
+  const match = elements.viewer.querySelector(`.mark[data-annotation="${escaped}"], .mark[data-remark="${escaped}"]`)
+    || elements.viewer.querySelector(`[data-annotation="${escaped}"], [data-remark="${escaped}"]`);
   if (!match) return;
   match.scrollIntoView({ behavior: "smooth", block: "center" });
   match.classList.remove("annotation-flash");
