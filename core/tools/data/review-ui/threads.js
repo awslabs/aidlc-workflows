@@ -683,16 +683,18 @@ function renderPending(annotation) {
     const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
     return `<article class="thread-card pending-card edit-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
       ${headRow(where, `<span class="thread-kind">Edit</span>`, { plain: true })}
-      <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
+      <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
       <p class="edit-summary">${summary}</p>
       <textarea rows="1" placeholder="Add a reason (optional)">${escapeHtml(annotation.body || "")}</textarea>
+      ${reactionsHtml(annotation.id)}
       <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
     </article>`;
   }
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${headRow(annotation.selection, kindSelect(annotation.kind))}
-    <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
+    <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
+    ${reactionsHtml(annotation.id)}
     <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Remove</button></div>
   </article>`;
 }
