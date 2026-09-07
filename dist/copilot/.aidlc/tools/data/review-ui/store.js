@@ -40,6 +40,20 @@ export const store = {
   },
 };
 
+/**
+ * The selected threads as ids. `store.focusThread` holds one id or, when a
+ * badge that groups several threads on one line is selected, an array of them
+ * - the reference selects every thread the badge counts, at once.
+ */
+export function selectedThreadIds(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? (Array.isArray(value.ids) ? value.ids : [value.id])
+      : [value];
+  return raw.filter((id) => id !== null && id !== undefined && id !== "").map(String);
+}
+
 /** sessionStorage key for pending annotations of the current stage/revision. */
 export function annotationsKey(state) {
   const current = state?.current;

@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { diffOps, escapeHtml } from "./diff.js";
-import { agentFor, decisionInFlight, persistAnnotations, setNotice, store } from "./store.js";
+import { agentFor, decisionInFlight, persistAnnotations, setNotice, store, selectedThreadIds } from "./store.js";
 
 const slot = document.getElementById("slot");
 const KINDS = [
@@ -674,7 +674,6 @@ function bindThreads() {
   for (const card of slot.querySelectorAll("[data-thread-id]")) card.addEventListener("click", (event) => {
     if (event.target.closest("button")) return;
     const id = card.dataset.threadId;
-    if (store.focusThread === id) return;
     store.set({ focusThread: id });
     // Clicking into the card's own inputs selects it without scrolling the
     // document away from where the reader is typing.
@@ -717,9 +716,9 @@ function bindThreads() {
 }
 
 function focusThread(value, emit = true) {
-  const id = typeof value === "object" ? value?.id : value;
-  for (const card of slot.querySelectorAll("[data-thread-id]")) card.classList.toggle("focused", card.dataset.threadId === String(id));
-  const match = [...slot.querySelectorAll("[data-thread-id]")].find((card) => card.dataset.threadId === String(id));
+  const ids = selectedThreadIds(value);
+  for (const card of slot.querySelectorAll("[data-thread-id]")) card.classList.toggle("focused", ids.includes(card.dataset.threadId));
+  const match = [...slot.querySelectorAll("[data-thread-id]")].find((card) => ids.includes(card.dataset.threadId));
   // Bring the selected card fully into the rail's view; "nearest" leaves a
   // card that is only partly visible where it is.
   if (match) {
@@ -728,7 +727,7 @@ function focusThread(value, emit = true) {
     const rr = rail.getBoundingClientRect();
     if (r.top < rr.top + 8 || r.bottom > rr.bottom - 8) match.scrollIntoView({ block: "center", behavior: "smooth" });
   }
-  if (emit && id && store.focusThread !== id) store.focusThread = id;
+  if (emit && ids.length && selectedThreadIds(store.focusThread).join(" ") !== ids.join(" ")) store.focusThread = ids.length === 1 ? ids[0] : ids;
 }
 
 function kindSelect(kind) {

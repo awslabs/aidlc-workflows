@@ -2,7 +2,7 @@
 import { api } from "./api.js";
 import { trackedChangesFragment, wordDiffHtml } from "./diff.js";
 import { icon } from "./icons.js";
-import { agentFor, decisionInFlight, persistAnnotations, setNotice, store } from "./store.js";
+import { agentFor, decisionInFlight, persistAnnotations, setNotice, store, selectedThreadIds } from "./store.js";
 
 const elements = {};
 let loadVersion = 0;
@@ -373,7 +373,7 @@ function captureSettled(target) {
   const markAtCaret = caret ? elementForNode(caretNode)?.closest(".mark[data-annotation], .mark[data-remark]") : null;
   if (markAtCaret) {
     const id = markAtCaret.dataset.annotation || markAtCaret.dataset.remark;
-    if (id && store.focusThread !== id) selectThreadFromDocument(id);
+    if (id && !selectedThreadIds(store.focusThread).includes(id)) selectThreadFromDocument(id);
   }
   // A caret's line is the element's own text, not its nested lists.
   const ownText = (line) => {
@@ -545,9 +545,13 @@ function emitCompose(kind, selection) {
 function handleViewerClick(event) {
   const anchor = event.target.closest("[data-annotation], [data-remark]");
   if (!anchor) return;
-  const id = anchor.dataset.annotation || anchor.dataset.remark;
-  if (!id) return;
-  selectThreadFromDocument(id);
+  // A badge counts every thread on its line: clicking it selects all of them,
+  // as the reference does. A mark is one thread.
+  const ids = anchor.classList.contains("bubble") && anchor.dataset.threads
+    ? anchor.dataset.threads.split(" ")
+    : [anchor.dataset.annotation || anchor.dataset.remark];
+  if (!ids[0]) return;
+  selectThreadFromDocument(ids);
 }
 
 /**
@@ -556,10 +560,12 @@ function handleViewerClick(event) {
  * card gets the selection ring and scrolls into view, and the document itself
  * does not move - the reader is already looking at the place.
  */
-function selectThreadFromDocument(id) {
-  store.set({ focusThread: id });
+function selectThreadFromDocument(value) {
+  const ids = selectedThreadIds(value);
+  if (!ids.length) return;
+  store.set({ focusThread: ids.length === 1 ? ids[0] : ids });
   if (store.panel !== "threads") store.set({ panel: "threads" });
-  store.emit("focus", { id, source: "document" });
+  store.emit("focus", { ids, source: "document" });
 }
 
 function applyAnnotations() {
@@ -645,7 +651,7 @@ function applyAnnotations() {
     bubble.className = `bubble ${first.kind}${pending ? "" : " sent"}`;
     bubble.dataset[first.sent ? "remark" : "annotation"] = first.item.id;
     bubble.dataset.threads = entries.map((entry) => entry.item.id).join(" ");
-    bubble.classList.toggle("selected", entries.some((entry) => entry.item.id === store.focusThread));
+    bubble.classList.toggle("selected", entries.some((entry) => selectedThreadIds(store.focusThread).includes(String(entry.item.id))));
     bubble.textContent = String(entries.length);
     const summary = entries.map((entry) => `${kindLabel(entry.kind)}${entry.sent ? ` (r${entry.item.revision ?? "?"})` : " (pending)"}`).join(", ");
     bubble.title = `${entries.length} ${entries.length === 1 ? "thread" : "threads"} · ${summary}`;
@@ -721,7 +727,7 @@ function renderSuggestedEdit(edit, sent) {
   bubble.className = `bubble suggestion${sent ? " sent" : ""} pencil`;
   bubble.dataset.annotation = edit.id;
   bubble.dataset.threads = edit.id;
-  bubble.classList.toggle("selected", edit.id === store.focusThread);
+  bubble.classList.toggle("selected", selectedThreadIds(store.focusThread).includes(String(edit.id)));
   bubble.title = sent ? "Your suggested edit (sent)" : "Your suggested edit (not sent yet)";
   bubble.setAttribute("aria-label", bubble.title);
   bubble.innerHTML = icon("edit", { size: 12 });
@@ -892,9 +898,10 @@ function markText(root, text, kind, id, sent = false) {
 }
 
 function focusAnnotation(value) {
-  const id = typeof value === "string" ? value : value?.id;
+  const ids = selectedThreadIds(value);
+  const id = ids[0];
   if (!id || !elements.viewer) return;
-  markSelectedBadge(id);
+  markSelectedBadge(ids);
   // Selected from the document itself (badge, mark, caret) or by clicking into
   // a card's input: the reader is where they want to be; only the rail moves.
   if (value?.source === "document" || value?.source === "rail-input") return;
@@ -908,9 +915,10 @@ function focusAnnotation(value) {
 }
 
 /** The badge whose threads include the selected one reads as selected. */
-function markSelectedBadge(id) {
+function markSelectedBadge(value) {
+  const ids = selectedThreadIds(value);
   for (const bubble of elements.viewer.querySelectorAll(".gutter .bubble")) {
-    bubble.classList.toggle("selected", Boolean(id) && (bubble.dataset.threads || "").split(" ").includes(String(id)));
+    bubble.classList.toggle("selected", (bubble.dataset.threads || "").split(" ").some((id) => ids.includes(id)));
   }
 }
 
