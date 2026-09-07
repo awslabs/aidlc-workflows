@@ -395,9 +395,10 @@ function renderOverview() {
 }
 
 /**
- * The files a human edits or reviews: each stage's questions file, produced
- * artifacts, and stage memory — nothing the engine keeps for itself (graph
- * caches, tokens, guides rendered inside Questions). Grouped in workflow order.
+ * The files a human edits or reviews: each stage's questions file and produced
+ * artifacts. Not the stage memory (the agent's diary, reachable from the tree),
+ * and nothing the engine keeps for itself (graph caches, tokens, guides
+ * rendered inside Questions). Grouped in workflow order.
  */
 function reviewableRows(entries) {
   const byPath = new Map((entries || []).filter((entry) => entry.type === "file").map((entry) => [entry.path, entry]));
@@ -410,7 +411,6 @@ function reviewableRows(entries) {
     };
     add(stage.questions?.file, "Questions");
     for (const artifact of stage.artifacts || []) add(artifact.path, "Artifact");
-    add(stage.memory, "Memory");
     if (rows.length) groups.push({ stage, rows });
   }
   return groups;
@@ -433,7 +433,7 @@ async function showAllFiles() {
     if (!filesMode) return;
     const back = fallbackStage ? `<button type="button" class="record-back" data-stage-overview="${escapeHtml(fallbackStage.slug)}">← ${escapeHtml(fallbackStage.name || titleCase(fallbackStage.slug))}</button>` : "";
     const count = reviewableRows(data.entries).reduce((total, group) => total + group.rows.length, 0);
-    overview.innerHTML = `<div class="record-tree-page">${back}<h1>All files${count ? `<small>${count}</small>` : ""}</h1><p>The files you review or answer in <code>${escapeHtml(store.workflow?.intent || "the active record")}</code>: each stage's questions, artifacts, and memory.</p>${treeRows(data.entries)}</div>`;
+    overview.innerHTML = `<div class="record-tree-page">${back}<h1>All files${count ? `<small>${count}</small>` : ""}</h1><p>The files you review or answer in <code>${escapeHtml(store.workflow?.intent || "the active record")}</code>: each stage's questions and artifacts.</p>${treeRows(data.entries)}</div>`;
   } catch (error) {
     if (!filesMode) return;
     overview.innerHTML = `<div class="workflow-placeholder"><b>File tree unavailable</b><span>${escapeHtml(error.message)}. Browse the record from the terminal.</span></div>`;
