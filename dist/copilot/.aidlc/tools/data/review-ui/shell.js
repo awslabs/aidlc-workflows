@@ -259,9 +259,6 @@ function pickerItems(stage) {
   for (const artifact of stageArtifacts(stage)) {
     if (artifact.path) items.push({ kind: "artifact", path: artifact.path, label: basename(artifact.path), missing: !artifact.exists });
   }
-  if (stage.memory && !items.some((item) => item.path === stage.memory)) {
-    items.push({ kind: "artifact", path: stage.memory, label: "memory.md" });
-  }
   items.push({ kind: "overview", path: "", label: `${stage.name} · overview` });
   return items;
 }

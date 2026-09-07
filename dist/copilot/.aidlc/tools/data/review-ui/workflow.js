@@ -3,9 +3,9 @@ import { api } from "./api.js";
 import { store } from "./store.js";
 import { icon } from "./icons.js";
 
+const BOOK_ICON = icon("book", { size: 14 });
 const FILE_ICON = icon("documentText", { size: 14 });
 const QUESTION_ICON = icon("question", { size: 14 });
-const MEMORY_ICON = icon("book", { size: 14 });
 
 let panel;
 let overview;
@@ -182,13 +182,6 @@ function artifactChild(stage, artifact) {
   </button>`;
 }
 
-function memoryChild(stage) {
-  if (!stage.memory) return "";
-  const selected = isSelected(stage, "artifact", stage.memory);
-  return `<button type="button" class="workflow-child memory ${selected ? "on" : ""} ${stage.state !== "current" ? "past" : ""}" data-child-kind="artifact" data-stage="${escapeHtml(stage.slug)}" data-path="${escapeHtml(stage.memory)}">
-    <span class="child-icon">${MEMORY_ICON}</span><span class="child-label"><code>${escapeHtml(basename(stage.memory))}</code></span><span class="child-meta">diary</span>
-  </button>`;
-}
 
 function upcomingHint(stage) {
   const names = (stage.produces?.length ? stage.produces : stageArtifacts(stage).map((artifact) => artifact.path)).map(basename);
@@ -204,7 +197,7 @@ function naturalList(items) {
 }
 
 function stageChildren(stage) {
-  if (stage.state === "conditional" && !stage.questions && !(stage.artifacts || []).some((artifact) => artifact.exists) && !stage.memory) return "";
+  if (stage.state === "conditional" && !stage.questions && !(stage.artifacts || []).some((artifact) => artifact.exists)) return "";
   if (stage.state === "skipped") {
     return `<div class="workflow-children"><div class="workflow-child hint"><span></span><span>${escapeHtml(stage.reason || "Not in this intent's scope")} — nothing produced.</span></div></div>`;
   }
@@ -212,8 +205,7 @@ function stageChildren(stage) {
     return `<div class="workflow-children">${upcomingHint(stage)}</div>`;
   }
   const artifacts = stageArtifacts(stage).map((artifact) => artifactChild(stage, artifact)).join("");
-  const memoryAlreadyListed = stageArtifacts(stage).some((artifact) => artifact.path === stage.memory);
-  return `<div class="workflow-children">${questionChild(stage)}${artifacts}${memoryAlreadyListed ? "" : memoryChild(stage)}</div>`;
+  return `<div class="workflow-children">${questionChild(stage)}${artifacts}</div>`;
 }
 
 function renderStage(stage) {
@@ -390,13 +382,32 @@ function renderOverview() {
       <section class="overview-card"><h2>Builds on</h2>${cardList(prior, "The workflow record and prior human decisions.", (artifact) => `<li><span>${FILE_ICON}</span><code>${escapeHtml(basename(artifact.path))}</code><em class="ready">${escapeHtml(artifact.stage.name || titleCase(artifact.stage.slug))}</em></li>`)}</section>
       <section class="overview-card then-card"><h2>Then</h2>${next.length ? `<ul>${next.map((candidate) => `<li><span class="stage-glyph ${escapeHtml(stageClass(candidate))}">${glyph(candidate)}</span><span class="then-label"><b>${escapeHtml(candidate.name || titleCase(candidate.slug))}</b>${candidate.state === "conditional" ? `<small> · ${escapeHtml(candidate.condition || "conditional")}</small>` : `<small> · ${escapeHtml(statusLabel(candidate))}</small>`}</span></li>`).join("")}</ul>` : '<p>This is the final stage in the projected workflow.</p>'}</section>
     </div>
+    ${stage.memory ? `<details class="stage-diary"><summary><span>${BOOK_ICON}</span><b>Diary</b><small>the agent's interpretations, deviations, trade-offs, and open questions while ${escapeHtml(stage.name || titleCase(stage.slug))} runs</small></summary><div class="diary-body"><p class="overview-placeholder">Reading…</p></div></details>` : ""}
     <aside class="scope-note"><b>${escapeHtml(store.workflow?.scope || "Selected")} scope</b> · ${escapeHtml(store.workflow?.depth || "Depth not reported")} depth. This projection comes from the compiled workflow graph and record; use the terminal for every equivalent action.</aside>
   </div>`;
+  const diary = overview.querySelector(".stage-diary");
+  if (diary) diary.addEventListener("toggle", () => { if (diary.open) loadDiary(diary, stage); }, { once: true });
+}
+
+/** The diary is read on demand: it is the agent's working notes, not a review target. */
+async function loadDiary(details, stage) {
+  const body = details.querySelector(".diary-body");
+  try {
+    const rendered = await api.get("/api/render", { path: stage.memory, intent: store.workflow?.intent || undefined });
+    const entries = (rendered.source || "").split("\n").filter((line) => /^\s*-\s+\d{4}-\d{2}-\d{2}T/.test(line)).length;
+    if (!entries) {
+      body.innerHTML = '<p class="overview-placeholder">Nothing recorded yet. Entries appear here as the agent makes a call the stage prose left open, departs from it, or weighs alternatives; at the approval gate they are offered back as candidate learnings.</p>';
+      return;
+    }
+    body.innerHTML = `<div class="diary-entries">${(rendered.blocks || []).map((block) => block.html).join("")}</div>`;
+  } catch (error) {
+    body.innerHTML = `<p class="overview-placeholder">Diary unavailable: ${escapeHtml(error.message)}. It stays in the terminal record at <code>${escapeHtml(stage.memory)}</code>.</p>`;
+  }
 }
 
 /**
  * The files a human edits or reviews: each stage's questions file and produced
- * artifacts. Not the stage memory (the agent's diary, reachable from the tree),
+ * artifacts. Not the stage memory (the agent's diary, folded on the overview),
  * and nothing the engine keeps for itself (graph caches, tokens, guides
  * rendered inside Questions). Grouped in workflow order.
  */
@@ -465,7 +476,7 @@ function handleTreeFile(path) {
     questionsView(owner);
     return;
   }
-  const stage = stages().find((entry) => entry.memory === path || (entry.artifacts || []).some((artifact) => artifact.path === path));
+  const stage = stages().find((entry) => (entry.artifacts || []).some((artifact) => artifact.path === path));
   if (!stage) return;
   const artifact = (stage.artifacts || []).find((entry) => entry.path === path) || { path, name: basename(path), exists: true };
   artifactView(stage, artifact);

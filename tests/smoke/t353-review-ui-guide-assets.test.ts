@@ -56,6 +56,12 @@ describe("t353 — review UI browser questions assets", () => {
     // A question round has one action: the browser is the form, not a file editor.
     expect(shell).not.toContain("terminal-edit");
 
+    // The diary is a folded overview section, never a tree row or dropdown entry.
+    const workflow = asset("workflow.js");
+    expect(workflow).toContain('class="stage-diary"');
+    expect(workflow).not.toContain("memoryChild");
+    expect(shell).not.toContain('label: "memory.md"');
+
     const css = asset("questions.css");
     expect(css).toMatch(/\.qblock\b/);
     expect(css).toMatch(/\.explain\b/);

@@ -210,6 +210,19 @@ button.workflow-child:hover { background: var(--panel); }
 .then-label b { font-size: 12px; font-weight: 650; }
 .then-label small { color: var(--muted); font-size: 10.5px; }
 .overview-placeholder { color: var(--faint); font-size: 12px; }
+.stage-diary { margin-top: 18px; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); }
+.stage-diary summary { display: flex; align-items: center; gap: 8px; padding: 11px 14px; cursor: pointer; list-style: none; color: var(--muted); font-size: 12px; }
+.stage-diary summary::-webkit-details-marker { display: none; }
+.stage-diary summary::before { content: "›"; display: inline-block; width: 8px; color: var(--faint); transition: transform .12s; }
+.stage-diary[open] summary::before { transform: rotate(90deg); }
+.stage-diary summary svg { width: 14px; height: 14px; color: var(--muted); }
+.stage-diary summary b { color: var(--ink); font-weight: 600; }
+.stage-diary summary small { color: var(--muted); }
+.diary-body { padding: 0 16px 14px; }
+.diary-body .overview-placeholder { margin: 0; }
+.diary-entries h2 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.diary-entries ul { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.55; }
+.diary-entries blockquote { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .scope-note { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--line2); border-radius: 10px; color: var(--muted); background: var(--panel); font-size: 12px; line-height: 1.55; }
 .scope-note b { color: var(--ink); }
 .record-files { margin: 0; padding: 0; border-top: 1px solid var(--line2); list-style: none; }

@@ -75,14 +75,17 @@ you**, **In progress**, and **Done**, and shows the active scope, depth, phase,
 and stage count.
 
 The stage tree is grouped by phase. A stage row opens its overview; expanding
-the row reveals **Questions**, produced artifacts, and the stage memory when
-present. Current stages open by default, done stages stay folded, phase headings
+the row reveals **Questions** and the produced artifacts — the files you act
+on. The stage's diary (`memory.md`, the agent's own interpretations, deviations,
+trade-offs, and open questions, which the approval gate offers back as candidate
+learnings) is a folded **Diary** section at the foot of the stage overview, read
+on demand; it is not a row. Current stages open by default, done stages stay folded, phase headings
 fold a whole phase, and **Collapse all** / **Expand all** folds or opens the
 tree. Skipped stages name the reason and show that nothing was produced;
 upcoming stages say what they will ask and produce. The footer holds **All
 files** — the files you review or answer, grouped by stage: each stage's
 questions and produced artifacts, every row opening the same view the tree
-does. Stage memory (the agent's diary, still reachable from the stage row) and
+does. The stage diary (folded on the stage overview) and
 engine bookkeeping (graph caches, tokens, the explainer rendered inside
 Questions) are not listed. Beside it, a note points at the audit ledger,
 which stays in the terminal record and is never served; what the agent is doing
@@ -91,7 +94,7 @@ panel for a wider document view.
 
 The header keeps the current workspace, intent, phase, and stage path beside a
 file-name dropdown. The dropdown switches among the stage's questions,
-artifacts, memory, and overview even when the workflow panel is hidden. The
+artifacts, and overview even when the workflow panel is hidden. The
 state sentence explains why the item needs you; the dot reports the daemon
 connection. On an artifact, **Threads · History · Outline** select the one
 right-hand panel. At a live gate the same header carries **Request changes** and
