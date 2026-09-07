@@ -197,7 +197,7 @@ function renderRail() {
   const count = needsYouCount();
   rail.innerHTML = `
     <button class="logo" type="button" data-action="inbox" title="AI-DLC Workflows · Inbox" aria-label="AI-DLC Workflows home">A</button>
-    <button type="button" data-action="inbox" class="${store.view.kind === "inbox" ? "on" : ""}" title="Inbox · ${count} need you" aria-label="Inbox, ${count} need you">
+    <button type="button" data-action="inbox" class="${store.view.kind === "inbox" ? "on" : ""}" title="Inbox · ${count} ${count === 1 ? "needs" : "need"} you" aria-label="Inbox, ${count} ${count === 1 ? "needs" : "need"} you">
       ${ICONS.inbox}${count ? `<span class="rail-badge">${count}</span>` : ""}
     </button>
     <button type="button" data-action="workflow" class="${store.sidebar ? "on" : ""}" title="Workflow${store.sidebar ? " · visible" : " · hidden"}" aria-pressed="${store.sidebar}">
@@ -218,7 +218,7 @@ function viewState(view, stage) {
   const time = stageTimestamp(stage);
   if (view.kind === "inbox") {
     const count = needsYouCount();
-    return { label: count ? `${count} ${count === 1 ? "item" : "items"} need you` : "Nothing waiting", detail: "Every browser action remains available from the terminal.", tone: count ? "needs" : "ok" };
+    return { label: count ? `${count} ${count === 1 ? "item needs" : "items need"} you` : "Nothing waiting", detail: "", tone: count ? "needs" : "ok" };
   }
   if (!stage) return { label: "Workflow unavailable", detail: "The terminal record remains complete.", tone: "quiet" };
   if (view.kind === "questions") {
@@ -399,7 +399,7 @@ function renderInbox() {
     return;
   }
   inbox.innerHTML = `<div class="inbox-page">
-    <div class="inbox-heading"><div><p>Workspace · ${escapeHtml(store.workflow.space || "default")}</p><h1>Inbox</h1><span>Human moments across every intent in this workspace.</span></div><b>${needsYouCount()} need you</b></div>
+    <div class="inbox-heading"><div><p>Workspace · ${escapeHtml(store.workflow.space || "default")}</p><h1>Inbox</h1><span>Human moments across every intent in this workspace.</span></div><b>${needsYouCount()} ${needsYouCount() === 1 ? "needs" : "need"} you</b></div>
     ${groups
       .map(
         ([label, intents]) => `<section class="inbox-group"><h2>${label}<span>${intents.length}</span></h2>
