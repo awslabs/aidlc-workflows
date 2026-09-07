@@ -1,17 +1,14 @@
 // covers: harness-instrument:sdk-drive-model-resolution
 //
-// Pins the SDK harness' model-source rule without driving a live Claude turn:
-// default to the shipped dist/claude/.claude/settings.json model/env so tests
-// exercise the model configuration users actually receive.
+// Pins the SDK harness' model-source rule without driving a live Claude turn.
+// The shipped distribution is provider-neutral, so project or explicit test
+// settings remain authoritative instead of hidden Bedrock defaults.
 
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveDriveSdkSettings } from "../harness/sdk-drive.ts";
-
-const SHIPPED_MODEL = "opus[1m]";
-const SHIPPED_OPUS = "global.anthropic.claude-opus-4-8[1m]";
 
 function withTempProject(assertions: (projectDir: string) => void): void {
   const projectDir = mkdtempSync(join(tmpdir(), "aidlc-sdk-model-"));
@@ -32,29 +29,33 @@ function writeProjectSettings(
 }
 
 describe("sdk-drive model resolution", () => {
-  test("bare project defaults to the shipped dist model/env", () => {
+  test("bare project does not inject a shipped model", () => {
     withTempProject((projectDir) => {
       const resolved = resolveDriveSdkSettings(projectDir);
 
-      expect(resolved.model).toBe(SHIPPED_MODEL);
-      expect(resolved.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
+      expect(resolved.model).toBeUndefined();
+      expect(resolved.modelSource).toBeUndefined();
+      if (process.env.PATH) {
+        expect(resolved.env.PATH).toBe(process.env.PATH);
+      }
     });
   });
 
-  test("shipped dist settings win over project settings by default", () => {
+  test("project settings remain the fallback authority", () => {
     withTempProject((projectDir) => {
       writeProjectSettings(projectDir, {
         model: "sonnet",
         env: {
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "project-opus-should-not-win",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "project-opus",
         },
       });
 
       const resolved = resolveDriveSdkSettings(projectDir);
 
-      expect(resolved.model).toBe(SHIPPED_MODEL);
-      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
+      expect(resolved.model).toBe("sonnet");
+      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(
+        "project-opus",
+      );
     });
   });
 

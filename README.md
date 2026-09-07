@@ -15,7 +15,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.7.1-blue)
+![version](https://img.shields.io/badge/version-2.7.2-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -102,10 +102,11 @@ On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS
 > [!TIP]
 > bun has to be on the PATH that *non-interactive* shells see, since that's what a harness uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc` — but the bun installer writes to `~/.zshrc`. So if `which bun` works in your terminal yet the harness can't find bun, copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc` for bash and Git Bash).
 
-Model-provider setup is harness-specific. The shipped Claude Code configuration
-uses **AWS Bedrock**; GitHub Copilot uses GitHub sign-in or BYOK; Kiro, Cursor,
-Codex, and opencode use the provider and credentials configured in their own
-runtime. Each harness section below has the specifics.
+Model-provider setup is harness-specific. The Claude Code and Codex
+distributions preserve the provider, authentication, model, and effort already
+selected in those runtimes; GitHub Copilot uses GitHub sign-in or BYOK; Kiro,
+Cursor, and opencode use their own runtime configuration. Each harness section
+below has the specifics, including optional Amazon Bedrock setup.
 
 ### Get the code
 
@@ -227,7 +228,10 @@ Then, inside the Claude Code session:
 /aidlc Build a task management API with user authentication   # start a workflow
 ```
 
-The shipped `.claude/settings.json` runs on **AWS Bedrock** (`AWS_REGION=us-east-1`, Fable/Opus/Sonnet/Haiku pinned). Before your first run, enable Anthropic model access in your AWS account and have AWS credentials on your SDK credential chain — see [Getting Started § AWS Bedrock Setup](docs/guide/01-getting-started.md#aws-bedrock-setup) for the model-access form, IAM policy, credential options, and how to change the region. The full prerequisites table, PATH troubleshooting, and Bedrock configuration are in [Getting Started](docs/guide/01-getting-started.md).
+The shipped `.claude/settings.json` does not change Claude Code's provider,
+model, region, or reasoning effort. Existing subscription, API, Amazon Bedrock,
+and enterprise-gateway setups continue to apply. To opt into Bedrock, see
+[Getting Started § AWS Bedrock Setup (optional)](docs/guide/01-getting-started.md#aws-bedrock-setup-optional).
 
 </details>
 
@@ -240,7 +244,9 @@ The shipped `.claude/settings.json` runs on **AWS Bedrock** (`AWS_REGION=us-east
 codex --version   # confirm ≥ 0.145.0
 ```
 
-The shipped `config.toml` runs on **Amazon Bedrock**; set your AWS profile and region in the bedrock provider block.
+The shipped `config.toml` does not set a provider or model. Codex keeps the
+provider, authentication, model, context window, and reasoning effort from your
+user-level `~/.codex/config.toml`.
 
 **2. Set up your project** (which must be a **git repository** — Codex only discovers a project `.codex/hooks.json` inside one):
 
@@ -466,7 +472,7 @@ Most first-run trouble is one of these; each harness guide covers the rest.
 | --- | --- | --- |
 | `which bun` works in your terminal, but the harness can't find bun | all | bun isn't on the non-interactive PATH. Copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (zsh) or `~/.bashrc` (bash/Git Bash) — see the tip under [Quick Start](#quick-start). |
 | `/aidlc --doctor` reports a Codex CLI version below 0.145.0 | Codex | Upgrade to Codex CLI 0.145.0 or later. Older releases either delay compact-session workflow-context restoration or break subagent attribution and hyphenated agent TOML resolution. |
-| Bedrock calls fail with `AccessDenied` or a model-not-found error | Claude, Codex | Enable model access for the harness's configured models in your AWS account and put working credentials on your SDK chain. Confirm `AWS_REGION` is a region where you enabled them. |
+| Bedrock calls fail with `AccessDenied` or a model-not-found error after you opted in | Claude, Codex | Enable model access in your AWS account, put working credentials on your SDK chain, and confirm the configured region exposes the selected model. AI-DLC does not select Bedrock for you. |
 | Hooks never fire (no audit rows, no gates) | Codex | Trust the hooks: from the AI-DLC source checkout run `bun install --frozen-lockfile`, then `bun scripts/package.ts codex trust --project <dir>` and replace any existing entries for that hook path; or start one TUI session and choose "Trust all." Untrusted hooks never run. |
 | Plugin stages or contributions disappeared after copying a new `dist/` | all | Re-run `/aidlc plugin sync`. Copying a fresh engine distribution restores the stock graph and core stage sources; compose-capable hosts also self-heal on the next session start. |
 | Skills or rules don't take effect after you copy a new `dist/` | all | Start a fresh session — harnesses load skills, agents, and rules at session start. |

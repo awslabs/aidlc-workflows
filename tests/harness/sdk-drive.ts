@@ -6,7 +6,8 @@
 //
 // This is a MEASURING INSTRUMENT. It will be calibrated by an independent
 // agent in the next stage before any test trusts it. Its job is to run a
-// prompt through the Claude Agent SDK (SDK 0.3.158, Bedrock) and return a
+// prompt through the Claude Agent SDK (SDK 0.3.158, using the caller's
+// configured provider) and return a
 // fully-structured, deterministic result so tests can assert on tool_result
 // content, written files, and audit/result events — NEVER on the assistant's
 // prose.
@@ -354,11 +355,10 @@ function processEnv(): Record<string, string> {
 }
 
 /**
- * Resolve the SDK model/env the harness should pass explicitly. The shipped
- * dist settings are the default authority so tests exercise what users copy
- * from dist/claude/.claude; project settings are only a fallback for non-repo
- * harness reuse, and per-call options remain the escape hatch for adversarial
- * calibration.
+ * Resolve the SDK model/env the harness should pass explicitly. Shipped dist
+ * settings overlay only AI-DLC-owned values and remain provider-neutral;
+ * project settings supply provider/model fallbacks, and per-call options are
+ * the final escape hatch for adversarial calibration.
  */
 export function resolveDriveSdkSettings(
   projectDir: string,

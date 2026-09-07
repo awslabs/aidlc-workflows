@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-04
+
+Preserve each harness's existing model-provider configuration instead of silently rerouting new AI-DLC installations through Amazon Bedrock. Claude Code and Codex now start with the provider, authentication, model, context window, and reasoning effort the user already selected; Bedrock remains an explicit opt-in. **Upgrade:** if you intentionally rely on the shipped Bedrock defaults, first run Claude Code's `/setup-bedrock` or move the Codex provider block to `~/.codex/config.toml`; then replace the complete `dist/claude/` or `dist/codex/` tree, remove stale AI-DLC-installed provider/model keys if you merge files manually, and start a fresh harness session. Closes #428 and aligns the current copy distribution with the explicit provider choice planned in #722.
+
+* Claude's project settings no longer set `CLAUDE_CODE_USE_BEDROCK`, AWS region, Bedrock model aliases, `model`, or `effortLevel`; subscription, direct API, Bedrock, and enterprise-gateway configurations remain intact.
+* Codex's project config no longer carries unsupported project-local provider tables or overrides the user's model/context/effort, eliminating the mixed state where Codex ignored the Bedrock provider but still selected its Bedrock model ID.
+* Codex delegated roles inherit the session model for every tier; balanced and templated roles retain their `medium` reasoning-effort cap without pinning a provider-specific model name.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

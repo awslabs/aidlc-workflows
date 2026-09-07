@@ -1,6 +1,5 @@
 name = "aidlc-architecture-reviewer-agent"
 description = "Senior solutions architect who reviews technical design artifacts for soundness, implementability, and coherence. Finds broken cross-references, hidden dependencies, unachievable quality targets, and designs that won't survive contact with reality."
-model = "openai.gpt-5.6-terra"
 model_reasoning_effort = "medium"
 developer_instructions = """
 <!-- aidlc-delegated-knowledge-preflight -->

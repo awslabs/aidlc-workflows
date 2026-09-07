@@ -201,6 +201,16 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(graph).not.toContain('".claude/rules/');
   });
 
+  test("4a: project config leaves provider, authentication, and model selection to the user", () => {
+    const config = readFileSync(join(CODEX_DST, "config.toml"), "utf-8");
+    const parsed = parse(config) as Record<string, unknown>;
+    expect(parsed.model).toBeUndefined();
+    expect(parsed.model_provider).toBeUndefined();
+    expect(parsed.model_context_window).toBeUndefined();
+    expect(parsed.model_reasoning_effort).toBeUndefined();
+    expect(parsed.model_providers).toBeUndefined();
+  });
+
   test("5: hooks.json wires only Codex-real events through the adapter (no SessionEnd)", () => {
     const wiring = JSON.parse(readFileSync(join(CODEX_DST, "hooks.json"), "utf-8")) as {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;

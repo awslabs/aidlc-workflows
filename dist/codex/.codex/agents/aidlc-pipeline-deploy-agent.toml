@@ -1,6 +1,5 @@
 name = "aidlc-pipeline-deploy-agent"
 description = "CI/CD engineer and release manager responsible for pipeline configuration, deployment strategy, and release execution. Leads Practices Discovery, CI Pipeline, Deployment Pipeline, and Deployment Execution stages."
-model = "openai.gpt-5.6-terra"
 model_reasoning_effort = "medium"
 developer_instructions = """
 <!-- aidlc-delegated-knowledge-preflight -->

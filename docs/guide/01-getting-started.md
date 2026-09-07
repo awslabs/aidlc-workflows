@@ -30,59 +30,35 @@ command -v claude >/dev/null && echo "✓ Claude Code installed" || echo "✗ In
 command -v bun    >/dev/null && echo "✓ bun installed"          || echo "✗ Install bun first"
 ```
 
-## AWS Bedrock Setup
+## AWS Bedrock Setup (optional)
 
-The Claude Code distribution ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
+AI-DLC does not select a model provider. The Claude Code distribution leaves
+`CLAUDE_CODE_USE_BEDROCK`, AWS region/profile, model aliases, the session model,
+and reasoning effort unset, so installing AI-DLC preserves an existing Claude
+subscription, Anthropic API configuration, Bedrock setup, or enterprise
+gateway. The Codex distribution follows the same ownership rule: provider,
+authentication, and model stay in the user's Codex configuration.
 
-### Why Claude Code ships with Bedrock by default
+To opt into Amazon Bedrock, use Claude Code's provider setup flow. Run
+`/setup-bedrock` (or `/login`, then choose **3rd-party platform → Amazon
+Bedrock**) and let Claude Code store the machine-specific provider settings.
+AI-DLC does not call Bedrock directly.
 
-This rationale is specific to the Claude Code distribution. Provider setup is
-harness-specific: [Codex also defaults to Bedrock](harnesses/codex-cli.md#prerequisites),
-while [opencode takes its session model from global configuration but pins its
-tiered personas to a Bedrock model](harnesses/opencode.md#prerequisites).
+For a project-local, explicitly opted-in Claude configuration, put the provider
+values in gitignored `.claude/settings.local.json`, not the shared
+`.claude/settings.json`. The relevant settings are:
 
-The Claude Code distribution needs a predictable runtime baseline across the
-orchestrator and its tier-pinned subagents. Bedrock lets the distribution pin
-exact global inference-profile IDs. Claude Code separately interprets model
-context selectors such as `[1m]` and strips them before sending the model ID to
-Bedrock. Together, those pins prevent a workflow from silently selecting
-different model aliases or context windows on different machines. Bedrock also
-uses the standard AWS SDK credential chain and IAM controls, which lets teams
-manage access without committing provider keys to a project. The repository's
-live Claude test environment uses the same provider and model/context baseline.
-
-This is a distribution default, not an AI-DLC methodology requirement. AI-DLC
-does not call the Bedrock API directly. To use the direct Anthropic API or
-another Claude Code-supported provider:
-
-1. In the installed `.claude/settings.json`, remove or replace
-   `env.CLAUDE_CODE_USE_BEDROCK`, `env.AWS_REGION`,
-   `env.ANTHROPIC_DEFAULT_FABLE_MODEL`,
-   `env.ANTHROPIC_DEFAULT_OPUS_MODEL`,
-   `env.ANTHROPIC_DEFAULT_SONNET_MODEL`,
-   `env.ANTHROPIC_DEFAULT_HAIKU_MODEL`, and the top-level `model`.
-2. Check `.claude/settings.local.json` and remove or replace any corresponding
-   overrides there. Local settings take precedence over the shared
-   `.claude/settings.json`.
-3. Run `claude` and select the target provider at the login prompt. If Claude
-   Code is already authenticated, run `/login` first. Complete the provider's
-   authentication flow as described in the
-   [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
-
-The AI-DLC stage protocol is provider-independent, but the repository ships and
-tests the Bedrock model/context baseline documented below. Alternate models
-still need enough context for the orchestrator and delegated agents.
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
+| Variable | Example value | Purpose |
+|----------|---------------|---------|
 | `CLAUDE_CODE_USE_BEDROCK` | `1` | Routes Claude Code through Bedrock |
-| `AWS_REGION` | `us-east-1` | Bedrock region — **required**; Claude Code does not read it from `~/.aws`. Override per-region (see below). |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | `global.anthropic.claude-fable-5[1m]` | Fable alias for users who opt into `fable`/`fable[1m]` |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-8[1m]` | Orchestrator model (used at `opus[1m]`, the 1M-context variant) |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6[1m]` | Subagent model |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Background/fast tasks (no `[1m]`: Haiku 4.5 is a 200K model with no 1M variant) |
+| `AWS_REGION` | `us-east-1` | Bedrock region |
+| `AWS_PROFILE` | `my-sso-profile` | Optional named AWS credential profile |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-8[1m]` | Optional Opus alias pin |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6[1m]` | Optional Sonnet alias pin |
 
-These model pins use global Bedrock inference profile IDs (the `global.` prefix). The `[1m]` suffix on the Fable, Opus, and Sonnet pins selects the 1M-context variant — so tier-pinned subagents (not just the `opus[1m]` orchestrator) get the 1M window; Claude Code strips the suffix before the model ID reaches Bedrock. You still need to do the AWS-account-side setup once.
+Model aliases and context variants must match what your AWS account and region
+can access. Users of another provider or an enterprise gateway should keep its
+existing Claude Code configuration unchanged.
 
 ### One-time AWS account setup (manual path)
 
@@ -125,16 +101,20 @@ These model pins use global Bedrock inference profile IDs (the `global.` prefix)
 
    Keep secrets out of the shared `settings.json`. Put `AWS_PROFILE` (or other env you don't want to leak) in `.claude/settings.local.json` (gitignored) instead.
 
-4. **Set your region** if it isn't `us-east-1`. The shipped default is `us-east-1`; override it without editing shared config:
+4. **Set your region** in your machine or gitignored local configuration:
 
    ```bash
    cp .claude/settings.local.json.example .claude/settings.local.json
-   # then add  "AWS_REGION": "<your-region>"  to the env block
+   # then add "CLAUDE_CODE_USE_BEDROCK": "1",
+   #          "AWS_REGION": "<your-region>", and optionally
+   #          "AWS_PROFILE": "<your-profile>" to the env block
    ```
 
    `settings.local.json` takes precedence over `settings.json`. Confirm the model is available in your region with `aws bedrock list-inference-profiles --region <your-region>`.
 
-> **Easier path:** instead of the manual steps above, run `claude`, choose **3rd-party platform → Amazon Bedrock** at the login prompt, and the wizard detects your credentials, region, and accessible models and writes them to your user settings. Re-run `/setup-bedrock` any time to change them. You still complete step 1 (model access) once in the console.
+> **Recommended path:** run `/setup-bedrock`; the wizard detects your
+> credentials, region, and accessible models and writes them to your user
+> settings. You still complete step 1 (model access) once in the console.
 
 For the authoritative, always-current setup — IAM detail, SSO refresh, inference profiles, troubleshooting — see the AWS guide: **[Claude Code on Amazon Bedrock: Quick Setup Guide](https://community.aws/content/2tXkZKrZzlrlu0KfH8gST5Dkppq/claude-code-on-amazon-bedrock-quick-setup-guide)** and the [Amazon Bedrock documentation](https://docs.aws.amazon.com/bedrock/).
 
@@ -168,7 +148,13 @@ Put `CONTEXT7_API_KEY` (and any other secret env) in `.claude/settings.local.jso
 
 ### What becomes available
 
-The four AWS servers authenticate with the same default AWS SDK credential chain Claude Code already uses for Bedrock (see [AWS Bedrock Setup](#aws-bedrock-setup)). Once `uvx` is installed and AWS credentials resolve, those servers come up automatically; `context7` comes up once `CONTEXT7_API_KEY` is set. Because the servers are inherited at the session level, every agent reaches every declared server — there is no per-agent grant to perform.
+The four AWS servers authenticate with the standard AWS SDK credential chain
+(see [AWS Bedrock Setup](#aws-bedrock-setup-optional)). They do not require
+Claude Code itself to use Bedrock. Once `uvx` is installed and AWS credentials
+resolve, those servers come up automatically; `context7` comes up once
+`CONTEXT7_API_KEY` is set. Because the servers are inherited at the session
+level, every agent reaches every declared server — there is no per-agent grant
+to perform.
 
 > **Restricting an agent (advanced):** inheritance is additive — declaring a server makes it available to all agents, and you cannot grant servers per-agent. To *prevent* a specific agent from using a server, narrow that agent's `tools:` allowlist to the fully-qualified `mcp__<server>__<tool>` ids it may call (a bare `mcp__<server>` token is not honoured). See [Agents](06-agents.md) for how agent tool access works.
 

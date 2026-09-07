@@ -16,11 +16,31 @@ never hand-edit it (the drift guard fails CI).
   `/aidlc --doctor` enforces the pin. Check with `codex --version`.
 - **bun** — same requirement as the Claude harness; every tool and hook runs
   via bun.
-- **A model provider** — the shipped `config.toml` defaults to **Amazon
-  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.6-terra`). Set the AWS
-  profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
-  comment out the provider lines. Note: `web_search` is unavailable on
-  Bedrock; the market-research stage degrades gracefully.
+- **A model provider** — the shipped project `config.toml` does not set one.
+  Codex keeps the provider, authentication, model, context window, and
+  reasoning effort from your user-level `~/.codex/config.toml`. AI-DLC roles
+  inherit that model; balanced and templated roles reduce only their reasoning
+  effort to `medium`. Configure Amazon Bedrock or another provider in the user
+  config, not the project distribution. Current Codex versions ignore
+  project-local `model_provider` and `model_providers` keys.
+
+### Optional Amazon Bedrock configuration
+
+To use Bedrock, configure it explicitly in `~/.codex/config.toml` (or a
+machine-local Codex profile), for example:
+
+```toml
+model = "openai.gpt-5.5"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock.aws]
+profile = "my-sso-profile"
+region = "us-east-1"
+```
+
+The model, profile, and region must be available to your AWS account. Bedrock
+does not provide Codex's native `web_search`, so market research degrades
+gracefully while that provider is active.
 
 ## Install
 

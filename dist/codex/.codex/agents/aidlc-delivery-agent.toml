@@ -1,6 +1,5 @@
 name = "aidlc-delivery-agent"
 description = "Engineering manager responsible for team formation, Bolt sequencing, and phase handoffs. Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages. Supports Scope Definition and Units Generation."
-model = "openai.gpt-5.6-terra"
 model_reasoning_effort = "medium"
 developer_instructions = """
 <!-- aidlc-delegated-knowledge-preflight -->
