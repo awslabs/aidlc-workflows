@@ -125,12 +125,9 @@ svg.fi path { fill: currentColor; }
   text-align: right;
   line-height: 1.25;
 }
-.header-state b,
-.header-state small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.header-state b { color: var(--accent); font-size: 12px; }
+.header-state b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: 12px; }
 .header-state.ok b { color: var(--green); }
 .header-state.quiet b { color: var(--muted); }
-.header-state small { color: var(--muted); font-size: 10.5px; }
 .header-tools {
   flex: 0 0 auto;
   min-width: 0;
@@ -235,7 +232,6 @@ svg.fi path { fill: currentColor; }
 .palette-box footer b { margin-left: auto; color: var(--muted); font-weight: 500; }
 
 @media (max-width: 1080px) {
-  .header-state small { display: none; }
   .header-state { flex-basis: 170px; }
   .header-tools .link { display: none; }
 }

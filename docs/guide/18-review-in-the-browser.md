@@ -94,8 +94,9 @@ view.
 
 The header keeps the current workspace, intent, phase, and stage path beside a
 file-name dropdown. The dropdown switches among the stage's questions,
-artifacts, and overview even when the workflow panel is hidden. The
-state sentence explains why the item needs you; the dot reports the daemon
+artifacts, and overview even when the workflow panel is hidden. A short
+state label (*4 questions for you*, *Awaiting your review · r1*, *Answered*,
+*Done · 11:15*) says where the stage stands; the dot reports the daemon
 connection. On an artifact, **Threads · History · Outline** select the one
 right-hand panel. At a live gate the same header carries **Request changes** and
 **Approve**.

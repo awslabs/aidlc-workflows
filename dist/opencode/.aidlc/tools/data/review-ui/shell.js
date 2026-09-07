@@ -218,38 +218,30 @@ function viewState(view, stage) {
   const time = stageTimestamp(stage);
   if (view.kind === "inbox") {
     const count = needsYouCount();
-    return { label: count ? `${count} ${count === 1 ? "item needs" : "items need"} you` : "Nothing waiting", detail: "", tone: count ? "needs" : "ok" };
+    return { label: count ? `${count} ${count === 1 ? "item needs" : "items need"} you` : "Nothing waiting", tone: count ? "needs" : "ok" };
   }
-  if (!stage) return { label: "Workflow unavailable", detail: "The terminal record remains complete.", tone: "quiet" };
+  if (!stage) return { label: "Workflow unavailable", tone: "quiet" };
   if (view.kind === "questions") {
-    if (store.questionsState === "submitted" && isActiveIntent()) {
-      return { label: "Answers sent", detail: "The agent is applying them and will confirm in the terminal; this page follows.", tone: "ok" };
-    }
+    if (store.questionsState === "submitted" && isActiveIntent()) return { label: "Answers sent", tone: "ok" };
     if (isLiveQuestions(stage)) {
       const total = stage.questions?.total || 0;
       const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;
-      return { label: `${open} ${open === 1 ? "question" : "questions"} for you`, detail: "", tone: "needs" };
+      return { label: `${open} ${open === 1 ? "question" : "questions"} for you`, tone: "needs" };
     }
-    return { label: `Answered${time ? ` · ${time}` : ""}`, detail: "Saved in the record; the terminal file is authoritative.", tone: "ok" };
+    return { label: "Answered", tone: "ok" };
   }
   if (sentDecision() && stage.state === "current" && (view.kind === "artifact" || view.kind === "overview")) {
-    const sent = sentDecision();
-    return sent.decision === "approve"
-      ? { label: `Approved · r${revision(stage)}`, detail: "Sent — the agent is picking it up and moves to the next stage.", tone: "ok" }
-      : { label: `Changes requested · r${revision(stage)}`, detail: "Sent — the agent is picking up your remarks; the gate reopens with the next revision.", tone: "ok" };
+    return sentDecision().decision === "approve"
+      ? { label: `Approved · r${revision(stage)}`, tone: "ok" }
+      : { label: `Changes requested · r${revision(stage)}`, tone: "ok" };
   }
-  if (isLiveGate(stage) && (view.kind === "artifact" || view.kind === "overview")) {
-    return { label: `Awaiting your review · r${revision(stage)}`, detail: "The agent continues after your decision here or in the terminal.", tone: "needs" };
-  }
-  if (stage.state === "done" && workflowComplete()) return { label: `Workflow complete${time ? ` · ${time}` : ""}`, detail: "Every stage is done; the record is read-only. Start the next intent from the terminal with /aidlc.", tone: "ok" };
-  if (stage.state === "done") return { label: `Done${time ? ` · ${time}` : ""}`, detail: "Read-only stage record.", tone: "ok" };
-  if (stage.state === "skipped") return { label: "Skipped", detail: stage.reason || "Not part of this intent's scope.", tone: "quiet" };
-  if (stage.state === "current" && stage.gate === "revising") {
-    const sent = (stage.artifacts || []).reduce((total, artifact) => total + (artifact.threads || 0), 0);
-    return { label: `Revising · r${revision(stage)}`, detail: sent ? `The agent is addressing your ${sent} ${sent === 1 ? "remark" : "remarks"}; the gate reopens when it is done.` : "The agent is addressing your request; the gate reopens when it is done.", tone: "needs" };
-  }
-  if (stage.state === "current") return { label: "In progress", detail: "The agent is working; this page updates when it needs you.", tone: "needs" };
-  return { label: stage.state === "conditional" ? stage.condition || "Conditional" : "Later", detail: "This stage has not started.", tone: "quiet" };
+  if (isLiveGate(stage) && (view.kind === "artifact" || view.kind === "overview")) return { label: `Awaiting your review · r${revision(stage)}`, tone: "needs" };
+  if (stage.state === "done" && workflowComplete()) return { label: `Workflow complete${time ? ` · ${time}` : ""}`, tone: "ok" };
+  if (stage.state === "done") return { label: `Done${time ? ` · ${time}` : ""}`, tone: "ok" };
+  if (stage.state === "skipped") return { label: "Skipped", tone: "quiet" };
+  if (stage.state === "current" && stage.gate === "revising") return { label: `Revising · r${revision(stage)}`, tone: "needs" };
+  if (stage.state === "current") return { label: "In progress", tone: "needs" };
+  return { label: stage.state === "conditional" ? stage.condition || "Conditional" : "Later", tone: "quiet" };
 }
 
 function pickerItems(stage) {
@@ -359,7 +351,7 @@ function renderHeader() {
       <span class="header-path">${escapeHtml(space)} <i>›</i> ${escapeHtml(intent)} <i>›</i> ${escapeHtml(phase)} <i>›</i> ${escapeHtml(stageName)}</span>
       ${renderPicker(view, stage, title)}
     </nav>
-    <div class="header-state ${state.tone}"><b>${escapeHtml(state.label)}</b>${state.detail ? `<small>${escapeHtml(state.detail)}</small>` : ""}</div>
+    <div class="header-state ${state.tone}"><b>${escapeHtml(state.label)}</b></div>
     <div class="header-tools">
       <span class="connection ${store.connected ? "connected" : "disconnected"}" title="${escapeHtml(connectedTitle)}" aria-label="${escapeHtml(connectedTitle)}"><i></i></span>
       ${panelButtons(view)}
