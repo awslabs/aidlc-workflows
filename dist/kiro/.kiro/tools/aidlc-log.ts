@@ -894,7 +894,7 @@ function handleAnswer(args: string[]): void {
 }
 
 // --- Subcommand: answers-apply ---
-// Usage: aidlc-log answers-apply --stage <slug> --questions-file <path>
+// Usage: aidlc-log answers-apply --stage <slug> --questions-file <path> [--single true]
 //   [--unit <unit>] [--project-dir <path>]
 //
 // Applies browser-authored answer submissions under the same audit lock and
@@ -1227,6 +1227,9 @@ function handleAnswersApply(args: string[]): void {
       const withEntry = readFileSync(questions.absolute, "utf-8");
       const confirmed = confirmSummarySection(withEntry, "Looks correct");
       writeFileAtomic(questions.absolute, confirmed);
+      // The same identity fields `aidlc-log.ts answer` records, so the
+      // completion guard matches this receipt for main, per-unit (claim
+      // attempt) and isolated (`--single`) rounds alike.
       const confirmationFields: Record<string, string> = {
         Stage: flags.stage,
         Details: "Looks correct",
@@ -1237,7 +1240,11 @@ function handleAnswersApply(args: string[]): void {
         Source: "review-ui",
         Submissions: files.join(", "),
       };
-      if (flags.unit) confirmationFields.Unit = flags.unit;
+      if (flags.unit) {
+        confirmationFields.Unit = flags.unit;
+        Object.assign(confirmationFields, claimAttemptFields(pd, flags.unit));
+      }
+      if (flags.single === "true") confirmationFields.Workflow = `single-stage:${flags.stage}`;
       emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", confirmationFields);
     }
 
