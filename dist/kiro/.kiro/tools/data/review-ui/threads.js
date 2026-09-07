@@ -103,11 +103,17 @@ function openReactionPicker(anchor, target) {
     closeReactionPicker();
     render();
   });
-  anchor.closest(".thread-card")?.append(picker);
-  const card = anchor.closest(".thread-card").getBoundingClientRect();
+  // On the page, not in the card: the rail scrolls and clips, and the card is
+  // narrower than the palette. Fixed to the viewport, opening upward from the
+  // button's left edge, pulled in from the viewport's right edge when needed.
+  document.body.append(picker);
   const at = anchor.getBoundingClientRect();
-  picker.style.top = `${Math.round(at.bottom - card.top + 6)}px`;
-  picker.style.right = `${Math.round(card.right - at.right)}px`;
+  const size = picker.getBoundingClientRect();
+  const left = Math.max(8, Math.min(at.left, window.innerWidth - size.width - 8));
+  const above = at.top - size.height - 6;
+  const top = above >= 8 ? above : at.bottom + 6;
+  picker.style.left = `${Math.round(left)}px`;
+  picker.style.top = `${Math.round(top)}px`;
   openPicker = picker;
   setTimeout(() => document.addEventListener("mousedown", closePickerOnOutside, { once: true }), 0);
 }
