@@ -565,6 +565,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 |----------|-------|--------|-----------|
 | **Session Lifecycle** | 5 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` | Hooks (session-start, validate-state PreCompact, session-end, human-presence mint) |
 | **Workflow Lifecycle** | 4 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED` | `aidlc-utility.ts intent-create`; `aidlc-orchestrate.ts report`/`park` through internal state emitters |
+| **Intent Lifecycle** | 2 | `INTENT_ABANDONED`, `INTENT_RESTORED` | `aidlc-utility.ts intent abandon` / `intent restore` |
 | **Phase** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` | `aidlc-utility.ts intent-create`; lifecycle outcomes reported through `aidlc-orchestrate.ts` |
 | **Stage** | 6 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED` | `aidlc-orchestrate.ts report` (internal state emitters), `aidlc-jump.ts` |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
@@ -679,7 +680,9 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `doctor` | Health check: verify hooks, prerequisites, file structure, plus local-only team claim stamp/activity/orphan-ref reconciliation (never fetches or releases). | `HEALTH_CHECKED` |
 | `intent-create` | Create a new intent and run the three deterministic Initialization stages. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
 | `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-create`. | none |
-| `intent [name]` | List intents (`--json`) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
+| `intent [name]` | List intents (`--json`, `--all` to include abandoned) or switch the active-intent cursor. Refuses to switch to an abandoned intent. Normally routed from `/aidlc intent [name]`. | — |
+| `intent abandon <name>` | Flip an intent's registry row to the terminal `abandoned` status, hiding it from the default listing and releasing the active-intent cursor and session binding if it was active. The record dir and audit shards are preserved. Normally routed from `/aidlc intent abandon <name>`. | `INTENT_ABANDONED` |
+| `intent restore <name>` | Return an abandoned intent to `in-flight`. Does not move the active-intent cursor. Normally routed from `/aidlc intent restore <name>`. | `INTENT_RESTORED` |
 | `space [name]` | List spaces (`--json`) or switch the active-space cursor and harness include. Normally routed from `/aidlc space [name]`. | — |
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
 | `codekb-path [--repo <name>] [--json]` | Direct-only, read-only query that prints the deterministic per-repo codekb directory. There is no `/aidlc codekb-path` route. | — |

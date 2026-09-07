@@ -163,6 +163,27 @@ run.
 > machine-readable output. See [CLI Commands](12-cli-commands.md) for the full
 > flag reference.
 
+### Giving up on an intent
+
+Not every intent finishes. When you start one and then decide to stop — the
+direction was wrong, priorities moved, it was an experiment — retire it:
+
+```
+/aidlc intent abandon export-bug  Retire "export-bug" (reversible)
+/aidlc intent list --all          List intents including abandoned ones
+/aidlc intent restore export-bug  Bring it back to in-flight
+```
+
+Abandoning flips the intent's `status` to `abandoned`, which drops it out of the
+default listing so you see only live work. **Nothing is deleted.** The record dir
+and its `audit/` shards stay exactly where they are, so the run remains
+auditable — this is the archive-don't-delete rule the whole workspace follows.
+The listing tells you how many abandoned intents are hidden; `--all` shows them.
+
+If the abandoned intent was the active one, no intent is active afterwards —
+switch to another to keep working. You cannot switch *to* an abandoned intent;
+`restore` it first, which is a single command and leaves the record untouched.
+
 ### Concurrent sessions in one checkout
 
 Each live session keeps a machine-local binding at

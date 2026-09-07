@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:clearActiveIntentCursor, function:isAbandonedStatus, function:recordDirMatches
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:clearActiveIntentCursor, function:isAbandonedStatus, function:isAbandonedRecord, function:recordDirMatches, function:activeIntent
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -417,8 +417,8 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     expect(readIntentRegistry(proj)).toEqual([]);
     const records = existsSync(intentsDir(proj))
       ? readdirSync(intentsDir(proj)).filter((entry) =>
-          existsSync(join(intentsDir(proj), entry, "aidlc-state.md")),
-        )
+        existsSync(join(intentsDir(proj), entry, "aidlc-state.md")),
+      )
       : [];
     expect(records).toEqual([]);
   });
@@ -444,8 +444,8 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
       expect(readIntentRegistry(proj)).toEqual([]);
       const records = existsSync(intentsDir(proj))
         ? readdirSync(intentsDir(proj)).filter((entry) =>
-            existsSync(join(intentsDir(proj), entry, "aidlc-state.md")),
-          )
+          existsSync(join(intentsDir(proj), entry, "aidlc-state.md")),
+        )
         : [];
       expect(records).toEqual([]);
     }
@@ -983,6 +983,95 @@ describe("t164 intent status lifecycle", () => {
     expect(
       readIntentRegistry(proj).find((e) => recordDirMatches(e, dir))?.status,
     ).toBe("abandoned");
+
+    // ...and it is NOT handed back as active. The record dir is preserved, so
+    // with the cursor cleared this is exactly the lone-record fallback case:
+    // activeIntent() must refuse to INFER a terminal record, otherwise the
+    // abandoned intent reads as active again (the state abandon exists to end).
+    expect(existsSync(join(intentsDir(proj), dir, "aidlc-state.md"))).toBe(true);
+    expect(activeIntent(proj)).toBeNull();
+
+    // Restoring is registry-driven, so it still works with no active intent,
+    // and the lone-record fallback resolves again once the row is live.
+    expect(util(["intent", "restore", dir]).status).toBe(0);
+    expect(activeIntent(proj)).toBe(dir);
+  });
+
+  // Regression: the audit event must land in the shard of the intent it is
+  // ABOUT. appendAuditEvent resolves an omitted target through activeIntent(),
+  // so abandoning a NON-active intent filed the event under whichever intent was
+  // active, and abandoning the ACTIVE one landed it in the bare space root once
+  // the cursor was released. Preserving the intent's own auditable history is the
+  // whole point of abandon-not-delete.
+  test("INTENT_ABANDONED / INTENT_RESTORED are written to the target intent's own audit shard", () => {
+    expect(util(["intent-create", "--scope", "classic", "--label", "alpha"]).status).toBe(0);
+    const alpha = activeIntent(proj) as string;
+    expect(util(["intent-create", "--scope", "bugfix", "--label", "beta"]).status).toBe(0);
+    const beta = activeIntent(proj) as string;
+
+    // (1) Abandon the NON-active intent: the event belongs to alpha, not beta.
+    expect(util(["intent", "abandon", alpha]).status).toBe(0);
+    const alphaAudit = readAllAuditShards(proj, alpha);
+    expect(alphaAudit).toContain("**Event**: INTENT_ABANDONED");
+    expect(alphaAudit).toContain(`**intent**: ${alpha}`);
+    expect(alphaAudit).toContain("**previous_status**: in-flight");
+    expect(alphaAudit).toContain("**new_status**: abandoned");
+    expect(alphaAudit).toContain("**was_active**: false");
+    // The active intent's shard is NOT where alpha's lifecycle is recorded.
+    expect(readAllAuditShards(proj, beta)).not.toContain("INTENT_ABANDONED");
+
+    // (2) Abandon the ACTIVE intent: still its OWN shard, even though the cursor
+    // is released as part of the same transaction.
+    expect(util(["intent", "abandon", beta]).status).toBe(0);
+    const betaAudit = readAllAuditShards(proj, beta);
+    expect(betaAudit).toContain("**Event**: INTENT_ABANDONED");
+    expect(betaAudit).toContain(`**intent**: ${beta}`);
+    expect(betaAudit).toContain("**was_active**: true");
+    // Nothing leaked into the bare space record root (the no-intent fallback).
+    expect(existsSync(join(intentsDir(proj), "audit"))).toBe(false);
+
+    // (3) Restore records against the same shard, with the inverse transition.
+    expect(util(["intent", "restore", alpha]).status).toBe(0);
+    const restored = readAllAuditShards(proj, alpha);
+    expect(restored).toContain("**Event**: INTENT_RESTORED");
+    expect(restored).toContain("**previous_status**: abandoned");
+    expect(restored).toContain("**new_status**: in-flight");
+  });
+
+  test("a lone abandoned record is not inferred as active even when its cursor still names it", () => {
+    expect(util(["intent-create", "--scope", "classic", "--label", "stale"]).status).toBe(0);
+    const dir = activeIntent(proj) as string;
+
+    // Abandon, then re-point the cursor by hand — the shape a stale cursor or a
+    // hand-edited registry leaves behind. Inference must still refuse it, on the
+    // cursor route as well as the lone-record route.
+    expect(util(["intent", "abandon", dir]).status).toBe(0);
+    setActiveIntentCursor(proj, dir);
+    expect(activeIntent(proj)).toBeNull();
+  });
+
+  test("switching to an abandoned intent is refused and points at restore", () => {
+    expect(util(["intent-create", "--scope", "classic", "--label", "dropped"]).status).toBe(0);
+    const droppedDir = activeIntent(proj) as string;
+    expect(util(["intent-create", "--scope", "bugfix", "--label", "keeper"]).status).toBe(0);
+    const keeperDir = activeIntent(proj) as string;
+    expect(util(["intent", "abandon", droppedDir]).status).toBe(0);
+
+    // Refused — NOT a silent switch to a terminal record, and NOT the misleading
+    // "Unknown intent" the default listing's hide would otherwise produce.
+    // die() JSON-encodes the message, so match on quote-free fragments.
+    const sw = util(["intent", droppedDir]);
+    expect(sw.status).not.toBe(0);
+    expect(sw.out).toContain("is abandoned");
+    expect(sw.out).toContain(`intent restore ${droppedDir}`);
+    expect(sw.out).not.toContain("Unknown intent");
+    // The cursor did not move.
+    expect(activeIntent(proj)).toBe(keeperDir);
+
+    // After a restore the same switch succeeds.
+    expect(util(["intent", "restore", droppedDir]).status).toBe(0);
+    expect(util(["intent", droppedDir]).status).toBe(0);
+    expect(activeIntent(proj)).toBe(droppedDir);
   });
 });
 

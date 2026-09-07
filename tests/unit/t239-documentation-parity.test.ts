@@ -146,7 +146,9 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(91);
+    // Bump WITH the source when an event is added. 91 → 93: +INTENT_ABANDONED
+    // and +INTENT_RESTORED (the intent abandon/restore lifecycle verbs).
+    expect(eventTypes.length).toBe(93);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -672,10 +674,10 @@ describe("documentation parity derives current behavior from authored implementa
     const sortDeep = (value: unknown): unknown =>
       value && typeof value === "object"
         ? Object.fromEntries(
-            Object.keys(value as object)
-              .sort()
-              .map((key) => [key, sortDeep((value as Record<string, unknown>)[key])]),
-          )
+          Object.keys(value as object)
+            .sort()
+            .map((key) => [key, sortDeep((value as Record<string, unknown>)[key])]),
+        )
         : value;
     const identical =
       JSON.stringify(sortDeep(TIER_PROJECTIONS.balanced)) ===

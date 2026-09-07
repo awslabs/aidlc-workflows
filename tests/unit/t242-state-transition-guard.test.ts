@@ -265,6 +265,27 @@ describe("t242 state-transition ownership guard", () => {
         "aidlc.ts intent switch",
       ],
       ["bun .claude/tools/aidlc.ts intent create", "aidlc.ts intent create"],
+      // The intent lifecycle verbs rewrite the shared registry row and release
+      // the active-intent cursor/session binding, so they stay main-session-only.
+      // These parse as their own `intent-status` kind (not the bare-name switch
+      // sugar that used to cover them), so this pins that the guard still sees
+      // them - without it the new parse kind would silently escape the boundary.
+      [
+        "bun .claude/tools/aidlc.ts intent abandon other-intent",
+        "aidlc.ts intent abandon",
+      ],
+      [
+        "bun .claude/tools/aidlc.ts intent restore other-intent",
+        "aidlc.ts intent restore",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent abandon other-intent",
+        "aidlc-utility.ts intent abandon",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts --project-dir /tmp intent restore other-intent",
+        "aidlc-utility.ts intent restore",
+      ],
       [
         "bun .claude/tools/aidlc.ts space create other-space",
         "aidlc.ts space create",
@@ -478,9 +499,8 @@ describe("t242 state-transition ownership guard", () => {
       (_, i) => `  const line${i} = compute(${i}); // generated filler`,
     ).join("\n");
     const closed = `cat > generated.ts <<'EOF'\n${body}\nEOF`;
-    const unterminated = `cat > generated.ts <<'EOF'\n${
-      Array.from({ length: 50000 }, () => "x".repeat(60)).join("\n")
-    }\n`;
+    const unterminated = `cat > generated.ts <<'EOF'\n${Array.from({ length: 50000 }, () => "x".repeat(60)).join("\n")
+      }\n`;
     for (const [label, command, verdict] of [
       ["closed-5000-line", closed, null],
       ["unterminated-50k-line", unterminated, null],

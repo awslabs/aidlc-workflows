@@ -155,6 +155,13 @@ archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and
 let the engine create a fresh one. A second `/aidlc` over an existing intent
 resumes it rather than re-initialising.
 
+To retire one specific intent rather than start over, use
+`/aidlc intent abandon <name>` — it moves that intent to the terminal `abandoned`
+status and out of the default listing while preserving its record dir and audit
+shards, and `/aidlc intent restore <name>` reverses it. That is the supported
+route for "I gave up on this one"; hand-editing `intents.json` is not required.
+See [CLI Commands](../../guide/12-cli-commands.md).
+
 ## Notes
 
 - All 3 stages auto-proceed — no approval gates in the Initialization phase

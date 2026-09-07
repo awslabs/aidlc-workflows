@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (91 events, 22 categories)
+## Event Registry (93 events, 23 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -32,6 +32,13 @@ deduplicate timestamp fields produced by older versions.
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
+
+### Intent Lifecycle (2 events)
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| ✓ `INTENT_ABANDONED` | Operator retires an intent to the terminal `abandoned` status; record dir and audit shards are preserved | Timestamp, space, intent, slug, previous_status, new_status, changed, was_active | `tools/aidlc-utility.ts intent abandon` |
+| ✓ `INTENT_RESTORED` | Abandoned intent returned to `in-flight` | Timestamp, space, intent, slug, previous_status, new_status, changed | `tools/aidlc-utility.ts intent restore` |
 
 ### Phase Lifecycle (4 events)
 

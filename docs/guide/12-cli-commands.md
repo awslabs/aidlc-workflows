@@ -30,6 +30,8 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
 | `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
+| `/aidlc intent abandon <name>` | Retire an intent you have given up on (terminal, reversible; record kept) |
+| `/aidlc intent restore <name>` | Bring an abandoned intent back to `in-flight` |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -240,6 +242,33 @@ Bare `/aidlc intent` lists the intents in the active space; add `--json` for
 structured output. `/aidlc intent <name>` switches the per-user active-intent
 cursor to an existing intent by unambiguous slug or full record-dir name. It
 never creates an intent or advances a workflow.
+
+The listing shows live work only — abandoned intents are hidden, with a count of
+how many. Add `--all` to include them. Switching to an abandoned intent is
+refused; restore it first.
+
+### `/aidlc intent abandon <name>` — Retire an intent
+
+Moves an in-flight intent to the terminal `abandoned` status: the intent drops
+out of the default listing, and if it was the active intent the active-intent
+cursor and any session bound to it are released, so nothing keeps resolving to
+it. Use it when you start something and then decide to stop — the direction was
+wrong, priorities moved, it was an experiment.
+
+Nothing is deleted or moved. The record dir under
+`aidlc/spaces/<space>/intents/` and its `audit/` shards are preserved intact, so
+the history stays auditable; only the `intents.json` row's `status` changes. This
+is the supported alternative to hand-editing `intents.json`.
+
+Reversible with `restore`. Targets are resolved like `switch` — unambiguous slug
+or full record-dir name — and abandoning an already-abandoned intent is a no-op.
+
+### `/aidlc intent restore <name>` — Un-abandon an intent
+
+Returns an abandoned intent to `in-flight` so it reappears in the default
+listing and can be switched to. It does **not** switch to it — restoring and
+selecting stay separate moves, so run `/aidlc intent <name>` afterwards to
+resume the work. A no-op on an intent that is not abandoned.
 
 ### `/aidlc space [name]` — List or switch spaces
 

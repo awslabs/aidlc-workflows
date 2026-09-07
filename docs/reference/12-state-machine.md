@@ -353,7 +353,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**91 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 91 into 22 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**93 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 93 into 23 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -363,6 +363,13 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `WORKFLOW_COMPLETED` | `tools/aidlc-state.ts` |  |
 | `WORKFLOW_PARKED` | `tools/aidlc-state.ts` | `park` - workflow parked mid-flow for a later session; no stage advanced |
 | `WORKFLOW_UNPARKED` | `tools/aidlc-state.ts` | `unpark` - park marker cleared on explicit `--resume` re-entry |
+
+### Intent lifecycle
+
+| Event | Emitter | Notes |
+|---|---|---|
+| `INTENT_ABANDONED` | `tools/aidlc-utility.ts` | `intent abandon` - registry row flipped to the terminal `abandoned` status; record dir and audit shards preserved |
+| `INTENT_RESTORED` | `tools/aidlc-utility.ts` | `intent restore` - abandoned intent returned to `in-flight` |
 
 ### Phase lifecycle
 

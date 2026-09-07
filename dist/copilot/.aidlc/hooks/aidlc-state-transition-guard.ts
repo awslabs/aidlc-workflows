@@ -735,6 +735,17 @@ function workspaceMutation(prefix: string, args: string[]): string | null {
   if (workspace.kind === "switch") {
     return `${prefix} ${workspace.noun} ${workspace.explicit ? "switch" : workspace.name}`;
   }
+  // `intent abandon` / `intent restore` retire or revive an intent: they rewrite
+  // the shared intents.json row AND release the active-intent cursor and session
+  // binding. That is selection/routing change, so it stays main-session-only —
+  // a reviewer subagent must not abandon the intent it was dispatched into.
+  // REQUIRED, not incidental: these used to parse as the bare-name switch sugar
+  // and were caught by the `switch` branch above; giving them their own parse
+  // kind would silently drop them out of this guard without this branch.
+  // Names the command only, like the explicit-switch and create branches.
+  if (workspace.kind === "intent-status") {
+    return `${prefix} intent ${workspace.verb}`;
+  }
   if (workspace.kind === "create-intent") return `${prefix} intent create`;
   if (workspace.kind === "create") {
     return `${prefix} ${args[0] === "space-create" ? "space-create" : "space create"}`;

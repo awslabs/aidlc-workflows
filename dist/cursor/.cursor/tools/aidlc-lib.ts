@@ -615,10 +615,11 @@ export const DEFAULT_SPACE = "default";
 
 // --- Intent lifecycle statuses (the registry-row `status` field) -------------
 //
-// An intent row's `status` moves through a small, explicit lifecycle. Historic
-// callers wrote the string literals "in-flight" and "complete" directly; these
-// constants name every value in one place so the abandon/restore verbs, the
-// listing filter, and the doctor reconciliation all agree on the vocabulary.
+// An intent row's `status` moves through a small, explicit lifecycle. These
+// constants name every value in one place — creation, the completion path in
+// aidlc-state.ts, the abandon/restore verbs, the listing filter, and the doctor
+// reconciliation all spell the status through them, never as a bare literal, so
+// the vocabulary cannot drift apart one call site at a time.
 //   - IN_FLIGHT: created, work under way (the initial status).
 //   - COMPLETE:  the workflow ran to its terminal completion.
 //   - ABANDONED: a terminal status set by `intent abandon` — the operator gave
@@ -669,10 +670,18 @@ export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
 
 export type WorkspaceNoun = "intent" | "space";
 
+// The intent lifecycle-status verbs, each taking a <name>.
+export type IntentStatusVerb = "abandon" | "restore";
+
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
   "create",
+  // Lifecycle verbs. Both take a <name>, so they MUST be listed here: an
+  // unrecognized second token falls through to the bare-name switch sugar, which
+  // would read the verb itself as the target and silently DROP the name.
+  "abandon",
+  "restore",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -694,8 +703,15 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
 ]);
 
 export type WorkspaceCommand =
-  | { kind: "list"; noun: WorkspaceNoun; json: boolean }
+  // `all` is the intent listing's include-abandoned flag (`--all`). Carried here
+  // so the seam forwards it; a flag the parser does not model is DROPPED from the
+  // reconstructed argv, which silently downgrades the command.
+  | { kind: "list"; noun: WorkspaceNoun; json: boolean; all: boolean }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
+  // `intent abandon <name>` / `intent restore <name>` — the lifecycle-status
+  // verbs. Carried as their own kind (not a switch) because they mutate the
+  // registry row rather than the active cursor.
+  | { kind: "intent-status"; noun: "intent"; verb: IntentStatusVerb; name: string }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
@@ -703,7 +719,7 @@ export type WorkspaceCommand =
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name";
-      verb: "switch" | "create" | "space-create";
+      verb: "switch" | "create" | "space-create" | IntentStatusVerb;
       message: string;
     }
   | {
@@ -717,7 +733,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create",
+  verb: "switch" | "create" | "space-create" | IntentStatusVerb,
 ): WorkspaceCommand {
   const usage =
     verb === "space-create"
@@ -750,8 +766,24 @@ function isReservedFutureWorkspaceVerb(token: string | undefined): token is stri
   return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
+// Read the listing flags out of a token tail. Order-independent and tolerant of
+// both being present (`intent list --json --all`). `--all` is intent-only — it
+// means "include abandoned rows", which has no meaning for spaces — so it is
+// never recorded for `space` and therefore never forwarded there.
+function workspaceListCommand(
+  noun: WorkspaceNoun,
+  tail: string[],
+): WorkspaceCommand {
+  return {
+    kind: "list",
+    noun,
+    json: tail.includes("--json"),
+    all: noun === "intent" && tail.includes("--all"),
+  };
+}
+
 function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
-  return { kind: "list", noun, json: tokens[2] === "--json" };
+  return workspaceListCommand(noun, tokens.slice(2));
 }
 
 export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
@@ -769,11 +801,14 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
   const verbOrName = tokens[1];
 
   if (verbOrName === undefined) {
-    return { kind: "list", noun, json: false };
+    return { kind: "list", noun, json: false, all: false };
   }
 
-  if (verbOrName === "--json") {
-    return { kind: "list", noun, json: true };
+  // A leading flag is the bare listing with flags (`intent --json`, `intent
+  // --all`), never a record NAME — without this the token falls through to the
+  // bare-name switch sugar and reads as an intent literally called "--all".
+  if (verbOrName === "--json" || verbOrName === "--all") {
+    return workspaceListCommand(noun, tokens.slice(1));
   }
 
   if (verbOrName === "help" || verbOrName === "-h") {
@@ -793,6 +828,14 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
+    }
+    if (verbOrName === "abandon" || verbOrName === "restore") {
+      const name = tokens[2];
+      // Fail here rather than falling through to the bare-name switch sugar: a
+      // nameless `intent abandon` must NOT dispatch, or the tool receives no
+      // target and reports a usage error the caller already satisfied.
+      if (name === undefined) return missingWorkspaceName(noun, verbOrName);
+      return { kind: "intent-status", noun, verb: verbOrName, name };
     }
   }
 
@@ -815,8 +858,14 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
 
 export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[] | null {
   switch (command.kind) {
-    case "list":
-      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "list": {
+      // `list` is implicit in the bare `[noun]` form the utility already treats
+      // as the listing; only the flags need forwarding.
+      const argv = [command.noun];
+      if (command.json) argv.push("--json");
+      if (command.all) argv.push("--all");
+      return argv;
+    }
     case "switch":
       // Explicit `switch <name>` must forward the literal "switch" token so
       // the utility reads <name> as the switch target even when it shadows a
@@ -831,6 +880,11 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
       return command.explicit
         ? [command.noun, "switch", command.name]
         : [command.noun, command.name];
+    case "intent-status":
+      // Always the literal 3-token form so <name> survives the seam and cannot
+      // be re-read as a verb (an intent legitimately named "restore" still
+      // resolves as the target of `intent abandon restore`).
+      return [command.noun, command.verb, command.name];
     case "create":
       return ["space-create", command.name];
     case "create-intent":
@@ -1663,17 +1717,34 @@ export function activeIntent(
   const sp = space ?? activeSpace(projectDir);
   const dir = intentsDir(projectDir, sp);
   if (explicit) return explicit;
+  // An ABANDONED record is never INFERRED as active. Both routes below infer —
+  // the cursor names a record, the lone-record fallback guesses the only one —
+  // and `intent abandon` PRESERVES the record dir, so without this guard
+  // abandoning a space's only intent would hand that very record back here (the
+  // cleared cursor falls through to the lone-record rule) and it would read as
+  // active again: precisely the "terminal yet active" state the abandon verb
+  // exists to remove. The `explicit` override above is deliberately exempt — a
+  // caller naming a record (session binding, --intent) has asked for it, and
+  // listIntents() keeps such an intent visible so the operator is never stranded
+  // looking at an invisible active intent.
   // Cursor: a real record the pointer names.
   try {
     const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+    if (
+      raw.length > 0 &&
+      existsSync(join(dir, raw, "aidlc-state.md")) &&
+      !isAbandonedRecord(projectDir, raw, sp)
+    ) {
+      return raw;
+    }
   } catch {
     // no cursor → fall through to lone-intent
   }
   const records = listIntentDirs(projectDir, sp);
-  if (records.length === 1) return records[0];
+  if (records.length === 1 && !isAbandonedRecord(projectDir, records[0], sp)) return records[0];
   // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
+  // Lone-but-abandoned → null too: the space has no live work.
   return null;
 }
 
@@ -2424,6 +2495,22 @@ export function readIntentRegistry(projectDir: string, space?: string): IntentRe
   return [];
 }
 
+// Is the on-disk record `dirName` marked abandoned in its space's registry?
+// The registry ROW is the source of truth for status — the record dir itself is
+// preserved verbatim on abandon, so its presence on disk says nothing about the
+// lifecycle. Used by activeIntent() to keep a terminal record from being
+// INFERRED as active. A record with no registry row (orphan / legacy flat) reads
+// as NOT abandoned: abandonment is an explicit recorded act, never an inference
+// from a missing row.
+export function isAbandonedRecord(
+  projectDir: string,
+  dirName: string,
+  space?: string,
+): boolean {
+  const row = readIntentRegistry(projectDir, space).find((e) => recordDirMatches(e, dirName));
+  return row !== undefined && isAbandonedStatus(row.status);
+}
+
 // --- The deterministic query layer: "what exists" (one source, two modes) ----
 //
 // listSpaces()/listIntents() are the single shared readers the verb handlers,
@@ -2514,8 +2601,11 @@ export function listIntents(
   // Abandoned intents are terminal and, by default, hidden from the listing so
   // it reflects only live work — the whole point of the abandon verb. Callers
   // that want the full picture (the `--all` listing, the doctor reconciliation)
-  // pass includeAbandoned=true. An abandoned row that is ALSO the active cursor
-  // is never hidden: leaving the active intent invisible would strand the user.
+  // pass includeAbandoned=true. An abandoned row that is somehow STILL active is
+  // never hidden: leaving the active intent invisible would strand the user.
+  // activeIntent() refuses to infer an abandoned record and the switch arm
+  // refuses to select one, so this only fires for an explicit override (a stale
+  // session binding, --intent) — exactly the case that must stay visible.
   if (includeAbandoned) return infos;
   return infos.filter((i) => !isAbandonedStatus(i.status) || i.active);
 }
@@ -3994,7 +4084,8 @@ export function createIntent(
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }
 
-// Flip an intent's registry row to a terminal/other status (e.g. "complete").
+// Flip an intent's registry row to another lifecycle status — one of the
+// INTENT_STATUS_* constants (in-flight / complete / abandoned).
 // Matches the row by record DIR NAME (the stable identity the cursor/state use),
 // rewriting intents.json in place. MUST be called under the WORKSPACE lock
 // (invariant 2). Returns true iff a row matched and was updated. No-op (false)

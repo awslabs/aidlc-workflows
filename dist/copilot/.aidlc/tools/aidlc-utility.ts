@@ -336,15 +336,24 @@ function validateIntentCreateFlagValues(
 // before throwing — so detect the held lock and use the unlocked variant.
 // Outside a held lock (every other caller — status/doctor/etc.) it takes its
 // own lock as before.
+//
+// `intent`/`space` name the record whose audit shard receives the event. Omit
+// them for the ambient active record (the historic behavior). Pass them when the
+// event is ABOUT a specific intent that is not necessarily the active one — the
+// resolution behind an omitted intent is activeIntent(), so an event about
+// another record would otherwise land in the active intent's shard, or in the
+// bare space root when no intent resolves at all.
 function appendAuditEvent(
   projectDir: string,
   event: string,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  intent?: string,
+  space?: string
 ): void {
   if (holdsAuditLock(projectDir)) {
-    appendAuditEntryUnlocked(event, fields, projectDir);
+    appendAuditEntryUnlocked(event, fields, projectDir, intent, space);
   } else {
-    appendAuditEntry(event, fields, projectDir);
+    appendAuditEntry(event, fields, projectDir, intent, space);
   }
 }
 
@@ -6061,13 +6070,22 @@ function handleUpgrade(): void {
 // dir within the active space, searching ALL intents including abandoned ones.
 // Returns the matched IntentInfo, or die()s with the same guidance shape the
 // switch arm uses. Shared by abandon/restore so both resolve targets identically.
+// A resolved intent target: the record dir plus the registry facts the verbs
+// branch on. Narrower than IntentInfo (dirName is non-null once resolved).
+interface IntentTarget {
+  dirName: string;
+  slug: string;
+  status: string;
+  active: boolean;
+}
+
 function resolveIntentTarget(
   projectDir: string,
   space: string,
   activeOverride: string | null,
   target: string | undefined,
   verb: string,
-): { dirName: string; slug: string; status: string; active: boolean } {
+): IntentTarget {
   if (!target) {
     die(`Usage: aidlc-utility intent ${verb} <name>`);
   }
@@ -6092,14 +6110,85 @@ function resolveIntentTarget(
   return { dirName: m.dirName, slug: m.slug, status: m.status, active: m.active };
 }
 
+// The one lock-and-record transaction behind BOTH `intent abandon` and `intent
+// restore`. The two verbs make the same SHAPE of mutation — flip one registry
+// row's status, optionally adjust the per-user cursors, record exactly one audit
+// event — so the ordering (mutate, then record, all inside the WORKSPACE audit
+// lock, mirroring intent-create) lives here once instead of being re-derived per
+// verb, and both verbs report `changed` identically. `duringLock` runs after the
+// status write and before the audit event, so any cursor/session adjustment it
+// makes is covered by the same lock. Returns updateIntentStatus's `changed` so a
+// caller can tell a real transition from a redundant re-write of the same status.
+function commitIntentStatusTransition(
+  projectDir: string,
+  space: string,
+  match: IntentTarget,
+  nextStatus: string,
+  eventType: "INTENT_ABANDONED" | "INTENT_RESTORED",
+  extraFields: Record<string, string> = {},
+  afterAudit?: () => void,
+): boolean {
+  let changed = false;
+  withAuditLock(projectDir, () => {
+    changed = updateIntentStatus(projectDir, match.dirName, nextStatus, space);
+    // The event is ABOUT this intent, so it is written to THIS intent's audit
+    // shard — named explicitly, never resolved from the ambient cursor. Omitting
+    // the target would resolve through activeIntent(): abandoning a NON-active
+    // intent would file the event under whichever intent happens to be active,
+    // and abandoning the ACTIVE one would land it in the bare space root once
+    // the cursor is released. Preserving the intent's own auditable history is
+    // the point of abandon-not-delete, so the shard must be the intent's own.
+    appendAuditEvent(
+      projectDir,
+      eventType,
+      {
+        space,
+        intent: match.dirName,
+        slug: match.slug,
+        previous_status: match.status,
+        new_status: nextStatus,
+        changed: String(changed),
+        ...extraFields,
+      },
+      match.dirName,
+      space,
+    );
+    // Cursor/session release runs AFTER the append, so the record is still fully
+    // resolvable while the event is written. Still inside the lock: the whole
+    // transition is one atomic unit.
+    afterAudit?.();
+  });
+  return changed;
+}
+
+// Unpin the LIVE session from an intent it is bound to, so abandoning the intent
+// the current conversation is working in does not leave that session resolving
+// to a terminal record. Only touches a binding that actually names this intent
+// in this space: resolveWorkflowSelection's `intent` can equally come from the
+// cursor, and inventing a binding where none existed would suppress the cursor
+// for unrelated intents. Best-effort, mirroring the switch arm's re-stamp.
+function unpinSessionFromIntent(
+  projectDir: string,
+  selection: { space: string; sessionId: string | null; binding: { space: string; intent: string | null } | null },
+  space: string,
+  dirName: string,
+): void {
+  const binding = selection.binding;
+  if (!binding || binding.space !== space || binding.intent !== dirName) return;
+  const sid = selection.sessionId ?? readCurrentSessionId(projectDir);
+  if (!sid) return;
+  writeSessionBinding(projectDir, sid, space, null);
+  clearSessionRebindOffer(projectDir, sid);
+}
+
 // `/aidlc intent abandon <name>` — retire an in-flight intent to the terminal
 // `abandoned` status. This is the first-class "I'm done with this one, stop it"
 // move: the registry row's status flips to `abandoned` so the intent drops out
 // of the default listing, while the record dir and audit shard are PRESERVED
-// (nothing is deleted or moved). If the abandoned intent is the active one, the
-// active-intent cursor is cleared so it no longer points at a terminal record.
-// Reversible via `intent restore`. Mutates under the WORKSPACE audit lock and
-// emits an INTENT_ABANDONED audit event, mirroring intent-create's transaction.
+// (nothing is deleted or moved). If the abandoned intent is the active one, BOTH
+// routes that could keep resolving to it are released — the active-intent cursor
+// is cleared and a live session bound to it is unpinned — so no layer reports a
+// terminal record as active. Reversible via `intent restore`.
 function handleIntentAbandon(projectDir: string, target: string | undefined): void {
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
@@ -6110,23 +6199,23 @@ function handleIntentAbandon(projectDir: string, target: string | undefined): vo
     );
     return;
   }
-  withAuditLock(projectDir, () => {
-    const changed = updateIntentStatus(projectDir, match.dirName, INTENT_STATUS_ABANDONED, space);
-    if (match.active) {
-      // The cursor must not keep pointing at a terminal record. Clearing it
-      // lets the lone-intent fallback resolve, or leaves the space with no
-      // active intent (the listing then prompts a switch).
+  commitIntentStatusTransition(
+    projectDir,
+    space,
+    match,
+    INTENT_STATUS_ABANDONED,
+    "INTENT_ABANDONED",
+    { was_active: String(match.active) },
+    () => {
+      if (!match.active) return;
+      // Neither cursor may keep pointing at a terminal record. activeIntent()
+      // additionally refuses to INFER an abandoned record (so the lone-record
+      // fallback cannot resurrect this one); clearing here is the matching
+      // write-side release.
       clearActiveIntentCursor(projectDir, space);
-    }
-    appendAuditEvent(projectDir, "INTENT_ABANDONED", {
-      space,
-      intent: match.dirName,
-      slug: match.slug,
-      previous_status: match.status,
-      was_active: String(match.active),
-      changed: String(changed),
-    });
-  });
+      unpinSessionFromIntent(projectDir, selection, space, match.dirName);
+    },
+  );
   process.stdout.write(
     `Abandoned intent "${match.dirName}" (space: ${space}). Record and audit trail are preserved; it is hidden from /aidlc intent (show with --all) and can be brought back with /aidlc intent restore ${match.dirName}.\n`
   );
@@ -6147,15 +6236,13 @@ function handleIntentRestore(projectDir: string, target: string | undefined): vo
     );
     return;
   }
-  withAuditLock(projectDir, () => {
-    const changed = updateIntentStatus(projectDir, match.dirName, INTENT_STATUS_IN_FLIGHT, space);
-    appendAuditEvent(projectDir, "INTENT_RESTORED", {
-      space,
-      intent: match.dirName,
-      slug: match.slug,
-      changed: String(changed),
-    });
-  });
+  commitIntentStatusTransition(
+    projectDir,
+    space,
+    match,
+    INTENT_STATUS_IN_FLIGHT,
+    "INTENT_RESTORED",
+  );
   process.stdout.write(
     `Restored intent "${match.dirName}" to in-flight (space: ${space}). Switch to it with /aidlc intent ${match.dirName}.\n`
   );
@@ -6192,9 +6279,19 @@ function printIntentListing(
     );
     return;
   }
+  // How many rows the default listing is hiding. Computed BEFORE the empty
+  // branch: a space whose only intents are abandoned is not an empty space, and
+  // saying "no intents yet — start one" there would invite a duplicate of work
+  // the operator deliberately retired. Cheap re-read of the same registry.
+  const hidden = includeAbandoned
+    ? 0
+    : listIntents(projectDir, space, selection.intent, true).length - intents.length;
+  const revealHint = `show with /aidlc intent list --all`;
   if (intents.length === 0) {
     process.stdout.write(
-      `No intents in space "${space}" yet. Start one by describing what to build: /aidlc "build the auth service"\n`
+      hidden > 0
+        ? `No live intents in space "${space}" — ${hidden} abandoned intent${hidden === 1 ? " is" : "s are"} hidden (${revealHint}). Restore one with /aidlc intent restore <name>, or start new work by describing what to build: /aidlc "build the auth service"\n`
+        : `No intents in space "${space}" yet. Start one by describing what to build: /aidlc "build the auth service"\n`
     );
     return;
   }
@@ -6206,14 +6303,9 @@ function printIntentListing(
   if (!active) {
     out += `\n(no active intent — switch with /aidlc intent <name>)\n`;
   }
-  if (!includeAbandoned) {
-    // Hint that abandoned intents exist but are hidden, so the count is not
-    // silently misleading. Cheap re-read against the same registry.
-    const all = listIntents(projectDir, space, selection.intent, true);
-    const hidden = all.length - intents.length;
-    if (hidden > 0) {
-      out += `\n(${hidden} abandoned intent${hidden === 1 ? "" : "s"} hidden — show with /aidlc intent list --all)\n`;
-    }
+  if (hidden > 0) {
+    // Say the count out loud so the listing is never silently partial.
+    out += `\n(${hidden} abandoned intent${hidden === 1 ? "" : "s"} hidden — ${revealHint})\n`;
   }
   process.stdout.write(out);
 }
@@ -6291,9 +6383,11 @@ function handleIntent(
   }
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
-  // Include abandoned intents so an explicit `switch <name>` can still target
-  // one (e.g. to inspect it before restoring); the default LISTING still hides
-  // them. The abandon/restore verbs resolve their own targets separately.
+  // Include abandoned intents so a switch that NAMES one is diagnosed precisely
+  // ("it is abandoned — restore it first", below) instead of failing with a
+  // misleading "Unknown intent" just because the default listing hides it. The
+  // switch itself is still refused: see the abandoned guard after the match.
+  // The abandon/restore verbs resolve their own targets separately.
   const intents = listIntents(projectDir, space, selection.intent, true);
   // Exact record-dir match first; then a unique slug match.
   let match = intents.find((i) => i.dirName === target);
@@ -6313,6 +6407,16 @@ function handleIntent(
     // stays a separate, human-confirmed move.
     die(
       `Unknown intent "${target}" in space "${space}". This command only switches between existing intents - run /aidlc intent to list them. Do not start a new workflow to recover from this error.`
+    );
+  }
+  // Refuse to make an abandoned intent active. Allowing it would recreate the
+  // exact state the abandon verb exists to remove — a terminal record sitting as
+  // the active cursor, hidden from the default listing yet driving the workflow.
+  // Restoring is the one supported way back in, and it is a single explicit
+  // command; inspecting an abandoned intent needs no cursor (`intent list --all`).
+  if (isAbandonedStatus(match.status)) {
+    die(
+      `Intent "${match.dirName}" is abandoned in space "${space}". Restore it first with /aidlc intent restore ${match.dirName}, then switch to it. Run /aidlc intent list --all to see abandoned intents. Do not start a new workflow to recover from this error.`
     );
   }
   setActiveIntentCursor(projectDir, match.dirName, space);

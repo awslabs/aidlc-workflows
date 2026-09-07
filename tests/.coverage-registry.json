@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 817,
+    "total": 825,
     "enumeratedByClass": {
-      "function": 519,
-      "audit": 91,
+      "function": 525,
+      "audit": 93,
       "scope": 11,
       "stage": 33,
       "hook": 18,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 299,
+      "function": 303,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -242,6 +242,20 @@
     {
       "unitClass": "audit",
       "unitId": "HUMAN_TURN",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "INTENT_ABANDONED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "INTENT_RESTORED",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1129,6 +1143,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
@@ -1656,6 +1674,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearActiveIntentCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2807,6 +2837,27 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:INTENT_STATUS_ABANDONED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:INTENT_STATUS_COMPLETE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:INTENT_STATUS_IN_FLIGHT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2871,6 +2922,30 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAbandonedRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAbandonedStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4305,8 +4380,13 @@
       "unitClass": "function",
       "unitId": "function:recordDirMatches",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

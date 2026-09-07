@@ -66,6 +66,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   unattendedHumanPresenceHint,
+  INTENT_STATUS_COMPLETE,
   intentRepos,
   isAutonomousConstructionDecision,
   isAutonomousMode,
@@ -1435,7 +1436,7 @@ function handleRefreshUnitProgress(
     if (workflowCompleted) {
       const completedIntentDir = activeIntent(pd);
       if (completedIntentDir) {
-        updateIntentStatus(pd, completedIntentDir, "complete");
+        updateIntentStatus(pd, completedIntentDir, INTENT_STATUS_COMPLETE);
       }
     }
     afterWrite?.();
@@ -4396,7 +4397,7 @@ function handleCompleteWorkflow(
     updateIntentStatus(
       pd,
       completedIntentDir,
-      "complete",
+      INTENT_STATUS_COMPLETE,
       completedSelection.space,
     );
   }
@@ -5714,7 +5715,7 @@ function handleSkip(args: string[]): void {
       updateIntentStatus(
         pd,
         completedIntentDir,
-        "complete",
+        INTENT_STATUS_COMPLETE,
         completedSelection.space,
       );
     }

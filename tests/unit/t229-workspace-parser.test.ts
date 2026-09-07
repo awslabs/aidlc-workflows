@@ -143,11 +143,13 @@ describe("parseWorkspaceCommand", () => {
       kind: "list",
       noun: "intent",
       json: false,
+      all: false,
     });
     expect(parseWorkspaceCommand(["intent", "list", "--json"])).toEqual({
       kind: "list",
       noun: "intent",
       json: true,
+      all: false,
     });
     expect(parseWorkspaceCommand(["intent", "switch", "list"])).toEqual({
       kind: "switch",
@@ -167,6 +169,65 @@ describe("parseWorkspaceCommand", () => {
       noun: "intent",
       rest: ["--scope", "poc", "--label", "x"],
     });
+  });
+
+  // Regression: an intent verb the parser does not model falls through to the
+  // bare-name switch sugar, which reads the VERB as the target and DROPS the
+  // trailing name. `intent abandon <name>` then reached the utility as a
+  // 2-token `intent abandon`, so the tool reported "Usage: intent abandon
+  // <name>" for a command that supplied one.
+  test("intent abandon / restore forward the verb AND the name through the seam", () => {
+    for (const verb of ["abandon", "restore"] as const) {
+      const parsed = parseWorkspaceCommand(["intent", verb, "260828-session-binding-article"]);
+      expect(parsed).toEqual({
+        kind: "intent-status",
+        noun: "intent",
+        verb,
+        name: "260828-session-binding-article",
+      });
+      expect(workspaceCommandUtilityArgv(parsed)).toEqual([
+        "intent",
+        verb,
+        "260828-session-binding-article",
+      ]);
+      // A nameless invocation is an error at the seam, not a nameless dispatch.
+      expect(parseWorkspaceCommand(["intent", verb])).toMatchObject({
+        kind: "error",
+        noun: "intent",
+        code: "missing-name",
+        verb,
+        message: `Usage: aidlc intent ${verb} <name>`,
+      });
+    }
+    // The name is never re-read as a verb, so a record named like a verb works.
+    expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["intent", "abandon", "restore"])))
+      .toEqual(["intent", "abandon", "restore"]);
+  });
+
+  // Same defect class: a listing flag the parser does not model is dropped from
+  // the reconstructed argv, silently downgrading `--all` to the default listing.
+  test("the intent listing forwards --all (alone, with --json, and in bare form)", () => {
+    expect(parseWorkspaceCommand(["intent", "list", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: false,
+      all: true,
+    });
+    expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["intent", "list", "--all"])))
+      .toEqual(["intent", "--all"]);
+    expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["intent", "list", "--json", "--all"])))
+      .toEqual(["intent", "--json", "--all"]);
+    // Bare `intent --all` is the listing, NOT a switch to a record named "--all".
+    expect(parseWorkspaceCommand(["intent", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: false,
+      all: true,
+    });
+    // --all is intent-only; it is never recorded or forwarded for spaces.
+    expect(parseWorkspaceCommand(["space", "--all"])).toMatchObject({ kind: "list", all: false });
+    expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["space", "list", "--all"])))
+      .toEqual(["space"]);
   });
 
   test("utility argv keeps the explicit switch token for verb-shaped names", () => {
@@ -221,6 +282,10 @@ describe("parseWorkspaceCommand", () => {
       "list",
       "switch",
       "create",
+      // The lifecycle verbs are grammar too: `intent abandon <name>` must not be
+      // ambiguous with a record literally named "abandon".
+      "abandon",
+      "restore",
       "archive",
       "rename",
       "show",
