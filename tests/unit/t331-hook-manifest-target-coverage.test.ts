@@ -1,15 +1,25 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-write-audit-log
+// covers: hook:aidlc-continue-workflow, hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-write-audit-log, hook:aidlc-review-freeze, hook:aidlc-deliver-stage-rules
 //
-// A hook manifest names an adapter target. Nothing else checks that the target
-// exists: `doctor` reports a healthy project, `graph compile --check` passes and
-// the type checker never sees the string, because it travels from JSON through
-// `aidlc engine adapter <harness> <target>` as plain argv. A manifest naming a
-// target the adapter does not implement therefore fails at run time only - and
-// for a PreToolUse gate it fails OPEN, because an adapter with no handler
-// returns null and the dispatcher exits 0.
+// The Kiro row serves two surfaces from one shell, and nothing else checks that
+// its hook wiring actually reaches both. Three ways it can fail silently:
 //
-// This walks every shipped manifest against its adapter's target set, in both
-// directions, so a rename or a row merge cannot silently unwire a hook.
+//   1. A manifest names an adapter target that does not exist. `doctor` reports a
+//      healthy project, `graph compile --check` passes, and the type checker never
+//      sees the string because it travels from JSON through
+//      `aidlc engine adapter <harness> <target>` as plain argv. For a PreToolUse
+//      gate it fails OPEN - an adapter with no handler returns null and the
+//      dispatcher exits 0.
+//   2. A responsibility is registered on a trigger only one surface fires.
+//      `docs/features/hooks.md` (Available triggers) gives Session Start as IDE
+//      only and Agent Spawn as CLI only, so a lifecycle hook needs BOTH names or
+//      it is dead on one surface.
+//   3. A responsibility that must be able to refuse a tool call is registered on a
+//      trigger that cannot block. The same table gives Prompt Submit, Pre Tool Use
+//      and Pre Task Execution as the only blocking triggers; Post* and Stop cannot
+//      block, so moving a guard there turns a refusal into a bystander.
+//
+// This encodes the contract instead of the current file list, so a missing
+// manifest is a failure rather than an absence nothing looks for.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,105 +27,201 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Rows whose hooks register through standalone manifests that dispatch into an
-// adapter. Discovered rather than hardcoded would be nicer, but the adapter path
-// differs per row, so the pairing is stated.
 const SUBJECTS = [
   { harness: "kiro", harnessDir: ".kiro", adapter: "hooks/aidlc-kiro-adapter.ts" },
 ] as const;
 
-/** Targets a manifest asks for, keyed by the manifest file that asks. */
-function manifestTargets(distRoot: string, harness: string, harnessDir: string) {
+// docs/features/hooks.md - Available triggers. PascalCase spellings as the schema
+// section gives them.
+const KNOWN_TRIGGERS = new Set([
+  "UserPromptSubmit",
+  "Stop",
+  "SessionStart",
+  "AgentSpawn",
+  "PreToolUse",
+  "PostToolUse",
+  "PostFileCreate",
+  "PostFileSave",
+  "PostFileDelete",
+  "PreTaskExecution",
+  "PostTaskExecution",
+]);
+const BLOCKING_TRIGGERS = new Set([
+  "UserPromptSubmit",
+  "PreToolUse",
+  "PreTaskExecution",
+]);
+/** Triggers only one surface fires, per the same table. */
+const SURFACE_ONLY: Record<string, "ide" | "cli"> = {
+  SessionStart: "ide",
+  AgentSpawn: "cli",
+  PostFileCreate: "ide",
+  PostFileSave: "ide",
+  PostFileDelete: "ide",
+  PreTaskExecution: "ide",
+  PostTaskExecution: "ide",
+};
+
+// What the row must register, and on which triggers. Grounded in two places: the
+// pre-merge agent-v1 registration this row carried (its `hooks` dict named the
+// event for each target) and the manifests the IDE row shipped. `blocking: true`
+// means the responsibility refuses tool calls, so a non-blocking trigger is wrong
+// for it whatever else is true.
+const REQUIRED: Array<{
+  target: string;
+  triggers: string[];
+  blocking?: true;
+  why: string;
+}> = [
+  {
+    target: "session-start",
+    triggers: ["SessionStart", "AgentSpawn"],
+    why: "lifecycle start; SessionStart is IDE-only and AgentSpawn is CLI-only, so one shell needs both",
+  },
+  { target: "verb-intercept", triggers: ["UserPromptSubmit"], why: "reads the /aidlc verb off the prompt" },
+  { target: "record-human-turn", triggers: ["UserPromptSubmit"], why: "records the human turn" },
+  { target: "continue-workflow", triggers: ["Stop"], why: "advances after the agent finishes" },
+  { target: "plan-approval-guard", triggers: ["PreToolUse"], blocking: true, why: "refuses writes before plan approval" },
+  { target: "enforce-approval-gate", triggers: ["PreToolUse"], blocking: true, why: "refuses work past an unapproved gate" },
+  { target: "terminal-command-guard", triggers: ["PreToolUse"], blocking: true, why: "refuses non-deterministic terminal commands" },
+  {
+    target: "review-freeze",
+    triggers: ["PreToolUse"],
+    blocking: true,
+    why: "refuses edits while a review is frozen; PostToolUse audit cannot substitute because it cannot block",
+  },
+  {
+    target: "state-transition-guard",
+    triggers: ["PreToolUse"],
+    blocking: true,
+    why: "refuses a hand-run lifecycle verb; the engine owns state transitions",
+  },
+  { target: "audit-and-sensors", triggers: ["PostToolUse"], why: "audits the write and runs sensors" },
+  { target: "rebuild-stage-graph", triggers: ["PostToolUse"], why: "rebuilds the compiled graph after a shell step" },
+  { target: "sync-workflow-state", triggers: ["PostToolUse"], why: "reconciles Current Stage from the audit tail" },
+  { target: "log-subagent", triggers: ["PostToolUse"], why: "records a delegation" },
+];
+
+type Registration = { target: string; trigger: string; manifest: string };
+
+function registrations(distRoot: string, harness: string, harnessDir: string): Registration[] {
   const hooksDir = join(distRoot, harness, harnessDir, "hooks");
-  const asked = new Map<string, string>();
-  if (!existsSync(hooksDir)) return asked;
+  const out: Registration[] = [];
+  if (!existsSync(hooksDir)) return out;
   for (const name of readdirSync(hooksDir).filter((n) => n.endsWith(".json")).sort()) {
     const parsed = JSON.parse(readFileSync(join(hooksDir, name), "utf-8")) as {
-      hooks?: Array<{ action?: { command?: unknown } }>;
+      hooks?: Array<{ trigger?: unknown; action?: { command?: unknown } }>;
     };
     for (const hook of parsed.hooks ?? []) {
       const command = hook.action?.command;
-      if (typeof command !== "string") continue;
+      const trigger = hook.trigger;
+      if (typeof command !== "string" || typeof trigger !== "string") continue;
       const match = command.match(
         new RegExp(`engine adapter ${harness}\\s+([a-z][a-z0-9-]*)`),
       );
-      if (match) asked.set(match[1], name);
+      if (match) out.push({ target: match[1], trigger, manifest: name });
     }
   }
-  return asked;
+  return out;
 }
 
-/** Targets the adapter implements. */
-function adapterTargets(source: string) {
+function adapterTargets(source: string): Set<string> {
   const handled = new Set<string>();
-  for (const match of source.matchAll(/target === "([a-z][a-z0-9-]*)"/g)) {
-    handled.add(match[1]);
-  }
-  for (const match of source.matchAll(/^\s*case "([a-z][a-z0-9-]*)":/gm)) {
-    handled.add(match[1]);
-  }
+  for (const m of source.matchAll(/target === "([a-z][a-z0-9-]*)"/g)) handled.add(m[1]);
+  for (const m of source.matchAll(/^\s*case "([a-z][a-z0-9-]*)":/gm)) handled.add(m[1]);
   return handled;
 }
 
-describe("t331 hook manifest target coverage", () => {
+describe("t331 kiro hook wiring contract", () => {
   for (const subject of SUBJECTS) {
+    const adapterPath = join(REPO_ROOT, "harness", subject.harness, subject.adapter);
+    const distRoot = join(REPO_ROOT, "dist");
+
+    test(`${subject.harness}: every required responsibility is registered on every trigger it needs`, () => {
+      const regs = registrations(distRoot, subject.harness, subject.harnessDir);
+      expect(regs.length, "no manifest dispatches into the adapter").toBeGreaterThan(0);
+      const missing: string[] = [];
+      for (const want of REQUIRED) {
+        for (const trigger of want.triggers) {
+          const hit = regs.some((r) => r.target === want.target && r.trigger === trigger);
+          if (!hit) missing.push(`${want.target} on ${trigger} (${want.why})`);
+        }
+      }
+      expect(missing).toEqual([]);
+    });
+
+    test(`${subject.harness}: a responsibility that must refuse is on a blocking trigger`, () => {
+      const regs = registrations(distRoot, subject.harness, subject.harnessDir);
+      const wrong: string[] = [];
+      for (const want of REQUIRED.filter((r) => r.blocking)) {
+        for (const reg of regs.filter((r) => r.target === want.target)) {
+          if (!BLOCKING_TRIGGERS.has(reg.trigger)) {
+            wrong.push(`${reg.manifest}: ${reg.target} on ${reg.trigger} cannot block`);
+          }
+        }
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    test(`${subject.harness}: a single-surface trigger is always paired`, () => {
+      const regs = registrations(distRoot, subject.harness, subject.harnessDir);
+      const bySurface = new Map<string, Set<string>>();
+      for (const reg of regs) {
+        const only = SURFACE_ONLY[reg.trigger];
+        if (!only) continue;
+        const seen = bySurface.get(reg.target) ?? new Set<string>();
+        seen.add(only);
+        bySurface.set(reg.target, seen);
+      }
+      // Only the lifecycle pair is required to cover both surfaces; the IDE-only
+      // file and task triggers have no CLI counterpart to pair with, so they are
+      // exempt by name rather than by silence.
+      const IDE_ONLY_BY_DESIGN = new Set([
+        "PostFileCreate",
+        "PostFileSave",
+        "PostFileDelete",
+        "PreTaskExecution",
+        "PostTaskExecution",
+      ]);
+      const lonely: string[] = [];
+      for (const [target, surfaces] of bySurface) {
+        const triggers = regs.filter((r) => r.target === target).map((r) => r.trigger);
+        if (triggers.every((t) => IDE_ONLY_BY_DESIGN.has(t))) continue;
+        if (surfaces.size < 2) {
+          lonely.push(`${target} reaches only the ${[...surfaces][0]} surface (${triggers.join(", ")})`);
+        }
+      }
+      expect(lonely).toEqual([]);
+    });
+
+    test(`${subject.harness}: every manifest trigger is a documented trigger name`, () => {
+      const regs = registrations(distRoot, subject.harness, subject.harnessDir);
+      const unknown = regs
+        .filter((r) => !KNOWN_TRIGGERS.has(r.trigger))
+        .map((r) => `${r.manifest}: ${r.trigger}`)
+        .sort();
+      expect(unknown).toEqual([]);
+    });
+
     test(`${subject.harness}: every manifest target exists in the adapter`, () => {
-      const adapterPath = join(REPO_ROOT, "harness", subject.harness, subject.adapter);
       expect(existsSync(adapterPath), adapterPath).toBe(true);
       const handled = adapterTargets(readFileSync(adapterPath, "utf-8"));
       expect(handled.size).toBeGreaterThan(0);
-
-      const asked = manifestTargets(
-        join(REPO_ROOT, "dist"),
-        subject.harness,
-        subject.harnessDir,
-      );
-      expect(asked.size, "no manifest dispatches into the adapter").toBeGreaterThan(0);
-
-      const unimplemented = [...asked]
-        .filter(([target]) => !handled.has(target))
-        .map(([target, manifest]) => `${manifest} -> ${target}`)
+      const unimplemented = registrations(distRoot, subject.harness, subject.harnessDir)
+        .filter((r) => !handled.has(r.target))
+        .map((r) => `${r.manifest} -> ${r.target}`)
         .sort();
       expect(unimplemented).toEqual([]);
     });
 
-    // The row merge folded a second adapter in. Its targets are not reachable
-    // from a manifest yet (the engine and the shipped shells call them), so the
-    // coverage walk above cannot see them; naming them here keeps a later edit
-    // from dropping one silently.
-    test(`${subject.harness}: the adapter keeps the targets the merge brought in`, () => {
-      const adapterPath = join(REPO_ROOT, "harness", subject.harness, subject.adapter);
-      const handled = adapterTargets(readFileSync(adapterPath, "utf-8"));
-      const required = [
-        "audit-and-sensors",
-        "continue-workflow",
-        "deliver-stage-rules",
-        "enforce-approval-gate",
-        "guard-tool-call",
-        "log-subagent",
-        "plan-approval-guard",
-        "rebuild-stage-graph",
-        "record-human-turn",
-        "review-freeze",
-        "reviewer-scope",
-        "session-end",
-        "session-start",
-        "state-transition-guard",
-        "sync-workflow-state",
-        "terminal-command-guard",
-        "verb-intercept",
-      ];
-      expect(required.filter((target) => !handled.has(target))).toEqual([]);
-    });
-
     test(`${subject.harness}: the manifests reach the adapter's own harness name`, () => {
-      const hooksDir = join(REPO_ROOT, "dist", subject.harness, subject.harnessDir, "hooks");
+      const hooksDir = join(distRoot, subject.harness, subject.harnessDir, "hooks");
       expect(existsSync(hooksDir), hooksDir).toBe(true);
       const strangers: string[] = [];
       for (const name of readdirSync(hooksDir).filter((n) => n.endsWith(".json")).sort()) {
         const text = readFileSync(join(hooksDir, name), "utf-8");
-        for (const match of text.matchAll(/engine adapter ([a-z][a-z0-9-]*)/g)) {
-          if (match[1] !== subject.harness) strangers.push(`${name} -> ${match[1]}`);
+        for (const m of text.matchAll(/engine adapter ([a-z][a-z0-9-]*)/g)) {
+          if (m[1] !== subject.harness) strangers.push(`${name} -> ${m[1]}`);
         }
       }
       expect(strangers).toEqual([]);
