@@ -939,7 +939,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t173-session-switch-restamp.test.ts",
     "integration/t175-space-create-memory-isolation.test.ts",
     "integration/t185-stage-artifact-guard.test.ts",
-    "integration/t188-plugin-compose.test.ts",
+    "integration/t188-plugin-compose.serial.test.ts",
     "integration/t224-plugin-selection.test.ts",
     "integration/t300-plugin-kit.test.ts",
     "integration/t304-loopback-review-receipt-replay.test.ts",
