@@ -49,6 +49,13 @@ export const ENV_REVIEW_HOME = "AIDLC_REVIEW_HOME";
  */
 export const ENV_REVIEW_STRICT = "AIDLC_REVIEW_STRICT";
 export const ENV_HTML_ARTIFACTS = "AIDLC_HTML_ARTIFACTS";
+// Set by the review daemon on an agent session it launches for one intent:
+// `<space>/<record dir>`. The SessionStart hook binds that session to the named
+// record (see reviewRunTarget); nothing else reads it.
+export const ENV_REVIEW_RUN = "AIDLC_REVIEW_RUN";
+// `0` disables the daemon's agent runner (Start then records a request for the
+// terminal, as before).
+export const ENV_REVIEW_RUNNER = "AIDLC_REVIEW_RUNNER";
 
 export const DEFAULT_REVIEW_HOST = "127.0.0.1";
 export const DEFAULT_IDLE_MINUTES = 240;
@@ -66,6 +73,60 @@ export function reviewUiStrict(env: NodeJS.ProcessEnv = process.env): boolean {
 
 export function htmlArtifactsRequested(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[ENV_HTML_ARTIFACTS] === "1";
+}
+
+/**
+ * Parse `AIDLC_REVIEW_RUN` (`<space>/<record>`) into the intent it names, or
+ * null when unset, malformed, or naming a record that does not exist. The
+ * record must already hold a state file: the daemon creates the intent before
+ * it launches the session, so a missing record is a stale or foreign value.
+ */
+export function reviewRunTarget(projectDir: string, raw: string | undefined): { space: string; intent: string } | null {
+  if (!raw) return null;
+  const match = /^([a-z][a-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(raw.trim());
+  if (!match || match[2] === "." || match[2] === "..") return null;
+  const [, space, intent] = match;
+  if (!existsSync(join(projectDir, "aidlc", "spaces", space, "intents", intent, "aidlc-state.md"))) return null;
+  return { space, intent };
+}
+
+// ---- Browser-round continuations ----------------------------------------------
+//
+// When the human answers in the browser, the agent's next move is the same
+// whether the Stop hook held the turn for it (terminal session) or the turn had
+// already ended and the daemon sends a fresh prompt (daemon-run session). One
+// text, two carriers.
+
+function doubleQuotedShellArgument(value: string): string {
+  return `"${value.replace(/([\\"$`])/g, "\\$1")}"`;
+}
+
+export function browserDecisionContinuation(options: {
+  harnessDir: string;
+  slug: string;
+  unit: string | null;
+  file: string;
+  decision: "approve" | "request-changes";
+  notes?: string | null;
+}): string {
+  const unitArg = options.unit ? ` --unit ${options.unit}` : "";
+  const command = options.decision === "approve"
+    ? `bun ${options.harnessDir}/tools/aidlc-orchestrate.ts report --stage ${options.slug}${unitArg} --result approved --user-input "Approve"`
+    : `bun ${options.harnessDir}/tools/aidlc-orchestrate.ts report --stage ${options.slug}${unitArg} --result rejected --user-input "Request Changes" --reason ${doubleQuotedShellArgument(options.notes ?? "See browser review feedback")}`;
+  const remarks = options.decision === "approve"
+    ? ""
+    : " The report's output carries the human's browser remarks (review_feedback, one `### <kind> · aN` heading each, with quotes and unified diffs): address every aN and answer each in the Feedback addressed list.";
+  return `The human decided in the browser (${options.file}): run \`${command}\`, then continue exactly as after a terminal decision.${remarks} Do not ask the human again.`;
+}
+
+export function browserAnswersContinuation(options: {
+  harnessDir: string;
+  slug: string;
+  questionsFile: string;
+  unit: string | null;
+}): string {
+  const unitArg = options.unit ? ` --unit ${options.unit}` : "";
+  return `The human saved answers in the review UI for ${options.slug}. Run \`bun ${options.harnessDir}/tools/aidlc-log.ts answers-apply --stage ${options.slug} --questions-file ${options.questionsFile}${unitArg}\`, then generate the stage artifacts. The browser round is its own confirmation (answers-apply records the summary checkpoint): state the consolidated answers as a short summary and proceed - do not ask "Looks correct", and do not ask the human to type done.`;
 }
 
 export function reviewUiHome(env: NodeJS.ProcessEnv = process.env): string {

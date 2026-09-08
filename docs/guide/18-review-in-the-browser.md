@@ -246,18 +246,51 @@ space it lives in; **New workspace…** creates one), describe what you want to
 build, pick a **Workflow** — a named scope, or *Let the composer decide*, which
 proposes one from your words and asks once — and an **Effort** preset
 (*Thorough · Balanced · Minimal*; the preset sets the effort for each agent
-group, and the menu shows what it means). **Start** (or ⌘↵) records the request.
+group, and the menu shows what it means). **Start** (or ⌘↵) starts it.
 
-Nothing runs yet: creating an intent is the conductor's move, made inside a
-session. The request appears in the Inbox under **Requested** with *Waiting ·
-type `/aidlc` in the terminal*; the next bare `/aidlc` in a session with no
-active workflow picks the oldest request up exactly as if you had typed its
-words there — creating the record with the chosen workflow and effort (the
-record's `Effort` field), then continuing into the first stage. A request with
-*Let the composer decide* goes through the same inference and compose asks a
-typed description would. The **×** on a requested row withdraws it. A session
-that already has an active workflow does not pick requests up; park or finish
-that intent first. Requests are kept per workspace in
+On Claude Code, with the `claude` CLI installed, Start does the whole thing: the
+daemon creates the record (the same `intent-create` the conductor runs, with the
+chosen workflow and the effort in the record's `Effort` field) and launches an
+agent session bound to that intent, prompting it with `/aidlc` — the words you
+would have typed. You never touch a terminal. With *Let the composer decide*,
+Start first shows what the composer would pick from your words (or the default
+workflow) and starts on your confirm. The tab opens the intent with the **Agent**
+panel beside it.
+
+### The Agent panel
+
+The panel (the flow icon in the header; also from ⌘K) follows the intent's run:
+
+- **State** — *Agent working* with a spinner, *Waiting for you* when it needs an
+  answer, *Agent stopped* when a turn ended, *Run ended* / *Run failed*.
+- **Questions** — everything the agent would have asked in the terminal arrives
+  here as a card: Plan Approval in Code Generation, the learnings prompt at a
+  gate, clarifying questions, the compose offer. Pick an option or type your
+  own answer; **Skip** leaves it unanswered. The header badge counts what is
+  waiting, and the panel opens itself when something arrives.
+- **Permissions** — a tool call the harness's own allow rules do not settle
+  waits here with the tool's input (the command, the path) and the agent's
+  options: *Allow*, *Always allow*, *Deny*. Everything the install's
+  `settings.json` already allows runs without asking, exactly as in a terminal.
+- **Log** — what the agent said, the tools it ran, when each turn started and
+  stopped.
+- **Continue** sends `/aidlc` to a stopped session; **Stop** cancels the turn.
+  A daemon restart re-attaches the run to the same session.
+
+Question rounds and approval gates work as before — the Questions form and
+**Approve** / **Request changes** in the header — and the agent resumes on its
+own after you save or decide. The terminal remains a full equivalent: open
+`claude` in the same project and `/aidlc` shows the same record. One run at a
+time per project: Start while an agent is running is refused; finish, park, or
+stop that intent first. Set `AIDLC_REVIEW_RUNNER=0` to turn the runner off.
+
+Without a runner (another harness, no `claude` on this machine, or the runner
+turned off), Start records the request instead. It appears in the Inbox under
+**Requested** with *Waiting · type `/aidlc` in the terminal*; the next bare
+`/aidlc` in a session with no active workflow picks the oldest request up exactly
+as if you had typed its words there, and a request with *Let the composer decide*
+goes through the same inference and compose asks a typed description would. The
+**×** on a requested row withdraws it. Requests are kept per workspace in
 `aidlc/spaces/<space>/intents/pending-intents.json` (gitignored).
 
 ### Inbox and search

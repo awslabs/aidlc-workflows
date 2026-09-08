@@ -16,6 +16,7 @@ export const store = {
   responses: new Map(), // remark_id -> { status, text, revision }
   focusThread: null,
   resolved: [],
+  run: null, // GET /api/run for the viewed intent: { run, pending, events, available }
   connected: false,
   set(partial) {
     const changed = [];

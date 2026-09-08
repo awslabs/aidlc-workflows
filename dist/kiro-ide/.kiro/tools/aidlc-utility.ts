@@ -5580,7 +5580,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   } catch (e) {
     die(errorMessage(e));
   }
-  const initialSelection = resolveWorkflowSelection(projectDir);
+  // `--space <name>`: create in a named workspace rather than the session's or
+  // the cursor's. The review daemon passes it (the composer chose the
+  // workspace); the terminal path leaves it unset. Unknown names fail before
+  // any mutation, like every other refused flag above.
+  const requestedSpace = typeof flags.space === "string" ? flags.space.trim() : "";
+  if (requestedSpace && !listSpaces(projectDir).some((entry) => entry.name === requestedSpace)) {
+    die(`intent-create refused: unknown space "${requestedSpace}". Existing: ${listSpaces(projectDir).map((entry) => entry.name).join(", ")}.`);
+  }
+  const initialSelection = resolveWorkflowSelection(projectDir, requestedSpace ? { space: requestedSpace } : {});
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace

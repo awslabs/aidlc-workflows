@@ -165,6 +165,8 @@ import {
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
 import {
+  browserAnswersContinuation,
+  browserDecisionContinuation,
   openQuestionsRound,
   pendingAnswerFiles,
   pendingDecisions,
@@ -841,10 +843,6 @@ function waitForBrowserDecision(
     // Polling alone carries the wait where recursive watching is unavailable.
   }
   return promise;
-}
-
-function doubleQuotedShellArgument(value: string): string {
-  return `"${value.replace(/([\\"$`])/g, "\\$1")}"`;
 }
 
 // A structured non-gate question is logged before it is rendered and answered
@@ -1708,20 +1706,20 @@ if (gateRound) {
   );
   if (result.kind === "decision") {
     const { file, submission } = result.file;
-    const unitArg = gateRound.unit ? ` --unit ${gateRound.unit}` : "";
-    const command = submission.decision === "approve"
-      ? `bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage ${gateRound.slug}${unitArg} --result approved --user-input "Approve"`
-      : `bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage ${gateRound.slug}${unitArg} --result rejected --user-input "Request Changes" --reason ${doubleQuotedShellArgument(submission.notes ?? "See browser review feedback")}`;
     recordHookDrop(
       projectDir,
       HOOK_NAME,
       `browser decision ${file} saved for ${gateRound.slug}; blocking the stop so the conductor reports it (browser-gate-wait)`,
     );
-    const remarks = submission.decision === "approve"
-      ? ""
-      : ` The report's output carries the human's browser remarks (review_feedback, one \`### <kind> · aN\` heading each, with quotes and unified diffs): address every aN and answer each in the Feedback addressed list.`;
     return blockStop(
-      `The human decided in the browser (${file}): run \`${command}\`, then continue exactly as after a terminal decision.${remarks} Do not ask the human again.`,
+      browserDecisionContinuation({
+        harnessDir: harnessDir(),
+        slug: gateRound.slug,
+        unit: gateRound.unit,
+        file,
+        decision: submission.decision,
+        notes: submission.notes,
+      }),
     );
   }
 }
@@ -1771,7 +1769,12 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
       `browser answers saved for ${round.slug}; blocking the stop so the conductor applies them (browser-wait)`,
     );
     return blockStop(
-      `The human saved answers in the review UI for ${round.slug}. Run \`bun ${harnessDir()}/tools/aidlc-log.ts answers-apply --stage ${round.slug} --questions-file ${round.questionsFile}${activeUnit ? ` --unit ${activeUnit}` : ""}\`, then generate the stage artifacts. The browser round is its own confirmation (answers-apply records the summary checkpoint): state the consolidated answers as a short summary and proceed - do not ask "Looks correct", and do not ask the human to type done.`,
+      browserAnswersContinuation({
+        harnessDir: harnessDir(),
+        slug: round.slug,
+        questionsFile: round.questionsFile,
+        unit: activeUnit ?? null,
+      }),
     );
   }
   recordHookDrop(

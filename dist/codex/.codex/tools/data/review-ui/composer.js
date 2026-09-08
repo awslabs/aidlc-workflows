@@ -4,10 +4,11 @@
 // world under aidlc/spaces/), what to build, which workflow (a scope, or let
 // the composer decide), and how much effort to spend (a preset from the config
 // policy lane - the preset decides model and effort per agent group - or a
-// custom dial). Start records a pending request with the daemon (no record, no
-// state - creation is the conductor's move); the next bare `/aidlc` in a
-// terminal session picks the request up and creates the intent as if the words
-// had been typed there.
+// custom dial). With an agent runner on the daemon, Start creates the intent
+// and runs the agent right here; the browser follows it in the Agent panel.
+// Without one, Start records a pending request and the next bare `/aidlc` in a
+// terminal session picks it up and creates the intent as if the words had been
+// typed there.
 import { api } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./diff.js";
@@ -50,8 +51,15 @@ const draft = {
   // Group dials are effort-only, as the config policy lane defines them; model
   // ids belong to per-agent exceptions in settings, not to a run's start.
   custom: { reviewing: "medium", writing: "medium" },
+  // With "Let the composer decide" and a runner, Start first asks the daemon
+  // what it would pick; the proposal shows here until confirmed or changed.
+  proposal: null, // { scope, source } | null
 };
 let openMenu = null;
+
+function runnerAvailable() {
+  return store.workflow?.runner === true;
+}
 
 export function renderComposer() {
   const space = draft.space || store.workflow?.space || "default";
@@ -69,8 +77,11 @@ export function renderComposer() {
       <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu" title="How much effort the run spends - the preset sets the models and effort for every agent group">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
     </div>
+    ${draft.proposal ? `<div class="composer-proposal"><span>The composer proposes <b>${escapeHtml(draft.proposal.scope)}</b>${draft.proposal.source === "keyword" ? " from your words" : " (the default)"}.</span><button type="button" class="btn primary" data-proposal-start>Start as ${escapeHtml(draft.proposal.scope)}</button><button type="button" class="btn" data-proposal-change>Pick another</button></div>` : ""}
   </section>
-  <p class="composer-foot">Start records the request here; the next <code>/aidlc</code> in your terminal creates and runs the intent.</p>`;
+  <p class="composer-foot">${runnerAvailable()
+    ? "Start creates the intent and runs the agent here; follow it in the Agent panel. Your terminal stays a full equivalent."
+    : "Start records the request here; the next <code>/aidlc</code> in your terminal creates and runs the intent."}</p>`;
 }
 
 export function bindComposer(root, rerender) {
@@ -88,6 +99,12 @@ export function bindComposer(root, rerender) {
     }
   });
   section.querySelector("[data-start]").addEventListener("click", start);
+  section.querySelector("[data-proposal-start]")?.addEventListener("click", () => start(true));
+  section.querySelector("[data-proposal-change]")?.addEventListener("click", (event) => {
+    draft.proposal = null;
+    openMenuFor(section.querySelector('[data-menu="scope"]'), "scope", rerender);
+    event.stopPropagation();
+  });
   for (const chip of section.querySelectorAll("[data-menu]")) {
     chip.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -99,23 +116,54 @@ export function bindComposer(root, rerender) {
 
 let starting = false;
 
-// Start records the request with the daemon. Nothing runs yet: the next bare
-// `/aidlc` in a terminal session picks it up and creates the intent exactly as
-// if the words had been typed there - so the notice says that, in those words.
-async function start() {
+// Start. With a runner: "Let the composer decide" first asks the daemon for its
+// proposal (one confirm, then it runs); a chosen workflow starts at once. The
+// daemon creates the record and launches the agent; the tab opens the intent.
+// Without a runner the request is recorded for the terminal, and the notice
+// says so in those words.
+async function start(confirmed = false) {
   const text = draft.text.trim();
   if (!text || starting) return;
-  starting = true;
   const section = document.querySelector(".composer");
+  const space = draft.space || store.workflow?.space || "default";
+  let scope = draft.scope;
+  if (runnerAvailable() && scope === null) {
+    if (confirmed && draft.proposal) {
+      scope = draft.proposal.scope;
+    } else {
+      starting = true;
+      section?.classList.add("busy");
+      try {
+        draft.proposal = await api.get("/api/intents/propose", { text });
+        store.emit("composer-rerender");
+      } catch (error) {
+        setNotice(`Could not propose a workflow: ${error.message}`, "error");
+      } finally {
+        starting = false;
+        section?.classList.remove("busy");
+      }
+      return;
+    }
+  }
+  starting = true;
   section?.classList.add("busy");
   try {
     const effort = draft.preset ? { preset: draft.preset } : { reviewing: draft.custom.reviewing, writing: draft.custom.writing };
-    await api.post("/api/intents", { text, space: draft.space || store.workflow?.space || "default", scope: draft.scope, effort });
+    const result = await api.post("/api/intents", { text, space, scope, effort });
     draft.text = "";
-    setNotice("Requested. Type /aidlc in your terminal to start it - the session picks the request up and creates the intent.", "info");
+    draft.proposal = null;
+    if (result.mode === "running") {
+      setNotice(`Started ${result.intent}. The agent is working; follow it in the Agent panel.`, "info");
+      store.emit("select-intent", result.intent);
+    } else if (result.mode === "created") {
+      setNotice(`Created ${result.intent}, but the agent did not start: ${result.error}. Open the intent and run it from the Agent panel, or type /aidlc in a terminal.`, "error");
+      store.emit("select-intent", result.intent);
+    } else {
+      setNotice("Requested. Type /aidlc in your terminal to start it - the session picks the request up and creates the intent.", "info");
+    }
     store.emit("wants-refresh");
   } catch (error) {
-    setNotice(`Could not request the intent: ${error.message}`, "error");
+    setNotice(`Could not start the intent: ${error.message}`, "error");
   } finally {
     starting = false;
     section?.classList.remove("busy");
@@ -201,7 +249,7 @@ function bindMenu(menu, kind, rerender) {
       setNotice(`Could not create the workspace: ${error.message}`, "error");
     }
   });
-  for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; closeMenu(); rerender(); });
+  for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; draft.proposal = null; closeMenu(); rerender(); });
   for (const button of menu.querySelectorAll("[data-pick-preset]")) button.addEventListener("click", () => { draft.preset = button.dataset.pickPreset; const entry = PRESETS.find((item) => item.id === draft.preset); draft.custom = { ...entry.efforts }; refreshMenu(menu, kind, rerender); rerender(); });
   for (const select of menu.querySelectorAll("[data-dial-effort]")) select.addEventListener("change", () => {
     draft.custom[select.dataset.dialEffort] = select.value;

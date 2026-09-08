@@ -100,6 +100,7 @@ export function connectSocket(onState) {
     try {
       const message = JSON.parse(event.data);
       if (message && message.type === "state") onState();
+      else if (message && message.type === "run") store.emit("run-changed", message.intents || []);
     } catch {
       // ignore malformed frames
     }

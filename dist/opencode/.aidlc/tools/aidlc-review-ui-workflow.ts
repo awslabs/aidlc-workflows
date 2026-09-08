@@ -127,12 +127,16 @@ export interface WorkflowIntent {
   phase: string | null;
   current_stage: string | null;
   needs: { kind: "gate" | "questions" | "sensor" | "request"; label: string } | null;
+  /** The daemon's agent run for this intent (`aidlc-review-ui-runs.ts`), when one exists. */
+  run?: "starting" | "running" | "waiting" | "idle" | "ended" | "failed" | null;
   updated_at: string | null;
   /** A review-UI request not yet picked up by a session: its exact text and asked-for effort. */
   request?: { id: string; text: string; effort: string | null };
 }
 
 export interface WorkflowPayload {
+  /** True when this daemon can run an agent for Start (Claude, this phase). */
+  runner?: boolean;
   space: string;
   spaces: string[];
   intent: string | null;

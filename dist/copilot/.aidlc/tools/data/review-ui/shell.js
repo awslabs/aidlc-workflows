@@ -11,6 +11,7 @@ const ICONS = {
   threads: icon("comment", { size: 17 }),
   history: icon("history", { size: 17 }),
   outline: icon("textBulletListTree", { size: 17 }),
+  agent: icon("flow", { size: 17 }),
 };
 
 let rail;
@@ -236,7 +237,8 @@ function viewState(view, stage) {
   // A terminal checkpoint is stated wherever the human is looking, not only on
   // the Questions view: the terminal is waiting for them.
   if (phase() === "confirming" && stage.state === "current" && isActiveIntent()) {
-    return { label: store.state?.checkpoint === "plan-approval" ? "Plan approval waiting in the terminal" : "Confirming in the terminal", tone: "needs" };
+    const where = (store.run?.pending || []).some((input) => input.kind === "question") ? "the Agent panel" : "the terminal";
+    return { label: store.state?.checkpoint === "plan-approval" ? `Plan approval waiting in ${where}` : `Confirming in ${where}`, tone: "needs" };
   }
   if (view.kind === "questions") {
     if (stage.state === "current" && isActiveIntent()) {
@@ -294,15 +296,29 @@ function renderPicker(view, stage, title) {
 }
 
 function panelButtons(view) {
-  if (view.kind !== "artifact") return "";
-  return [
-    ["threads", "Threads"],
-    ["history", "History"],
-    ["outline", "Outline"],
-  ]
-    .map(
-      ([key, label]) => `<button type="button" class="header-icon ${store.panel === key ? "on" : ""}" data-panel="${key}" title="${label}" aria-label="${label}" aria-pressed="${store.panel === key}">${ICONS[key]}</button>`,
-    )
+  if (view.kind === "inbox" || view.kind === "empty") return "";
+  const buttons = view.kind === "artifact"
+    ? [
+        ["threads", "Threads"],
+        ["history", "History"],
+        ["outline", "Outline"],
+      ]
+    : [];
+  // The agent panel follows the intent, not the document: the daemon's run for
+  // this intent is reachable from its overview, its questions, and its artifacts.
+  if (store.workflow?.runner || store.run?.run) buttons.push(["agent", "Agent"]);
+  return buttons
+    .map(([key, label]) => {
+      const run = key === "agent" ? store.run?.run : null;
+      const pending = key === "agent" ? store.run?.pending?.length || 0 : 0;
+      const badge = pending
+        ? `<em class="header-badge attention">${pending}</em>`
+        : run && (run.state === "running" || run.state === "starting")
+          ? '<i class="spin" aria-hidden="true"></i>'
+          : "";
+      const title = pending ? `${label} · ${pending} waiting for you` : label;
+      return `<button type="button" class="header-icon ${store.panel === key ? "on" : ""} ${badge ? "badged" : ""}" data-panel="${key}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" aria-pressed="${store.panel === key}">${ICONS[key]}${badge}</button>`;
+    })
     .join("");
 }
 
@@ -383,7 +399,21 @@ function renderHeader() {
     </div>`;
 }
 
+function runLabel(intent) {
+  switch (intent.run) {
+    case "starting":
+    case "running":
+      return "agent working";
+    case "waiting":
+      return "agent needs you";
+    default:
+      return null;
+  }
+}
+
 function intentStatus(intent) {
+  const running = runLabel(intent);
+  if (running) return running;
   if (intent.needs?.kind === "questions") return intent.needs.label || "questions";
   if (intent.needs?.kind === "gate") return intent.needs.label || "awaiting review";
   if (intent.needs) return intent.needs.label || "needs you";
@@ -396,8 +426,8 @@ function intentGroups() {
   const intents = store.workflow?.intents || [];
   return [
     ["Requested", intents.filter((intent) => intent.status === "requested")],
-    ["Needs you", intents.filter((intent) => intent.status !== "requested" && (intent.status === "needs-you" || intent.needs))],
-    ["In progress", intents.filter((intent) => intent.status === "in-progress" || intent.status === "idle")],
+    ["Needs you", intents.filter((intent) => intent.status !== "requested" && (intent.status === "needs-you" || intent.needs || intent.run === "waiting"))],
+    ["In progress", intents.filter((intent) => (intent.status === "in-progress" || intent.status === "idle") && intent.run !== "waiting")],
     ["Done", intents.filter((intent) => intent.status === "done")],
   ];
 }
@@ -433,7 +463,7 @@ function renderInbox() {
     return `<button type="button" class="inbox-row ${intent.status || "idle"}" data-intent="${escapeHtml(intent.slug)}">
       <span class="intent-dot ${intent.status || "idle"}"></span>
       <span class="inbox-main"><b>${escapeHtml(intent.label || intent.slug)}</b><small>${escapeHtml(where || "Record")}${meta ? `<em> · ${escapeHtml(meta)}</em>` : ""}</small></span>
-      <span class="inbox-status ${intent.needs ? "needs" : ""}">${escapeHtml(intentStatus(intent))}</span>
+      <span class="inbox-status ${intent.needs || intent.run === "waiting" ? "needs" : ""}">${intent.run === "running" || intent.run === "starting" ? '<i class="spin" aria-hidden="true"></i>' : ""}${escapeHtml(intentStatus(intent))}</span>
       <span class="inbox-go">${icon("chevronDown", { size: 14 })}</span>
     </button>`;
   };
@@ -477,6 +507,7 @@ function allSearchItems() {
       { group: "Actions", label: "Show Threads", meta: "Right panel", action: () => store.set({ panel: "threads" }) },
       { group: "Actions", label: "Show History", meta: "Right panel", action: () => store.set({ panel: "history" }) },
       { group: "Actions", label: "Show Outline", meta: "Right panel", action: () => store.set({ panel: "outline" }) },
+      { group: "Actions", label: "Show Agent", meta: "Right panel", action: () => store.set({ panel: "agent" }) },
     );
   }
   return result;
@@ -638,8 +669,19 @@ export function init() {
   });
   store.on("state", render);
   store.on("view", (view) => {
-    if (view.kind !== "artifact" && store.panel !== null) store.set({ panel: null });
+    // Document panels belong to a document; the agent panel stays with the
+    // intent, so only the inbox and the empty view close it.
+    const keep = store.panel === "agent" && view.kind !== "inbox" && view.kind !== "empty";
+    if (view.kind !== "artifact" && store.panel !== null && !keep) store.set({ panel: null });
     render();
+  });
+  store.on("run", renderHeader);
+  store.on("composer-rerender", () => {
+    if (store.view.kind === "inbox") renderInbox();
+  });
+  store.on("select-intent", async (slug) => {
+    await selectIntent(slug);
+    store.set({ panel: "agent" });
   });
   store.on("sidebar", renderRail);
   store.on("panel", renderHeader);

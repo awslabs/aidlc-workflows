@@ -63,6 +63,10 @@ export function init() {
   store.on("state", () => {
     if (store.view.kind === "empty") renderEmpty();
   });
+  store.on("run", () => {
+    const banner = document.querySelector('.read-only-banner[data-confirming] span');
+    if (banner) banner.textContent = confirmingBannerText(store.state?.checkpoint === "plan-approval", store.state?.checkpoint_prompt);
+  });
 
   renderView(store.view);
 }
@@ -252,6 +256,16 @@ function buildDocumentMeta(doc, view) {
   return meta;
 }
 
+// A daemon-run agent asks in the Agent panel; a terminal session asks there.
+function confirmingBannerText(plan, prompt) {
+  const agentAsks = (store.run?.pending || []).some((input) => input.kind === "question");
+  const who = agentAsks ? "the agent" : "the terminal";
+  const where = agentAsks ? "the Agent panel" : "the terminal";
+  if (prompt?.decision) return `· ${who} is asking: "${prompt.decision}" (${prompt.options.join(" / ")}) - answer in ${where}`;
+  if (plan) return `· ${who} is asking you to approve this plan - read it here, decide in ${where}`;
+  return `· ${who} is asking you to confirm the answers before this is generated`;
+}
+
 function buildReadOnlyBanner(doc, view) {
   const banner = document.createElement("div");
   banner.className = "read-only-banner";
@@ -268,11 +282,8 @@ function buildReadOnlyBanner(doc, view) {
     const plan = store.state?.checkpoint === "plan-approval";
     const prompt = store.state?.checkpoint_prompt;
     banner.innerHTML = `<b>${plan ? "Plan approval" : "Confirmation"}</b><span></span>`;
-    banner.querySelector("span").textContent = prompt?.decision
-      ? `· the terminal is asking: "${prompt.decision}" (${prompt.options.join(" / ")}) - answer there`
-      : plan
-        ? "· the terminal is asking you to approve this plan - read it here, decide there"
-        : "· the terminal is asking you to confirm the answers before this is generated";
+    banner.querySelector("span").textContent = confirmingBannerText(plan, prompt);
+    banner.dataset.confirming = "1";
     return banner;
   }
   if (stage?.state === "current") {

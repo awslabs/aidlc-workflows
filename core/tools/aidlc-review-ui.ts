@@ -38,12 +38,17 @@ import {
   type StageEntry,
   stateFilePath,
   appendPendingIntentRequest,
+  harnessDir,
   INTENT_EFFORT_LEVELS,
   INTENT_EFFORT_PRESETS,
   type IntentEffort,
   removePendingIntentRequest,
+  selectionAwareDefaultScope,
   validScopes,
 } from "./aidlc-lib.ts";
+import { inferScopeFromText } from "./aidlc-utility.ts";
+import { AcpError, resolveClaudeAcpLaunch } from "./aidlc-review-ui-acp.ts";
+import { RunBusyError, RunManager } from "./aidlc-review-ui-runs.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   ANSWERS_PREFIX,
@@ -97,6 +102,7 @@ import {
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
 import { handleDecision } from "./aidlc-review-ui-decision.ts";
+import { browserAnswersContinuation, browserDecisionContinuation, ENV_REVIEW_RUNNER } from "./aidlc-review-ui-shared.ts";
 import { openCheckpointPrompt, questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
@@ -1269,6 +1275,7 @@ interface IntentRequestBody {
   space?: string;
   scope?: string | null;
   effort?: unknown;
+  label?: string;
 }
 
 function parseEffortBody(value: unknown): IntentEffort | null {
@@ -1302,7 +1309,14 @@ function requireSpace(projectDir: string, name: string | undefined): string {
   return space;
 }
 
-async function intentRequestResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
+/**
+ * Start. With a runner on this machine the daemon creates the record itself -
+ * the same deterministic `intent-create` the conductor runs - and launches an
+ * agent session bound to it; the browser watches the run. Without a runner the
+ * request is recorded for the next bare `/aidlc` in a terminal (the envelope in
+ * `pending-intents.json`), exactly as before.
+ */
+async function intentRequestResponse(projectDir: string, request: Request, publishState: () => void, runs: RunManager): Promise<Response> {
   const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as Partial<IntentRequestBody> | null;
   if (!body || typeof body !== "object" || typeof body.text !== "string") throw new HttpError(400, "invalid intent request");
   const text = body.text.replace(/\r\n?/g, "\n").trim();
@@ -1315,9 +1329,111 @@ async function intentRequestResponse(projectDir: string, request: Request, publi
     scope = body.scope;
   }
   const effort = parseEffortBody(body.effort);
-  const stored = appendPendingIntentRequest(projectDir, space, { text, scope, effort });
+  if (!runs.available || scope === null) {
+    const stored = appendPendingIntentRequest(projectDir, space, { text, scope, effort });
+    publishState();
+    return json({ id: stored.id, space, created_at: stored.created_at, mode: "requested" }, 201);
+  }
+  const busy = runs.live();
+  if (busy) throw new HttpError(409, `an intent is already running: ${busy.intent}. Finish, park, or stop it first.`);
+  const label = typeof body.label === "string" && body.label.trim() ? body.label.trim() : text;
+  const args = [
+    join(import.meta.dir, "aidlc-utility.ts"),
+    "intent-create",
+    "--space", space,
+    "--scope", scope,
+    "--arguments", text,
+    "--label", label,
+  ];
+  if (effort) args.push("--effort", "preset" in effort ? effort.preset : `reviewing=${effort.reviewing},writing=${effort.writing}`);
+  const result = Bun.spawnSync({ cmd: [process.execPath, ...args], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) {
+    const detail = `${result.stderr.toString()}${result.stdout.toString()}`.trim().replace(/\s+/g, " ").slice(0, 300);
+    throw new HttpError(500, `could not create the intent: ${detail}`);
+  }
+  const created = /^Intent created: (\S+) \(space: ([a-z0-9-]+)\)/m.exec(result.stdout.toString());
+  if (!created) throw new HttpError(500, "intent-create did not report the record it created");
+  const intent = created[1];
   publishState();
-  return json({ id: stored.id, space, created_at: stored.created_at }, 201);
+  try {
+    const run = await runs.start(space, intent);
+    return json({ intent, space, run_id: run.run_id, mode: "running" }, 201);
+  } catch (error) {
+    if (error instanceof RunBusyError) throw new HttpError(409, error.message);
+    // The record exists and is valid; only the agent did not start. The human
+    // can start it from the intent (or type /aidlc in a terminal).
+    return json({ intent, space, mode: "created", error: error instanceof Error ? error.message : String(error) }, 201);
+  }
+}
+
+/** What the composer would choose for this text: the engine's keyword inference, else the default scope. */
+function proposeScopeResponse(url: URL): Response {
+  const text = (url.searchParams.get("text") ?? "").trim();
+  if (!text) throw new HttpError(400, "describe what to build");
+  const inferred = inferScopeFromText(text.slice(0, MAX_INTENT_TEXT_CHARS));
+  if (inferred.source === "keyword" && validScopes().has(inferred.scope)) {
+    return json({ scope: inferred.scope, source: "keyword" });
+  }
+  const fallback = selectionAwareDefaultScope();
+  return json({ scope: fallback.scope, source: "default" });
+}
+
+function requireIntentParam(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) throw new HttpError(400, "invalid intent");
+  return value;
+}
+
+function runViewResponse(runs: RunManager, url: URL, fallbackIntent: string | null): Response {
+  const intent = url.searchParams.get("intent")?.trim() || fallbackIntent;
+  if (!intent) return json({ run: null, pending: [], events: [], available: runs.available });
+  const view = runs.view(requireIntentParam(intent));
+  return json(view ?? { run: null, pending: [], events: [], available: runs.available });
+}
+
+async function runActionResponse(runs: RunManager, action: string, request: Request): Promise<Response> {
+  const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") throw new HttpError(400, "invalid body");
+  const intent = requireIntentParam(body.intent);
+  try {
+    switch (action) {
+      case "prompt": {
+        const text = typeof body.text === "string" && body.text.trim() ? body.text.trim() : "/aidlc";
+        // No live run for this intent: start one (Run the agent / Run again).
+        if (!runs.isLive(intent)) {
+          const space = runs.spaceOf(intent);
+          if (!space) throw new HttpError(404, "no such intent");
+          return json({ run: await runs.start(space, intent, text) }, 201);
+        }
+        return json({ run: runs.prompt(intent, text) });
+      }
+      case "permission": {
+        if (typeof body.id !== "string" || typeof body.option_id !== "string") throw new HttpError(400, "id and option_id required");
+        runs.resolvePermission(intent, body.id, body.option_id);
+        return json({ ok: true });
+      }
+      case "question": {
+        if (typeof body.id !== "string") throw new HttpError(400, "id required");
+        const action = body.action;
+        if (action === "accept") {
+          const content = body.content && typeof body.content === "object" ? (body.content as Record<string, unknown>) : {};
+          runs.resolveQuestion(intent, body.id, { action: "accept", content });
+        } else if (action === "decline" || action === "cancel") {
+          runs.resolveQuestion(intent, body.id, { action });
+        } else {
+          throw new HttpError(400, "action must be accept, decline, or cancel");
+        }
+        return json({ ok: true });
+      }
+      case "cancel":
+        return json({ run: runs.cancel(intent) });
+      default:
+        throw new HttpError(404, "not found");
+    }
+  } catch (error) {
+    if (error instanceof RunBusyError) throw new HttpError(409, error.message);
+    if (error instanceof AcpError) throw new HttpError(409, error.message);
+    throw error;
+  }
 }
 
 function withdrawIntentRequestResponse(projectDir: string, url: URL, publishState: () => void): Response {
@@ -1345,7 +1461,13 @@ async function createSpaceResponse(projectDir: string, request: Request, publish
   return json({ space: name }, 201);
 }
 
-async function answersResponse(projectDir: string, request: Request): Promise<Response> {
+interface AnswersLanded {
+  stage: string;
+  questionsFile: string;
+  unit: string | null;
+}
+
+async function answersResponse(projectDir: string, request: Request, landed?: (info: AnswersLanded) => void): Promise<Response> {
   const bytes = await limitedRequestBytes(request, MAX_ANSWERS_BODY_BYTES);
   let body: unknown;
   try {
@@ -1406,6 +1528,7 @@ async function answersResponse(projectDir: string, request: Request): Promise<Re
       closeSync(descriptor);
     }
     appendHumanTurn(projectDir, file);
+    landed?.({ stage: target.stage, questionsFile: target.file, unit: stateContext(projectDir).current?.unit ?? null });
     return json({ file });
   }
 }
@@ -1486,6 +1609,20 @@ async function serve(projectDir: string): Promise<void> {
   // it exists below (the write itself also trips the watcher - this is the
   // belt to that brace, so a tab updates even when the watch is coalescing).
   let publishState: () => void = () => {};
+  // The agent runner (Start in the browser). Claude only in this phase: the
+  // adapter needs the local `claude`; AIDLC_REVIEW_RUNNER=0 turns it off.
+  const runnerLaunch = process.env[ENV_REVIEW_RUNNER] === "0" || harnessDir() !== ".claude" ? null : resolveClaudeAcpLaunch();
+  let publishRun: (intent: string) => void = () => {};
+  const runs = new RunManager({
+    projectDir,
+    launch: runnerLaunch,
+    publish: (intent) => publishRun(intent),
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+  const continueRun = (text: string): void => {
+    const intent = stateContext(projectDir).intent;
+    if (intent) runs.continueAfterBrowser(intent, text);
+  };
   const serveOn = (hostname: string, candidatePort: number) => Bun.serve<{ authenticated: true }>({
     hostname,
     port: candidatePort,
@@ -1535,11 +1672,14 @@ async function serve(projectDir: string): Promise<void> {
           if (url.pathname === "/" && request.method === "GET") return appShellResponse();
           if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir));
           if (request.method === "GET" && url.pathname === "/api/workflow") {
-            return json(workflowPayload(projectDir, {
+            const payload = workflowPayload(projectDir, {
               ...selectionFromUrl(url),
               version: AIDLC_VERSION,
               port: boundPort,
-            }));
+            });
+            for (const entry of payload.intents) entry.run = runs.stateOf(entry.slug);
+            payload.runner = runs.available;
+            return json(payload);
           }
           if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir, url));
           if (request.method === "GET" && url.pathname === "/api/artifact") return artifactResponse(projectDir, url);
@@ -1552,16 +1692,43 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
           if (request.method === "POST" && url.pathname === "/api/render-fragment") return await renderFragmentResponse(request);
           if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
-          if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
-          if (request.method === "POST" && url.pathname === "/api/intents") return await intentRequestResponse(projectDir, request, publishState);
+          if (request.method === "POST" && url.pathname === "/api/answers") {
+            return await answersResponse(projectDir, request, (info) =>
+              continueRun(browserAnswersContinuation({ harnessDir: harnessDir(), slug: info.stage, questionsFile: info.questionsFile, unit: info.unit })));
+          }
+          if (request.method === "GET" && url.pathname === "/api/intents/propose") return proposeScopeResponse(url);
+          if (request.method === "POST" && url.pathname === "/api/intents") return await intentRequestResponse(projectDir, request, publishState, runs);
           if (request.method === "DELETE" && url.pathname === "/api/intents") return withdrawIntentRequestResponse(projectDir, url, publishState);
           if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
+          if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir).intent);
+          const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
+          if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);
           if (request.method === "POST" && url.pathname === "/api/decision") {
-            return await handleDecision(request, {
+            const submitted = request.clone();
+            const response = await handleDecision(request, {
               projectDir,
               stateContext: stateContext(projectDir),
               appendHumanTurn: (file) => appendHumanTurn(projectDir, file),
             });
+            if (response.ok) {
+              try {
+                const body = (await submitted.json()) as { stage?: string; unit?: string | null; decision?: "approve" | "request-changes"; notes?: string | null };
+                const { file } = (await response.clone().json()) as { file: string };
+                if (body.stage && body.decision) {
+                  continueRun(browserDecisionContinuation({
+                    harnessDir: harnessDir(),
+                    slug: body.stage,
+                    unit: body.unit ?? null,
+                    file,
+                    decision: body.decision,
+                    notes: body.notes,
+                  }));
+                }
+              } catch {
+                // The decision is recorded; a run that missed the nudge resumes from Continue.
+              }
+            }
+            return response;
           }
           if (request.method === "GET" && url.pathname === "/api/snapshot") return snapshotResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/diff") return diffResponse(projectDir, url);
@@ -1680,6 +1847,24 @@ async function serve(projectDir: string): Promise<void> {
     debounce = setTimeout(observeState, WATCH_DEBOUNCE_MS);
   };
   publishState = onWatch;
+  // Run events stream fast; one push per debounce window tells the tab to
+  // refetch /api/run for that intent.
+  let runDebounce: ReturnType<typeof setTimeout> | null = null;
+  const runIntents = new Set<string>();
+  publishRun = (intent) => {
+    runIntents.add(intent);
+    lastStateChange = Date.now();
+    if (runDebounce) return;
+    runDebounce = setTimeout(() => {
+      runDebounce = null;
+      const intents = [...runIntents];
+      runIntents.clear();
+      for (const instance of servers) instance.publish("state", JSON.stringify({ type: "run", intents }));
+    }, WATCH_DEBOUNCE_MS);
+  };
+  void runs.resumeFromDisk().catch((error: unknown) => {
+    process.stderr.write(`Review UI: could not resume agent runs: ${error instanceof Error ? error.message : String(error)}\n`);
+  });
 
   // Watch the whole spaces root, not just the record that existed at startup:
   // intents created later, `active-intent` switches, and their state files all
@@ -1710,16 +1895,19 @@ async function serve(projectDir: string): Promise<void> {
     writeServerInfo(currentInfo);
   }, HEARTBEAT_INTERVAL_MS);
   const idle = setInterval(() => {
-    if (wsClients === 0 && Date.now() - lastStateChange >= idleMinutes * 60_000) shutdown(0);
+    // A live agent run keeps the daemon up: it is the run's only client.
+    if (wsClients === 0 && runs.live() === null && Date.now() - lastStateChange >= idleMinutes * 60_000) shutdown(0);
   }, Math.min(60_000, Math.max(1_000, idleMinutes * 15_000)));
 
   const cleanup = (): void => {
     if (stopped) return;
     stopped = true;
-    if (debounce) clearTimeout(debounce);
+    clearTimeout(debounce ?? undefined);
+    clearTimeout(runDebounce ?? undefined);
     clearInterval(heartbeat);
     clearInterval(idle);
     for (const watcher of watchers) watcher.close();
+    runs.shutdown();
     removeServerInfo(projectDir);
     for (const instance of servers) instance.stop(true);
   };

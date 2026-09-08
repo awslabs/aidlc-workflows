@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.3] - 2026-09-08
+
+Start in the browser now runs the work. On Claude Code the review daemon creates the intent and drives an agent session for it over the Agent Client Protocol; questions, permissions, and the agent's log live in a new Agent panel. Upgrade by copying the new `dist/<harness>/` tree; the first Start fetches `@agentclientprotocol/claude-agent-acp` with `bunx` (set `AIDLC_ACP_CLAUDE_COMMAND` on hosts without registry access).
+
+* **Start runs the intent.** With the `claude` CLI on the machine, **Start** creates the record (`intent-create --space --scope --arguments --label --effort`) and launches an agent bound to it (`AIDLC_REVIEW_RUN`, bound by the SessionStart hook), prompting `/aidlc`. *Let the composer decide* shows the proposed workflow first (`GET /api/intents/propose`). One run per project: Start while one is live is 409. `AIDLC_REVIEW_RUNNER=0` restores the request-for-the-terminal behaviour, which also remains the path on the other harnesses.
+* **Agent panel.** State (working / waiting for you / stopped), the agent's questions as cards — Plan Approval and every other `AskUserQuestion` — permission requests with Allow / Always allow / Deny, a compact log, **Continue** and **Stop**. The header badge counts what waits; the panel opens itself when something arrives. Inbox rows read *agent working* / *agent needs you*.
+* **Browser rounds resume the agent.** Saving answers or deciding a gate resumes the run whether the Stop hook was holding the turn or the turn had already ended (the daemon sends the same continuation). A daemon restart re-attaches a live run with `session/load`.
+* New routes: `GET /api/run`, `POST /api/run/{prompt,permission,question,cancel}`, `GET /api/intents/propose`. New env: `AIDLC_REVIEW_RUNNER`, `AIDLC_ACP_CLAUDE_COMMAND`, `AIDLC_REVIEW_TURN_MINUTES`. `intent-create` accepts `--space <name>`.
+* Fix: Plan Approval accepts a pick whose label a harness or a user hook decorated with `(Recommended)` / `(Toss-up)` / `(Default)` — the choice is still one of the two offered; previously `aidlc-log answer` was refused (`PLAN_APPROVAL_BLOCKED`) until the human re-answered.
+
 ## [2.8.2] - 2026-09-08
 
 Start intents from the browser, and a rail that reads like a reviewed document. Upgrade by copying the new `dist/<harness>/` tree; add `aidlc/spaces/*/intents/pending-intents.json` to an existing project's `.gitignore` (the shipped `.gitignore` has it).

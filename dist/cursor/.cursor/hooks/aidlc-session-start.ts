@@ -61,7 +61,9 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import {
+  ENV_REVIEW_RUN,
   ensureReviewUiDaemon,
+  reviewRunTarget,
   reviewUiEnabled,
 } from "../tools/aidlc-review-ui-shared.ts";
 
@@ -150,7 +152,15 @@ const stampedTarget =
   source === "resume" && !preExistingBinding && preExistingStamp
     ? findIntentByUuid(projectDir, preExistingStamp)
     : null;
-const selection = stampedTarget
+// A session the review daemon launched for one intent (Start in the browser)
+// names it in the environment as `<space>/<record>`; that binding is the
+// sanctioned session switch a human would make with `/aidlc intent <name>`,
+// so it wins over the cursor. Only an existing record binds; anything else
+// is ignored and the ordinary resolution below applies.
+const runTarget = reviewRunTarget(projectDir, process.env[ENV_REVIEW_RUN]);
+const selection = runTarget
+  ? { space: runTarget.space, intent: runTarget.intent, sessionId, binding: null }
+  : stampedTarget
   ? {
       space: stampedTarget.space,
       intent: stampedTarget.dirName,

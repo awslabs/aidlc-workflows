@@ -984,6 +984,34 @@ describe("t265b hook lifecycle", () => {
         ]).status,
       ).toBe(1);
       writeFileSync(questionsPath, approvedQuestions);
+      // The human's pick arrives decorated by a presentation marker (a harness
+      // or a user's always-recommend hook appends "(Recommended)" to the label);
+      // it is still the offered choice. Drop the response the plain answer above
+      // recorded so this capture is the one the receipt rests on.
+      rmSync(join(proj, "aidlc", ".aidlc-sessions", "plan-approval", "response-plan-session.json"), { force: true });
+      expect(
+        runLog([
+          "answer",
+          ...identity,
+          "--details",
+          "Approve Plan",
+        ]).status,
+      ).toBe(1);
+      const decorated = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "PostToolUse",
+            session_id: "plan-session",
+            tool_response: { answers: { "Approve this exact Code Generation plan?": "Approve Plan (Recommended)" } },
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(decorated.status, decorated.stderr).toBe(0);
+      expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "plan-approval", "response-plan-session.json")), decorated.stderr).toBe(true);
       const approved = runLog([
         "answer",
         ...identity,

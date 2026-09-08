@@ -109,6 +109,39 @@ A `0600` file whose body is the ISO expiration time. It is a single-use,
 30-minute capability: successful `GET /open/<nonce>` deletes the file before
 setting the session cookie. Expired nonces are swept when a new one is minted.
 
+### Agent runs
+
+#### `<record>/.review-ui/run.json` and `run-log.jsonl`
+
+The daemon's agent run for one intent (`aidlc-review-ui-runs.ts`): `{version:
+1, run_id, space, intent, backend: "claude", session_id, pid, state, started_at,
+updated_at, turns, last_stop_reason, error}` with `state` one of `starting`,
+`running`, `waiting` (a permission or question waits on the human), `idle` (the
+turn ended; the session is alive), `ended`, `failed`. The log is one JSON event
+per line (`turn`, `text`, `tool`, `permission`, `question`, `note`, `error`),
+the last 400 of which `/api/run` serves.
+
+The runner drives the agent over the **Agent Client Protocol** (JSON-RPC 2.0,
+newline-delimited, on the agent's stdio; `aidlc-review-ui-acp.ts`). For Claude
+the agent is `@agentclientprotocol/claude-agent-acp` (Zed's adapter over the
+Agent SDK), resolved as `AIDLC_ACP_CLAUDE_COMMAND` > `claude-agent-acp` on PATH >
+`bunx <pinned package>`; it needs the local `claude` executable
+(`CLAUDE_CODE_EXECUTABLE`, found on PATH when unset), and the runner is off when
+none exists or `AIDLC_REVIEW_RUNNER=0`. The daemon advertises form elicitation
+and answers exactly two inbound requests — `session/request_permission` and
+`elicitation/create` (how the adapter forwards the built-in AskUserQuestion) —
+refusing every other server→client request with `-32601` so the agent never
+blocks on an unanswered one. Session start sets `AIDLC_REVIEW_RUN=<space>/<record>`
+in the agent's environment; the SessionStart hook binds that session to the
+named record (`reviewRunTarget`), so `next` in it resolves to the intent
+regardless of the cursor. The first prompt is `/aidlc`. When a turn ends and a
+browser round lands afterwards (answers saved, gate decided), the daemon sends
+the same continuation the Stop hook would have injected
+(`browserAnswersContinuation` / `browserDecisionContinuation` in
+`aidlc-review-ui-shared.ts`); while the hook is holding the turn it sends
+nothing. One live run per project; a live run keeps the daemon from idling out;
+on restart, a run whose session is alive is re-attached with `session/load`.
+
 ### Pending intent requests
 
 #### `aidlc/spaces/<space>/intents/pending-intents.json`
@@ -403,7 +436,13 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /api/export?path=&intent=` | Cookie/header | Self-contained HTML attachment |
 | `GET /api/questions?path=&intent=` | Cookie/header | Parsed questions, answers, notes, confirmation flags, and source digest for the selected current question target |
 | `POST /api/answers` | Cookie/header | Active intent only. Validate submission/digest, write `answers-NNN.json`, return `{file}`; stale digest is 409 `{error:"questions file changed; reload"}` |
-| `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, effort?: {preset}\|{reviewing,writing}}`. Records a pending intent request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock; no record, state, or audit is created. Returns 201 `{id, space, created_at}`; unknown workflow/effort 400, unknown workspace 404 |
+| `GET /api/intents/propose?text=` | Cookie/header | `{scope, source: "keyword"\|"default"}` — what the composer would choose: the engine's keyword inference (`inferScopeFromText`), else the selection-aware default scope |
+| `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, effort?: {preset}\|{reviewing,writing}, label?}`. With a runner and a `scope`: runs `intent-create --space --scope --arguments --label [--effort]` (the record, state, and audit the conductor would create), starts an agent run bound to it, returns 201 `{intent, space, run_id, mode:"running"}`; 409 while another run is live; `mode:"created"` with `error` when the record exists but the agent did not start. Otherwise records a pending request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock, 201 `{id, space, created_at, mode:"requested"}`. Unknown workflow/effort 400, unknown workspace 404 |
+| `GET /api/run?intent=` | Cookie/header | `{run, pending, events, available}` — the intent's agent run (`run.json`), the inputs waiting on the human, the last 400 log events; `run: null` when it never ran |
+| `POST /api/run/prompt` | Cookie/header | `{intent, text?}` — send a prompt (default `/aidlc`) to an idle run; with no live run, start one (201). 409 while a turn is live |
+| `POST /api/run/permission` | Cookie/header | `{intent, id, option_id}` — answer a pending permission with one of its advertised options |
+| `POST /api/run/question` | Cookie/header | `{intent, id, action: "accept"\|"decline"\|"cancel", content?}` — answer a pending form question; `content` keys are the schema's properties |
+| `POST /api/run/cancel` | Cookie/header | `{intent}` — `session/cancel` the live turn (pending inputs resolve cancelled); an idle run is closed |
 | `DELETE /api/intents?id=` | Cookie/header | Withdraws a pending request; 404 when none |
 | `POST /api/spaces` | Cookie/header | Body `{name}` (lowercase letters, digits, dashes). Runs the same `space-create` move as the terminal; 409 when it exists |
 | `POST /api/decision` | Cookie/header | Active intent only. Exact body `{stage,unit,revision,decision:"approve"|"request-changes",notes?}`; validate exact current target and `awaiting-approval`, write `decision-NNN.json`, append browser `HUMAN_TURN`, return `{file}`. Stale or closed gates return 409 |
@@ -881,6 +920,10 @@ Boolean variables use the exact string `"1"` unless a row says otherwise.
 | `AIDLC_REVIEW_WAIT_SECONDS` | `1200` on Claude Code, `0` elsewhere | How long the Stop hook holds a browser question round or an `awaiting-approval` browser gate waiting for `answers-NNN.json` or `decision-NNN.json`. A fresh terminal prompt releases the decision hold; timeout falls back to the ordinary terminal flow. Must stay below the hook's own timeout (`settings.json` grants 1500 s on Claude Code). `0` disables both holds |
 | `AIDLC_REVIEW_HOME` | `~/.aidlc/review-ui` | Override private daemon discovery/log/nonce root; primarily useful for tests and isolated installations |
 | `AIDLC_HTML_ARTIFACTS` | unset | `1` seeds new intents with `HTML Artifacts: on`; the state field, not the environment, controls the intent thereafter |
+| `AIDLC_REVIEW_RUNNER` | enabled | `0` turns the daemon's agent runner off; Start then records a request for the terminal |
+| `AIDLC_ACP_CLAUDE_COMMAND` | unset | Command line that launches the Claude ACP agent (whitespace-split); default `claude-agent-acp` on PATH, else `bunx @agentclientprotocol/claude-agent-acp@0.75.1` |
+| `AIDLC_REVIEW_TURN_MINUTES` | `240` | Ceiling on one agent turn; a turn still running after it is cancelled |
+| `AIDLC_REVIEW_RUN` | set by the daemon | `<space>/<record>` on an agent session the daemon launched; the SessionStart hook binds the session to that record |
 
 Auto-open is also suppressed when `SSH_CONNECTION` is present. The daemon opens
 only on a supported desktop (`open`, `xdg-open`, or `cmd /c start`) and ignores

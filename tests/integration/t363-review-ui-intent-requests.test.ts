@@ -78,6 +78,9 @@ beforeAll(async () => {
     AIDLC_REVIEW_HOST: "127.0.0.1",
     AIDLC_REVIEW_OPEN: "0",
     AIDLC_REVIEW_UI: "1",
+    // No agent runner: this test pins the request envelope, the path Start
+    // takes when the daemon cannot run an agent (t365 covers the runner).
+    AIDLC_REVIEW_RUNNER: "0",
     // The scope catalogue and the engine read the compiled stage graph; the
     // authored core/ tree has none, the packaged tree does.
     AIDLC_STAGE_GRAPH: join(ROOT, "dist", "claude", ".claude", "tools", "data", "stage-graph.json"),

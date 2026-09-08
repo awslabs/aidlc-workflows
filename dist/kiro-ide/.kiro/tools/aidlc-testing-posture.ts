@@ -1388,11 +1388,16 @@ export function recordPlanApprovalChallenge(
     : createChallenge();
 }
 
+// A presentation marker a harness or a user's own hook may append to an option
+// label ("Approve Plan (Recommended)"). The protocol already strips these before
+// an answer is written; the human still picked one of the two offered choices.
+const OPTION_DECORATION_MARKER = /\s*\((?:recommended|default|toss-up)\)\s*$/i;
+
 function offeredPlanApprovalChoice(
   challenge: PlanApprovalRuntimeChallenge,
   responseText: string,
 ): "Approve Plan" | "Request Changes" | null {
-  const response = responseText.trim();
+  const response = responseText.trim().replace(OPTION_DECORATION_MARKER, "").trim();
   const comparison = challenge.hashedOptionLabels
     ? createHash("sha256")
       .update(response.toLowerCase(), "utf-8")
