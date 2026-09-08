@@ -26749,8 +26749,17 @@ export function redactProjectDirPrefix(
   return redacted;
 }
 
-// Failures are swallowed — we're already exiting, the caller gets the JSON
+// Failures are swallowed: we're already exiting, the caller gets the JSON
 // error on stderr regardless.
+//
+// The row lands in the workflow the command was TARGETING. The caller's
+// explicit selectors (--intent/--space, or the per-intent lock context a
+// state transaction set) are resolved once with the same resolver the lock and
+// the append use, and the append is gated on THAT selection's state file: a
+// refusal for an explicit target with no active cursor still records, and a
+// refusal naming an intent that does not exist records nothing (an append
+// there would create a phantom audit directory). The bare space record root
+// never holds a state file, so an unresolved selection also records nothing.
 export function emitError(
   projectDir: string,
   tool: string,
@@ -26764,8 +26773,9 @@ export function emitError(
   if (!_errorEmitInProgress) {
     _errorEmitInProgress = true;
     try {
-      if (existsSync(stateFilePath(projectDir))) {
-        // Lazy import to break the lib.ts ↔ aidlc-audit.ts cycle at load time.
+      const selection = resolveWorkflowSelection(projectDir, { intent, space });
+      if (existsSync(stateFilePathForSelection(projectDir, selection))) {
+        // Lazy import to break the lib.ts <-> aidlc-audit.ts cycle at load time.
         // aidlc-audit.ts imports from lib.ts, and importing it at top of lib.ts
         // would create a circular dependency. Dynamic import is synchronous via
         // require under Bun and keeps the dependency one-way at module-init time.
@@ -26773,35 +26783,28 @@ export function emitError(
           appendAuditEntry: typeof AppendAuditEntry;
           appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
         };
-        // If we're inside a withAuditLock-held critical section (e.g., the
-        // caller is aidlc-state.ts fork/merge mid-transaction), the audit
-        // lock is already held by us. Use the unlocked variant directly so
-        // the ERROR_LOGGED row lands without the 5s acquire timeout. The
+        // Lock bucket: intent-omitted keys the workspace sentinel (the lock
+        // invariant every sentinel-locked caller relies on, so it is NOT
+        // replaced by the resolved intent); an explicit intent keys the
+        // per-intent bucket in the SELECTED space, which is the shard the
+        // append writes. If we're inside a withAuditLock-held critical section
+        // (e.g. aidlc-state.ts fork/merge mid-transaction) the lock is already
+        // held by us on that same bucket, so use the unlocked variant directly
+        // and the ERROR_LOGGED row lands without the 5s acquire timeout. The
         // exit-handler safety net releases the lock dir on process.exit.
-        // NOTE: holdsAuditLock keys on the COMPOSITE lock identity (per-intent
-        // keying, P3) — a bare `AUDIT_LOCK_EXIT_HANDLERS.has(projectDir)` would
-        // miss the workspace-bucket / per-intent handler keys and re-introduce
-        // the 5s self-deadlock on every in-transaction error emit.
-        //
-        // The caller threads its RESOLVED intent+space (fork/merge hold a
-        // PER-INTENT lock — aidlc-state.ts error()/lockIntent). We MUST probe and
-        // emit on the SAME bucket: a bare holdsAuditLock(projectDir) keys the
-        // __workspace__ sentinel, returns false mid per-intent transaction, takes
-        // the 5s blocking-acquire branch, and writes ERROR_LOGGED to the wrong
-        // shard. Omitted intent/space -> sentinel, which is correct for every
-        // sentinel-locked caller (the common case).
-        if (holdsAuditLock(projectDir, intent, space)) {
+        const lockSpace = intent === undefined ? space : selection.space;
+        if (holdsAuditLock(projectDir, intent, lockSpace)) {
           audit.appendAuditEntryUnlocked("ERROR_LOGGED", {
             Tool: tool,
             Command: auditCommand,
             Error: auditMessage,
-          }, projectDir, intent, space);
+          }, projectDir, intent, lockSpace);
         } else {
           audit.appendAuditEntry("ERROR_LOGGED", {
             Tool: tool,
             Command: auditCommand,
             Error: auditMessage,
-          }, projectDir, intent, space);
+          }, projectDir, intent, lockSpace);
         }
       }
     } catch {

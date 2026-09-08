@@ -16,7 +16,7 @@
 // the verb and flag surfaces, and the CHANGE_CONTROL_SET rows.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditBlockField,
@@ -744,5 +744,87 @@ describe("t333 (6) a memory edit observed by a governed check", () => {
     expect(resolved.value).toBe("strict");
     mkdirSync(join(proj, "nothing"), { recursive: true });
     expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents", "audit"))).toBe(false);
+  });
+});
+
+describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow", () => {
+  /** selectedProject plus a second default intent and no default cursor: the
+   *  active space cannot resolve an intent, so nothing about the active state
+   *  may decide whether an explicitly selected refusal is recorded. */
+  function ambiguousDefault(): ReturnType<typeof selectedProject> {
+    const selected = selectedProject("classic");
+    const second = run(
+      UTILITY,
+      ["intent-create", "--scope", "classic", "--arguments", "second default", "--label", "second"],
+      selected.proj,
+    );
+    expect(second.status, second.stderr).toBe(0);
+    const defaultIntents = join(selected.proj, "aidlc", "spaces", "default", "intents");
+    rmSync(join(defaultIntents, "active-intent"));
+    const records = readdirSync(defaultIntents).filter((name) =>
+      existsSync(join(defaultIntents, name, "aidlc-state.md")),
+    );
+    expect(records).toHaveLength(2);
+    return selected;
+  }
+
+  test("an explicit target with no active cursor records the refusal in the selected shard", () => {
+    const selected = ambiguousDefault();
+    const beforeTarget = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
+
+    const refused = run(
+      UTILITY,
+      ["change-control", "loose", ...selectedArgs(selected.targetIntent)],
+      selected.proj,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(
+      'change-control requires exactly one of: strict, relaxed (received \\"loose\\").',
+    );
+    const targetAfter = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
+    expect(targetAfter).toHaveLength(beforeTarget.length + 1);
+    const row = targetAfter[targetAfter.length - 1];
+    expect(row.event).toBe("ERROR_LOGGED");
+    expect(auditBlockField(row.block, "Command")).toContain(
+      `--space alt --intent ${selected.targetIntent}`,
+    );
+    expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")
+      .filter((entry) => entry.event === "ERROR_LOGGED")).toHaveLength(0);
+  });
+
+  test("an explicit target that does not exist is refused without creating its audit directory", () => {
+    const selected = selectedProject("classic");
+    const altIntents = join(selected.proj, "aidlc", "spaces", "alt", "intents");
+    const beforeAlt = readdirSync(altIntents).sort();
+    const beforeDefault = readAuditShardEvents(selected.proj, selected.defaultIntent, "default");
+
+    const refused = run(
+      UTILITY,
+      ["change-control", "relaxed", "--space", "alt", "--intent", "not-a-real-intent"],
+      selected.proj,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr.trim().split("\n").pop()!)).toHaveProperty("error");
+    expect(existsSync(join(altIntents, "not-a-real-intent"))).toBe(false);
+    expect(readdirSync(altIntents).sort()).toEqual(beforeAlt);
+    expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(
+      beforeDefault,
+    );
+  });
+
+  test("a selected space with no resolvable intent records nothing and creates nothing", () => {
+    const selected = ambiguousDefault();
+    const emptyIntents = join(selected.proj, "aidlc", "spaces", "empty", "intents");
+    const createdSpace = run(UTILITY, ["space-create", "empty"], selected.proj);
+    expect(createdSpace.status, createdSpace.stderr).toBe(0);
+    const beforeEmpty = existsSync(emptyIntents) ? readdirSync(emptyIntents).sort() : null;
+
+    const refused = run(UTILITY, ["change-control", "loose", "--space", "empty"], selected.proj);
+
+    expect(refused.status).toBe(1);
+    expect(existsSync(join(emptyIntents, "audit"))).toBe(false);
+    expect(existsSync(emptyIntents) ? readdirSync(emptyIntents).sort() : null).toEqual(beforeEmpty);
   });
 });
