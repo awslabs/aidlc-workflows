@@ -462,31 +462,38 @@ export function success(message: string, data?: unknown): CommandResult {
 // for an empty line, which makes "press Enter to accept the default"
 // indistinguishable from a cancelled prompt. This reader returns `""` for an
 // empty line and `null` only when the input is closed (EOF), so callers can
-// treat Enter as "accept the default" and EOF as "cancel".
+// treat Enter as "accept the default" and EOF as "cancel". It reads one byte at
+// a time so nothing past the newline is consumed from the input.
 export function readTerminalLine(label: string, fd = 0): string | null {
   process.stdout.write(`${label} `);
-  const chunks: Buffer[] = [];
-  const buffer = Buffer.alloc(4096);
+  const bytes: number[] = [];
+  const byte = Buffer.alloc(1);
   let sawNewline = false;
-  while (!sawNewline) {
+  let sawEof = false;
+  while (!sawNewline && !sawEof) {
     let read: number;
     try {
-      read = readSync(fd, buffer, 0, buffer.length, null);
+      read = readSync(fd, byte, 0, 1, null);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EAGAIN") {
         Bun.sleepSync(10);
         continue;
       }
-      if (code === "EOF") break;
+      if (code === "EOF") {
+        sawEof = true;
+        continue;
+      }
       throw error;
     }
-    if (read === 0) break;
-    const chunk = buffer.subarray(0, read);
-    const newline = chunk.indexOf(0x0a);
-    chunks.push(Buffer.from(newline === -1 ? chunk : chunk.subarray(0, newline)));
-    sawNewline = newline !== -1;
+    if (read === 0) {
+      sawEof = true;
+    } else if (byte[0] === 0x0a) {
+      sawNewline = true;
+    } else {
+      bytes.push(byte[0]);
+    }
   }
-  if (chunks.length === 0 && !sawNewline) return null;
-  return Buffer.concat(chunks).toString("utf-8").replace(/\r$/, "");
+  if (sawEof && bytes.length === 0) return null;
+  return Buffer.from(bytes).toString("utf-8").replace(/\r$/, "");
 }

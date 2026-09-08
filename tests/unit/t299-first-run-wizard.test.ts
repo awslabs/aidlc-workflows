@@ -404,9 +404,20 @@ describe("t299 first-run setup wizard", () => {
     expect(read("\n")).toBe("");
     expect(read("\r\n")).toBe("");
     expect(read("2\n")).toBe("2");
-    expect(read("us-east-1\r\nignored\n")).toBe("us-east-1");
     expect(read("partial")).toBe("partial");
     expect(read("")).toBeNull();
+    // Consecutive answers on one descriptor: nothing past the newline is consumed.
+    const path = join(dir, "queued.txt");
+    writeFileSync(path, "us-east-1\r\n\nminimal\n");
+    const fd = openSync(path, "r");
+    try {
+      expect(readTerminalLine("Q:", fd)).toBe("us-east-1");
+      expect(readTerminalLine("Q:", fd)).toBe("");
+      expect(readTerminalLine("Q:", fd)).toBe("minimal");
+      expect(readTerminalLine("Q:", fd)).toBeNull();
+    } finally {
+      closeSync(fd);
+    }
   });
 
   // The scripted-answer seam above never reaches the real terminal path, so this
