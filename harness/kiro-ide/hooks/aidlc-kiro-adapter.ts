@@ -1082,6 +1082,12 @@ function mutationCapableTool(name: string): boolean {
   return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
 }
 
+const SHELL_TOOLS = new Set(["execute_bash", "execute_pwsh", "shell"]);
+
+function shellTool(name: string): boolean {
+  return SHELL_TOOLS.has(name);
+}
+
 function inputPaths(input: Record<string, unknown>): string[] {
   const paths: string[] = [];
   const add = (value: unknown) => {
@@ -1262,7 +1268,7 @@ function buildForward(): Forward {
         } catch {
           // Missing host identity remains fail closed below.
         }
-        if (toolName === "execute_bash") {
+        if (shellTool(toolName)) {
           const recovery = runLegacyRecoveryNext(
             projectDir,
             recoverySession,
@@ -1287,7 +1293,7 @@ function buildForward(): Forward {
           (
             Object.keys(toolArgs).length === 0 ||
             (
-              toolName !== "execute_bash" &&
+              !shellTool(toolName) &&
               paths.length === 0
             )
           )
@@ -1300,7 +1306,7 @@ function buildForward(): Forward {
           (!state.active || state.target === null) &&
           writeWindows.length > 0
         ) {
-          if (toolName === "execute_bash") {
+          if (shellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1334,7 +1340,7 @@ function buildForward(): Forward {
           }
         }
         if (interruptedWrite && !state.approved) {
-          if (toolName === "execute_bash") {
+          if (shellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1359,7 +1365,7 @@ function buildForward(): Forward {
               ?.trim()
               .toLowerCase()
               .replace(/\s+/g, "-") === "code-generation";
-          if (durableCodeGeneration && toolName === "execute_bash") {
+          if (durableCodeGeneration && shellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1379,7 +1385,7 @@ function buildForward(): Forward {
           }
         }
         if (state.active && state.violated) {
-          if (toolName === "execute_bash") {
+          if (shellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1444,7 +1450,7 @@ function buildForward(): Forward {
           !state.approved &&
           (
             toolName === "" ||
-            toolName === "execute_bash" ||
+            shellTool(toolName) ||
             toolName === "fs_append"
           )
         ) {
@@ -1502,7 +1508,7 @@ function buildForward(): Forward {
               };
             }
           }
-          if (Object.keys(toolArgs).length > 0 && toolName !== "execute_bash") {
+          if (Object.keys(toolArgs).length > 0 && !shellTool(toolName)) {
             return {
               hook: "__legacy_plan_approval_block__",
               input: {
@@ -1533,7 +1539,7 @@ function buildForward(): Forward {
           },
         };
       }
-      if (toolName === "execute_bash") {
+      if (shellTool(toolName)) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
           input: {
