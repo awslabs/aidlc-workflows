@@ -79,8 +79,10 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   activeSpace,
+  pipelineAttemptStartedAt,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -138,6 +140,15 @@ function auditHasStageEvent(audit: string, event: string, slug: string): boolean
   );
 }
 
+function ensurePipelineAttemptStarted(proj: string): void {
+  if (pipelineAttemptStartedAt(proj, TARGET_SLUG)) return;
+  appendAuditEntry(
+    "STAGE_STARTED",
+    { Stage: TARGET_SLUG, Agent: "aidlc-developer-agent" },
+    proj,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Timeout budget — the .sh set AIDLC_TEST_TIMEOUT=900 (RE is a HEAVY multi-agent
 // stage). Honour it. The driver aborts ~15s before bun's per-test cap so a stuck
@@ -177,6 +188,14 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
         );
+        // The init-done fixture marks reverse-engineering in progress but its
+        // seeded audit carries no STAGE_STARTED row for it; the real advance out
+        // of Initialization writes that row, and `aidlc-log.ts link` refuses a
+        // developer handoff "not written in the current stage attempt" without
+        // it. Seed the attempt floor the way t185 does so the journey depends on
+        // the conductor's stage work, not on whether it happens to re-emit the
+        // row before its first link.
+        ensurePipelineAttemptStarted(proj);
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,
