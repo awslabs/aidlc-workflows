@@ -1973,13 +1973,16 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toContain('install.sh" --from "$release" --offline');
     expect(unix).toContain("aidlc-lifecycle-provenance-fixture");
     expect(unix).toContain('AIDLC_GH_BIN="$gh_bin"');
-    expect(unix).toContain('[ "$#" -eq 9 ] || [ "$#" -eq 13 ]');
+    expect(unix).toContain(
+      '[ "$#" -eq 9 ] || [ "$#" -eq 11 ] || [ "$#" -eq 13 ]',
+    );
     expect(unix).toContain('[ "$3" = --help ]');
     expect(unix).toContain("'--source-digest string'");
     expect(unix).toContain('[ "$4" = --bundle ] || exit 2');
     expect(unix).toMatch(
       /\[ "\$5" = "\$\{3%\/checksums\.txt\}\/aidlc-release\.intoto\.jsonl" \] \|\| exit 2/,
     );
+    expect(unix).toContain('if [ "$#" -ge 11 ]; then');
     expect(unix).toMatch(/\[ "\$\{10\}" = --source-ref \] \|\| exit 2/);
     expect(unix).toMatch(
       /\[ "\$\{11\}" = "\$AIDLC_TEST_GH_SOURCE_REF" \] \|\| exit 2/,
@@ -1992,6 +1995,7 @@ describe("t244 Windows and completion release surfaces", () => {
       '[ "$actual" = "$AIDLC_TEST_GH_CHECKSUM_SHA" ] || exit 2',
     );
     expect(unix).toContain('test -s "$gh_marker"');
+    expect(unix).toContain("grep -qx 'verified-11' \"$gh_marker\"");
     expect(unix).toContain(
       "for harness in claude codex copilot cursor kiro kiro-ide opencode; do",
     );

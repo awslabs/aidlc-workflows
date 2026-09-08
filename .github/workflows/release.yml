@@ -405,7 +405,7 @@ jobs:
               '--source-digest string'
             exit 0
           fi
-          { [ "$#" -eq 9 ] || [ "$#" -eq 13 ]; } || exit 2
+          { [ "$#" -eq 9 ] || [ "$#" -eq 11 ] || [ "$#" -eq 13 ]; } || exit 2
           [ "$1" = attestation ] || exit 2
           [ "$2" = verify ] || exit 2
           case "$3" in /*/checksums.txt) ;; *) exit 2 ;; esac
@@ -417,9 +417,11 @@ jobs:
           [ "$7" = "$AIDLC_TEST_GH_REPOSITORY" ] || exit 2
           [ "$8" = --signer-workflow ] || exit 2
           [ "$9" = "$AIDLC_TEST_GH_WORKFLOW" ] || exit 2
-          if [ "$#" -eq 13 ]; then
+          if [ "$#" -ge 11 ]; then
             [ "${10}" = --source-ref ] || exit 2
             [ "${11}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
+          fi
+          if [ "$#" -eq 13 ]; then
             [ "${12}" = --source-digest ] || exit 2
             [ "${13}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
           fi
@@ -449,6 +451,7 @@ jobs:
             sh "$release/install.sh" --from "$release" --offline --quiet
           test -s "$gh_marker"
           grep -qx 'verified-9' "$gh_marker"
+          grep -qx 'verified-11' "$gh_marker"
           grep -qx 'verified-13' "$gh_marker"
           command="$AIDLC_BIN_DIR/aidlc"
           env PATH="/usr/bin:/bin" "$command" version
