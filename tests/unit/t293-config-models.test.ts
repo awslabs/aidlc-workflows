@@ -257,14 +257,6 @@ describe("t293 model policy resolution", () => {
     expect(kiro.effort).toBeUndefined();
     expect(kiro.unexpressed).toContain("effort");
 
-    const ide = resolveModelPolicy({
-      schemaVersion: 1,
-      agents: { architect: { model: "raw/model", effort: "high" } },
-    }, "architect", "judgment", "kiro-ide");
-    expect(ide.model).toBeUndefined();
-    expect(ide.effort).toBeUndefined();
-    expect(ide.unexpressed.sort()).toEqual(["effort", "model"]);
-
     const cursor = resolveModelPolicy({
       schemaVersion: 1,
       agents: { architect: { model: "raw/model", effort: "high" } },
@@ -273,7 +265,7 @@ describe("t293 model policy resolution", () => {
     expect(
       harnessHonestyNotes(groupPolicy, { "product-lead": "balanced" }, "kiro"),
     ).toEqual([
-      "Kiro CLI cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults.",
+      "Kiro cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults, which Kiro CLI reads. Kiro IDE does not read that file, so set its chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
     ]);
   });
 
@@ -790,7 +782,7 @@ describe("t293 config models CLI", () => {
     ], project, runtimeEnv());
     expect(unsupported.status, unsupported.stdout + unsupported.stderr).toBe(0);
     expect(unsupported.stdout).toContain(
-      "Kiro CLI cannot express group effort dials today",
+      "Kiro cannot express group effort dials today",
     );
     expect(unsupported.stdout).not.toContain("reviews run slower and cost more");
     const unsupportedPolicy = resolvedPolicy(project, "kiro");

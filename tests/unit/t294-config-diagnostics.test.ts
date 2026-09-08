@@ -292,9 +292,12 @@ describe("t294 runtime diagnostics", () => {
       status: "missing",
     }));
 
-    expect(probeHarnessCli("kiro-ide")).toEqual(expect.objectContaining({
+    // The Kiro row serves the IDE as well as the CLI, so `kiro-cli` is optional:
+    // a project opened only in Kiro IDE needs no separate CLI.
+    expect(probeHarnessCli("kiro", { which: () => null })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
       required: false,
-      status: "not-applicable",
+      status: "missing",
     }));
   });
 });
@@ -413,7 +416,7 @@ describe("t294 provider diagnostics", () => {
     expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
 
     for (const [harness, dir, file] of [
-      ["kiro-ide", ".kiro", "tools/data/harness.json"],
+      ["kiro", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
     ] as const) {
@@ -501,8 +504,8 @@ describe("t294 trust diagnostics", () => {
   });
 
   test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
-    const project = temp("aidlc-t294-trust-kiro-ide-");
-    cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
+    const project = temp("aidlc-t294-trust-kiro-");
+    cpSync(join(DIST, "kiro"), project, { recursive: true });
     mkdirSync(join(project, ".vscode"), { recursive: true });
     writeFileSync(
       join(project, ".vscode", "settings.json"),
@@ -510,9 +513,9 @@ describe("t294 trust diagnostics", () => {
         "kiroAgent.trustedCommands": ["aidlc engine *"],
       }, null, 2)}\n`,
     );
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues).toEqual([]);
+    expect(trustStatus(project, ".kiro", "kiro").issues).toEqual([]);
     writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues.map((item) => item.id))
+    expect(trustStatus(project, ".kiro", "kiro").issues.map((item) => item.id))
       .toContain("kiro-ide-trusted-command-missing");
 
     const codex = temp("aidlc-t294-siblings-codex-");
@@ -1244,7 +1247,7 @@ describe("t294 config diagnostics CLI", () => {
       status: "pending",
     });
 
-    const ide = install("kiro-ide");
+    const ide = install("kiro");
     expect(run([
       "config",
       "providers",
