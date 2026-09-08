@@ -4032,6 +4032,12 @@ export function createIntent(
     resolveSessionIdFromAncestry(projectDir);
   if (creatingSession) {
     writeSessionBinding(projectDir, creatingSession, space, dirName);
+  } else if (activeSpace(projectDir) !== space) {
+    // No session can carry the selection, so every cursor-based step that
+    // follows creation (audit, scaffold, state) would resolve the active space
+    // instead of this record. Creating into another space switches to it, the
+    // same way creation already moves that space's intent cursor.
+    setActiveSpaceCursor(projectDir, space);
   }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }

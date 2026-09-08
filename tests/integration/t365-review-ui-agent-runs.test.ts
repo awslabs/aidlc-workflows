@@ -11,7 +11,7 @@
 // on the restored session; /api/intents/propose names the engine's inference.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serverInfoPath, type ServerInfo } from "../../core/tools/aidlc-review-ui-shared.ts";
@@ -354,4 +354,45 @@ describe("t365 review UI agent runs", () => {
     expect(workflow.runner).toBe(false);
     expect((await api("GET", `/api/run?intent=${intent}`)).body.available).toBe(false);
   }, 30_000);
+
+  test("as the compiled binary, Start creates the workspace and intent through the aidlc CLI, not a tool file", async () => {
+    await stopDaemon();
+    // A compiled `aidlc` has no sibling .ts files and process.execPath is not
+    // bun. AIDLC_COMPILED_EXECUTABLE is the same seam the compiled binary
+    // sets for itself; a shell stub that re-enters the authored dispatcher
+    // stands in for it and records every invocation it receives.
+    const stubDir = join(temp, "compiled");
+    mkdirSync(stubDir, { recursive: true });
+    const calls = join(stubDir, "calls.log");
+    const stub = join(stubDir, "aidlc");
+    writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(calls)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "core", "tools", "aidlc.ts"))} "$@"\n`, { mode: 0o755 });
+    const other = join(temp, "project-compiled");
+    mkdirSync(join(other, "aidlc", "spaces", "default", "memory"), { recursive: true });
+    mkdirSync(join(other, ".claude"), { recursive: true });
+    writeFileSync(join(other, "aidlc", "active-space"), "default\n");
+    const saved = { project, infoPath };
+    project = other;
+    infoPath = serverInfoPath(other, env);
+    try {
+      await startDaemon({ AIDLC_COMPILED_EXECUTABLE: stub, FAKE_ACP_BIND: "1", FAKE_ACP_SCRIPT: "quiet" });
+      const space = await api("POST", "/api/spaces", { name: "browser" });
+      expect(space.status, JSON.stringify(space.body)).toBe(201);
+      expect(existsSync(join(other, "aidlc", "spaces", "browser", "memory"))).toBe(true);
+      const started = await api("POST", "/api/intents", { text: "Work started from the binary", space: "browser", scope: "express" });
+      expect(started.status, JSON.stringify(started.body)).toBe(201);
+      const slug = String(started.body.intent);
+      expect(existsSync(join(other, "aidlc", "spaces", "browser", "intents", slug, "aidlc-state.md"))).toBe(true);
+      await until(slug, (candidate) => candidate.run?.state === "idle" || candidate.run?.state === "running", 20_000);
+      // The daemon names its (canonical) project on every call, so the binary
+      // never has to infer it from a tool file's location or its cwd.
+      const canonical = realpathSync(other);
+      const recorded = readFileSync(calls, "utf-8").trim().split("\n");
+      expect(recorded).toContain(`engine space create browser --project-dir ${canonical}`);
+      expect(recorded.some((line) => line.startsWith("engine intent create --space browser --scope express ") && line.endsWith(`--project-dir ${canonical}`))).toBe(true);
+    } finally {
+      await stopDaemon();
+      project = saved.project;
+      infoPath = saved.infoPath;
+    }
+  }, 90_000);
 });

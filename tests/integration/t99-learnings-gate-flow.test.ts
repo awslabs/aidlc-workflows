@@ -111,8 +111,10 @@ const MEMORY_MIXED = join(FIX, "memory-mixed.md");
 
 const projects: string[] = [];
 afterAll(() => {
+  // Fourteen full .claude copies: removing them legitimately exceeds bun's
+  // 5-second hook default on slower disks or under a parallel suite run.
   for (const p of projects) rmSync(p, { recursive: true, force: true });
-});
+}, 60_000);
 
 /**
  * mkproj — mirrors the .sh mkproj(): a fresh temp project with a full

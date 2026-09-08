@@ -9596,10 +9596,6 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t337-review-ui-status-doctor.test.ts",
-          "mechanism": "cli"
-        },
-        {
           "file": "tests/unit/t37.test.ts",
           "mechanism": "cli"
         },

@@ -65,11 +65,13 @@ describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
     if (compose.status !== 0) {
       throw new Error(`test-pro compose failed: ${compose.stderr ?? compose.stdout}`);
     }
-  });
+  // A full dist copy plus the compose hook's subprocess: beyond bun's 5-second
+  // hook default under a parallel suite run.
+  }, 60_000);
 
   afterAll(() => {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
-  });
+  }, 60_000);
 
   test("doctor surfaces the plugin's reference checks after compose", () => {
     const doctor = spawnSync(

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:status, subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-utility:status, subcommand:aidlc-doctor:doctor
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -20,6 +20,8 @@ import {
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTILITY = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
+// Review UI diagnostics are a DoctorCheck of the public doctor command.
+const DOCTOR = join(REPO_ROOT, "core", "tools", "aidlc-doctor.ts");
 const SHARED = join(REPO_ROOT, "core", "tools", "aidlc-review-ui-shared.ts");
 const DIST_DATA = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data");
 const project = createTestProject();
@@ -85,7 +87,7 @@ function runUtility(command: "status" | "doctor", enabled: boolean, strict = fal
     // Doctor folds passing checks into a count unless --verbose; the review-ui
     // row is what this suite reads, so ask for every row.
     cmd: command === "doctor"
-      ? [BUN, UTILITY, command, "--verbose", "--project-dir", project]
+      ? [BUN, DOCTOR, "--verbose", "--project-dir", project]
       : [BUN, UTILITY, command, "--project-dir", project],
     stdout: "pipe",
     stderr: "pipe",
