@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-reviewer-scope",
+      "trigger": "PreToolUse",
+      "matcher": "^(fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|read|fs_read|read_file|read_files|execute_bash|execute_pwsh|shell)$",
+      "description": "Keeps a dispatched reviewer inside the artifact it was asked to review. PreToolUse because it must refuse, and reads are matched too because reading outside the scope is the violation this guard exists for.",
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro reviewer-scope"
+      }
+    }
+  ]
+}

@@ -113,7 +113,7 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -125,6 +125,7 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 interface IdeHookContext {
   channel?: "legacy" | "modern";
   sessionId?: string;
+  event?: string;
   prompt?: string;
   userPrompt?: string;
   toolName?: string;
@@ -157,6 +158,60 @@ const SESSION_ID_TARGETS = new Set([
 ]);
 
 const TERMINAL_TOOLS = new Set(["execute_bash", "execute_pwsh", "shell"]);
+
+// The payload as the platform sends it. Distinct from IdeHookContext above, which
+// is the normalized view: the targets merged in from the pre-merge kiro row pass
+// the platform's own field names straight through to the core hooks.
+interface KiroHookInput {
+  hook_event_name?: string;
+  cwd?: string;
+  session_id?: string;
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  tool_response?: unknown;
+  prompt?: string;
+  assistant_response?: string;
+}
+
+/** A delegation, normalized to the shape the core hooks expect. */
+interface KiroDispatch {
+  coreTool: "subagent" | "Task";
+  coreInput: Record<string, unknown>;
+  agents: string[];
+  prompt: string;
+}
+
+function firstNonBlank(values: unknown[]): string {
+  return values.find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  ) ?? "";
+}
+
+// Delegation arrives under three tool names, and `orchestrate_subagent` was
+// missing from the recognition set: its payload puts the personas in
+// `tool_input.stages[].role`, the same shape the `subagent` alias uses, so it
+// belongs on the crew path rather than the direct one. Until it was listed, an
+// orchestrated delegation produced no dispatch at all — the guards saw nothing
+// and the audit recorded nothing. (Measured on captured 2.18.1 payloads: keys
+// `task`, `stages`, `repeat`, with `role` naming each stage's persona.)
+const CREW_DISPATCH_TOOLS = new Set(["subagent", "orchestrate_subagent"]);
+const DISPATCH_TOOL_NAMES = new Set([
+  "subagent",
+  "orchestrate_subagent",
+  "invoke_sub_agent",
+]);
+
+/** One open delegation window: which persona, and when it opened. */
+interface DelegationEntry {
+  agent: string;
+  ts: number;
+}
+
+// A window is closed by an event a crashed or abandoned session never sends, so
+// entries expire. Without this a stuck entry would make state-transition-guard
+// refuse the MAIN session's own lifecycle commands for the rest of the project's
+// life, which is a worse failure than losing the attribution.
+const DELEGATION_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** Run a packaged core hook body and hand back its exit code and stderr. The
  *  guards below map a 2 onto Kiro's reject contract; anything else fails open. */
@@ -538,6 +593,33 @@ export async function run(
 // harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
+// The raw snake_case payload, alongside the normalized `ide` view above. The
+// targets merged in from the pre-merge kiro row read it directly because they
+// forward the platform's own field names to the core hooks rather than a
+// normalized subset; `ide` cannot serve them without flattening shapes those
+// hooks distinguish. Malformed stdin leaves it empty and each target falls open
+// on its own terms, matching how it behaved before the merge.
+let kiro: KiroHookInput = {};
+if (!process.stdin.isTTY && input.length > 0) {
+  try {
+    const parsed: unknown = JSON.parse(input);
+    if (isRecord(parsed)) kiro = parsed as KiroHookInput;
+  } catch {
+    kiro = {};
+  }
+}
+
+// Child hooks resolve the project from the environment. Only override it when
+// this process was itself given one, so a bare invocation keeps the inherited
+// environment rather than pinning children to a directory nobody asked for.
+const projectEnv = process.env.AIDLC_PROJECT_DIR
+  ? {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    CLAUDE_PROJECT_DIR: projectDir,
+  }
+  : process.env;
+
 // Normalize the hook context for the payload-dependent targets. IDE 1.x
 // delivers it as JSON on stdin (the `input` argument); 0.12 delivered it via
 // USER_PROMPT with stdin open-but-never-written. Prefer stdin, fall back to
@@ -572,6 +654,11 @@ if (INPUT_TARGETS.has(target)) {
           const rawResult = parsed.toolResult ?? parsed.tool_response;
           const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
           const rawSessionId = parsed.session_id ?? parsed.sessionId;
+          // Needed to tell a dispatch window's opening edge from its closing
+          // one; nothing else in this adapter branched on the event name,
+          // because until the delegation latch every target was registered on a
+          // single trigger.
+          const rawEvent = parsed.hook_event_name ?? parsed.hookEventName;
           const rawPrompt =
             parsed.prompt ??
             parsed.user_prompt ??
@@ -618,6 +705,7 @@ if (INPUT_TARGETS.has(target)) {
             sessionId: typeof rawSessionId === "string"
               ? rawSessionId
               : undefined,
+            event: typeof rawEvent === "string" ? rawEvent : undefined,
             prompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
             userPrompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
             toolName: typeof rawName === "string" ? rawName : undefined,
@@ -1027,232 +1115,29 @@ if (target === "enforce-approval-gate") {
   }
 }
 
-if (target === "state-transition-guard") {
-  // Refuses a hand-run `aidlc-state.ts <verb>`. The engine owns state
-  // transitions, so the state file, the audit log and the compiled graph stay in
-  // agreement. Distinct from terminal-command-guard, which keeps terminal
-  // commands deterministic: this one protects workflow lifecycle state.
-  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
-  const tool = ide.toolName ?? "";
-  if (!TERMINAL_TOOLS.has(tool)) return 0;
-  const command = typeof ide.toolArgs?.command === "string" ? ide.toolArgs.command : "";
-  if (!command) return 0;
-  const pd = process.cwd();
-  const result = runCoreHook("state-transition-guard", {
-    hook_event_name: "PreToolUse",
-    tool_name: "Bash",
-    tool_input: { command },
-  }, pd);
-  if (result.code === 2) {
-    process.stderr.write(result.stderr);
-    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  }
-  return 0;
-}
-
-if (target === "review-freeze") {
-  // Freezes artifact writes once a reviewer receipt is terminal, so a late edit
-  // cannot reopen a closed review loop. PreToolUse because it must refuse; the
-  // PostToolUse audit hook sees the same tools and cannot block.
-  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
-  const tool = ide.toolName ?? "";
-  const args = ide.toolArgs ?? {};
-  const shell = TERMINAL_TOOLS.has(tool);
-  const write = canonicalWriteTool(tool);
-  if (!shell && write === null) return 0;
-  const paths = inputPaths(args);
-  const pd = process.cwd();
-  const result = runCoreHook("review-freeze", {
-    hook_event_name: "PreToolUse",
-    tool_name: shell ? "Bash" : write,
-    tool_input: shell
-      ? { command: typeof args.command === "string" ? args.command : "" }
-      : { file_path: paths[0] ?? "", paths },
-    cwd: pd,
-  }, pd);
-  if (result.code === 2) {
-    process.stderr.write(result.stderr);
-    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  }
-  return 0;
-}
-
-// Extract the absolute path of the file a write tool just touched from the
-// IDE's toolResult prose. Captured PostToolUse write inputs are empty, so this
-// is the ONLY path source on those events. Only the known Kiro wordings match; anything else returns "" so the caller
-// can record a visible drop (no silent no-op).
-//   fs_write    → "Created the <PATH> file."
-//   str_replace → "Replaced text in <PATH>"           (may carry a trailing
-//                  " (N occurrences)" or similar suffix — stripped below)
-//   fs_append   → "Appended the text to the <PATH> file."
-//
-// Robustness (finding 4): trim first so a trailing newline does not defeat the
-// `$` anchor, and for the open-ended str_replace form stop the capture before a
-// trailing " (…)" parenthetical so a "Replaced text in foo.md (2 occurrences)"
-// result yields "foo.md", not "foo.md (2 occurrences)".
-function extractWrittenPath(toolResult: string): string {
-  const s = toolResult.trim();
-  let m = s.match(/^Created the (.+) file\.$/);
-  if (m) return m[1].trim();
-  m = s.match(/^Appended the text to the (.+) file\.$/);
-  if (m) return m[1].trim();
-  m = s.match(/^Replaced text in (.+?)(?:\s+\([^)]*\))?$/);
-  if (m) return m[1].trim();
-  return "";
-}
-
-// Does this toolResult describe a write that FAILED? Used only to keep the drop
-// log honest: a failed write has no artifact to audit, so not forwarding it is
-// correct behaviour and must NOT be recorded as harness decay (see the call
-// site). The 1.x stdin channel carries no success flag, so error prose is the
-// only signal available.
-//
-// EVIDENCE GRADING — only the first pattern is grounded in a capture:
-//   ^Caught an error while   OBSERVED live on IDE 1.x (a str_replace whose old
-//                            string matched multiple times). This is the case
-//                            that motivated the fix.
-//   ^Error:                  DEFENSIVE GUESS. Not observed; no capture in this
-//   ^Failed to               repo or in docs/reference/kiro-ide-hook-payload.md
-//   ^An error occurred       backs these three shapes.
-// They are kept because the risk direction is mild and one-way: a match only
-// suppresses a drop when path extraction has ALREADY failed and the payload has
-// no structured success flag. Explicit `toolSuccess: true` remains authoritative.
-// Masking real decay would therefore require a new flagless SUCCESS wording that
-// begins with error prose — and the known success wordings ("Created the …",
-// "Replaced text in …", "Appended the text to …") cannot collide with any of
-// them. If a capture ever contradicts one, delete it rather than widening the set.
-//
-// Every pattern is start-anchored on purpose: a loose "contains 'error'" test
-// would swallow a successful write to a file whose NAME mentions an error, which
-// would hide exactly the decay this log exists to surface. Anything unrecognised
-// is treated as a success and still earns a visible drop — the default stays
-// biased toward reporting, not toward silence.
-function isFailedWriteResult(toolResult: string): boolean {
-  const s = toolResult.trim();
-  return (
-    /^Caught an error while /i.test(s) ||
-    /^Error:/i.test(s) ||
-    /^Failed to /i.test(s) ||
-    /^An error occurred/i.test(s)
-  );
-}
-
-// Map the IDE tool name to the canonical name the core hooks match on. Write
-// creates a (possibly new) file; str_replace/fs_append always target an
-// existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
-function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write" || name === "create_file") return "Write";
-  if (
-    name === "str_replace" ||
-    name === "fs_append" ||
-    name === "delete_file" ||
-    name === "apply_patch" ||
-    name === "edit_file"
-  ) return "Edit";
-  return "";
-}
-
-function mutationCapableTool(name: string): boolean {
-  return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
-}
-
-function inputPaths(input: Record<string, unknown>): string[] {
-  const paths: string[] = [];
-  const add = (value: unknown) => {
-    if (typeof value === "string" && value.length > 0) paths.push(value);
-  };
-  add(input.path);
-  add(input.file_path);
-  add(input.filePath);
-  if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
-  if (Array.isArray(input.operations)) {
-    for (const operation of input.operations) {
-      if (isRecord(operation)) add(operation.path);
+// Maintain the delegation latch before any target runs, so a guard registered on
+// the same event still sees an accurate inflight set. Placed here rather than
+// inside one target because several targets are registered on the dispatch tools;
+// the latch is keyed by payload, so being called from more than one of them for
+// the same event is a no-op rather than a double count.
+if (INPUT_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) === 0) {
+  const dispatchTool = ide.toolName ?? "";
+  const isDispatch =
+    DISPATCH_TOOL_NAMES.has(dispatchTool) ||
+    (dispatchTool.startsWith("subagent_") && dispatchTool !== "subagent_response");
+  if (isDispatch) {
+    const latchSession = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
+    const payload: KiroHookInput = {
+      tool_name: dispatchTool,
+      tool_input: ide.toolArgs ?? {},
+    };
+    if (ide.event === "PreToolUse") {
+      openDelegation(latchSession, payload, kiroDispatch(payload)?.agents ?? []);
+    } else if (ide.event === "PostToolUse") {
+      closeDelegation(latchSession, payload);
     }
   }
-  return [...new Set(paths)];
 }
-
-// Recover the delegated agent's identity from the hook payload.
-//
-// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
-// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
-// platform-provided identity the delegate cannot author. It therefore WINS over
-// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
-// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
-// to a different persona while a more authoritative identity is available.
-//
-// The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
-// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
-// shape, which carries no structured identity. They also still cover a
-// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
-function extractAgentIdentity(toolResult: string, toolName = ""): string {
-  const structured =
-    toolName.startsWith("subagent_") && toolName !== "subagent_response"
-      ? toolName.slice("subagent_".length).trim()
-      : "";
-  if (structured !== "") return structured;
-  const lines = toolResult.split("\n").slice(0, 8);
-  for (const line of lines) {
-    const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
-    if (m) return m[1].replace(/\*+$/, "").trim() || "unknown";
-  }
-  return "unknown";
-}
-
-type Forward = { hook: string; input: Record<string, unknown> } | null;
-
-function buildForward(): Forward {
-  if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
-    recordHookDrop(
-      projectDir,
-      "kiro-adapter",
-      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
-    );
-    if (target === "plan-approval-guard") {
-      const malformedToolName = ide.toolName ?? "";
-      if (
-        readPlanApprovalLegacyWindows(projectDir).length > 0 &&
-        (
-          malformedToolName === "" ||
-          mutationCapableTool(malformedToolName)
-        )
-      ) {
-        return {
-          hook: "__legacy_plan_approval_block__",
-          input: {
-            reason:
-              `Plan Approval denied a malformed mutation payload while a legacy write recovery latch is active (${ide.malformedFields?.join(", ")}).`,
-          },
-        };
-      }
-      let codeGenerationRelevant = false;
-      try {
-        const statePath = stateFilePath(projectDir);
-        if (existsSync(statePath)) {
-          const state = readFileSync(statePath, "utf-8");
-          const marker = readActiveDirectiveMarker(projectDir, state);
-          codeGenerationRelevant =
-            getField(state, "Current Stage")
-              ?.trim()
-              .toLowerCase()
-              .replace(/\s+/g, "-") === "code-generation" ||
-            marker?.stage === "code-generation";
-        }
-      } catch {
-        codeGenerationRelevant = false;
-      }
-      if (!codeGenerationRelevant) return null;
-      return {
-        hook: "__legacy_plan_approval_block__",
-        input: {
-          reason:
-            `Plan Approval denied a malformed PreToolUse payload (${ide.malformedFields?.join(", ")}).`,
-        },
-      };
-    }
-    return null;
-  }
 
 
 // ── Targets the CLI row carried before the merge ───────────────────────────
@@ -1289,7 +1174,7 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
     toolInput.role,
   ]).trim();
   const directPrompt = firstNonBlank([toolInput.prompt, toolInput.task]);
-  if (tool === "subagent") {
+  if (CREW_DISPATCH_TOOLS.has(tool)) {
     // The alias is used for both legacy crew payloads and direct dispatches.
     // Only a non-empty set of valid crew stages identifies the former; an
     // absent or empty/malformed stages field must fall through to direct
@@ -1323,7 +1208,7 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   }
 
   const named = /^subagent_(.+)$/.exec(tool);
-  if (tool !== "subagent" && tool !== "invoke_sub_agent" && named === null) return null;
+  if (!DISPATCH_TOOL_NAMES.has(tool) && named === null) return null;
   const namedAgent = named?.[1]?.trim() ?? "";
   const agent = namedAgent || directAgent;
   const prompt = directPrompt;
@@ -1471,7 +1356,24 @@ if (target === "reviewer-scope") {
   } else {
     return 0;
   }
-  const registeredAgent = extraArgs[0] ?? "";
+  // The identity this guard compares against the dispatched reviewer. The
+  // pre-merge row took it from the persona argv of a per-agent registration and
+  // otherwise asserted `scoped_registration`, which was sound only BECAUSE the
+  // registration itself was the reviewer's. A standalone manifest is global, so
+  // that assertion would now claim every unattributed call is the reviewer's —
+  // including the conductor's own. The latch replaces both: a name when exactly
+  // one delegate is inflight, and nothing at all otherwise.
+  //
+  // Unlike state-transition-guard this one COMPARES the identity
+  // (`agent_type === dispatch.reviewer`), so an ambiguous set cannot be joined
+  // into one string. Two inflight personas mean the acting one is unknown, and
+  // there this guard fails open, as the core hook does for every other
+  // uncertainty, rather than enforcing reviewer scope on a call that may belong
+  // to a different persona.
+  const latched = inflightDelegates(
+    ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
+  );
+  const registeredAgent = latched.length === 1 ? latched[0] : "";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "reviewer-scope"]
@@ -1484,7 +1386,7 @@ if (target === "reviewer-scope") {
         tool_input: coreInput,
         ...(registeredAgent.length > 0
           ? { agent_type: registeredAgent }
-          : { scoped_registration: true }),
+          : {}),
       }),
       "utf-8",
     ),
@@ -1549,6 +1451,352 @@ if (target === "deliver-stage-rules") {
   }
   return 0;
 }
+
+if (target === "state-transition-guard") {
+  // Refuses a hand-run `aidlc-state.ts <verb>`. The engine owns state
+  // transitions, so the state file, the audit log and the compiled graph stay in
+  // agreement. Distinct from terminal-command-guard, which keeps terminal
+  // commands deterministic: this one protects workflow lifecycle state.
+  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
+  const tool = ide.toolName ?? "";
+  if (!TERMINAL_TOOLS.has(tool)) return 0;
+  const command = typeof ide.toolArgs?.command === "string" ? ide.toolArgs.command : "";
+  if (!command) return 0;
+  const pd = process.cwd();
+  // The core hook enforces only when it knows a DELEGATE is acting (an empty
+  // agent_type returns 0), because the main session is allowed to run these
+  // verbs. The pre-merge row got that identity from the persona argv of a
+  // per-agent registration; the latch supplies it now. Every inflight name is
+  // forwarded rather than one being chosen: the enforcement here does not depend
+  // on WHICH delegate is acting, only on the fact that one is, so a set of two
+  // is still a correct answer and never a guess.
+  const delegates = inflightDelegates(ide.sessionId?.trim() || rememberedKiroIdeSessionId());
+  const result = runCoreHook("state-transition-guard", {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+    ...(delegates.length > 0 ? { agent_type: delegates.join(", ") } : {}),
+  }, pd);
+  if (result.code === 2) {
+    process.stderr.write(result.stderr);
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+if (target === "review-freeze") {
+  // Freezes artifact writes once a reviewer receipt is terminal, so a late edit
+  // cannot reopen a closed review loop. PreToolUse because it must refuse; the
+  // PostToolUse audit hook sees the same tools and cannot block.
+  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
+  const tool = ide.toolName ?? "";
+  const args = ide.toolArgs ?? {};
+  const shell = TERMINAL_TOOLS.has(tool);
+  const write = canonicalWriteTool(tool);
+  // canonicalWriteTool signals "not a write tool" with "", not null. Compared
+  // against null this gate never fired, and a tool that is neither shell nor
+  // write reached the core hook with an empty tool_name.
+  if (!shell && write === "") return 0;
+  const paths = inputPaths(args);
+  const pd = process.cwd();
+  const result = runCoreHook("review-freeze", {
+    hook_event_name: "PreToolUse",
+    tool_name: shell ? "Bash" : write,
+    tool_input: shell
+      ? { command: typeof args.command === "string" ? args.command : "" }
+      : { file_path: paths[0] ?? "", paths },
+    cwd: pd,
+  }, pd);
+  if (result.code === 2) {
+    process.stderr.write(result.stderr);
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+// Extract the absolute path of the file a write tool just touched from the
+// IDE's toolResult prose. Captured PostToolUse write inputs are empty, so this
+// is the ONLY path source on those events. Only the known Kiro wordings match; anything else returns "" so the caller
+// can record a visible drop (no silent no-op).
+//   fs_write    → "Created the <PATH> file."
+//   str_replace → "Replaced text in <PATH>"           (may carry a trailing
+//                  " (N occurrences)" or similar suffix — stripped below)
+//   fs_append   → "Appended the text to the <PATH> file."
+//
+// Robustness (finding 4): trim first so a trailing newline does not defeat the
+// `$` anchor, and for the open-ended str_replace form stop the capture before a
+// trailing " (…)" parenthetical so a "Replaced text in foo.md (2 occurrences)"
+// result yields "foo.md", not "foo.md (2 occurrences)".
+function extractWrittenPath(toolResult: string): string {
+  const s = toolResult.trim();
+  let m = s.match(/^Created the (.+) file\.$/);
+  if (m) return m[1].trim();
+  m = s.match(/^Appended the text to the (.+) file\.$/);
+  if (m) return m[1].trim();
+  m = s.match(/^Replaced text in (.+?)(?:\s+\([^)]*\))?$/);
+  if (m) return m[1].trim();
+  return "";
+}
+
+// Does this toolResult describe a write that FAILED? Used only to keep the drop
+// log honest: a failed write has no artifact to audit, so not forwarding it is
+// correct behaviour and must NOT be recorded as harness decay (see the call
+// site). The 1.x stdin channel carries no success flag, so error prose is the
+// only signal available.
+//
+// EVIDENCE GRADING — only the first pattern is grounded in a capture:
+//   ^Caught an error while   OBSERVED live on IDE 1.x (a str_replace whose old
+//                            string matched multiple times). This is the case
+//                            that motivated the fix.
+//   ^Error:                  DEFENSIVE GUESS. Not observed; no capture in this
+//   ^Failed to               repo or in docs/reference/kiro-ide-hook-payload.md
+//   ^An error occurred       backs these three shapes.
+// They are kept because the risk direction is mild and one-way: a match only
+// suppresses a drop when path extraction has ALREADY failed and the payload has
+// no structured success flag. Explicit `toolSuccess: true` remains authoritative.
+// Masking real decay would therefore require a new flagless SUCCESS wording that
+// begins with error prose — and the known success wordings ("Created the …",
+// "Replaced text in …", "Appended the text to …") cannot collide with any of
+// them. If a capture ever contradicts one, delete it rather than widening the set.
+//
+// Every pattern is start-anchored on purpose: a loose "contains 'error'" test
+// would swallow a successful write to a file whose NAME mentions an error, which
+// would hide exactly the decay this log exists to surface. Anything unrecognised
+// is treated as a success and still earns a visible drop — the default stays
+// biased toward reporting, not toward silence.
+function isFailedWriteResult(toolResult: string): boolean {
+  const s = toolResult.trim();
+  return (
+    /^Caught an error while /i.test(s) ||
+    /^Error:/i.test(s) ||
+    /^Failed to /i.test(s) ||
+    /^An error occurred/i.test(s)
+  );
+}
+
+// Map the IDE tool name to the canonical name the core hooks match on. Write
+// creates a (possibly new) file; str_replace/fs_append always target an
+// existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
+function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
+  if (name === "fs_write" || name === "create_file") return "Write";
+  if (
+    name === "str_replace" ||
+    name === "fs_append" ||
+    name === "delete_file" ||
+    name === "apply_patch" ||
+    name === "edit_file"
+  ) return "Edit";
+  return "";
+}
+
+function mutationCapableTool(name: string): boolean {
+  return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
+}
+
+function inputPaths(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  const add = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) paths.push(value);
+  };
+  add(input.path);
+  add(input.file_path);
+  add(input.filePath);
+  if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
+  if (Array.isArray(input.operations)) {
+    for (const operation of input.operations) {
+      if (isRecord(operation)) add(operation.path);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+// The delegation latch — how a delegate's own tool calls get an identity again.
+//
+// v3 hook payloads carry no acting-agent field: every event delivers the same
+// keys (session_id, hook_event_name, cwd, tool_name, tool_input, tool_response,
+// prompt, file_path). The agent-v1 registration channel this row used to have
+// supplied that identity out of band — the guards were registered inside each
+// persona's own agent config with the persona as argv — and standalone hook
+// manifests have no agent-scope field, so that channel is gone with the merge.
+//
+// What replaces it is measured, not inferred. Across 615 captured payloads (Kiro
+// CLI 2.18.1 / 2.19.2 / 2.20.1 and IDE 1.x) a delegate's OWN tool calls do reach
+// the workspace hooks, strictly nested inside the dispatch event's
+// PreToolUse..PostToolUse window, and the dispatch event names the delegate in
+// one of three places: the `subagent_<agent>` tool name, `tool_input.name`
+// (invoke_sub_agent), or `tool_input.stages[].role` (orchestrate_subagent). So
+// open on the dispatch's PreToolUse, close on its PostToolUse, and every tool
+// call in between belongs to that delegate.
+//
+// Keyed by the dispatch payload rather than counted, so a redelivery of the same
+// event is idempotent — several manifests can match one tool call, and each match
+// invokes this adapter separately.
+//
+// Ambiguity is reported, never guessed. Delegates run in parallel (measured:
+// three `requirement-detailer` dispatches opened before any closed), and with two
+// DIFFERENT personas inflight a nested call cannot be attributed to either. This
+// reports the whole inflight set and the callers decide; nothing here picks one.
+function delegationLatchPath(sessionId: string): string {
+  const key = createHash("sha256").update(sessionId).digest("hex");
+  return join(sessionsDir(projectDir), "kiro-delegation", key, "inflight.json");
+}
+
+function readDelegationLatch(sessionId: string): Record<string, DelegationEntry> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(delegationLatchPath(sessionId), "utf-8"));
+  } catch {
+    return {};
+  }
+  if (!isRecord(parsed)) return {};
+  const now = Date.now();
+  const live: Record<string, DelegationEntry> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!isRecord(value)) continue;
+    const agent = typeof value.agent === "string" ? value.agent.trim() : "";
+    const ts = typeof value.ts === "number" ? value.ts : 0;
+    if (agent.length === 0 || now - ts > DELEGATION_TTL_MS) continue;
+    live[key] = { agent, ts };
+  }
+  return live;
+}
+
+function writeDelegationLatch(
+  sessionId: string,
+  entries: Record<string, DelegationEntry>,
+): void {
+  try {
+    const path = delegationLatchPath(sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(entries)}\n`, "utf-8");
+  } catch {
+    // Best-effort attribution. A latch we cannot persist costs the agent_type on
+    // the calls inside this window; it must never fail the tool call itself.
+  }
+}
+
+// One dispatch, one key. Pre and Post carry byte-identical tool_input for the
+// same dispatch (measured), so hashing the pair identifies the window without
+// needing an id the payload does not have.
+function delegationKey(input: KiroHookInput): string {
+  return createHash("sha256")
+    .update(`${input.tool_name ?? ""} ${JSON.stringify(input.tool_input ?? {})}`)
+    .digest("hex");
+}
+
+function openDelegation(sessionId: string, input: KiroHookInput, agents: string[]): void {
+  const named = agents.map((agent) => agent.trim()).filter((agent) => agent.length > 0);
+  if (named.length === 0) return;
+  const entries = readDelegationLatch(sessionId);
+  const key = delegationKey(input);
+  const now = Date.now();
+  named.forEach((agent, index) => {
+    entries[index === 0 ? key : `${key}:${index}`] = { agent, ts: now };
+  });
+  writeDelegationLatch(sessionId, entries);
+}
+
+function closeDelegation(sessionId: string, input: KiroHookInput): void {
+  const entries = readDelegationLatch(sessionId);
+  const key = delegationKey(input);
+  let changed = false;
+  for (const candidate of Object.keys(entries)) {
+    if (candidate === key || candidate.startsWith(`${key}:`)) {
+      delete entries[candidate];
+      changed = true;
+    }
+  }
+  if (changed) writeDelegationLatch(sessionId, entries);
+}
+
+/** Distinct personas whose delegation window is open right now. */
+function inflightDelegates(sessionId: string): string[] {
+  return [
+    ...new Set(Object.values(readDelegationLatch(sessionId)).map((e) => e.agent)),
+  ];
+}
+
+// Recover the delegated agent's identity from the hook payload.
+//
+// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
+// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
+// platform-provided identity the delegate cannot author. It therefore WINS over
+// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
+// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
+// to a different persona while a more authoritative identity is available.
+//
+// The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
+// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
+// shape, which carries no structured identity. They also still cover a
+// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
+function extractAgentIdentity(toolResult: string, toolName = ""): string {
+  const structured =
+    toolName.startsWith("subagent_") && toolName !== "subagent_response"
+      ? toolName.slice("subagent_".length).trim()
+      : "";
+  if (structured !== "") return structured;
+  const lines = toolResult.split("\n").slice(0, 8);
+  for (const line of lines) {
+    const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
+    if (m) return m[1].replace(/\*+$/, "").trim() || "unknown";
+  }
+  return "unknown";
+}
+
+type Forward = { hook: string; input: Record<string, unknown> } | null;
+
+function buildForward(): Forward {
+  if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
+    recordHookDrop(
+      projectDir,
+      "kiro-adapter",
+      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
+    );
+    if (target === "plan-approval-guard") {
+      const malformedToolName = ide.toolName ?? "";
+      if (
+        readPlanApprovalLegacyWindows(projectDir).length > 0 &&
+        (
+          malformedToolName === "" ||
+          mutationCapableTool(malformedToolName)
+        )
+      ) {
+        return {
+          hook: "__legacy_plan_approval_block__",
+          input: {
+            reason:
+              `Plan Approval denied a malformed mutation payload while a legacy write recovery latch is active (${ide.malformedFields?.join(", ")}).`,
+          },
+        };
+      }
+      let codeGenerationRelevant = false;
+      try {
+        const statePath = stateFilePath(projectDir);
+        if (existsSync(statePath)) {
+          const state = readFileSync(statePath, "utf-8");
+          const marker = readActiveDirectiveMarker(projectDir, state);
+          codeGenerationRelevant =
+            getField(state, "Current Stage")
+              ?.trim()
+              .toLowerCase()
+              .replace(/\s+/g, "-") === "code-generation" ||
+            marker?.stage === "code-generation";
+        }
+      } catch {
+        codeGenerationRelevant = false;
+      }
+      if (!codeGenerationRelevant) return null;
+      return {
+        hook: "__legacy_plan_approval_block__",
+        input: {
+          reason:
+            `Plan Approval denied a malformed PreToolUse payload (${ide.malformedFields?.join(", ")}).`,
+        },
+      };
+    }
+    return null;
+  }
+
 
   switch (target) {
     case "session-start": {
@@ -2156,8 +2404,14 @@ if (target === "deliver-stage-rules") {
         return null;
       }
 
+      // The PreToolUse registration exists only to open the delegation window,
+      // which the latch already did before this switch ran. It carries no result
+      // by definition, so returning early here keeps the empty-payload drop below
+      // meaning what it says: a COMPLETION that arrived without its output.
+      if (ide.event === "PreToolUse") return null;
+
       const isSubagentCompletion =
-        toolName === "invoke_sub_agent" ||
+        DISPATCH_TOOL_NAMES.has(toolName) ||
         (toolName.startsWith("subagent_") && toolName !== "subagent_response");
       if (!isSubagentCompletion) return null;
 

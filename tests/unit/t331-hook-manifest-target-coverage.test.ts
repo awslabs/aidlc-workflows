@@ -96,13 +96,55 @@ const REQUIRED: Array<{
     blocking: true,
     why: "refuses a hand-run lifecycle verb; the engine owns state transitions",
   },
+  {
+    target: "reviewer-scope",
+    triggers: ["PreToolUse"],
+    blocking: true,
+    why: "refuses a dispatched reviewer's work outside the artifact it was asked to review",
+  },
   { target: "audit-and-sensors", triggers: ["PostToolUse"], why: "audits the write and runs sensors" },
   { target: "rebuild-stage-graph", triggers: ["PostToolUse"], why: "rebuilds the compiled graph after a shell step" },
   { target: "sync-workflow-state", triggers: ["PostToolUse"], why: "reconciles Current Stage from the audit tail" },
-  { target: "log-subagent", triggers: ["PostToolUse"], why: "records a delegation" },
+  {
+    target: "log-subagent",
+    triggers: ["PreToolUse", "PostToolUse"],
+    why:
+      "PostToolUse records the delegation; PreToolUse opens the delegation window, " +
+      "which is the ONLY thing that gives a delegate's own tool calls an identity - " +
+      "v3 payloads carry no acting-agent field, so without the opening edge the " +
+      "persona-scoped guards see every delegated call as the main session's",
+  },
 ];
 
-type Registration = { target: string; trigger: string; manifest: string };
+// Tool-name matchers, per responsibility, that a guard must cover or it is blind
+// to a tool that can do the thing it exists to refuse. Grounded in the adapter's
+// own canonicalizers (canonicalWriteTool, canonicalTool, TERMINAL_TOOLS): a name
+// they translate is a name the guard can act on, so a matcher that omits it drops
+// the call silently.
+const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: string }> = [
+  {
+    target: "review-freeze",
+    tools: ["fs_write", "create_file", "str_replace", "fs_append", "delete_file", "execute_bash"],
+    why: "every tool that can mutate a frozen artifact",
+  },
+  {
+    target: "reviewer-scope",
+    tools: ["fs_write", "str_replace", "delete_file", "read_file", "execute_bash"],
+    why: "reads count: reading outside the reviewed artifact is the violation",
+  },
+  {
+    target: "log-subagent",
+    tools: ["subagent_aidlc-architect-agent", "invoke_sub_agent", "orchestrate_subagent"],
+    why: "all three shapes a delegation arrives under",
+  },
+];
+
+type Registration = {
+  target: string;
+  trigger: string;
+  manifest: string;
+  matcher: string | null;
+};
 
 function registrations(distRoot: string, harness: string, harnessDir: string): Registration[] {
   const hooksDir = join(distRoot, harness, harnessDir, "hooks");
@@ -110,7 +152,11 @@ function registrations(distRoot: string, harness: string, harnessDir: string): R
   if (!existsSync(hooksDir)) return out;
   for (const name of readdirSync(hooksDir).filter((n) => n.endsWith(".json")).sort()) {
     const parsed = JSON.parse(readFileSync(join(hooksDir, name), "utf-8")) as {
-      hooks?: Array<{ trigger?: unknown; action?: { command?: unknown } }>;
+      hooks?: Array<{
+        trigger?: unknown;
+        matcher?: unknown;
+        action?: { command?: unknown };
+      }>;
     };
     for (const hook of parsed.hooks ?? []) {
       const command = hook.action?.command;
@@ -119,7 +165,14 @@ function registrations(distRoot: string, harness: string, harnessDir: string): R
       const match = command.match(
         new RegExp(`engine adapter ${harness}\\s+([a-z][a-z0-9-]*)`),
       );
-      if (match) out.push({ target: match[1], trigger, manifest: name });
+      if (match) {
+        out.push({
+          target: match[1],
+          trigger,
+          manifest: name,
+          matcher: typeof hook.matcher === "string" ? hook.matcher : null,
+        });
+      }
     }
   }
   return out;
@@ -192,6 +245,26 @@ describe("t331 kiro hook wiring contract", () => {
         }
       }
       expect(lonely).toEqual([]);
+    });
+
+    test(`${subject.harness}: a guard's matcher covers every tool it must be able to see`, () => {
+      const regs = registrations(distRoot, subject.harness, subject.harnessDir);
+      const blind: string[] = [];
+      for (const want of REQUIRED_MATCHER_TOOLS) {
+        const matching = regs.filter((r) => r.target === want.target);
+        if (matching.length === 0) {
+          blind.push(`${want.target} is not registered at all (${want.why})`);
+          continue;
+        }
+        for (const tool of want.tools) {
+          // A registration with no matcher matches every tool, per the schema.
+          const seen = matching.some((r) =>
+            r.matcher === null || new RegExp(r.matcher).test(tool)
+          );
+          if (!seen) blind.push(`${want.target} cannot see ${tool} (${want.why})`);
+        }
+      }
+      expect(blind).toEqual([]);
     });
 
     test(`${subject.harness}: every manifest trigger is a documented trigger name`, () => {

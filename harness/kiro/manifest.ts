@@ -106,6 +106,7 @@ const manifest: HarnessManifest = {
     // tool calls; the PostToolUse audit hook sees the same tools and cannot.
     { src: "hooks/aidlc-review-freeze.json", dst: "hooks/aidlc-review-freeze.json" },
     { src: "hooks/aidlc-state-transition-guard.json", dst: "hooks/aidlc-state-transition-guard.json" },
+    { src: "hooks/aidlc-reviewer-scope.json", dst: "hooks/aidlc-reviewer-scope.json" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "settings/mcp.json", dst: "settings/mcp.json" },
     // Authored as dot-gitignore so it does not act as a live ignore inside
