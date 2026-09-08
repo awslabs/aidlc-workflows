@@ -2109,39 +2109,6 @@ async function readStdin(): Promise<string> {
   return bufferedStdin;
 }
 
-async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
-  return await new Promise<string>((resolve) => {
-    const chunks: Buffer[] = [];
-    let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
-    const cleanup = () => {
-      clearTimeout(timeout);
-      process.stdin.off("data", onData);
-      process.stdin.off("end", onEnd);
-      process.stdin.off("error", onError);
-    };
-    const finish = (value: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(value);
-    };
-    const onData = (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    };
-    const onEnd = () => finish(Buffer.concat(chunks).toString("utf-8"));
-    const onError = () => finish("");
-    timeout = setTimeout(() => {
-      process.stdin.pause();
-      finish("");
-    }, timeoutMs);
-    process.stdin.on("data", onData);
-    process.stdin.once("end", onEnd);
-    process.stdin.once("error", onError);
-    process.stdin.resume();
-  });
-}
-
 async function withProjectDir(
   projectDir: string | undefined,
   run: () => Promise<number>,

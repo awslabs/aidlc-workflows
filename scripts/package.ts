@@ -83,7 +83,6 @@ import {
   modelAgentName,
   resolveModelPolicy,
   serializeAgentTiers,
-  writeKiroAgentSurface,
   writeKiroCliSurface,
   writeMarkdownAgentSurface,
 } from "../core/tools/aidlc-model-policy.ts";
@@ -298,37 +297,6 @@ function projectTierFrontmatter(
   return writeMarkdownAgentSurface(s, effective, {
     effortKey: harness === "opencode" ? "variant" : "effort",
   });
-}
-
-// Project the `"model"` field of an authored Kiro agent .json from the tier
-// table. The JSONs stay hand-written (tools, resources, sandbox settings) but
-// the model dial is projection-owned: the authored files carry NO "model"
-// field at all (so nobody edits a value the build would overwrite), and the
-// tier comes from the same-name core/agents/<slug>.md (single source of
-// truth). A pinned tier ADDS the field; a null projected model leaves it
-// absent - the agent-v1 schema documents the fallback ("If not specified,
-// uses the default model"), which is exactly the judgment-tier inherit
-// contract. Files with no core .md counterpart (the aidlc.json orchestrator
-// config) pass through untouched: the orchestrator is not a tier-carrying
-// persona. Never writes any effort-like key - kiro-cli fail-closes on
-// unknown agent-JSON fields.
-function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
-  const name = srcPath.split(sep).join("/").split("/").pop() ?? "";
-  if (!name.endsWith("-agent.json")) return content;
-  const coreMd = join(CORE_ROOT, "agents", name.replace(/\.json$/, ".md"));
-  if (!existsSync(coreMd)) return content;
-  const tier = agentTierFromMd(readFileSync(coreMd, "utf-8"), coreMd);
-  const effective = resolveModelPolicy(
-    null,
-    modelAgentName(name),
-    tier as Tier,
-    "kiro",
-    TIER_CAP,
-  );
-  return Buffer.from(
-    writeKiroAgentSurface(content.toString("utf-8"), effective),
-    "utf-8",
-  );
 }
 
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
@@ -824,12 +792,10 @@ function buildTree(
       harnessKind,
       invoke,
     );
-    if (harnessKind === "kiro") {
-      if (src.startsWith("agents/") && src.endsWith(".json")) {
-        out = projectKiroAgentJson(srcPath, out);
-      } else if (src === "settings/cli.json") {
-        out = projectKiroCliJson(out);
-      }
+    if (harnessKind === "kiro" && src === "settings/cli.json") {
+      // The row's agents are Markdown and carry no model keys, so cli.json is
+      // the only Kiro surface the tier table projects onto.
+      out = projectKiroCliJson(out);
     }
     writeFileSync(outPath, out);
   }

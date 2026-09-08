@@ -1709,20 +1709,14 @@ export function trustFilesForHarness(
     );
   }
   if (harness === "kiro") {
-    const agentsDir = join(projectDir, harnessDir, "agents");
-    if (existsSync(agentsDir)) {
-      files.push(
-        ...readdirSync(agentsDir)
-          .filter((name) => name.endsWith(".json"))
-          .sort()
-          .map((name) => join(agentsDir, name)),
-      );
-    }
+    // Follow the channel that declares commands. Agent surfaces are Markdown and
+    // carry no command, and the 0.12-era `.kiro.hook` manifests are gone; the
+    // standalone `hooks/*.json` manifests are what a host is asked to trust.
     const hooksDir = join(projectDir, harnessDir, "hooks");
     if (existsSync(hooksDir)) {
       files.push(
         ...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(".json") || name.endsWith(".kiro.hook"))
           .sort()
           .map((name) => join(hooksDir, name)),
       );

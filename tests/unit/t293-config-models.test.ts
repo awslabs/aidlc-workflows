@@ -22,7 +22,6 @@ import {
   readAgentTiers,
   resolveModelPolicy,
   writeCodexAgentSurface,
-  writeKiroAgentSurface,
   writeKiroCliSurface,
   writeMarkdownAgentSurface,
   type ModelPolicyRecord,
@@ -265,7 +264,7 @@ describe("t293 model policy resolution", () => {
     expect(
       harnessHonestyNotes(groupPolicy, { "product-lead": "balanced" }, "kiro"),
     ).toEqual([
-      "Kiro cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults, which Kiro CLI reads. Kiro IDE does not read that file, so set its chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
+      "Kiro agents are Markdown and carry no model keys, so neither a per-agent model nor an effort dial has a surface to land on. The per-model effort default in settings/cli.json is projection-owned and read by Kiro CLI only; Kiro IDE reads neither, so set its chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
     ]);
   });
 
@@ -310,18 +309,8 @@ describe("t293 model policy resolution", () => {
       { effortKey: "variant", insertBeforeKeys: ["mode"] },
     )).toBe(opencode);
 
-    const kiroPath = join(
-      DIST,
-      "kiro",
-      ".kiro",
-      "agents",
-      "aidlc-architect-agent.json",
-    );
-    const kiro = readFileSync(kiroPath, "utf-8");
-    expect(writeKiroAgentSurface(
-      kiro,
-      resolveModelPolicy(null, "architect", "judgment", "kiro"),
-    )).toBe(kiro);
+    // The Kiro row ships Markdown agents with no model keys, so there is no
+    // per-agent surface to round-trip; cli.json below is the only one.
 
     const cliPath = join(DIST, "kiro", ".kiro", "settings", "cli.json");
     const cli = readFileSync(cliPath, "utf-8");
@@ -782,7 +771,7 @@ describe("t293 config models CLI", () => {
     ], project, runtimeEnv());
     expect(unsupported.status, unsupported.stdout + unsupported.stderr).toBe(0);
     expect(unsupported.stdout).toContain(
-      "Kiro cannot express group effort dials today",
+      "Kiro agents are Markdown and carry no model keys",
     );
     expect(unsupported.stdout).not.toContain("reviews run slower and cost more");
     const unsupportedPolicy = resolvedPolicy(project, "kiro");
@@ -814,25 +803,30 @@ describe("t293 config models CLI", () => {
       "--yes",
     ], project, runtimeEnv());
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
-    const agent = JSON.parse(
-      readFileSync(
-        join(project, ".kiro", "agents", "aidlc-architect-agent.json"),
-        "utf-8",
-      ),
-    ) as { model?: string };
-    expect(agent.model).toBe("vendor/kiro-model");
+    // The row's agents are Markdown and carry no model keys, so the requested
+    // model is reported as unexpressed rather than written to an agent surface.
+    expect(applied.stdout).toContain("Kiro agents are Markdown and carry no model keys");
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-architect-agent.json"))).toBe(false);
+    // Effort has no surface either, so cli.json keeps its projection-owned
+    // defaults and the requested model never becomes a key.
     const cli = JSON.parse(
       readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8"),
     ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+    expect(cli["chat.modelDefaults"]["vendor/kiro-model"]).toBeUndefined();
+    // The engine pin is this row's own delta; a refresh must not drop it.
     expect(
-      cli["chat.modelDefaults"]["vendor/kiro-model"].output_config?.effort,
-    ).toBe("max");
+      readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8"),
+    ).toContain('"chat.agentEngine": "v3"');
+    // Drift reports the inexpressible request rather than pretending it landed.
     expect(modelPolicySurfaceDrift(
       project,
       ".kiro",
       "kiro",
       resolvedPolicy(project, "kiro"),
-    )).toEqual([]);
+    )).toEqual([
+      "architect: model policy is not expressible on kiro",
+      "architect: effort policy is not expressible on kiro",
+    ]);
   }, 60_000);
   test("global settings roll back when the coordinated project refresh cannot lock", () => {
     const project = install("claude");
