@@ -143,7 +143,7 @@ impact-estimated fix identified):
    Root-cause stage / Planned fix / Estimated impact) to test-results.md and a matching
    Deviations entry to this stage's memory.md.
 2. Execute the jump through the ENGINE: run
-   `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts next --stage code-generation`.
+   `{{INVOKE}} engine orchestrate next --stage code-generation`.
    The engine validates the target and answers with a `print` directive naming
    the exact `aidlc-jump.ts execute --target code-generation --direction
    backward --scope <scope>` command; run that printed command verbatim (it

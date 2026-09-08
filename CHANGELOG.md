@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-09
+
+Finish moving the shipped stage prose onto the single `aidlc` dispatcher command. Forty-one hand-authored command examples still used the pre-2.7 per-tool form (`bun <harness-dir>/tools/aidlc-<tool>.ts <verb>`), which renders verbatim on a native install and fails when `bun` is not on PATH; they now render through the dispatcher (`aidlc engine <noun> <verb>` natively, `bun <harness-dir>/tools/aidlc.ts engine <noun> <verb>` on a copy install). **Upgrade:** replace the `dist/<harness>/` tree or run `aidlc update`; no workflow state migration is required.
+
+* Native installs no longer depend on `bun` for the `log`, `review-brief`, `orchestrate`, `knowledge`, `testing-posture`, `state`, `workspace`, and `worktree` commands named in the Ensemble, Reviewer, Swarm, Construction, Code Generation, Intent Capture, Requirements Analysis, Delivery Planning, Reverse Engineering, and `aidlc-knowledge` prose; copy-install behavior is unchanged. The Kiro IDE conductor's shell allowlist now matches the dispatcher form on both channels.
+
 ## [2.8.1] - 2026-09-08
 
 Fix two defects found while exercising the 2.8.0 native install on Linux and Windows: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, and `aidlc update` on an already-current install failed its integrity check under a normal shell umask. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`; no project changes are required, and `aidlc config` refreshes projects when convenient.

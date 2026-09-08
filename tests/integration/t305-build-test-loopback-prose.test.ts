@@ -213,7 +213,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
 
   test("autonomous procedure routes the jump through the ENGINE, not a hand-composed execute", () => {
     // Step 2 names the engine invocation…
-    expect(CONSTRUCTION_PROTOCOL).toContain("tools/aidlc-orchestrate.ts next --stage code-generation`");
+    expect(CONSTRUCTION_PROTOCOL).toContain("engine orchestrate next --stage code-generation`");
     // …which answers with the validated jump print the conductor runs verbatim.
     expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction\n   backward --scope <scope>`");
     expect(CONSTRUCTION_PROTOCOL).toContain("run that printed command verbatim");

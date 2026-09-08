@@ -394,7 +394,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 - Continue until all questions are answered
 - **Consolidated summary before generation**: After all questions have been
   answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). Then run
-  `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
+  `{{INVOKE}} engine review-brief summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
   add `--unit "<directive.unit>"` on a per-unit stage. Print its compact
   decision brief verbatim before presenting this structured question. The brief
   names the stage, the questions file and artifacts being confirmed, why
@@ -623,7 +623,7 @@ answer; only the human's next interaction may be followed by `answer`.
 
 State and audit updates use the CLI tools in `{{HARNESS_DIR}}/tools/`. These tools handle atomic read-modify-write, timestamp generation, and audit formatting internally. Do NOT use Edit or Write for these updates — those tools show diffs that create visual noise.
 
-**CWD drift warning**: If a stage runs `cd` in Bash (e.g., `cd todo-app/server && npm install`), subsequent `bun {{HARNESS_DIR}}/tools/...` calls using relative paths will fail with "Module not found". Always use absolute paths to the tools directory for tool calls (on Claude Code, `$CLAUDE_PROJECT_DIR/.claude/tools/`), or run `cd` commands in subshells: `(cd subdir && npm install)`.
+**CWD drift warning**: If a stage runs `cd` in Bash (e.g., `cd todo-app/server && npm install`), subsequent `{{INVOKE}} ...` calls using relative paths will fail with "Module not found". Always use absolute paths to the tools directory for tool calls (on Claude Code, `$CLAUDE_PROJECT_DIR/.claude/tools/`), or run `cd` commands in subshells: `(cd subdir && npm install)`.
 
 **Checkpoint updates** (aidlc-state.md):
 ```bash

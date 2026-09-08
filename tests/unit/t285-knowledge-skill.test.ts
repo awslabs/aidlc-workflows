@@ -168,13 +168,18 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       test(`${h.name}: the tool path in the prose RESOLVES in the shipped layout`, () => {
         const text = readFileSync(join(REPO, h.root, h.skill), "utf-8");
         // Every invocation the skill prints, not just the first: a skill can get
-        // one path right and another wrong.
-        const refs = [...new Set(text.match(/bun (\S*tools\/aidlc-\S+\.ts)/g) ?? [])]
+        // one path right and another wrong. The copy channel renders `{{INVOKE}}`
+        // as `bun <harnessDir>/tools/aidlc.ts`, so the path named is the
+        // dispatcher; the verbs must reach the knowledge tool through it.
+        const refs = [...new Set(text.match(/bun (\S*tools\/aidlc\S*\.ts)/g) ?? [])]
           .map((m) => m.replace(/^bun /, ""));
         expect(refs.length, "the skill names no tool to run").toBeGreaterThan(0);
         for (const ref of refs) {
           expect(existsSync(join(REPO, h.root, ref)), `${h.name}: ${ref} does not resolve`).toBe(true);
         }
+        expect(text, `${h.name}: the skill does not route through the knowledge noun`).toContain(
+          "tools/aidlc.ts engine knowledge ",
+        );
       });
 
       test(`${h.name}: no unsubstituted {{HARNESS_DIR}} token survives`, () => {
@@ -487,7 +492,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
     test("the RELATIVE path shape the skill prints actually resolves [dry-run regression]", () => {
       const text = readFileSync(join(REPO, "core", "skills", "aidlc-knowledge", "SKILL.md"), "utf-8");
       // Every relative documents/ path the skill hands an LLM, from any verb.
-      const shapes = [...text.matchAll(/aidlc-knowledge\.ts \S+(?:\s+\S+)*?\s(\S*knowledge\/documents\/\S+)/g)]
+      const shapes = [...text.matchAll(/engine knowledge \S+(?:\s+\S+)*?\s(\S*knowledge\/documents\/\S+)/g)]
         .map((m) => m[1])
         .filter((s) => !s.startsWith("/"));
       expect(shapes.length, "the skill prints no relative documents/ path to check").toBeGreaterThan(0);

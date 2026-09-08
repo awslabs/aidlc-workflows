@@ -188,9 +188,9 @@ builds.
 The several-teams choice requires the unit-first order above. If the plan is not
 already unit-major, explain that prerequisite and confirm switching before
 recording:
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`,
+`{{INVOKE}} engine state set-construction-iteration unit-major`,
 then
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-ownership team`. Team ownership
+`{{INVOKE}} engine state set-unit-ownership team`. Team ownership
 requires the workspace root itself to be the source Git repository; intents with
 recorded sibling repos must remain solo.
 For the one-session choice, leave the field absent (the byte-identical default)
@@ -204,7 +204,7 @@ or record `set-unit-ownership solo`.
 > after the unit's design and code are complete."
 
 Record the answer with
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-gate-rhythm per-stage` or
+`{{INVOKE}} engine state set-unit-gate-rhythm per-stage` or
 `... unit-end`. If the field is absent under team ownership, `per-stage` is the
 default. These names are tool vocabulary; present the plain-language choices,
 not the field or enum names.

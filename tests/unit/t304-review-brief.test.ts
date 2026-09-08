@@ -952,9 +952,9 @@ describe("t304 protocol and harness projections use the deterministic renderer",
       ),
       "utf-8",
     );
-    expect(stageProtocol).toContain("aidlc-review-brief.ts summary");
-    expect(reviewerProtocol).toContain("aidlc-review-brief.ts context");
-    expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
+    expect(stageProtocol).toContain("engine review-brief summary");
+    expect(reviewerProtocol).toContain("engine review-brief context");
+    expect(reviewerProtocol).toContain("engine review-brief review");
     expect(reviewerProtocol).toContain("--reject-finding");
   });
 });

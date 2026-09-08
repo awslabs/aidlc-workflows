@@ -78,11 +78,11 @@ describe("t329 project-description and document-input boundaries", () => {
       join("core", "aidlc-common", "stages", "inception", "requirements-analysis.md"),
     ]) {
       const body = readFileSync(join(REPO_ROOT, file), "utf-8");
-      expect(body).toContain("aidlc-utility.ts project-description`");
+      expect(body).toContain("engine workspace project-description`");
       expect(body).toContain("aidlc-state.md#Project");
       expect(body).toContain("Do not reconstruct the description");
       expect(body).toContain("<record>/.aidlc-document-input-path");
-      expect(body).toContain("aidlc-utility.ts document-input`");
+      expect(body).toContain("engine workspace document-input`");
       expect(body).toContain("Never interpolate a customer-chosen path");
       expect(body).toContain("Never search recursively");
       expect(body).toContain("<document>...</document>");

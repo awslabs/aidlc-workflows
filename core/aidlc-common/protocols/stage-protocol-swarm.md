@@ -12,7 +12,7 @@ This rule is self-contained so a fresh session cannot repeat reviews after
 losing the earlier swarm conversation.
 
 **Post-finalize source landing.** After every `finalize` call, before `next` or
-the human gate, run `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug
+the human gate, run `{{INVOKE}} engine worktree merge --slug
 <that converged result row's bolt_slug> --target <the same base branch used by
 prepare> --strategy squash` for each result row whose status is `converged` and
 which is absent from `merge_failures`. The merge recovers the creating
