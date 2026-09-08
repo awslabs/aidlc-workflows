@@ -44,6 +44,9 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+  async delete(path, params) {
+    return request(api.url(path, params), { method: "DELETE" });
+  },
   async text(path, params) {
     const response = await fetch(api.url(path, params));
     if (response.status === 401) {

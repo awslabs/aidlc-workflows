@@ -209,6 +209,11 @@ import {
   classifyStateVersion,
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
+  activeSpace,
+  allPendingIntentRequests,
+  intentEffortLabel,
+  pendingIntentRequestForText,
+  type PendingIntentRequest,
 } from "./aidlc-lib.ts";
 import {
   cachedUnitClaimOverview,
@@ -1463,6 +1468,8 @@ function costClause(scope: string, projectDir: string): string {
 
 interface ParsedFlags {
   scope?: string;
+  /** A review-UI request a bare `next` picked up: its text and scope stand in for typed arguments. */
+  request?: PendingIntentRequest & { space: string };
   positionalScope?: string; // leading valid scope token (e.g. `/aidlc bugfix Fix the crash`)
   stage?: string;
   phase?: string;
@@ -1711,12 +1718,26 @@ function createPrintDirective(
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
+  // A request made in the review UI: creation consumes its envelope (so it
+  // leaves the Inbox exactly when the record exists) and records the effort it
+  // asked for. The request found by id on pickup, or by its exact text when the
+  // conductor reaches creation through the compose or confirm asks.
+  const request = flags.request ?? pendingIntentRequestForText(projectDir, description);
+  if (request) {
+    cmd.push(`--request ${request.id}`);
+    if (request.effort) cmd.push(`--effort ${shellArg(intentEffortLabel(request.effort).replace(/^reviewing (\w+) · writing (\w+)$/, "reviewing=$1,writing=$2"))}`);
+  }
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
   const clause = costClause(scope, projectDir);
   const cost = clause ? ` (${clause})` : "";
-  const runCmd = `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\``;
+  // The request names its workspace; when that is not the active space the
+  // conductor switches first, so the record lands where the human asked.
+  const switchSpace = request && request.space !== activeSpace(projectDir)
+    ? `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts space ${request.space}\` to switch to the requested workspace, then run`
+    : "Run";
+  const runCmd = `${switchSpace} \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\``;
   const directive = flags.newIntent
     ? printDirective(
       `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
@@ -1837,6 +1858,9 @@ function intentPickPromptIfRecordsExist(
   const intents = listIntents(projectDir, space, selection.intent);
   if (intents.length === 0) return null; // zero intents → creation is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
+  // A request from the review UI already IS the human's "start a new intent"
+  // judgement; asking them to pick an existing record would contradict it.
+  if (pendingWork?.description && pendingIntentRequestForText(projectDir, pendingWork.description)) return null;
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // Carry exact record-dir selectors accepted by `intent <name>`. Slugs remain
   // display labels because duplicate labels are legal and ambiguous to switch.
@@ -4240,7 +4264,11 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // scope-confirm `ask` first. No `--init`/`--force` flag reaches the engine.)
 
   // Resolve scope by the precedence ladder before any graph lookup.
-  const { scope, source, error: scopeResolutionError } = resolveScope(stateContent, flags);
+  const resolvedScope = resolveScope(stateContent, flags);
+  // `let`: a review-UI request picked up below (Branch 7c) supplies the scope
+  // the human chose in the browser, exactly as `--scope` would have.
+  let { scope, source } = resolvedScope;
+  const scopeResolutionError = resolvedScope.error;
 
   // Branch 3b — UNCONDITIONAL --scope validation. An explicit `--scope` flag is
   // validated even when state supplies a valid scope that wins the precedence
@@ -4482,6 +4510,27 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     }
     emit(createPrintDirective(flags.positionalScope, flags, pd, flags.intent));
     return;
+  }
+
+  // Branch 7c - a request from the review UI. The human described what to
+  // build in the browser; nothing was typed here. With no workflow active and
+  // nothing typed, the oldest pending request stands in for the typed text (and
+  // its scope for `--scope`), so the branches below route it exactly as
+  // `/aidlc "<text>"` would: explicit scope → creation print (which threads
+  // `--request <id>` so intent-create consumes the envelope), no scope → the
+  // Branch 8 inference asks and the compose offer. `next` stays read-only: the
+  // envelope is only ever removed by intent-create, after the record exists.
+  if (!stateContent && !flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
+    const [oldest] = allPendingIntentRequests(pd);
+    if (oldest) {
+      flags.request = oldest;
+      flags.intent = oldest.text;
+      if (oldest.scope) {
+        flags.scope = oldest.scope;
+        source = "flag";
+        scope = oldest.scope;
+      }
+    }
   }
 
   // Branch 8 - freeform intent with no workflow yet (SKILL.md:355-362). The

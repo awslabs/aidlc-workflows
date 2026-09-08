@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
@@ -22634,6 +22634,138 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
 }
 
 // --- Timestamp ---
+
+// ---------------------------------------------------------------------------
+// Pending intent requests - an intent asked for from the review UI, before any
+// session has picked it up. NOT a record: no state file, no registry row, no
+// audit - creating those is the conductor's move (`intent-create`), which must
+// run inside a session. The request is a workspace-level envelope the browser
+// writes and a bare `/aidlc` (`next` with nothing typed) picks up: it emits the
+// same creation or compose directive the typed text would have, threading the
+// request id so `intent-create` consumes the envelope only once creation
+// actually succeeded. Kept per space beside the registry, gitignored (transient,
+// per machine).
+// ---------------------------------------------------------------------------
+export const PENDING_INTENT_REQUESTS_FILE = "pending-intents.json";
+export const INTENT_EFFORT_PRESETS = ["thorough", "balanced", "minimal"] as const;
+export const INTENT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+
+export type IntentEffort =
+  | { preset: (typeof INTENT_EFFORT_PRESETS)[number] }
+  | { reviewing: (typeof INTENT_EFFORT_LEVELS)[number]; writing: (typeof INTENT_EFFORT_LEVELS)[number] };
+
+export interface PendingIntentRequest {
+  id: string;
+  /** The exact words the human typed; the intent's description verbatim. */
+  text: string;
+  /** A shipped scope name, or null for "let the composer decide". */
+  scope: string | null;
+  effort: IntentEffort | null;
+  created_at: string;
+  source: "review-ui";
+}
+
+export function pendingIntentRequestsPath(projectDir: string, space: string): string {
+  return join(intentsDir(projectDir, space), PENDING_INTENT_REQUESTS_FILE);
+}
+
+export function readPendingIntentRequests(projectDir: string, space: string): PendingIntentRequest[] {
+  try {
+    const parsed = JSON.parse(readFileSync(pendingIntentRequestsPath(projectDir, space), "utf-8")) as { requests?: unknown };
+    if (!Array.isArray(parsed.requests)) return [];
+    return parsed.requests.filter(
+      (entry): entry is PendingIntentRequest =>
+        typeof entry === "object" && entry !== null && typeof (entry as PendingIntentRequest).id === "string" && typeof (entry as PendingIntentRequest).text === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writePendingIntentRequests(projectDir: string, space: string, requests: PendingIntentRequest[]): void {
+  const path = pendingIntentRequestsPath(projectDir, space);
+  if (requests.length === 0) {
+    try {
+      unlinkSync(path);
+    } catch {
+      // already gone
+    }
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify({ version: 1, requests }, null, 2)}\n`);
+}
+
+/** Append a request under the workspace lock; returns the stored request. */
+export function appendPendingIntentRequest(
+  projectDir: string,
+  space: string,
+  request: Omit<PendingIntentRequest, "id" | "created_at" | "source">,
+): PendingIntentRequest {
+  const stored: PendingIntentRequest = {
+    id: `req-${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`,
+    text: request.text,
+    scope: request.scope,
+    effort: request.effort,
+    created_at: new Date().toISOString(),
+    source: "review-ui",
+  };
+  withAuditLock(projectDir, () => {
+    writePendingIntentRequests(projectDir, space, [...readPendingIntentRequests(projectDir, space), stored]);
+  });
+  return stored;
+}
+
+/** Remove one request (by id) from whichever space holds it; true when found. */
+export function removePendingIntentRequest(projectDir: string, id: string): boolean {
+  let removed = false;
+  withAuditLock(projectDir, () => {
+    for (const space of listSpaces(projectDir)) {
+      const requests = readPendingIntentRequests(projectDir, space.name);
+      if (!requests.some((entry) => entry.id === id)) continue;
+      writePendingIntentRequests(projectDir, space.name, requests.filter((entry) => entry.id !== id));
+      removed = true;
+    }
+  });
+  return removed;
+}
+
+/** Every pending request across the project's spaces, oldest first, each tagged with its space. */
+export function allPendingIntentRequests(projectDir: string): Array<PendingIntentRequest & { space: string }> {
+  const all: Array<PendingIntentRequest & { space: string }> = [];
+  for (const space of listSpaces(projectDir)) {
+    for (const request of readPendingIntentRequests(projectDir, space.name)) all.push({ ...request, space: space.name });
+  }
+  return all.sort((left, right) => left.created_at.localeCompare(right.created_at));
+}
+
+/** The pending request whose exact text is `description`, if any - how a later creation finds the envelope it fulfils. */
+export function pendingIntentRequestForText(projectDir: string, description: string | undefined): (PendingIntentRequest & { space: string }) | null {
+  if (!description) return null;
+  const wanted = description.trim();
+  return allPendingIntentRequests(projectDir).find((request) => request.text.trim() === wanted) ?? null;
+}
+
+/** "balanced" or "reviewing high · writing low" - the state file's Effort field. */
+export function intentEffortLabel(effort: IntentEffort | null | undefined): string {
+  if (!effort) return "";
+  if ("preset" in effort) return effort.preset;
+  return `reviewing ${effort.reviewing} · writing ${effort.writing}`;
+}
+
+/** Parse the `--effort` flag as `intent-create` receives it: a preset name, or `reviewing=<l>,writing=<l>`. */
+export function parseIntentEffort(raw: string | undefined): IntentEffort | null {
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase();
+  if ((INTENT_EFFORT_PRESETS as readonly string[]).includes(value)) return { preset: value as IntentEffort extends { preset: infer P } ? P : never } as IntentEffort;
+  const parts = Object.fromEntries(value.split(",").map((part) => part.split("=").map((piece) => piece.trim())));
+  const reviewing = parts.reviewing;
+  const writing = parts.writing;
+  if ((INTENT_EFFORT_LEVELS as readonly string[]).includes(reviewing) && (INTENT_EFFORT_LEVELS as readonly string[]).includes(writing)) {
+    return { reviewing, writing } as IntentEffort;
+  }
+  throw new Error(`Unknown effort "${raw}". Use ${INTENT_EFFORT_PRESETS.join(", ")}, or reviewing=<level>,writing=<level> with levels ${INTENT_EFFORT_LEVELS.join(", ")}.`);
+}
 
 export function isoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");

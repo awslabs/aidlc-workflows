@@ -37,6 +37,12 @@ import {
   stageDir,
   type StageEntry,
   stateFilePath,
+  appendPendingIntentRequest,
+  INTENT_EFFORT_LEVELS,
+  INTENT_EFFORT_PRESETS,
+  type IntentEffort,
+  removePendingIntentRequest,
+  validScopes,
 } from "./aidlc-lib.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -53,6 +59,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   consumeReviewUiOpenNonce,
   nextSequence,
+  parseQuestionsMarkdown,
   readCurrentPointer,
   readManifest,
   pendingAnswerFiles,
@@ -77,7 +84,6 @@ import {
   injectBridge,
   isReviewHiddenPath,
   lineDiff,
-  parseQuestionsMarkdown,
   PathConfinementError,
   renderFeedbackMarkdown,
   renderMarkdown,
@@ -1247,6 +1253,98 @@ function appendHumanTurn(projectDir: string, file: string): void {
   }
 }
 
+// --- Intent requests -------------------------------------------------------
+//
+// The browser asks for a new intent; the daemon records the request as a
+// pending envelope beside the space's registry (see aidlc-lib.ts). It creates
+// no record and no state: that is the conductor's move, made when a bare
+// `/aidlc` in a session picks the request up. Withdrawing removes the envelope.
+
+const MAX_INTENT_REQUEST_BODY_BYTES = 32 * 1024;
+const MAX_INTENT_TEXT_CHARS = 4000;
+const SPACE_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
+
+interface IntentRequestBody {
+  text: string;
+  space?: string;
+  scope?: string | null;
+  effort?: unknown;
+}
+
+function parseEffortBody(value: unknown): IntentEffort | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object") throw new HttpError(400, "invalid effort");
+  const record = value as Record<string, unknown>;
+  if (typeof record.preset === "string") {
+    if (!(INTENT_EFFORT_PRESETS as readonly string[]).includes(record.preset)) throw new HttpError(400, "unknown effort preset");
+    return { preset: record.preset as IntentEffort extends { preset: infer P } ? P : never } as IntentEffort;
+  }
+  const levels = INTENT_EFFORT_LEVELS as readonly string[];
+  if (typeof record.reviewing === "string" && typeof record.writing === "string" && levels.includes(record.reviewing) && levels.includes(record.writing)) {
+    return { reviewing: record.reviewing, writing: record.writing } as IntentEffort;
+  }
+  throw new HttpError(400, "invalid effort");
+}
+
+async function readJsonBody(request: Request, maximum: number): Promise<unknown> {
+  const bytes = await limitedRequestBytes(request, maximum);
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new HttpError(400, "invalid JSON");
+  }
+}
+
+function requireSpace(projectDir: string, name: string | undefined): string {
+  const space = name === undefined ? activeSpace(projectDir) : name;
+  if (!SPACE_NAME.test(space)) throw new HttpError(400, "invalid workspace name");
+  if (!existsSync(join(spacesRoot(projectDir), space))) throw new HttpError(404, `unknown workspace "${space}"`);
+  return space;
+}
+
+async function intentRequestResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
+  const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as Partial<IntentRequestBody> | null;
+  if (!body || typeof body !== "object" || typeof body.text !== "string") throw new HttpError(400, "invalid intent request");
+  const text = body.text.replace(/\r\n?/g, "\n").trim();
+  if (!text) throw new HttpError(400, "describe what to build");
+  if (text.length > MAX_INTENT_TEXT_CHARS) throw new HttpError(400, `intent text over ${MAX_INTENT_TEXT_CHARS} characters`);
+  const space = requireSpace(projectDir, typeof body.space === "string" ? body.space : undefined);
+  let scope: string | null = null;
+  if (body.scope !== undefined && body.scope !== null) {
+    if (typeof body.scope !== "string" || !validScopes().has(body.scope)) throw new HttpError(400, "unknown workflow");
+    scope = body.scope;
+  }
+  const effort = parseEffortBody(body.effort);
+  const stored = appendPendingIntentRequest(projectDir, space, { text, scope, effort });
+  publishState();
+  return json({ id: stored.id, space, created_at: stored.created_at }, 201);
+}
+
+function withdrawIntentRequestResponse(projectDir: string, url: URL, publishState: () => void): Response {
+  const id = url.searchParams.get("id") || "";
+  if (!/^req-[a-z0-9]+-[a-f0-9]{6}$/.test(id)) throw new HttpError(400, "invalid request id");
+  if (!removePendingIntentRequest(projectDir, id)) throw new HttpError(404, "no such request");
+  publishState();
+  return json({ removed: id });
+}
+
+async function createSpaceResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
+  const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as { name?: unknown } | null;
+  const name = body && typeof body === "object" && typeof body.name === "string" ? body.name.trim().toLowerCase() : "";
+  if (!SPACE_NAME.test(name)) throw new HttpError(400, "workspace names are lowercase letters, digits, and dashes");
+  if (existsSync(join(spacesRoot(projectDir), name))) throw new HttpError(409, `workspace "${name}" already exists`);
+  // The same deterministic move the terminal's `/aidlc space create <name>` runs.
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, join(import.meta.dir, "aidlc-utility.ts"), "space-create", name],
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new HttpError(500, `could not create workspace: ${result.stderr.toString().trim().slice(0, 200)}`);
+  publishState();
+  return json({ space: name }, 201);
+}
+
 async function answersResponse(projectDir: string, request: Request): Promise<Response> {
   const bytes = await limitedRequestBytes(request, MAX_ANSWERS_BODY_BYTES);
   let body: unknown;
@@ -1384,6 +1482,10 @@ async function serve(projectDir: string): Promise<void> {
   let debounce: ReturnType<typeof setTimeout> | null = null;
   const watchers: FSWatcher[] = [];
 
+  // Mutating routes ask for a state push; wired to the watcher's debounce once
+  // it exists below (the write itself also trips the watcher - this is the
+  // belt to that brace, so a tab updates even when the watch is coalescing).
+  let publishState: () => void = () => {};
   const serveOn = (hostname: string, candidatePort: number) => Bun.serve<{ authenticated: true }>({
     hostname,
     port: candidatePort,
@@ -1451,6 +1553,9 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "POST" && url.pathname === "/api/render-fragment") return await renderFragmentResponse(request);
           if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
           if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
+          if (request.method === "POST" && url.pathname === "/api/intents") return await intentRequestResponse(projectDir, request, publishState);
+          if (request.method === "DELETE" && url.pathname === "/api/intents") return withdrawIntentRequestResponse(projectDir, url, publishState);
+          if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
           if (request.method === "POST" && url.pathname === "/api/decision") {
             return await handleDecision(request, {
               projectDir,
@@ -1574,6 +1679,7 @@ async function serve(projectDir: string): Promise<void> {
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(observeState, WATCH_DEBOUNCE_MS);
   };
+  publishState = onWatch;
 
   // Watch the whole spaces root, not just the record that existed at startup:
   // intents created later, `active-intent` switches, and their state files all

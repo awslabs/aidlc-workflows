@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { validateQuestionAnswers } from "../../core/tools/aidlc-review-ui-render.ts";
 import {
   parseQuestionsMarkdown,
-  validateQuestionAnswers,
   type ReviewQuestion,
-} from "../../core/tools/aidlc-review-ui-render.ts";
+} from "../../core/tools/aidlc-review-ui-shared.ts";
 
 const QUESTIONS_MARKDOWN = `# Architecture questions
 

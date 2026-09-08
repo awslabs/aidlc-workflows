@@ -51,7 +51,13 @@ code { font: 12px var(--mono); background: var(--panel); padding: 1px 5px; borde
 @media (prefers-reduced-motion: reduce) {
   .app, .panel { transition: none; }
 }
-.work { min-width: 0; min-height: 0; display: grid; grid-template-rows: var(--header-h) minmax(0, 1fr); }
+/* Header, an optional notice row, then the body takes the rest. The rows are
+   placed explicitly so a shown notice sits in its own auto row instead of
+   claiming the flexible one. */
+.work { min-width: 0; min-height: 0; display: grid; grid-template-rows: var(--header-h) auto minmax(0, 1fr); }
+.work > .header { grid-row: 1; }
+.work > .notice { grid-row: 2; }
+.work > .body { grid-row: 3; }
 .header { display: flex; align-items: center; gap: 12px; padding: 0 14px 0 18px; border-bottom: 1px solid var(--line2); min-width: 0; }
 .body { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--slot-w); }
 .body.slot-hidden { grid-template-columns: minmax(0, 1fr); }

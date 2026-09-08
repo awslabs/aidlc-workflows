@@ -34,6 +34,7 @@ dist-ssr
 aidlc/active-space
 aidlc/.aidlc-active-space-*.tmp
 aidlc/spaces/*/intents/active-intent
+aidlc/spaces/*/intents/pending-intents.json
 #
 # Machine-local runtime / derived — ignored (regenerated per machine).
 # The clone-id token names this clone's audit shard; it MUST stay machine-local

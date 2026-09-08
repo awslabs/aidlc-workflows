@@ -31,9 +31,12 @@ import {
   type AuditShardEvent,
   type IntentRegistryEntry,
   type StageEntry,
+  intentEffortLabel,
+  readPendingIntentRequests,
 } from "./aidlc-lib.ts";
 import {
   listFeedbackFiles,
+  parseQuestionsMarkdown,
   readConsumed,
   readCurrentPointer,
   readManifest,
@@ -43,11 +46,10 @@ import {
   type FeedbackRemarkKind,
   type ReviewManifest,
 } from "./aidlc-review-ui-shared.ts";
-import { parseQuestionsMarkdown } from "./aidlc-review-ui-render.ts";
 import { PLAN_APPROVAL_CHECKPOINT } from "./aidlc-testing-posture.ts";
 
 export type WorkflowStageState = "done" | "current" | "skipped" | "next" | "conditional" | "pending";
-export type WorkflowIntentStatus = "needs-you" | "in-progress" | "done" | "idle";
+export type WorkflowIntentStatus = "needs-you" | "in-progress" | "done" | "idle" | "requested";
 
 export interface WorkflowArtifact {
   name: string;
@@ -124,8 +126,10 @@ export interface WorkflowIntent {
   depth: string | null;
   phase: string | null;
   current_stage: string | null;
-  needs: { kind: "gate" | "questions" | "sensor"; label: string } | null;
+  needs: { kind: "gate" | "questions" | "sensor" | "request"; label: string } | null;
   updated_at: string | null;
+  /** A review-UI request not yet picked up by a session: its exact text and asked-for effort. */
+  request?: { id: string; text: string; effort: string | null };
 }
 
 export interface WorkflowPayload {
@@ -612,6 +616,23 @@ export function workflowPayload(
     const summary = intentSummary(projectDir, selection.space, recordName, entry.slug);
     return summary ? [summary] : [];
   });
+  // Requests made in the review UI that no session has picked up yet: not
+  // records, so they carry no stage or phase - just the words, the workflow
+  // asked for, and the fact that a terminal `/aidlc` is what starts them.
+  for (const request of readPendingIntentRequests(projectDir, selection.space)) {
+    intents.push({
+      slug: request.id,
+      label: request.text.length > 72 ? `${request.text.slice(0, 69).trimEnd()}…` : request.text,
+      status: "requested",
+      scope: request.scope,
+      depth: null,
+      phase: null,
+      current_stage: null,
+      needs: { kind: "request", label: "Waiting for a session" },
+      updated_at: request.created_at,
+      request: { id: request.id, text: request.text, effort: intentEffortLabel(request.effort) || null },
+    });
+  }
   // The payload's `intent` is the record directory name, exactly what
   // `/api/state.intent` reports and what `intent=` accepts; the registry
   // label rides along on each entry as `label`.

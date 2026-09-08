@@ -1,13 +1,14 @@
-// The intent composer - DESIGN PROTOTYPE.
+// The intent composer.
 //
 // The box above the Inbox where a new intent starts: which workspace (a team's
 // world under aidlc/spaces/), what to build, which workflow (a scope, or let
 // the composer decide), and how much effort to spend (a preset from the config
 // policy lane - the preset decides model and effort per agent group - or a
-// custom dial). Every control here is live so the design can be tried; Start
-// does not create anything yet - it names what it would do. The write path
-// (daemon route -> record + state, then the terminal session picks it up) is
-// the implementation step that follows the design.
+// custom dial). Start records a pending request with the daemon (no record, no
+// state - creation is the conductor's move); the next bare `/aidlc` in a
+// terminal session picks the request up and creates the intent as if the words
+// had been typed there.
+import { api } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./diff.js";
 import { setNotice, store } from "./store.js";
@@ -57,7 +58,7 @@ export function renderComposer() {
   const scope = SCOPES.find((entry) => entry.name === draft.scope);
   const preset = PRESETS.find((entry) => entry.id === draft.preset);
   const effortLabel = preset ? preset.label : "Custom";
-  return `<section class="composer" data-prototype="design">
+  return `<section class="composer">
     <div class="composer-top">
       <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="Workspace: one team's world of intents, knowledge, and practices (aidlc/spaces/<name>)">${icon("flowchart", { size: 13 })}<span>Workspace</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
     </div>
@@ -69,7 +70,7 @@ export function renderComposer() {
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
     </div>
   </section>
-  <p class="composer-foot"><span class="composer-proto">Design preview</span> Start does not create an intent yet - it says what it would do.</p>`;
+  <p class="composer-foot">Start records the request here; the next <code>/aidlc</code> in your terminal creates and runs the intent.</p>`;
 }
 
 export function bindComposer(root, rerender) {
@@ -96,10 +97,29 @@ export function bindComposer(root, rerender) {
   }
 }
 
-function start() {
-  const workflow = draft.scope ? `the ${draft.scope} workflow` : "the composer choosing the workflow";
-  const effort = PRESETS.find((entry) => entry.id === draft.preset)?.label.toLowerCase() || "custom";
-  setNotice(`Design preview — Start would create the intent in workspace “${draft.space || store.workflow?.space || "default"}” with ${workflow} at ${effort} effort, then your terminal session picks it up.`, "info");
+let starting = false;
+
+// Start records the request with the daemon. Nothing runs yet: the next bare
+// `/aidlc` in a terminal session picks it up and creates the intent exactly as
+// if the words had been typed there - so the notice says that, in those words.
+async function start() {
+  const text = draft.text.trim();
+  if (!text || starting) return;
+  starting = true;
+  const section = document.querySelector(".composer");
+  section?.classList.add("busy");
+  try {
+    const effort = draft.preset ? { preset: draft.preset } : { reviewing: draft.custom.reviewing, writing: draft.custom.writing };
+    await api.post("/api/intents", { text, space: draft.space || store.workflow?.space || "default", scope: draft.scope, effort });
+    draft.text = "";
+    setNotice("Requested. Type /aidlc in your terminal to start it - the session picks the request up and creates the intent.", "info");
+    store.emit("wants-refresh");
+  } catch (error) {
+    setNotice(`Could not request the intent: ${error.message}`, "error");
+  } finally {
+    starting = false;
+    section?.classList.remove("busy");
+  }
 }
 
 function openMenuFor(anchor, kind, rerender) {
@@ -167,7 +187,20 @@ function effortMenu() {
 
 function bindMenu(menu, kind, rerender) {
   for (const button of menu.querySelectorAll("[data-pick-space]")) button.addEventListener("click", () => { draft.space = button.dataset.pickSpace; closeMenu(); rerender(); });
-  menu.querySelector("[data-new-space]")?.addEventListener("click", () => { closeMenu(); setNotice("Design preview — a new workspace (aidlc/spaces/<name>) would be created here.", "info"); });
+  menu.querySelector("[data-new-space]")?.addEventListener("click", async () => {
+    closeMenu();
+    const name = window.prompt("New workspace name (lowercase letters, digits, dashes):", "");
+    if (!name) return;
+    try {
+      const created = await api.post("/api/spaces", { name: name.trim().toLowerCase() });
+      draft.space = created.space;
+      setNotice(`Workspace “${created.space}” created.`, "info");
+      store.emit("wants-refresh");
+      rerender();
+    } catch (error) {
+      setNotice(`Could not create the workspace: ${error.message}`, "error");
+    }
+  });
   for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; closeMenu(); rerender(); });
   for (const button of menu.querySelectorAll("[data-pick-preset]")) button.addEventListener("click", () => { draft.preset = button.dataset.pickPreset; const entry = PRESETS.find((item) => item.id === draft.preset); draft.custom = { ...entry.efforts }; refreshMenu(menu, kind, rerender); rerender(); });
   for (const select of menu.querySelectorAll("[data-dial-effort]")) select.addEventListener("change", () => {

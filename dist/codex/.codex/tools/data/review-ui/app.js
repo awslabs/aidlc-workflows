@@ -105,6 +105,11 @@ async function boot() {
   connectSocket(() => {
     refresh();
   });
+  // A module that just wrote through the daemon asks for the payload now
+  // rather than waiting for the watcher's push.
+  store.on("wants-refresh", () => {
+    refresh();
+  });
 }
 
 boot();

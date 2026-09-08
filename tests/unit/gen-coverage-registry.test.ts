@@ -1152,6 +1152,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t351-review-ui-questions-routes.test.ts",
     "integration/t352-answers-apply.test.ts",
     "integration/t356-directive-guide-module.test.ts",
+    "integration/t361-review-ui-responses.test.ts",
+    "integration/t362-review-ui-decision.test.ts",
+    "integration/t363-review-ui-intent-requests.test.ts",
     "unit/t354-html-check-guide.test.ts",
   ];
 

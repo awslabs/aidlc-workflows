@@ -1,6 +1,6 @@
 // App rail, per-view header, inbox, and command palette.
 import { api } from "./api.js";
-import { decisionInFlight, relativeTime, store } from "./store.js";
+import { decisionInFlight, relativeTime, setNotice, store } from "./store.js";
 import { icon } from "./icons.js";
 import { bindComposer, closeMenu as closeComposerMenu, renderComposer } from "./composer.js";
 
@@ -40,7 +40,10 @@ function titleCase(value) {
   return String(value || "")
     .split(/[-_]/)
     .filter(Boolean)
-    .map((part, index) => (index > 0 && SMALL_WORDS.has(part.toLowerCase()) ? part.toLowerCase() : part[0]?.toUpperCase() + part.slice(1)))
+    .map((part, index) => {
+      const word = part === part.toUpperCase() ? part.toLowerCase() : part;
+      return index > 0 && SMALL_WORDS.has(word.toLowerCase()) ? word.toLowerCase() : word[0]?.toUpperCase() + word.slice(1);
+    })
     .join(" ");
 }
 
@@ -195,7 +198,11 @@ function openCurrentThing(workflow = store.workflow) {
 }
 
 function needsYouCount() {
-  return (store.workflow?.intents || []).filter((intent) => intent.status === "needs-you" || intent.needs).length;
+  return (store.workflow?.intents || []).filter((intent) => intent.status !== "requested" && (intent.status === "needs-you" || intent.needs)).length;
+}
+
+function requestedCount() {
+  return (store.workflow?.intents || []).filter((intent) => intent.status === "requested").length;
 }
 
 function renderRail() {
@@ -388,7 +395,8 @@ function intentStatus(intent) {
 function intentGroups() {
   const intents = store.workflow?.intents || [];
   return [
-    ["Needs you", intents.filter((intent) => intent.status === "needs-you" || intent.needs)],
+    ["Requested", intents.filter((intent) => intent.status === "requested")],
+    ["Needs you", intents.filter((intent) => intent.status !== "requested" && (intent.status === "needs-you" || intent.needs))],
     ["In progress", intents.filter((intent) => intent.status === "in-progress" || intent.status === "idle")],
     ["Done", intents.filter((intent) => intent.status === "done")],
   ];
@@ -412,7 +420,14 @@ function renderInbox() {
   }
   const needs = needsYouCount();
   const total = (store.workflow.intents || []).length;
+  const requestedRow = (intent) => `<div class="inbox-row requested" data-request="${escapeHtml(intent.request?.id || intent.slug)}">
+      <span class="intent-dot requested"></span>
+      <span class="inbox-main"><b>${escapeHtml(intent.request?.text || intent.label)}</b><small>${escapeHtml(intent.scope ? `${intent.scope} workflow` : "composer decides the workflow")}${intent.request?.effort ? ` · ${escapeHtml(intent.request.effort)} effort` : ""}<em> · ${escapeHtml(relativeTime(intent.updated_at))}</em></small></span>
+      <span class="inbox-status requested" title="Nothing runs until a session picks this up: type /aidlc in your terminal">Waiting · type <code>/aidlc</code> in the terminal</span>
+      <button type="button" class="inbox-withdraw" data-withdraw="${escapeHtml(intent.request?.id || intent.slug)}" title="Withdraw this request" aria-label="Withdraw this request">${icon("dismiss", { size: 13 })}</button>
+    </div>`;
   const row = (intent) => {
+    if (intent.status === "requested") return requestedRow(intent);
     const where = [intent.phase ? titleCase(intent.phase) : null, intent.current_stage ? titleCase(intent.current_stage) : null].filter(Boolean).join(" · ");
     const meta = [intent.scope ? `${intent.scope}${intent.depth ? ` · ${intent.depth.toLowerCase()}` : ""}` : null, relativeTime(intent.updated_at)].filter(Boolean).join(" · ");
     return `<button type="button" class="inbox-row ${intent.status || "idle"}" data-intent="${escapeHtml(intent.slug)}">
@@ -428,11 +443,11 @@ function renderInbox() {
       <header class="inbox-heading">
         <h1>Inbox</h1>
         <span class="inbox-tagline">${total ? `${total} ${total === 1 ? "intent" : "intents"} in this workspace` : "Human moments across every intent in this workspace"}</span>
-        <b class="${needs ? "needs" : ""}">${needs ? `${needs} ${needs === 1 ? "needs" : "need"} you` : "Nothing waiting"}</b>
+        <b class="${needs ? "needs" : ""}">${needs ? `${needs} ${needs === 1 ? "needs" : "need"} you` : requestedCount() ? `${requestedCount()} requested` : "Nothing waiting"}</b>
       </header>
       ${total === 0
         ? `<div class="inbox-empty">${icon("mailInbox", { size: 22 })}<b>No intents yet</b><span>Describe what you want to build above. Everything that needs a decision from you will land here.</span></div>`
-        : groups.filter(([, intents]) => intents.length).map(([label, intents]) => `<section class="inbox-group ${label === "Needs you" ? "needs" : ""}"><h2>${label}<span>${intents.length}</span></h2>${intents.map(row).join("")}</section>`).join("")}
+        : groups.filter(([, intents]) => intents.length).map(([label, intents]) => `<section class="inbox-group ${label === "Needs you" ? "needs" : label === "Requested" ? "requested" : ""}"><h2>${label}<span>${intents.length}</span></h2>${intents.map(row).join("")}</section>`).join("")}
     </section>
   </div>`;
   bindComposer(inbox, renderInbox);
@@ -571,7 +586,18 @@ export function init() {
     const picker = event.target.closest("[data-picker-kind]");
     if (picker) handlePicker(picker);
   });
-  inbox.addEventListener("click", (event) => {
+  inbox.addEventListener("click", async (event) => {
+    const withdraw = event.target.closest("[data-withdraw]")?.dataset.withdraw;
+    if (withdraw) {
+      try {
+        await api.delete("/api/intents", { id: withdraw });
+        setNotice("Request withdrawn.", "info");
+        store.emit("wants-refresh");
+      } catch (error) {
+        setNotice(`Could not withdraw: ${error.message}`, "error");
+      }
+      return;
+    }
     const slug = event.target.closest("[data-intent]")?.dataset.intent;
     if (slug) selectIntent(slug);
   });

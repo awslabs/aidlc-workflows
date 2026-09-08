@@ -239,12 +239,33 @@ produced, ask for it at the stage's approval gate with **Request changes** (or,
 before generation, at the consolidated-summary confirmation). The browser never
 rewrites the canonical questions file.
 
+### Start an intent from the browser
+
+The box above the Inbox starts a new intent. Choose the **Workspace** (the
+space it lives in; **New workspace…** creates one), describe what you want to
+build, pick a **Workflow** — a named scope, or *Let the composer decide*, which
+proposes one from your words and asks once — and an **Effort** preset
+(*Thorough · Balanced · Minimal*; the preset sets the effort for each agent
+group, and the menu shows what it means). **Start** (or ⌘↵) records the request.
+
+Nothing runs yet: creating an intent is the conductor's move, made inside a
+session. The request appears in the Inbox under **Requested** with *Waiting ·
+type `/aidlc` in the terminal*; the next bare `/aidlc` in a session with no
+active workflow picks the oldest request up exactly as if you had typed its
+words there — creating the record with the chosen workflow and effort (the
+record's `Effort` field), then continuing into the first stage. A request with
+*Let the composer decide* goes through the same inference and compose asks a
+typed description would. The **×** on a requested row withdraws it. A session
+that already has an active workflow does not pick requests up; park or finish
+that intent first. Requests are kept per workspace in
+`aidlc/spaces/<space>/intents/pending-intents.json` (gitignored).
+
 ### Inbox and search
 
-**Inbox** groups every intent in the workspace by what needs you, what is in
-progress, and what is done. Choosing an intent opens its current item. The
-terminal equivalent is `/aidlc intent` plus `/aidlc --status` for the selected
-intent.
+**Inbox** groups every intent in the workspace by what is requested, what needs
+you, what is in progress, and what is done. Choosing an intent opens its current
+item. The terminal equivalent is `/aidlc intent` plus `/aidlc --status` for the
+selected intent.
 
 Choose the rail's **Search or jump · ⌘K** control or press `⌘K` to search
 intents, stages, files, and actions.

@@ -91,8 +91,9 @@ itself, so state the summary and generate. Run
 `aidlc-review-brief.ts summary` (print the brief above its separator; the fenced
 spec below it is the widget) and the checkpoint `aidlc-log.ts decision`, which
 writes the `## Consolidated Summary Confirmation` entry in the questions file
-when it is missing (the summary, the prompt, both options without A/B
-file-letter prefixes, and a blank `[Answer]:` tag) - never write it by hand -
+when it is missing (the summary, the prompt,
+both options without A/B file-letter prefixes, and a blank `[Answer]:` tag) -
+never write it by hand -
 then render this numbered question in chat:
 
 ```

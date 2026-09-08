@@ -33,6 +33,7 @@ dist-ssr
 # navigation into shared state and cause conflicts on intent creation and cursor switches).
 aidlc/active-space
 aidlc/spaces/*/intents/active-intent
+aidlc/spaces/*/intents/pending-intents.json
 #
 # Machine-local runtime / derived — ignored (regenerated per machine).
 # The clone-id token names this clone's audit shard; it MUST stay machine-local

@@ -109,6 +109,23 @@ A `0600` file whose body is the ISO expiration time. It is a single-use,
 30-minute capability: successful `GET /open/<nonce>` deletes the file before
 setting the session cookie. Expired nonces are swept when a new one is minted.
 
+### Pending intent requests
+
+#### `aidlc/spaces/<space>/intents/pending-intents.json`
+
+An intent asked for in the browser before any session has picked it up. Not a
+record: `{version: 1, requests: [{id, text, scope|null, effort|null, created_at,
+source: "review-ui"}]}`, written by the daemon under the workspace lock and
+gitignored. `/api/workflow` merges each request into `intents` with
+`status: "requested"` and `needs: {kind: "request"}`. The engine's `next`, with
+no state file and nothing typed, takes the oldest request as the typed text (and
+its scope as `--scope`): an explicit scope reaches the creation print directly,
+a null scope takes the Branch 8 inference asks, and `createPrintDirective`
+threads `--request <id>` (by id on pickup, by exact text when the conductor
+reaches creation through the compose or confirm asks) plus `--effort`. `next`
+stays read-only; `intent-create` removes the envelope only after the record
+exists and records the effort in the state file's `Effort` field.
+
 ### Record pointer
 
 #### `<record>/.review-ui/current.json`
@@ -386,6 +403,9 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /api/export?path=&intent=` | Cookie/header | Self-contained HTML attachment |
 | `GET /api/questions?path=&intent=` | Cookie/header | Parsed questions, answers, notes, confirmation flags, and source digest for the selected current question target |
 | `POST /api/answers` | Cookie/header | Active intent only. Validate submission/digest, write `answers-NNN.json`, return `{file}`; stale digest is 409 `{error:"questions file changed; reload"}` |
+| `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, effort?: {preset}\|{reviewing,writing}}`. Records a pending intent request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock; no record, state, or audit is created. Returns 201 `{id, space, created_at}`; unknown workflow/effort 400, unknown workspace 404 |
+| `DELETE /api/intents?id=` | Cookie/header | Withdraws a pending request; 404 when none |
+| `POST /api/spaces` | Cookie/header | Body `{name}` (lowercase letters, digits, dashes). Runs the same `space-create` move as the terminal; 409 when it exists |
 | `POST /api/decision` | Cookie/header | Active intent only. Exact body `{stage,unit,revision,decision:"approve"|"request-changes",notes?}`; validate exact current target and `awaiting-approval`, write `decision-NNN.json`, append browser `HUMAN_TURN`, return `{file}`. Stale or closed gates return 409 |
 | `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after watched record changes |
 

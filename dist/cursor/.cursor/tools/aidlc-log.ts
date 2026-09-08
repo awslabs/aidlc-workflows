@@ -104,9 +104,9 @@ import {
   closeHumanRound,
   openQuestionsRound,
   publishConfirmationRound,
+  parseQuestionsMarkdown,
   reviewUiEnabled,
 } from "./aidlc-review-ui-shared.ts";
-import { parseQuestionsMarkdown } from "./aidlc-review-ui-render.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no

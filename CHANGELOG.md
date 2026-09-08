@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-08
+
+Start intents from the browser, and a rail that reads like a reviewed document. Upgrade by copying the new `dist/<harness>/` tree; add `aidlc/spaces/*/intents/pending-intents.json` to an existing project's `.gitignore` (the shipped `.gitignore` has it).
+
+* **Start an intent from the browser.** The box above the Inbox takes a workspace, what to build, a workflow (a named scope or *Let the composer decide*), and an effort preset (*Thorough · Balanced · Minimal*, or a per-group dial). **Start** records a pending request (`POST /api/intents`; `pending-intents.json` beside the registry, gitignored) — no record or state yet. It shows in the Inbox under **Requested**; the next bare `/aidlc` in a session with no active workflow picks it up as if the words had been typed, creating the record with the chosen scope and an `Effort` field, and consuming the request only once the record exists. **×** withdraws a request (`DELETE /api/intents?id=`). **New workspace…** creates a space (`POST /api/spaces`).
+* **Inbox page redesigned.** One column: the composer, then the Inbox with an intent count and a *need you* pill; groups show only when they have intents (Requested, Needs you, In progress, Done); rows carry phase · stage · scope · depth · when and a pill for what needs you.
+* **Threads read like a reviewed document.** Cards share one anatomy — the quote (or, for an edit, the change itself: *wants → **wants***, removed words struck, added words highlighted) beside a bar in the kind's colour, *You · when*, the body as text, then the state and the action. State is said once: *Not sent*, *Sent · r0*, *Applied/Kept/Answered in r1* (the agent's reply above it), *Resolved* (faded; leaves the page; *Re-open*). *Remove* and *Undo edit* are icons. Edit summaries understand Markdown formatting (bold, italic, strikethrough, code, links, headings, lists, quotes). The rail's *In document order* orders pending and sent threads together by position.
+* **Selection and badges follow the reference editor.** Clicking a margin badge, marked text, or a card selects one thread (blue ring; a grouped badge selects all its threads) and brings up Threads; the document stays put. Badges are outlined pills with a speech bubble and count (violet pencil for edits, amber for comments), placed beside their lines. Comments are written in a popover at the text (Cancel / Comment) and posted straight to the rail. Emoji reactions on every card and agent reply.
+* **Working indicator.** A spinner beside the current stage (rail and header) while the daemon reports the agent writing or revising it.
+* Fixes: pending comments no longer leak between intents at the same stage and revision; a typed edit survives view switches and daemon refreshes (a routine refresh no longer re-renders an unchanged document); the caret's comment trigger anchors to the caret's visual line and clears the badges on it; the notice bar takes its own row.
+
 ## [2.8.1] - 2026-09-06
 
 Fixes from driving two complete express workflows through the browser with a live Claude Code session — answering question rounds, reviewing and editing artifacts, and requesting changes — plus the editing and commenting parity work. Upgrade by copying the new `dist/<harness>/` tree; no record migration.

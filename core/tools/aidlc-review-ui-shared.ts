@@ -1041,3 +1041,217 @@ export async function ensureReviewUiDaemon(
   }
   return readServerInfo(projectDir, env);
 }
+
+// ---- Questions-file contract: `<slug>-questions.md` sections, options, and tags.
+// Shared by aidlc-log (the writer/reader in every install), the daemon, and the
+// workflow payload; the renderer imports it from here.
+
+export interface ReviewQuestionOption {
+  letter: string | null;
+  text: string;
+}
+
+export interface ReviewQuestion {
+  id: string;
+  title: string;
+  prompt: string;
+  options: ReviewQuestionOption[];
+  multi: boolean;
+  answer: string | null;
+  note: string | null;
+  confirmation: boolean;
+}
+
+interface MarkdownSectionLine {
+  text: string;
+  structural: boolean;
+}
+
+interface MarkdownH2Section {
+  title: string;
+  body: MarkdownSectionLine[];
+}
+
+const QUESTION_TITLE = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/;
+const ANSWER_LINE = /^\[Answer\]:[ \t]*(.*)$/;
+const NOTE_LINE = /^\[Note\]:[ \t]*(.*)$/;
+const OPTION_LINE = /^([A-Z])\.\s+(.*)$/;
+const SUMMARY_CONFIRMATION_TITLE = "Consolidated Summary Confirmation";
+
+function atxH2Title(line: string): string | null {
+  const match = /^ {0,3}##(?:[ \t]+(.*)|[ \t]*)$/.exec(line);
+  if (match === null) return null;
+  return (match[1] ?? "").replace(/[ \t]+#+[ \t]*$/, "").trim();
+}
+
+function markdownH2Sections(source: string): MarkdownH2Section[] {
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const sections: MarkdownH2Section[] = [];
+  let current: MarkdownH2Section | null = null;
+  let fenceCharacter: "`" | "~" | null = null;
+  let fenceLength = 0;
+  let inComment = false;
+  let rawHtmlEnd: RegExp | null = null;
+
+  for (const rawLine of lines) {
+    if (rawHtmlEnd !== null) {
+      if (current !== null) current.body.push({ text: rawLine, structural: false });
+      if (rawHtmlEnd.test(rawLine)) rawHtmlEnd = null;
+      continue;
+    }
+    if (fenceCharacter !== null) {
+      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(rawLine);
+      if (current !== null) current.body.push({ text: rawLine, structural: false });
+      if (
+        closing !== null &&
+        closing[1][0] === fenceCharacter &&
+        closing[1].length >= fenceLength
+      ) {
+        fenceCharacter = null;
+        fenceLength = 0;
+      }
+      continue;
+    }
+
+    let line = "";
+    let cursor = 0;
+    while (cursor < rawLine.length) {
+      if (inComment) {
+        const end = rawLine.indexOf("-->", cursor);
+        if (end === -1) {
+          cursor = rawLine.length;
+          continue;
+        }
+        inComment = false;
+        cursor = end + 3;
+        continue;
+      }
+      const start = rawLine.indexOf("<!--", cursor);
+      if (start === -1) {
+        line += rawLine.slice(cursor);
+        break;
+      }
+      line += rawLine.slice(cursor, start);
+      inComment = true;
+      cursor = start + 4;
+    }
+    const rawHtml = /^ {0,3}<(script|pre|style|textarea)(?:[ \t>]|$)/i.exec(line);
+    if (rawHtml !== null) {
+      const closing = new RegExp(`</${rawHtml[1]}>`, "i");
+      if (!closing.test(line.slice(rawHtml[0].length))) rawHtmlEnd = closing;
+      if (current !== null) current.body.push({ text: line, structural: false });
+      continue;
+    }
+
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (
+      opening !== null &&
+      !(opening[1][0] === "`" && opening[2].includes("`"))
+    ) {
+      fenceCharacter = opening[1][0] as "`" | "~";
+      fenceLength = opening[1].length;
+      if (current !== null) current.body.push({ text: line, structural: false });
+      continue;
+    }
+
+    const structural = !/^(?: {4}|\t)/.test(line);
+    const title = structural ? atxH2Title(line) : null;
+    if (title !== null) {
+      current = { title, body: [] };
+      sections.push(current);
+    } else if (current !== null) {
+      current.body.push({ text: line, structural });
+    }
+  }
+
+  return sections;
+}
+
+function trimmedParagraphs(lines: readonly string[]): string {
+  const normalized = lines.map((line) => line.replace(/[ \t]+$/, ""));
+  while (normalized.length > 0 && normalized[0].trim() === "") normalized.shift();
+  while (normalized.length > 0 && normalized[normalized.length - 1].trim() === "") {
+    normalized.pop();
+  }
+
+  const compact: string[] = [];
+  for (const line of normalized) {
+    if (line.trim() === "") {
+      if (compact.length > 0 && compact[compact.length - 1] !== "") compact.push("");
+    } else {
+      compact.push(line);
+    }
+  }
+  return compact.join("\n");
+}
+
+function parseQuestionSection(
+  section: MarkdownH2Section,
+  id: string,
+  confirmation: boolean,
+): ReviewQuestion {
+  let answer: string | null = null;
+  let note: string | null = null;
+  let contentEnd = section.body.length;
+
+  for (let index = 0; index < section.body.length; index++) {
+    const line = section.body[index];
+    if (!line.structural) continue;
+    const answerMatch = ANSWER_LINE.exec(line.text);
+    if (answerMatch !== null) {
+      contentEnd = Math.min(contentEnd, index);
+      if (answer === null) answer = answerMatch[1].trim() || null;
+      continue;
+    }
+    const noteMatch = NOTE_LINE.exec(line.text);
+    if (noteMatch !== null) {
+      contentEnd = Math.min(contentEnd, index);
+      if (note === null) note = noteMatch[1].trim() || null;
+    }
+  }
+
+  const options: ReviewQuestionOption[] = [];
+  const promptLines: string[] = [];
+  for (const line of section.body.slice(0, contentEnd)) {
+    if (confirmation) {
+      if (line.structural && (line.text === "- Looks correct" || line.text === "- Request changes")) {
+        options.push({ letter: null, text: line.text.slice(2) });
+      } else {
+        promptLines.push(line.text);
+      }
+      continue;
+    }
+
+    const optionMatch = line.structural ? OPTION_LINE.exec(line.text) : null;
+    if (optionMatch !== null && optionMatch[2].trim() !== "") {
+      options.push({ letter: optionMatch[1], text: optionMatch[2].trim() });
+    } else {
+      promptLines.push(line.text);
+    }
+  }
+
+  const prompt = trimmedParagraphs(promptLines);
+  return {
+    id,
+    title: section.title,
+    prompt,
+    options,
+    multi: !confirmation && /\(select all that apply\)/i.test(`${section.title}\n${prompt}`),
+    answer,
+    note,
+    confirmation,
+  };
+}
+
+export function parseQuestionsMarkdown(source: string): ReviewQuestion[] {
+  const questions: ReviewQuestion[] = [];
+  for (const section of markdownH2Sections(source)) {
+    if (section.title === SUMMARY_CONFIRMATION_TITLE) {
+      questions.push(parseQuestionSection(section, "summary-confirmation", true));
+      continue;
+    }
+    const match = QUESTION_TITLE.exec(section.title);
+    if (match !== null) questions.push(parseQuestionSection(section, `Q${match[1]}`, false));
+  }
+  return questions;
+}

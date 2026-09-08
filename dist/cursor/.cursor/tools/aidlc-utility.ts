@@ -187,6 +187,10 @@ import {
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
   idSuffix,
+  type IntentEffort,
+  intentEffortLabel,
+  parseIntentEffort,
+  removePendingIntentRequest,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -5570,6 +5574,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
+  let effort: IntentEffort | null = null;
+  try {
+    effort = parseIntentEffort(flags.effort);
+  } catch (e) {
+    die(errorMessage(e));
+  }
   const initialSelection = resolveWorkflowSelection(projectDir);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
@@ -5771,8 +5781,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       reviewOverride,
       created.dirName,
       created.space,
+      effort,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  // The record exists: the review-UI request it fulfils leaves the Inbox now,
+  // and only now - a failed creation above leaves the envelope for a retry.
+  if (flags.request) removePendingIntentRequest(projectDir, flags.request);
 }
 
 // The scope→stage state-build half of creation: the workspace detection + state
@@ -5787,6 +5801,7 @@ function handleIntentCreateStateBuild(
   reviewOverride: ReviewOverride | undefined,
   createdDir: string,
   createdSpace: string,
+  effort: IntentEffort | null = null,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -6000,6 +6015,7 @@ function handleIntentCreateStateBuild(
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
 - **HTML Artifacts**: ${htmlArtifactsRequested() ? "on" : "off"}
+- **Effort**: ${intentEffortLabel(effort)}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State

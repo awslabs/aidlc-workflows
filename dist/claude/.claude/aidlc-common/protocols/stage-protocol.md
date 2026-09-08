@@ -538,9 +538,9 @@ Log the mode to `<record>/audit/<host>-<clone>.md` using the Question interactio
   letter, chat number, punctuation, option description, or `(Recommended)`
   marker before writing; `[Answer]: A. Looks correct`, `[Answer]: 1. Looks
   correct` and `[Answer]: Looks correct (Recommended)` are invalid. Then render
-  the fenced spec the brief emitted, exactly as emitted. Never ask for this
-  confirmation as bare prose: the harness must render an answerable structured
-  question before the turn ends.
+  the fenced spec the brief emitted, exactly as emitted.
+  Never ask for this confirmation as bare prose: the harness must render an
+  answerable structured question before the turn ends.
 
   After the human responds, first write the exact choice to the confirmation
   `[Answer]:` tag, then record the human-backed receipt with
