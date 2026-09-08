@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.1] - 2026-09-08
+
+Add the `ddd` plugin: Domain-Driven Design as an installable AIDLC plugin that makes the domain model a first-class deliverable. It adds a `ddd-domain-modeling` stage in Inception (ubiquitous language, bounded contexts, aggregates, invariants, state machines, domain events, business rules), a `ddd-conformance` hard gate after Build and Test that generates and runs a domain-conformance test suite, contributions onto Units Generation, Functional Design, Code Generation, and Build and Test, an advisory `ddd-conformance` sensor, a `ddd-modeling` scope, and architect-agent modeling methodology knowledge. **Install:** copy `dist/plugins/ddd/<harness>/` into the project and run `/aidlc plugin sync`.
+
+* New stages `ddd-domain-modeling` (2.15, Inception) and `ddd-conformance` (3.9, Construction) run when the plugin is selected under the `enterprise`, `feature`, `mvp`, or `workshop` scopes. The plugin's `ddd-modeling` scope is a standalone modeling-only path (initialization, requirements analysis, domain modeling — no build, no gate) whose deliverable is the approved domain model.
+* The conformance gate adjudicates violations as either code fixes or human-approved domain-model amendments, and folds the generated domain tests into the standing suite.
+
 ## [2.8.0] - 2026-09-08
 
 AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.
