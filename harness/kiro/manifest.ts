@@ -13,7 +13,7 @@
 //   - the orchestrator skill is per-harness (authored here, NOT core), so it
 //     is NOT in coreDirs — only the 3 session skills are.
 //   - agents/ is MIXED: the persona .md files are core (copied + rules rename
-//     n/a), the Kiro-native agent .json configs are authored (harnessFiles).
+//     n/a), the conductor agents/aidlc.md is authored (harnessFiles).
 //   - hooks/ is MIXED: core hook bodies are copied; the one authored
 //     aidlc-kiro-adapter.ts stdin shim is a harnessFile.
 //   - AGENTS.md lands at the PROJECT ROOT (dist/kiro/AGENTS.md), outside .kiro/.
@@ -83,35 +83,29 @@ const manifest: HarnessManifest = {
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
-    { src: "agents/aidlc.json", dst: "agents/aidlc.json" },
-    { src: "agents/aidlc-architect-agent.json", dst: "agents/aidlc-architect-agent.json" },
-    { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },
-    { src: "agents/aidlc-product-lead-agent.json", dst: "agents/aidlc-product-lead-agent.json" },
-    { src: "agents/aidlc-architecture-reviewer-agent.json", dst: "agents/aidlc-architecture-reviewer-agent.json" },
-    { src: "agents/aidlc-composer-agent.json", dst: "agents/aidlc-composer-agent.json" },
-    // Ensemble collaborator configs (2.5.0 roster closure): lean read+shell
-    // delegation targets so any stage can flip to an ensemble topology here.
-    { src: "agents/aidlc-product-agent.json", dst: "agents/aidlc-product-agent.json" },
-    { src: "agents/aidlc-design-agent.json", dst: "agents/aidlc-design-agent.json" },
-    { src: "agents/aidlc-delivery-agent.json", dst: "agents/aidlc-delivery-agent.json" },
-    { src: "agents/aidlc-aws-platform-agent.json", dst: "agents/aidlc-aws-platform-agent.json" },
-    { src: "agents/aidlc-compliance-agent.json", dst: "agents/aidlc-compliance-agent.json" },
-    { src: "agents/aidlc-devsecops-agent.json", dst: "agents/aidlc-devsecops-agent.json" },
-    { src: "agents/aidlc-quality-agent.json", dst: "agents/aidlc-quality-agent.json" },
-    { src: "agents/aidlc-pipeline-deploy-agent.json", dst: "agents/aidlc-pipeline-deploy-agent.json" },
-    { src: "agents/aidlc-operations-agent.json", dst: "agents/aidlc-operations-agent.json" },
+    { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
+    // One conductor agent in Markdown. The v2 engine's agent-v1 JSON configs are
+    // gone with the row merge: hook wiring lives in the standalone manifests below,
+    // so a JSON twin would only restate the persona and drift from it.
+    { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
-    { src: "hooks/aidlc-record-human-turn.kiro.hook", dst: "hooks/aidlc-record-human-turn.kiro.hook" },
-    { src: "hooks/aidlc-plan-approval-guard.kiro.hook", dst: "hooks/aidlc-plan-approval-guard.kiro.hook" },
+    // Standalone hook manifests - the registration channel both supported
+    // surfaces read.
+    { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
+    { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
+    { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
+    { src: "hooks/aidlc-terminal-command-guard.json", dst: "hooks/aidlc-terminal-command-guard.json" },
+    { src: "hooks/aidlc-enforce-approval-gate.json", dst: "hooks/aidlc-enforce-approval-gate.json" },
+    { src: "hooks/aidlc-plan-approval-guard.json", dst: "hooks/aidlc-plan-approval-guard.json" },
+    { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
+    { src: "hooks/aidlc-rebuild-stage-graph.json", dst: "hooks/aidlc-rebuild-stage-graph.json" },
+    { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
+    { src: "hooks/aidlc-continue-workflow.json", dst: "hooks/aidlc-continue-workflow.json" },
+    { src: "hooks/aidlc-sync-workflow-state.json", dst: "hooks/aidlc-sync-workflow-state.json" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "settings/mcp.json", dst: "settings/mcp.json" },
-    // Project-root .gitignore (beside .kiro/, not inside it) — re-rooted under
-    // aidlc/spaces/* for the workspace layout (SEED): cursors + machine-local
-    // runtime ignored, the shared work (memory/codekb/registry/state/audit
-    // shards/artifacts) committed. Net-new for Kiro — it shipped none before.
     // Authored as dot-gitignore so it does not act as a live ignore inside
-    // harness/kiro/. projectRoot routes it to dist/kiro/.gitignore + the --check
-    // determinism guard.
+    // harness/, and lands at the project root.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
@@ -129,8 +123,8 @@ const manifest: HarnessManifest = {
   emit: null,
 
   // Kiro has no host plugin store — AIDLC plugins arrive by folder-drop and use
-  // the explicit composer. Agent-v1 reads hooks from agent configs; v3/KAS also
-  // consumes the standalone .kiro.hook files projected above.
+  // the explicit composer. Hook wiring is the standalone manifests projected
+  // above; both supported surfaces read them.
   plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
 };
 
