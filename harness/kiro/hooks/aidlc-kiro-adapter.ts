@@ -143,6 +143,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
+  "review-freeze",
+  "state-transition-guard",
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
@@ -153,6 +155,28 @@ const SESSION_ID_TARGETS = new Set([
   "continue-workflow",
   "record-human-turn",
 ]);
+
+const TERMINAL_TOOLS = new Set(["execute_bash", "execute_pwsh", "shell"]);
+
+/** Run a packaged core hook body and hand back its exit code and stderr. The
+ *  guards below map a 2 onto Kiro's reject contract; anything else fails open. */
+function runCoreHook(
+  hook: string,
+  payload: Record<string, unknown>,
+  cwd: string,
+): { code: number; stderr: string } {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "engine", "hook", hook]
+    : [process.execPath, join(HOOKS_DIR, `aidlc-${hook}.ts`)];
+  const r = Bun.spawnSync(command, {
+    stdin: Buffer.from(JSON.stringify(payload), "utf-8"),
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { code: r.exitCode ?? 0, stderr: r.stderr?.toString() ?? "" };
+}
 const INPUT_TARGETS = new Set([
   ...PAYLOAD_TARGETS,
   ...SESSION_ID_TARGETS,
@@ -1003,6 +1027,56 @@ if (target === "enforce-approval-gate") {
   }
 }
 
+if (target === "state-transition-guard") {
+  // Refuses a hand-run `aidlc-state.ts <verb>`. The engine owns state
+  // transitions, so the state file, the audit log and the compiled graph stay in
+  // agreement. Distinct from terminal-command-guard, which keeps terminal
+  // commands deterministic: this one protects workflow lifecycle state.
+  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
+  const tool = ide.toolName ?? "";
+  if (!TERMINAL_TOOLS.has(tool)) return 0;
+  const command = typeof ide.toolArgs?.command === "string" ? ide.toolArgs.command : "";
+  if (!command) return 0;
+  const pd = process.cwd();
+  const result = runCoreHook("state-transition-guard", {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+  }, pd);
+  if (result.code === 2) {
+    process.stderr.write(result.stderr);
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+if (target === "review-freeze") {
+  // Freezes artifact writes once a reviewer receipt is terminal, so a late edit
+  // cannot reopen a closed review loop. PreToolUse because it must refuse; the
+  // PostToolUse audit hook sees the same tools and cannot block.
+  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
+  const tool = ide.toolName ?? "";
+  const args = ide.toolArgs ?? {};
+  const shell = TERMINAL_TOOLS.has(tool);
+  const write = canonicalWriteTool(tool);
+  if (!shell && write === null) return 0;
+  const paths = inputPaths(args);
+  const pd = process.cwd();
+  const result = runCoreHook("review-freeze", {
+    hook_event_name: "PreToolUse",
+    tool_name: shell ? "Bash" : write,
+    tool_input: shell
+      ? { command: typeof args.command === "string" ? args.command : "" }
+      : { file_path: paths[0] ?? "", paths },
+    cwd: pd,
+  }, pd);
+  if (result.code === 2) {
+    process.stderr.write(result.stderr);
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
 // Extract the absolute path of the file a write tool just touched from the
 // IDE's toolResult prose. Captured PostToolUse write inputs are empty, so this
 // is the ONLY path source on those events. Only the known Kiro wordings match; anything else returns "" so the caller
@@ -1376,39 +1450,6 @@ if (target === "guard-tool-call") {
   return 0;
 }
 
-if (target === "state-transition-guard") {
-  const tool = kiro.tool_name ?? "";
-  if (canonicalTool(tool) !== "Bash") process.exit(0);
-  const command = String(kiro.tool_input?.command ?? "");
-  const registeredAgent = extraArgs[0] ?? "";
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  const hookCommand = executable
-    ? [executable, "engine", "hook", "state-transition-guard"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
-  const r = Bun.spawnSync(
-    hookCommand,
-    {
-      stdin: Buffer.from(
-        JSON.stringify({
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command },
-          ...(registeredAgent ? { agent_type: registeredAgent } : {}),
-        }),
-        "utf-8",
-      ),
-      cwd: childCwd,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: projectEnv,
-    },
-  );
-  if (r.exitCode === 2) {
-    process.stderr.write(r.stderr?.toString() ?? "");
-    process.exit(2);
-  }
-  process.exit(0);
-}
 
 if (target === "reviewer-scope") {
   const tool = kiro.tool_name ?? "";
@@ -1460,43 +1501,6 @@ if (target === "reviewer-scope") {
   return 0;
 }
 
-if (target === "review-freeze") {
-  const tool = kiro.tool_name ?? "";
-  const ti = kiro.tool_input ?? {};
-  const canonical = canonicalTool(tool, ti);
-  const shell = canonical === "Bash";
-  const mutation = canonical === "Write" || canonical === "Edit" || tool === "delete_file";
-  if (!shell && !mutation) return 0;
-  const paths = inputPaths(ti);
-  const coreInput: Record<string, unknown> = shell
-    ? { command: (ti.command as string) ?? "" }
-    : { file_path: paths[0] ?? "", paths };
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  const command = executable
-    ? [executable, "engine", "hook", "review-freeze"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-review-freeze.ts")];
-  const r = Bun.spawnSync(command, {
-    stdin: Buffer.from(
-      JSON.stringify({
-        hook_event_name: "PreToolUse",
-        tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
-        tool_input: coreInput,
-        cwd: projectDir,
-      }),
-      "utf-8",
-    ),
-    cwd: projectDir,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: projectEnv,
-  });
-  const stderrText = r.stderr?.toString() ?? "";
-  if (r.exitCode === 2) {
-    process.stderr.write(stderrText);
-    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  }
-  return 0;
-}
 
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
