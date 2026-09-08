@@ -156,9 +156,59 @@ nothing. When a turn ends on a *prepared* question round (a harness whose Stop
 seam cannot hold the turn), the daemon opens the round (`openQuestionsRound`) -
 it is now the process that waits for the browser - so the form shows instead of
 the preparing spinner. `POST /api/run/prompt` with `text` is the reply path for
-an agent that asked in prose. One live run per project; a live run keeps the
-daemon from idling out; on restart, a run whose session is alive is re-attached
-with `session/load`.
+an agent that asked in prose. A live run keeps the daemon from idling out; on
+restart, a run whose session is alive is re-attached with `session/load`.
+
+**Runs per intent.** After `session/new` the daemon waits up to 8 s for
+`aidlc/.aidlc-sessions/<acp session id>.binding.json` to name the run's intent
+(the SessionStart hook writes it from `AIDLC_REVIEW_RUN`; on every harness
+verified so far the hook's session id is the ACP session id). A bound run
+isolates its tools from the shared active-intent cursor, so several bound runs
+coexist, one per intent (`run.json` `bound: true`). An unbound run - Codex
+through `codex-acp`, whose bundled Codex does not fire the project hooks - is
+refused while any other run is live and refuses any other Start while it is live
+(`RunManager.busyReason`). Every read and write route takes `?intent=&space=`
+(`selectionFromUrl`) so the tab operates on the intent it views; without them the
+active intent applies, as before.
+
+**Session effort.** `POST /api/intents` and `POST /api/run/prompt` accept
+`session_effort` (`low|medium|high|xhigh`; `run.json` `session_effort`). The
+profile says how it is applied (`effort`): Claude as `session/set_config_option`
+`{configId: "effort"}` after `session/new` and after `session/load`; Kiro as
+`kiro-cli acp --effort <level>` at launch. Backends without an `effort` control
+ignore it (`RunView.effort_control` false; the composer hides the dial).
+
+**Nudge (daemon-side forwarding loop).** When a turn ends with no pending input,
+the pointer at `none`, and the state file's Current Stage still `[-]` in
+progress, the daemon re-prompts with the resume prompt after 3 s, at most twice
+(`NUDGE_CAP`, the interactive Stop hook's ceiling); any human action - Continue,
+Reply, an answer, a permission decision - resets the count and drops a scheduled
+nudge. A pointer on any human moment (`prepared`, `questions`, `confirming`,
+`awaiting-approval`, `revising`, `approved`) is never nudged.
+
+**Vendored adapters.** `aidlc-review-ui.ts vendor-agent` runs
+`bun install --omit=optional` of the profile's `vendorPackage` into
+`<toolsDir>/vendor/acp/` (`manifest.json` records backend, package, time);
+`resolveAcpLaunch` prefers `vendor/acp/node_modules/.bin/<vendorBin>` over PATH
+and `bunx`. Optional dependencies are the adapters' bundled agent binaries (the
+Claude SDK's ~190 MB native build), which the runner never uses because it
+points the adapter at the harness CLI. Every shipped `.gitignore` re-includes
+`<harnessDir>/tools/vendor/acp/node_modules` under the blanket `node_modules`
+rule.
+
+**Launcher.** `aidlc-review-ui.ts start [--project-dir]` is `ensureReviewUiDaemon`
+with `AIDLC_REVIEW_UI=1` forced (the same detached spawn the SessionStart hook
+uses), then prints the URL and the runner's availability and opens the tab.
+
+**Verification status per backend.** Live end to end: Claude (questions, gate,
+Plan Approval card, code generation), Kiro CLI 2.13 (questions, gate, Plan
+Approval by Reply, code generation), Codex 0.149 via `codex-acp` 1.10 (questions
+through `answers-wait`, answers applied; its session does not bind, so it runs
+alone). Handshake only: opencode 1.18 (`initialize`, `session/new`, `/aidlc`
+advertised). Scripted agent only: Cursor (`agent acp`, the two extension asks)
+and Copilot (`copilot --acp`) - neither CLI was available with credentials where
+this was built; their profiles follow the published documentation and t364/t365
+exercise the bridges against the fixture.
 
 ### Pending intent requests
 
@@ -455,7 +505,7 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /api/questions?path=&intent=` | Cookie/header | Parsed questions, answers, notes, confirmation flags, and source digest for the selected current question target |
 | `POST /api/answers` | Cookie/header | Active intent only. Validate submission/digest, write `answers-NNN.json`, return `{file}`; stale digest is 409 `{error:"questions file changed; reload"}` |
 | `GET /api/intents/propose?text=` | Cookie/header | `{scope, source: "keyword"\|"default"}` — what the composer would choose: the engine's keyword inference (`inferScopeFromText`), else the selection-aware default scope |
-| `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, effort?: {preset}\|{reviewing,writing}, label?}`. With a runner and a `scope`: runs `intent-create --space --scope --arguments --label [--effort]` (the record, state, and audit the conductor would create), starts an agent run bound to it, returns 201 `{intent, space, run_id, mode:"running"}`; 409 while another run is live; `mode:"created"` with `error` when the record exists but the agent did not start. Otherwise records a pending request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock, 201 `{id, space, created_at, mode:"requested"}`. Unknown workflow/effort 400, unknown workspace 404 |
+| `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, effort?: {preset}\|{reviewing,writing}, label?, session_effort?: low\|medium\|high\|xhigh}`. With a runner and a `scope`: runs `intent-create --space --scope --arguments --label [--effort]` (the record, state, and audit the conductor would create), starts an agent run bound to it, returns 201 `{intent, space, run_id, mode:"running"}`; 409 while another run is live; `mode:"created"` with `error` when the record exists but the agent did not start. Otherwise records a pending request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock, 201 `{id, space, created_at, mode:"requested"}`. Unknown workflow/effort 400, unknown workspace 404 |
 | `GET /api/run?intent=` | Cookie/header | `{run, pending, events, available, start_prompt, requirement}` — the intent's agent run (`run.json`), the inputs waiting on the human, the last 400 log events, the harness's resume prompt, and what the machine lacks when `available` is false; `run: null` when it never ran |
 | `POST /api/run/prompt` | Cookie/header | `{intent, text?}` — send a prompt (default: the harness's resume prompt) to an idle run — Continue, or a Reply to an agent that asked in prose; with no live run, start one (201). 409 while a turn is live |
 | `POST /api/run/permission` | Cookie/header | `{intent, id, option_id}` — answer a pending permission with one of its advertised options |

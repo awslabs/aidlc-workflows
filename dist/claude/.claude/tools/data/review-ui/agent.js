@@ -85,7 +85,7 @@ function render() {
     <section class="agent-panel" aria-labelledby="agent-title">
       <header class="side-panel-header">
         <div><h2 id="agent-title">Agent</h2><span>${escapeHtml(intent || "")}</span><button class="side-panel-close" type="button" aria-label="Close panel">×</button></div>
-        ${run ? `<div class="agent-state ${state.tone}">${state.working ? '<i class="spin" aria-hidden="true"></i>' : ""}<b>${escapeHtml(state.label)}</b><span>· turn ${run.turns}${run.last_stop_reason && !state.working ? ` · ${escapeHtml(run.last_stop_reason.replaceAll("_", " "))}` : ""}</span></div>` : ""}
+        ${run ? `<div class="agent-state ${state.tone}">${state.working ? '<i class="spin" aria-hidden="true"></i>' : ""}<b>${escapeHtml(state.label)}</b><span>· turn ${run.turns}${run.session_effort ? ` · effort ${escapeHtml(run.session_effort)}` : ""}${run.last_stop_reason && !state.working ? ` · ${escapeHtml(run.last_stop_reason.replaceAll("_", " "))}` : ""}</span></div>` : ""}
       </header>
       <div class="agent-body">
         ${run ? "" : renderNoRun(view)}

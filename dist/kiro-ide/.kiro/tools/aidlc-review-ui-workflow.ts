@@ -139,6 +139,8 @@ export interface WorkflowPayload {
   runner?: boolean;
   /** When `runner` is false: what this machine lacks (e.g. "the `kiro-cli` CLI"), or null. */
   runner_requirement?: string | null;
+  /** True when the runner's backend takes a session effort (Claude, Kiro). */
+  runner_effort?: boolean;
   space: string;
   spaces: string[];
   intent: string | null;

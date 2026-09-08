@@ -9,6 +9,8 @@
 //   FAKE_ACP_SCRIPT=hang      the turn never ends until session/cancel
 //   FAKE_ACP_SCRIPT=cursor    asks through Cursor's cursor/ask_question and cursor/create_plan
 //   FAKE_ACP_EXIT_AFTER_INIT  exit(3) on session/new instead of answering (process death mid-request)
+//   FAKE_ACP_BIND=1           on session/new, write the session binding the SessionStart hook would
+//                             (AIDLC_REVIEW_RUN=<space>/<intent> -> aidlc/.aidlc-sessions/<id>.binding.json)
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,6 +21,8 @@ let nextId = 1;
 const pending = new Map<number, (message: Rpc) => void>();
 let cancelled = false;
 let sessionCwd = process.cwd();
+// `session/set_config_option` calls, echoed into the first prompt's text.
+const configSet: string[] = [];
 
 interface Rpc {
   jsonrpc?: "2.0";
@@ -56,7 +60,7 @@ async function prompt(id: number | string, params: Record<string, unknown>): Pro
   const finish = (stopReason: string): void => send({ id, result: { stopReason } });
 
   update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Working on: ${text}` } });
-  update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: ` (run=${process.env.AIDLC_REVIEW_RUN ?? "unset"})` } });
+  update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: ` (run=${process.env.AIDLC_REVIEW_RUN ?? "unset"}; argv=${process.argv.slice(2).join(" ")}; config=${configSet.join(",")})` } });
   if (script === "quiet") {
     finish("end_turn");
     return;
@@ -167,6 +171,12 @@ function onMessage(message: Rpc): void {
       const sessionId = `fake-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       mkdirSync(sessionsDir(), { recursive: true });
       writeFileSync(join(sessionsDir(), `${sessionId}.json`), JSON.stringify({ created: new Date().toISOString() }));
+      const target = /^([a-z0-9-]+)\/(.+)$/.exec(process.env.AIDLC_REVIEW_RUN ?? "");
+      if (process.env.FAKE_ACP_BIND === "1" && target) {
+        const bindings = join(sessionCwd, "aidlc", ".aidlc-sessions");
+        mkdirSync(bindings, { recursive: true });
+        writeFileSync(join(bindings, `${sessionId}.binding.json`), JSON.stringify({ space: target[1], intent: target[2], boundAt: new Date().toISOString() }));
+      }
       send({ id: message.id, result: { sessionId, modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }] } } });
       return;
     }
@@ -183,6 +193,10 @@ function onMessage(message: Rpc): void {
       send({ id: message.id, result: { modes: { currentModeId: "default", availableModes: [] } } });
       return;
     }
+    case "session/set_config_option":
+      configSet.push(`${String(params.configId)}=${String(params.value)}`);
+      send({ id: message.id, result: { configOptions: [{ id: String(params.configId), currentValue: params.value }] } });
+      return;
     case "session/prompt":
       void prompt(message.id!, params);
       return;

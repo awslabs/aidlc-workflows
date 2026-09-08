@@ -1,6 +1,19 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.5] - 2026-09-08
+
+The browser becomes the whole surface: start the review UI without a session, run several intents at once, pin the session's effort from the composer, and carry the agent adapters to hosts without a package registry. Upgrade by copying the new `dist/<harness>/` tree; an existing project's `.gitignore` should re-include `<harnessDir>/tools/vendor/acp/node_modules` if you vendor (the shipped file does).
+
+* **`aidlc-review-ui.ts start`** starts the daemon detached (review UI on), prints the URL and whether an agent runner is available, and opens the tab. No harness session is needed to start, drive, or review work.
+* **Several intents at once.** Runs are per intent; a run whose session is bound to its intent (Claude, Kiro - the SessionStart hook writes the binding) coexists with others, and every read and write in the tab targets the intent you are viewing (`?intent=&space=` on state, feedback, answers, decisions). A run that did not bind (Codex through its adapter) holds the project until it ends.
+* **Session ceiling.** The Effort menu's *Session ceiling* pins the agent session's own effort - Claude via the adapter's `effort` config option, Kiro via `kiro-cli acp --effort` - and the Agent panel shows it. Hidden where the backend has no dial.
+* **`aidlc-review-ui.ts vendor-agent`** installs the pinned Claude or Codex adapter (without the bundled agent binaries, ~50 MB) under `<harnessDir>/tools/vendor/acp/`; the runner prefers it over `bunx`, so an install copied to an offline host runs. `.gitignore` re-includes it.
+* **Daemon-side forwarding loop.** A turn that ends mid-stage with nothing open for the human is re-prompted with the resume prompt, at most twice, then parked with a note - the Stop hook's job, for harnesses whose hooks do not fire under their ACP agent (seen live: Codex ended its turn on an engine refusal).
+* **Fix: source-freshness receipts on large source sets.** `readUnitSourceManifest` spawned `git rev-parse`, `ls-tree`, and `check-ignore` per claimed path (over a thousand processes for 400 claims); ignore checks are batched through `check-ignore --stdin`, HEAD is indexed once, and registry expansion is cached. A 400-claim manifest verifies in ~12 s instead of timing out.
+* Verified live: Codex 0.149 through `codex-acp` 1.10 (Start → `$aidlc` → questions → `answers-wait` → Save → answers applied). Cursor and Copilot remain verified against the scripted agent only (no credentials here).
+* Tests: t365 covers concurrent bound runs, the unbound hold, session effort per backend, and the bounded nudge; t205, t255, t298, t314 are green again (summary-confirmation bypass set explicitly, real-Git cases given a realistic timeout, the journal test synchronises on the helper's readiness, fixture Git isolated from the user's global hooks).
+
 ## [2.8.4] - 2026-09-08
 
 Start in the browser runs the intent on every harness. The review daemon drives the installed harness's own agent over the Agent Client Protocol — Kiro CLI, Cursor, opencode, and Copilot natively, Claude and Codex through their published adapters — so the browser is the driver on all seven distributions. Upgrade by copying the new `dist/<harness>/` tree.

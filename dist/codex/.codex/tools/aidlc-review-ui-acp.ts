@@ -43,12 +43,21 @@ export const ENV_ACP_CLAUDE_COMMAND = "AIDLC_ACP_CLAUDE_COMMAND";
 
 export type AcpBackend = "claude" | "kiro" | "codex" | "cursor" | "opencode" | "copilot";
 
+/** The session-level reasoning effort a run may pin (the harness's own dial). */
+export const SESSION_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export type SessionEffort = (typeof SESSION_EFFORT_LEVELS)[number];
+
+/** How a backend takes a session effort: an ACP config option after `session/new`, a launch flag, or not at all. */
+export type EffortControl = { kind: "config"; configId: string } | { kind: "flag"; flag: string };
+
 export interface AcpLaunch {
   backend: AcpBackend;
   command: string[];
   env: Record<string, string>;
   /** The prompt a human would type to start or resume the workflow in this harness. */
   startPrompt: string;
+  /** How this backend takes a session effort, when it does. */
+  effort?: EffortControl;
 }
 
 export interface AcpBackendProfile {
@@ -59,9 +68,32 @@ export interface AcpBackendProfile {
   envCommand: string;
   startPrompt: string;
   /** Null when the harness is not usable on this machine; the reason is shown to the human. */
-  resolve(env: NodeJS.ProcessEnv, which: (name: string) => string | null): { command: string[]; env: Record<string, string> } | null;
+  resolve(env: NodeJS.ProcessEnv, which: (name: string) => string | null, vendored: string | null): { command: string[]; env: Record<string, string> } | null;
   /** What is missing when `resolve` returns null. */
   requirement: string;
+  /** The published adapter package (pinned) when the agent is not the harness CLI itself. */
+  vendorPackage?: string;
+  /** The adapter's bin name under node_modules/.bin. */
+  vendorBin?: string;
+  /** How this backend takes a session effort; absent when it has no such dial over ACP. */
+  effort?: EffortControl;
+}
+
+/** `<toolsDir>/vendor/acp`: where `vendor-agent` installs the pinned adapter. */
+export function vendorAcpDir(toolsDir: string): string {
+  return join(toolsDir, "vendor", "acp");
+}
+
+export function splitPinned(spec: string): [string, string] {
+  const at = spec.lastIndexOf("@");
+  return at > 0 ? [spec.slice(0, at), spec.slice(at + 1)] : [spec, "latest"];
+}
+
+/** The vendored adapter's executable when `vendor-agent` has run for this profile. */
+export function vendoredAcpBin(toolsDir: string, profile: AcpBackendProfile): string | null {
+  if (!profile.vendorBin) return null;
+  const bin = join(vendorAcpDir(toolsDir), "node_modules", ".bin", profile.vendorBin);
+  return existsSync(bin) ? bin : null;
 }
 
 function bunx(which: (name: string) => string | null): string {
@@ -75,12 +107,17 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     envCommand: ENV_ACP_CLAUDE_COMMAND,
     startPrompt: "/aidlc",
     requirement: "the `claude` CLI",
+    vendorPackage: CLAUDE_ACP_PACKAGE,
+    vendorBin: "claude-agent-acp",
+    // The adapter exposes Claude's effort as a session config option (verified
+    // live: values default/low/medium/high/xhigh/max).
+    effort: { kind: "config", configId: "effort" },
     // Zed's adapter over the Agent SDK. The SDK needs the local `claude`
     // executable and does not search PATH for it, so it travels in the env.
-    resolve(env, which) {
+    resolve(env, which, vendored) {
       const claude = env.CLAUDE_CODE_EXECUTABLE || which("claude");
       if (!claude) return null;
-      const onPath = which("claude-agent-acp");
+      const onPath = vendored ?? which("claude-agent-acp");
       return { command: onPath ? [onPath] : [bunx(which), CLAUDE_ACP_PACKAGE], env: { CLAUDE_CODE_EXECUTABLE: claude } };
     },
   },
@@ -90,9 +127,11 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     envCommand: "AIDLC_ACP_KIRO_COMMAND",
     startPrompt: "/aidlc",
     requirement: "the `kiro-cli` CLI",
+    // `kiro-cli acp --effort <level>` sets the first session's effort.
+    effort: { kind: "flag", flag: "--effort" },
     // Native. The shipped `aidlc` agent carries the framework's hooks, so the
     // session must run as that agent.
-    resolve(_env, which) {
+    resolve(_env, which, _vendored) {
       const kiro = which("kiro-cli");
       return kiro ? { command: [kiro, "acp", "--agent", "aidlc"], env: {} } : null;
     },
@@ -103,12 +142,14 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     envCommand: "AIDLC_ACP_CODEX_COMMAND",
     startPrompt: "$aidlc",
     requirement: "the `codex` CLI (or a `~/.codex` login)",
+    vendorPackage: CODEX_ACP_PACKAGE,
+    vendorBin: "codex-acp",
     // The ACP project's adapter bundles its own Codex; auth comes from the
     // user's `~/.codex`, so a login is the real requirement.
-    resolve(env, which) {
+    resolve(env, which, vendored) {
       const home = env.CODEX_HOME || join(env.HOME || homedir(), ".codex");
       if (!which("codex") && !existsSync(home)) return null;
-      const onPath = which("codex-acp");
+      const onPath = vendored ?? which("codex-acp");
       return { command: onPath ? [onPath] : [bunx(which), CODEX_ACP_PACKAGE], env: {} };
     },
   },
@@ -118,7 +159,7 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     envCommand: "AIDLC_ACP_CURSOR_COMMAND",
     startPrompt: "/aidlc",
     requirement: "the Cursor CLI (`agent` or `cursor-agent`)",
-    resolve(_env, which) {
+    resolve(_env, which, _vendored) {
       const agent = which("cursor-agent") ?? which("agent");
       return agent ? { command: [agent, "acp"], env: {} } : null;
     },
@@ -129,7 +170,7 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     envCommand: "AIDLC_ACP_OPENCODE_COMMAND",
     startPrompt: "/aidlc",
     requirement: "the `opencode` CLI",
-    resolve(_env, which) {
+    resolve(_env, which, _vendored) {
       const opencode = which("opencode");
       return opencode ? { command: [opencode, "acp"], env: {} } : null;
     },
@@ -140,7 +181,7 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     envCommand: "AIDLC_ACP_COPILOT_COMMAND",
     startPrompt: "/aidlc",
     requirement: "the `copilot` CLI",
-    resolve(_env, which) {
+    resolve(_env, which, _vendored) {
       const copilot = which("copilot");
       return copilot ? { command: [copilot, "--acp"], env: {} } : null;
     },
@@ -158,7 +199,7 @@ export function acpBackendForHarness(harness: string | null): AcpBackendProfile 
  * line (whitespace-split) and skips the requirement check, so a vendored
  * adapter or a test double can stand in.
  */
-export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv = process.env): AcpLaunch | null {
+export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv = process.env, toolsDir: string = import.meta.dir): AcpLaunch | null {
   const profile = acpBackendForHarness(harness);
   if (!profile) return null;
   const which = (name: string): string | null => Bun.which(name, env.PATH !== undefined ? { PATH: env.PATH } : undefined);
@@ -166,10 +207,18 @@ export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv 
   if (override) {
     const extra: Record<string, string> = {};
     if (profile.backend === "claude" && env.CLAUDE_CODE_EXECUTABLE) extra.CLAUDE_CODE_EXECUTABLE = env.CLAUDE_CODE_EXECUTABLE;
-    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt };
+    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort };
   }
-  const resolved = profile.resolve(env, which);
-  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt } : null;
+  // A vendored adapter (vendor-agent) beats PATH and bunx: it is the pinned
+  // copy an offline host carries.
+  const resolved = profile.resolve(env, which, vendoredAcpBin(toolsDir, profile));
+  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort } : null;
+}
+
+/** The launch with a session effort applied where the backend takes it as a flag. */
+export function launchWithEffort(launch: AcpLaunch, effort: SessionEffort | null): AcpLaunch {
+  if (!effort || launch.effort?.kind !== "flag") return launch;
+  return { ...launch, command: [...launch.command, launch.effort.flag, effort] };
 }
 
 export interface AcpPermissionOption {
@@ -348,6 +397,11 @@ export class AcpClient {
     })) as { stopReason?: unknown };
     const reason = result?.stopReason;
     return typeof reason === "string" ? (reason as AcpStopReason) : "end_turn";
+  }
+
+  /** Set a session config option (ACP `session/set_config_option`), e.g. the Claude adapter's effort. */
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<void> {
+    await this.request("session/set_config_option", { sessionId, configId, value }, ACP_HANDSHAKE_TIMEOUT_MS);
   }
 
   /** Ask the agent to stop the current turn; the in-flight prompt resolves `cancelled`. */

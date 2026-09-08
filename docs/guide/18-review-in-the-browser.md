@@ -18,12 +18,17 @@ export AIDLC_REVIEW_UI=1
 At session start, AI-DLC ensures that the project-local review daemon is running,
 normally at **http://localhost:4765/** (the next free port upward if another
 project already holds it). It is detached from the session and stops after its
-idle timeout. If your harness
-does not run the session-start hook, start it directly from the project root:
+idle timeout. You do not need a session at all: from the project root,
 
 ```bash
-bun <harnessDir>/tools/aidlc-review-ui.ts serve --project-dir "$PWD"
+bun <harnessDir>/tools/aidlc-review-ui.ts start
 ```
+
+starts the daemon detached, prints the URL and whether an agent runner is
+available for this harness, and opens the tab. From there every intent is
+started, driven, and reviewed in the browser (see *Start an intent from the
+browser*). `serve --project-dir "$PWD"` runs the daemon in the foreground with
+its log in the terminal; `status`, `stop`, and `open` do what they say.
 
 `<harnessDir>` is the installed harness directory, such as `.claude`, `.kiro`,
 `.codex`, `.cursor`, or `.aidlc`.
@@ -270,7 +275,41 @@ daemon drives each one the same way:
 | GitHub Copilot | `copilot --acp` (public preview) | `copilot` | `/aidlc` |
 
 `AIDLC_ACP_<HARNESS>_COMMAND` (for example `AIDLC_ACP_KIRO_COMMAND`) replaces the
-launch command line — a vendored adapter, a pinned version, extra flags.
+launch command line — a pinned version, extra flags.
+
+**Hosts without a package registry.** The Claude and Codex agents are published
+adapters that `bunx` fetches on first use. Once, on a machine with registry
+access, run
+
+```bash
+bun <harnessDir>/tools/aidlc-review-ui.ts vendor-agent
+```
+
+It installs the pinned adapter (without the bundled agent binaries, which the
+runner never uses — about 50 MB) under `<harnessDir>/tools/vendor/acp/`, and the
+runner prefers that copy from then on. The directory is part of the install (the
+shipped `.gitignore` re-includes it), so copying or committing the tree carries it
+to hosts that cannot reach a registry. The other harnesses' agents are their own
+CLIs; there is nothing to vendor.
+
+**Session ceiling.** The Effort menu's *Session ceiling* pins the effort the agent
+session itself runs at (Claude's `/effort`, Kiro's `--effort`) — what deciding
+work inherits, separate from the preset's per-group efforts. *Harness default*
+leaves it to your own settings. Codex, Cursor, opencode, and Copilot expose no
+such dial over ACP; the control is hidden there.
+
+**Several intents at once.** Each run is bound to its own intent (the
+SessionStart hook binds the agent's session), so you can Start a second intent
+while the first is working, and every read and write in the tab — questions,
+feedback, decisions — targets the intent you are viewing. A harness whose session
+does not bind (Codex through its adapter, whose hooks do not fire) holds the
+project: Start is refused until that run ends.
+
+**When the agent just stops.** If a turn ends mid-stage with nothing open for you
+— no question round, no gate — the daemon sends the resume prompt itself, up to
+twice; then it parks and the panel says so. This is the terminal's forwarding
+loop (the Stop hook) done daemon-side, for harnesses whose hooks do not fire
+under their ACP agent.
 
 ### The Agent panel
 
@@ -303,9 +342,7 @@ own after you save or decide: on Claude the Stop hook holds the turn for you;
 elsewhere the turn ends and the daemon sends the continuation itself, opening
 the question round for you when the agent left it prepared. The terminal remains
 a full equivalent: open the harness in the same project and `/aidlc` shows the
-same record. One run at a time per project: Start while an agent is running is
-refused; finish, park, or stop that intent first. Set `AIDLC_REVIEW_RUNNER=0` to
-turn the runner off.
+same record. Set `AIDLC_REVIEW_RUNNER=0` to turn the runner off.
 
 Without a runner (the harness's CLI is not on this machine, or the runner is
 turned off), Start records the request instead. It appears in the Inbox under

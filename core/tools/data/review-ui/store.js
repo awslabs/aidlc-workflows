@@ -131,3 +131,8 @@ try {
 } catch {
   // ignore a corrupt or unavailable session store
 }
+
+/** The intent and workspace this tab is viewing - every read and write names them. */
+export function selection() {
+  return { intent: store.view.intent || store.workflow?.intent || undefined, space: store.workflow?.space || undefined };
+}

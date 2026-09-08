@@ -15,9 +15,13 @@
 //      submission that lands while the turn is over is re-prompted by the
 //      daemon with the same continuation text the hook would have used.
 //
-// One live run per project. The engine keeps one active-intent cursor per
-// space and the workspace lock serializes mutation; two agents on two intents
-// in one project is not a Phase 1 shape. Start while a run is live is refused.
+// Several runs per project, one per intent. What makes that safe is the
+// session binding: the SessionStart hook binds the agent's session to the intent
+// named in AIDLC_REVIEW_RUN, so every tool the agent runs resolves to its own
+// record however the shared active-intent cursor moves. The daemon checks that
+// the binding landed after `session/new`; a run whose session did not bind
+// (a harness whose hook carries no session id) is the only run allowed, and
+// Start is refused while it is live.
 //
 // Persistence. `<record>/.review-ui/run.json` is the run's record - state,
 // session id, pid - and `run-log.jsonl` its event log. On daemon start a run
@@ -27,10 +31,12 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { intentsDir, isoTimestamp, listIntents, listSpaces, writeFileAtomic } from "./aidlc-lib.ts";
+import { intentsDir, isoTimestamp, listIntents, listSpaces, readSessionBinding, writeFileAtomic } from "./aidlc-lib.ts";
 import {
   AcpClient,
   AcpError,
+  launchWithEffort,
+  type SessionEffort,
   type AcpElicitationRequest,
   type AcpElicitationResponse,
   type AcpLaunch,
@@ -67,7 +73,15 @@ export interface RunRecord {
   turns: number;
   last_stop_reason: AcpStopReason | null;
   error: string | null;
+  /** The agent's session is bound to this intent (the SessionStart hook wrote the binding). */
+  bound: boolean;
+  /** The session effort pinned at Start, when the backend takes one. */
+  session_effort: SessionEffort | null;
 }
+
+// How long after `session/new` the binding may take to appear: the hook runs
+// during the harness's own session start, normally within the handshake.
+const BINDING_WAIT_MS = 8_000;
 
 export type RunEvent =
   | { seq: number; t: string; kind: "turn"; phase: "start" | "stop"; prompt?: string; stop_reason?: AcpStopReason }
@@ -93,10 +107,19 @@ export interface RunView {
   available: boolean;
   /** The harness's own start/resume prompt (`/aidlc`, `$aidlc`); what Continue sends. */
   start_prompt: string | null;
+  /** Whether this backend takes a session effort at all. */
+  effort_control: boolean;
 }
+
+// A stopped-mid-stage turn is nudged at most this many times before the human
+// is asked; a human action (Continue, Reply, an answer, a decision) resets it.
+const NUDGE_CAP = 2;
+const NUDGE_DELAY_MS = 3_000;
 
 interface LiveRun {
   record: RunRecord;
+  nudges: number;
+  nudgeTimer: ReturnType<typeof setTimeout> | null;
   client: AcpClient;
   events: RunEvent[];
   seq: number;
@@ -120,8 +143,8 @@ export interface RunManagerOptions {
 }
 
 export class RunBusyError extends Error {
-  constructor(readonly run: RunRecord) {
-    super(`an intent is already running: ${run.intent}`);
+  constructor(readonly run: RunRecord, detail: string) {
+    super(detail);
   }
 }
 
@@ -139,10 +162,34 @@ export class RunManager {
     return this.options.launch !== null;
   }
 
-  /** The run whose agent process is alive, if any. */
-  live(): RunRecord | null {
+  /** Every run whose agent process is alive. */
+  liveRuns(): RunRecord[] {
+    const live: RunRecord[] = [];
     for (const run of this.runs.values()) {
-      if (!run.client.exited) return run.record;
+      if (!run.client.exited) live.push(run.record);
+    }
+    return live;
+  }
+
+  /** Any live run, if one exists (idle-daemon guard). */
+  live(): RunRecord | null {
+    return this.liveRuns()[0] ?? null;
+  }
+
+  /**
+   * Why a new run for `intent` cannot start now, or null when it can: the
+   * intent already has a live run, or another live run is unbound (its tools
+   * follow the shared cursor, which a second intent would move).
+   */
+  busyReason(intent: string): RunBusyError | null {
+    for (const record of this.liveRuns()) {
+      if (record.intent === intent) return new RunBusyError(record, `${intent} already has a running agent; stop it first`);
+      if (!record.bound) {
+        return new RunBusyError(
+          record,
+          `${record.intent} is running in a session that is not bound to it, so a second run would share its cursor; finish, park, or stop that intent first`,
+        );
+      }
     }
     return null;
   }
@@ -181,19 +228,21 @@ export class RunManager {
         events: live.events,
         available: this.available,
         start_prompt: this.startPrompt,
+        effort_control: this.options.launch?.effort !== undefined,
       };
     }
     const done = this.finished.get(intent) ?? this.readFromDisk(intent);
     if (!done) return null;
-    return { run: done.record, pending: [], events: done.events, available: this.available, start_prompt: this.startPrompt };
+    return { run: done.record, pending: [], events: done.events, available: this.available, start_prompt: this.startPrompt, effort_control: this.options.launch?.effort !== undefined };
   }
 
   /** Spawn the agent for `intent`, bind the session, and send the first prompt. */
-  async start(space: string, intent: string, prompt?: string): Promise<RunRecord> {
+  async start(space: string, intent: string, prompt?: string, sessionEffort: SessionEffort | null = null): Promise<RunRecord> {
     if (!this.options.launch) throw new AcpError("no agent runner is available on this machine");
     const first = prompt ?? this.options.launch.startPrompt;
-    const busy = this.live();
-    if (busy) throw new RunBusyError(busy);
+    const effort = this.options.launch.effort ? sessionEffort : null;
+    const busy = this.busyReason(intent);
+    if (busy) throw busy;
     const now = isoTimestamp();
     const record: RunRecord = {
       version: 1,
@@ -209,8 +258,10 @@ export class RunManager {
       turns: 0,
       last_stop_reason: null,
       error: null,
+      bound: false,
+      session_effort: effort,
     };
-    const live = this.attach(record, this.options.launch);
+    const live = this.attach(record, launchWithEffort(this.options.launch, effort));
     this.finished.delete(intent);
     this.persist(live);
     this.options.publish(intent);
@@ -220,8 +271,21 @@ export class RunManager {
       record.session_id = session.sessionId;
       record.pid = live.client.pid;
       this.persist(live);
+      await this.applyEffort(live);
+      record.bound = await this.awaitBinding(record);
+      if (!record.bound) {
+        this.note(live, "The session did not bind to this intent; its tools follow the workspace cursor. Other intents cannot start until this run ends.");
+        // A second run may have started in the meantime; an unbound run may not
+        // share the project with anything else.
+        const others = this.liveRuns().filter((candidate) => candidate.intent !== intent);
+        if (others.length) {
+          this.end(live, "failed", `session did not bind to ${intent} while ${others[0].intent} is running`);
+          throw new RunBusyError(others[0], `${intent} could not bind its session while ${others[0].intent} is running; stop that run first`);
+        }
+      }
+      this.persist(live);
     } catch (error) {
-      this.fail(live, error);
+      if (!(error instanceof RunBusyError)) this.fail(live, error);
       throw error;
     }
     this.beginTurn(live, first);
@@ -232,8 +296,37 @@ export class RunManager {
   prompt(intent: string, text: string): RunRecord {
     const live = this.requireLive(intent);
     if (live.turn) throw new AcpError("the agent is still working; wait for it to stop");
+    this.humanActed(live);
     this.beginTurn(live, text);
     return live.record;
+  }
+
+  /** A human acted: the nudge count restarts and a scheduled nudge is dropped. */
+  private humanActed(live: LiveRun): void {
+    live.nudges = 0;
+    clearTimeout(live.nudgeTimer ?? undefined);
+    live.nudgeTimer = null;
+  }
+
+  /**
+   * Resume a run that stopped mid-stage without anything for the human to do
+   * (the daemon-side forwarding-loop backstop). Bounded: after NUDGE_CAP
+   * nudges with no human action in between, the run stays idle and the note
+   * says so; Continue or Reply resets the count.
+   */
+  nudge(intent: string, reason: string): void {
+    const live = this.runs.get(intent);
+    if (!live || live.client.exited || live.turn || live.nudgeTimer) return;
+    if (live.nudges >= NUDGE_CAP) {
+      this.note(live, `${reason} It has stopped ${live.nudges} times in a row without progress; press Continue or reply when ready.`);
+      return;
+    }
+    live.nudges += 1;
+    this.note(live, `${reason} (${live.nudges}/${NUDGE_CAP})`);
+    live.nudgeTimer = setTimeout(() => {
+      live.nudgeTimer = null;
+      if (!live.client.exited && !live.turn && live.record.session_id) this.beginTurn(live, live.client.launch.startPrompt);
+    }, NUDGE_DELAY_MS);
   }
 
   /**
@@ -245,6 +338,7 @@ export class RunManager {
   continueAfterBrowser(intent: string, text: string): boolean {
     const live = this.runs.get(intent);
     if (!live || live.client.exited || live.turn) return false;
+    this.humanActed(live);
     this.beginTurn(live, text);
     return true;
   }
@@ -256,6 +350,7 @@ export class RunManager {
     const option = entry.input.options.find((candidate) => candidate.optionId === optionId);
     if (!option) throw new AcpError("unknown permission option");
     live.pending.delete(id);
+    this.humanActed(live);
     this.markEvent(live, "permission", id, (event) => {
       if (event.kind === "permission") event.decision = option.name;
     });
@@ -268,6 +363,7 @@ export class RunManager {
     const entry = live.pending.get(id);
     if (entry?.input.kind !== "question") throw new AcpError("no such pending question");
     live.pending.delete(id);
+    this.humanActed(live);
     this.markEvent(live, "question", id, (event) => {
       if (event.kind === "question") event.answered = true;
     });
@@ -307,14 +403,15 @@ export class RunManager {
           this.writeRecord(stored.record);
           continue;
         }
-        if (this.live()) break;
-        const record: RunRecord = { ...stored.record, state: "starting", pid: null, updated_at: isoTimestamp(), error: null };
-        const live = this.attach(record, this.options.launch, stored.events);
+        if (this.liveRuns().some((candidate) => !candidate.bound)) break;
+        const record: RunRecord = { ...stored.record, bound: stored.record.bound === true, session_effort: stored.record.session_effort ?? null, state: "starting", pid: null, updated_at: isoTimestamp(), error: null };
+        const live = this.attach(record, launchWithEffort(this.options.launch, record.session_effort), stored.events);
         this.persist(live);
         try {
           await live.client.start({ [ENV_REVIEW_RUN]: `${record.space}/${record.intent}` });
           await live.client.loadSession(record.session_id!);
           record.pid = live.client.pid;
+          await this.applyEffort(live);
           // The replayed transcript arrived as text; land it before the note.
           this.flushText(live);
           this.setState(live, "idle");
@@ -332,6 +429,7 @@ export class RunManager {
     for (const live of this.runs.values()) {
       if (live.client.exited) continue;
       clearTimeout(live.turnTimer ?? undefined);
+      clearTimeout(live.nudgeTimer ?? undefined);
       this.flushText(live);
       if (live.record.state !== "ended" && live.record.state !== "failed") {
         live.record.state = "idle";
@@ -345,9 +443,39 @@ export class RunManager {
 
   // ---- internals -------------------------------------------------------------
 
+  /** A config-option effort is set on the live session (flags were applied at launch). */
+  private async applyEffort(live: LiveRun): Promise<void> {
+    const effort = live.record.session_effort;
+    const control = live.client.launch.effort;
+    if (!effort || control?.kind !== "config" || !live.record.session_id) return;
+    try {
+      await live.client.setConfigOption(live.record.session_id, control.configId, effort);
+    } catch (error) {
+      this.note(live, `Could not set the session effort to ${effort}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * The SessionStart hook binds the harness session to the intent named in
+   * AIDLC_REVIEW_RUN. For every harness verified so far the hook's session id is
+   * the ACP session id, so the binding is checked under that id.
+   */
+  private async awaitBinding(record: RunRecord): Promise<boolean> {
+    if (!record.session_id) return false;
+    const deadline = Date.now() + BINDING_WAIT_MS;
+    while (Date.now() <= deadline) {
+      const binding = readSessionBinding(this.options.projectDir, record.session_id);
+      if (binding) return binding.space === record.space && binding.intent === record.intent;
+      await Bun.sleep(100);
+    }
+    return false;
+  }
+
   private attach(record: RunRecord, launch: AcpLaunch, events: RunEvent[] = []): LiveRun {
     const live: LiveRun = {
       record,
+      nudges: 0,
+      nudgeTimer: null,
       client: null as unknown as AcpClient,
       events,
       seq: events.length ? events[events.length - 1].seq : 0,
@@ -388,6 +516,7 @@ export class RunManager {
       this.note(live, `Turn exceeded ${this.turnMinutes} minutes; stopping it.`);
       live.client.cancel(sessionId);
     }, this.turnMinutes * 60_000);
+    let idle = false;
     live.turn = live.client
       .prompt(sessionId, prompt)
       .then((stopReason) => {
@@ -396,7 +525,7 @@ export class RunManager {
         this.push(live, { kind: "turn", phase: "stop", stop_reason: stopReason });
         if (!live.client.exited) {
           this.setState(live, "idle");
-          this.options.onIdle?.(live.record.intent, live.record.space);
+          idle = true;
         }
       })
       .catch((error: unknown) => {
@@ -407,6 +536,9 @@ export class RunManager {
         clearTimeout(live.turnTimer ?? undefined);
         live.turnTimer = null;
         live.turn = null;
+        // After the turn is released: the human's move, or the daemon's nudge,
+        // may start the next one.
+        if (idle) this.options.onIdle?.(live.record.intent, live.record.space);
       });
   }
 
@@ -508,6 +640,7 @@ export class RunManager {
 
   private end(live: LiveRun, state: "ended" | "failed", error: string | null): void {
     clearTimeout(live.turnTimer ?? undefined);
+    clearTimeout(live.nudgeTimer ?? undefined);
     this.flushText(live);
     live.record.state = state;
     live.record.error = error;

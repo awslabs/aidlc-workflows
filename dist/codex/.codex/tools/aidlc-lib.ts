@@ -13835,6 +13835,64 @@ interface GitPathModeIndex {
 
 type GitPathModeIndexCache = Map<string, GitPathModeIndex | null>;
 
+interface GitIgnoredSourcePaths {
+  queried: Set<string>;
+  ignored: Set<string>;
+}
+
+type SourceRegistrationCache = Map<string, Set<string> | null>;
+
+function batchedGitIgnoredSourcePaths(
+  sourceRepoDir: string,
+  paths: Iterable<string>,
+): GitIgnoredSourcePaths | null {
+  const queried = new Set(
+    [...paths].map((path) => path.replace(/\/+$/, "")),
+  );
+  if (queried.size === 0) return { queried, ignored: new Set() };
+  const input = `${[...queried].map((path) => `./${path}`).join("\0")}\0`;
+  const result = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "check-ignore", "-z", "--no-index", "--stdin"],
+    {
+      input,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0 && result.status !== 1) return null;
+  const ignored = new Set(
+    result.stdout
+      .split("\0")
+      .filter(Boolean)
+      .map((path) => path.replace(/^\.\//, "")),
+  );
+  return { queried, ignored };
+}
+
+function gitHeadPathModes(sourceRepoDir: string): Map<string, string> | null {
+  const head = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (head.status !== 0 || !head.stdout.trim()) return new Map();
+  const listed = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "ls-tree", "-r", "-t", "-z", "--full-tree", head.stdout.trim()],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (listed.status !== 0) return null;
+  const modes = new Map<string, string>();
+  for (const record of listed.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab === -1) continue;
+    const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1];
+    if (mode !== undefined) modes.set(record.slice(tab + 1), mode);
+  }
+  return modes;
+}
+
 function currentGitPathMode(
   sourceRepoDir: string,
   literalPath: string,
@@ -13931,42 +13989,56 @@ function symlinkedParentComponent(
   return null;
 }
 
-function sourcePathIsRegistered(
+function sourceRegisteredPaths(
   sourceRepoDir: string,
   carriesWorkspaceShell: boolean,
-  path: string,
-): boolean {
+  cache: SourceRegistrationCache,
+): Set<string> | null {
+  let repoKey: string;
+  try {
+    repoKey = realpathSync(sourceRepoDir);
+  } catch {
+    repoKey = resolvePath(sourceRepoDir);
+  }
+  if (cache.has(repoKey)) return cache.get(repoKey) ?? null;
   const harnessShellDirs = carriesWorkspaceShell
     ? sourceHarnessShellDirs(sourceRepoDir)
     : new Set<string>();
-  if (harnessShellDirs === null) return false;
+  if (harnessShellDirs === null) {
+    cache.set(repoKey, null);
+    return null;
+  }
   const registered = sourceFingerprintRegistryPaths(
     sourceRepoDir,
     carriesWorkspaceShell,
     harnessShellDirs,
   );
-  if (registered === null) return false;
+  if (registered === null) {
+    cache.set(repoKey, null);
+    return null;
+  }
   const effective = new Set(registered);
   let rootReal: string;
   try {
     rootReal = realpathSync(sourceRepoDir);
   } catch {
-    return false;
+    cache.set(repoKey, null);
+    return null;
   }
   for (const logicalPath of registered) {
-    const physical = registeredPhysicalSourcePath(
-      rootReal,
-      logicalPath,
-      false,
-    );
-    if (physical === null || physical.path === null) return false;
+    const physical = registeredPhysicalSourcePath(rootReal, logicalPath, false);
+    if (physical === null || physical.path === null) {
+      cache.set(repoKey, null);
+      return null;
+    }
     const physicalPath = physical.path;
     const physicalInside = pathIsWithinRoot(rootReal, physicalPath);
-    if (physical.externalHop && physicalInside) return false;
+    if (physical.externalHop && physicalInside) {
+      cache.set(repoKey, null);
+      return null;
+    }
     if (!physicalInside) continue;
-    const physicalRel = relative(rootReal, physicalPath)
-      .split(sep)
-      .join("/");
+    const physicalRel = relative(rootReal, physicalPath).split(sep).join("/");
     if (
       physicalRel.length > 0 &&
       !sourcePathPhysicallyExcluded(
@@ -13978,6 +14050,22 @@ function sourcePathIsRegistered(
       effective.add(physicalRel);
     }
   }
+  cache.set(repoKey, effective);
+  return effective;
+}
+
+function sourcePathIsRegistered(
+  sourceRepoDir: string,
+  carriesWorkspaceShell: boolean,
+  path: string,
+  cache: SourceRegistrationCache,
+): boolean {
+  const effective = sourceRegisteredPaths(
+    sourceRepoDir,
+    carriesWorkspaceShell,
+    cache,
+  );
+  if (effective === null) return false;
   const normalized = path.replace(/\/+$/, "");
   if (effective.has(normalized)) return true;
   let slash = normalized.lastIndexOf("/");
@@ -13994,6 +14082,9 @@ function ignoredSourceClaimReason(
   prefix: boolean,
   pathModeIndexes: GitPathModeIndexCache,
   carriesWorkspaceShell: boolean,
+  registrationCache: SourceRegistrationCache,
+  batchedIgnored?: GitIgnoredSourcePaths,
+  headPathModes?: ReadonlyMap<string, string>,
 ): string | null {
   if (!isGitRepoDir(sourceRepoDir)) return null;
   const literalPath = path.replace(/\/+$/, "");
@@ -14015,69 +14106,86 @@ function ignoredSourceClaimReason(
   } catch {
     // An absent exact path is valid and becomes stale if it appears later.
   }
-
   let headTracked = false;
-  const head = spawnSync(
-    "git",
-    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-  );
-  if (head.status === 0 && head.stdout.trim()) {
-    const listed = spawnSync(
+  if (headPathModes !== undefined) {
+    const headMode = headPathModes.get(literalPath);
+    if (!prefix && !currentExists && headMode === "040000") {
+      return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+    }
+    headTracked = headMode !== undefined && headMode !== "040000";
+  } else {
+    const head = spawnSync(
       "git",
-      [
-        "-C",
-        sourceRepoDir,
-        "ls-tree",
-        "-z",
-        "--full-tree",
-        head.stdout.trim(),
-        "--",
-        literalPathspec,
-      ],
+      ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
       { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
     );
-    if (listed.status !== 0) {
-      return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
-    }
-    const entry = listed.stdout.split("\0").find(Boolean);
-    if (entry) {
-      const headIsDirectory = /^040000 /.test(entry);
-      if (!prefix && !currentExists && headIsDirectory) {
-        return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+    if (head.status === 0 && head.stdout.trim()) {
+      const listed = spawnSync(
+        "git",
+        [
+          "-C",
+          sourceRepoDir,
+          "ls-tree",
+          "-z",
+          "--full-tree",
+          head.stdout.trim(),
+          "--",
+          literalPathspec,
+        ],
+        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (listed.status !== 0) {
+        return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
       }
-      headTracked = !headIsDirectory;
+      const entry = listed.stdout.split("\0").find(Boolean);
+      if (entry) {
+        const headIsDirectory = /^040000 /.test(entry);
+        if (!prefix && !currentExists && headIsDirectory) {
+          return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+        }
+        headTracked = !headIsDirectory;
+      }
     }
   }
 
-  const ignored = spawnSync(
-    "git",
-    [
-      "-C",
-      sourceRepoDir,
-      "check-ignore",
-      "-q",
-      "--no-index",
-      "--",
-      literalPathspec,
-    ],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-  );
-  if (ignored.status === 0) {
+  const ignoredByGit = batchedIgnored?.queried.has(literalPath)
+    ? batchedIgnored.ignored.has(literalPath)
+    : (() => {
+        const ignored = spawnSync(
+          "git",
+          [
+            "-C",
+            sourceRepoDir,
+            "check-ignore",
+            "-q",
+            "--no-index",
+            "--",
+            literalPathspec,
+          ],
+          { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+        );
+        return ignored.status === 0
+          ? true
+          : ignored.status === 1
+            ? false
+            : null;
+      })();
+  if (ignoredByGit === null) {
+    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (ignoredByGit) {
     if (
       sourcePathIsRegistered(
         sourceRepoDir,
         carriesWorkspaceShell,
         literalPath,
+        registrationCache,
       )
     ) {
       return null;
     }
     if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
-  }
-  if (ignored.status !== 1) {
-    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
   }
   if (!prefix && currentIsDirectory) {
     const currentMode = currentGitPathMode(
@@ -14094,6 +14202,11 @@ function ignoredSourceClaimReason(
   }
   if (!prefix) return null;
 
+  const prefixHead = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
   const indexFile = join(
     tmpdir(),
     `aidlc-ignored-claims-${process.pid}-${randomUUID().slice(0, 8)}`,
@@ -14106,8 +14219,8 @@ function ignoredSourceClaimReason(
         "-C",
         sourceRepoDir,
         "read-tree",
-        ...(head.status === 0 && head.stdout.trim()
-          ? [head.stdout.trim()]
+        ...(prefixHead.status === 0 && prefixHead.stdout.trim()
+          ? [prefixHead.stdout.trim()]
           : ["--empty"]),
       ],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
@@ -14193,6 +14306,7 @@ function symlinkClaimTargetReason(
   prefix: boolean,
   carriesWorkspaceShell: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  registrationCache: SourceRegistrationCache,
 ): string | null {
   const links = manifestClaimSymlinkPaths(
     sourceRepoDir,
@@ -14300,6 +14414,7 @@ function symlinkClaimTargetReason(
         false,
         pathModeIndexes,
         carriesWorkspaceShell,
+        registrationCache,
       );
       if (ignored !== null) {
         const targetReason = prefix && stat.isDirectory()
@@ -14382,6 +14497,20 @@ export function readUnitSourceManifest(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const pathModeIndexes: GitPathModeIndexCache = new Map();
+  const registrationCache: SourceRegistrationCache = new Map();
+  const worktreeClaimPaths = worktreeRelative
+    ? value.writes.flatMap((write) => {
+        if (!isPlainObject(write) || typeof write.path !== "string") return [];
+        const normalized = normalizeManifestSourcePath(write.path);
+        return "reason" in normalized ? [] : [normalized.path];
+      })
+    : [];
+  const worktreeIgnored = worktreeRelative
+    ? batchedGitIgnoredSourcePaths(projectDir, worktreeClaimPaths) ?? undefined
+    : undefined;
+  const worktreeHeadModes = worktreeRelative
+    ? gitHeadPathModes(projectDir) ?? undefined
+    : undefined;
 
   try {
   for (let index = 0; index < value.writes.length; index++) {
@@ -14431,6 +14560,9 @@ export function readUnitSourceManifest(
       normalized.prefix,
       pathModeIndexes,
       carriesWorkspaceShell,
+      registrationCache,
+      sourceRepoDir === projectDir ? worktreeIgnored : undefined,
+      sourceRepoDir === projectDir ? worktreeHeadModes : undefined,
     );
     if (ignoredReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
@@ -14441,6 +14573,7 @@ export function readUnitSourceManifest(
       normalized.prefix,
       carriesWorkspaceShell,
       pathModeIndexes,
+      registrationCache,
     );
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };

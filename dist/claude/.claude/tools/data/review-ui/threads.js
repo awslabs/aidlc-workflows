@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { editSummary, escapeHtml } from "./diff.js";
 import { icon } from "./icons.js";
-import { agentFor, decisionInFlight, persistAnnotations, relativeTime, setNotice, store, selectedThreadIds } from "./store.js";
+import { agentFor, decisionInFlight, persistAnnotations, relativeTime, setNotice, store, selectedThreadIds, selection } from "./store.js";
 
 const slot = document.getElementById("slot");
 const KINDS = [
@@ -244,7 +244,7 @@ async function sendDecision(decision, notes) {
         decision_hint: decision === "approve" ? "approve" : "request-changes",
         ...(cleanNotes ? { general: cleanNotes } : {}),
         annotations: pending,
-      });
+      }, selection());
       feedbackSent = true;
     }
 
@@ -255,7 +255,7 @@ async function sendDecision(decision, notes) {
         revision: current.revision,
         decision,
         ...(cleanNotes ? { notes: cleanNotes } : {}),
-      });
+      }, selection());
       const sentEdits = [
         ...(Array.isArray(store.sentEdits) ? store.sentEdits : []),
         ...store.annotations

@@ -37,8 +37,8 @@ export const api = {
   async get(path, params) {
     return request(api.url(path, params));
   },
-  async post(path, body) {
-    return request(path, {
+  async post(path, body, params) {
+    return request(api.url(path, params), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

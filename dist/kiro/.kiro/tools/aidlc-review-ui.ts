@@ -21,7 +21,6 @@ import { networkInterfaces } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
 import {
-  activeIntent,
   activeSpace,
   artifactFormatsForProject,
   artifactFormatsFromState,
@@ -48,7 +47,7 @@ import {
   validScopes,
 } from "./aidlc-lib.ts";
 import { inferScopeFromText } from "./aidlc-utility.ts";
-import { AcpError, acpBackendForHarness, resolveAcpLaunch } from "./aidlc-review-ui-acp.ts";
+import { AcpError, acpBackendForHarness, resolveAcpLaunch, SESSION_EFFORT_LEVELS, splitPinned, vendorAcpDir, vendoredAcpBin, type SessionEffort } from "./aidlc-review-ui-acp.ts";
 import { RunBusyError, RunManager } from "./aidlc-review-ui-runs.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -85,6 +84,9 @@ import {
   type CurrentPointer,
   type ReviewManifest,
   type ServerInfo,
+  ensureReviewUiDaemon,
+  serverLogPath,
+  ENV_REVIEW_UI,
 } from "./aidlc-review-ui-shared.ts";
 import {
   injectBridge,
@@ -128,10 +130,15 @@ const ASSET_ROOT = join(import.meta.dir, "data", "review-ui");
 const USAGE = `Usage: aidlc-review-ui.ts <command> [options]
 
 Commands:
+  start [--project-dir <path>]         Start the review UI for this project (detached) and open it - no
+                                       harness session needed; Start in the browser runs the work
   serve --project-dir <absolute-path>  Run the review UI daemon in the foreground
   status [--project-dir <path>] [--json]
   stop [--project-dir <path>]
   open [--project-dir <path>]
+  vendor-agent [--project-dir <path>]  Install this harness's pinned ACP agent adapter under
+                                       <harnessDir>/tools/vendor/acp so Start works without a
+                                       package registry (copy the tree to offline hosts)
 
 Options:
   --help                            Show this help
@@ -190,7 +197,7 @@ function parseArgs(argv: string[]): {
     process.exit(0);
   }
   const command = argv[0];
-  if (!new Set(["serve", "status", "stop", "open"]).has(command)) {
+  if (!new Set(["start", "serve", "status", "stop", "open", "vendor-agent"]).has(command)) {
     usageError(`Unknown command: ${command}`);
   }
   let projectDir = process.cwd();
@@ -616,8 +623,8 @@ function stageMarker(state: string | null, currentStage: string | null): string 
   return checkbox ? CHECKBOX_MAP[checkbox.state] : null;
 }
 
-function statePayload(projectDir: string): Record<string, unknown> {
-  const context = stateContext(projectDir);
+function statePayload(projectDir: string, url?: URL): Record<string, unknown> {
+  const context = stateContext(projectDir, url ? selectionFromUrl(url) : {});
   const revisionValue = context.state ? getField(context.state, "Revision Count") : null;
   const revision = revisionValue === null ? null : Number(revisionValue);
   // The workflow's cursor names the stage. The pointer may still describe a
@@ -1127,7 +1134,7 @@ function validFeedbackBody(value: unknown): value is FeedbackRequest {
   });
 }
 
-async function feedbackResponse(projectDir: string, request: Request): Promise<Response> {
+async function feedbackResponse(projectDir: string, request: Request, url: URL): Promise<Response> {
   const contentLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
     throw new HttpError(413, "request body too large");
@@ -1142,7 +1149,7 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
   }
   if (!validFeedbackBody(parsed)) throw new HttpError(400, "invalid feedback body");
 
-  const { current, manifest, stageDir } = selectedStageContext(projectDir);
+  const { current, manifest, stageDir } = selectedStageContext(projectDir, url);
   if (
     parsed.stage !== current.stage ||
     parsed.unit !== current.unit ||
@@ -1240,16 +1247,15 @@ function validAnswersEnvelope(value: unknown): value is Omit<AnswersRequest, "an
     Array.isArray(body.answers);
 }
 
-function appendHumanTurn(projectDir: string, file: string): void {
+function appendHumanTurn(projectDir: string, file: string, selection: { space: string; intent: string | null }): void {
   try {
-    const space = activeSpace(projectDir);
     if (humanTurnMintAllowed()) {
       appendAuditEntry(
         "HUMAN_TURN",
         { Mode: "browser", Source: "review-ui", Submission: file },
         projectDir,
-        activeIntent(projectDir, space) ?? undefined,
-        space,
+        selection.intent ?? undefined,
+        selection.space,
       );
     }
     markHumanTurn(projectDir);
@@ -1277,6 +1283,7 @@ interface IntentRequestBody {
   scope?: string | null;
   effort?: unknown;
   label?: string;
+  session_effort?: string | null;
 }
 
 function parseEffortBody(value: unknown): IntentEffort | null {
@@ -1330,13 +1337,15 @@ async function intentRequestResponse(projectDir: string, request: Request, publi
     scope = body.scope;
   }
   const effort = parseEffortBody(body.effort);
+  const sessionEffort = parseSessionEffort(body.session_effort);
   if (!runs.available || scope === null) {
     const stored = appendPendingIntentRequest(projectDir, space, { text, scope, effort });
     publishState();
     return json({ id: stored.id, space, created_at: stored.created_at, mode: "requested" }, 201);
   }
-  const busy = runs.live();
-  if (busy) throw new HttpError(409, `an intent is already running: ${busy.intent}. Finish, park, or stop it first.`);
+  // Refuse before creating anything when a run could not start anyway.
+  const blocked = runs.liveRuns().find((record) => !record.bound);
+  if (blocked) throw new HttpError(409, `${blocked.intent} is running in a session that is not bound to it; finish, park, or stop it before starting another intent.`);
   const label = typeof body.label === "string" && body.label.trim() ? body.label.trim() : text;
   const args = [
     join(import.meta.dir, "aidlc-utility.ts"),
@@ -1357,7 +1366,7 @@ async function intentRequestResponse(projectDir: string, request: Request, publi
   const intent = created[1];
   publishState();
   try {
-    const run = await runs.start(space, intent);
+    const run = await runs.start(space, intent, undefined, sessionEffort);
     return json({ intent, space, run_id: run.run_id, mode: "running" }, 201);
   } catch (error) {
     if (error instanceof RunBusyError) throw new HttpError(409, error.message);
@@ -1377,6 +1386,14 @@ function proposeScopeResponse(url: URL): Response {
   }
   const fallback = selectionAwareDefaultScope();
   return json({ scope: fallback.scope, source: "default" });
+}
+
+function parseSessionEffort(value: unknown): SessionEffort | null {
+  if (value === undefined || value === null || value === "" || value === "default") return null;
+  if (typeof value !== "string" || !(SESSION_EFFORT_LEVELS as readonly string[]).includes(value)) {
+    throw new HttpError(400, `session effort must be one of ${SESSION_EFFORT_LEVELS.join(", ")}`);
+  }
+  return value as SessionEffort;
 }
 
 function requireIntentParam(value: unknown): string {
@@ -1404,7 +1421,7 @@ async function runActionResponse(runs: RunManager, action: string, request: Requ
         if (!runs.isLive(intent)) {
           const space = runs.spaceOf(intent);
           if (!space) throw new HttpError(404, "no such intent");
-          return json({ run: await runs.start(space, intent, text) }, 201);
+          return json({ run: await runs.start(space, intent, text, parseSessionEffort(body.session_effort)) }, 201);
         }
         return json({ run: runs.prompt(intent, text) });
       }
@@ -1467,9 +1484,11 @@ interface AnswersLanded {
   stage: string;
   questionsFile: string;
   unit: string | null;
+  intent: string | null;
+  space: string;
 }
 
-async function answersResponse(projectDir: string, request: Request, landed?: (info: AnswersLanded) => void): Promise<Response> {
+async function answersResponse(projectDir: string, request: Request, url: URL, landed?: (info: AnswersLanded) => void): Promise<Response> {
   const bytes = await limitedRequestBytes(request, MAX_ANSWERS_BODY_BYTES);
   let body: unknown;
   try {
@@ -1482,7 +1501,8 @@ async function answersResponse(projectDir: string, request: Request, landed?: (i
   const questionsPath = resolveProjectAidlcPath(projectDir, body.questions_file);
   regularFile(questionsPath);
   if (extname(questionsPath).toLowerCase() !== ".md") throw new HttpError(400, "invalid questions file");
-  const target = requireQuestionsTarget(projectDir, body.questions_file, questionsPath);
+  const context = stateContext(projectDir, selectionFromUrl(url));
+  const target = requireQuestionsTarget(projectDir, body.questions_file, questionsPath, context);
   const source = readFileSync(questionsPath);
   const sourceSha256 = sha256Hex(source);
   if (body.source_sha256 !== sourceSha256) {
@@ -1529,8 +1549,8 @@ async function answersResponse(projectDir: string, request: Request, landed?: (i
     } finally {
       closeSync(descriptor);
     }
-    appendHumanTurn(projectDir, file);
-    landed?.({ stage: target.stage, questionsFile: target.file, unit: stateContext(projectDir).current?.unit ?? null });
+    appendHumanTurn(projectDir, file, context);
+    landed?.({ stage: target.stage, questionsFile: target.file, unit: context.current?.unit ?? null, intent: context.intent, space: context.space });
     return json({ file });
   }
 }
@@ -1633,17 +1653,29 @@ async function serve(projectDir: string): Promise<void> {
       try {
         const context = stateContext(projectDir, { intent, space });
         const current = context.current;
-        if (current?.state !== "prepared" || !current.questions_sha256 || !current.stage) return;
-        const target = currentQuestionsTarget(projectDir, context);
-        if (!target || target.ready) return;
-        if (openQuestionsRound(context.record, current.stage, current.questions_sha256)) publishState();
+        if (current?.state === "prepared" && current.questions_sha256 && current.stage) {
+          const target = currentQuestionsTarget(projectDir, context);
+          if (target && !target.ready && openQuestionsRound(context.record, current.stage, current.questions_sha256)) publishState();
+          return;
+        }
+        // The forwarding loop's backstop for a harness whose Stop hook does not
+        // fire under its ACP agent: a turn that ended mid-stage - the current
+        // stage still in progress and no round or gate open for the human - is
+        // nudged with the resume prompt, at most twice per human action (the
+        // same ceiling the Stop hook uses for an interactive run).
+        // A pointer on a human moment (a round, a gate, a confirmation, or the
+        // revising loop) is the human's turn, never a nudge.
+        if (current && current.state !== "none") return;
+        const stage = context.state ? getField(context.state, "Current Stage") : null;
+        const checkbox = context.state && stage ? parseCheckboxes(context.state).find((entry) => entry.slug === stage) : undefined;
+        if (checkbox?.state !== "in-progress") return;
+        runs.nudge(intent, `The agent stopped while ${stage} was still in progress; resuming.`);
       } catch {
         // A malformed record is not a reason to drop the run.
       }
     },
   });
-  const continueRun = (text: string): void => {
-    const intent = stateContext(projectDir).intent;
+  const continueRun = (intent: string | null, text: string): void => {
     if (intent) runs.continueAfterBrowser(intent, text);
   };
   const serveOn = (hostname: string, candidatePort: number) => Bun.serve<{ authenticated: true }>({
@@ -1693,7 +1725,7 @@ async function serve(projectDir: string): Promise<void> {
       const response = await (async (): Promise<Response> => {
         try {
           if (url.pathname === "/" && request.method === "GET") return appShellResponse();
-          if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir));
+          if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir, url));
           if (request.method === "GET" && url.pathname === "/api/workflow") {
             const payload = workflowPayload(projectDir, {
               ...selectionFromUrl(url),
@@ -1703,6 +1735,7 @@ async function serve(projectDir: string): Promise<void> {
             for (const entry of payload.intents) entry.run = runs.stateOf(entry.slug);
             payload.runner = runs.available;
             payload.runner_requirement = runs.available ? null : runnerRequirement;
+            payload.runner_effort = runnerLaunch?.effort !== undefined;
             return json(payload);
           }
           if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir, url));
@@ -1713,33 +1746,34 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "GET" && url.pathname === "/api/history") return historyResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/responses") return responsesResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/remarks") return remarksResponse(projectDir, url);
-          if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
+          if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request, url);
           if (request.method === "POST" && url.pathname === "/api/render-fragment") return await renderFragmentResponse(request);
           if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
           if (request.method === "POST" && url.pathname === "/api/answers") {
-            return await answersResponse(projectDir, request, (info) =>
-              continueRun(browserAnswersContinuation({ harnessDir: harnessDir(), slug: info.stage, questionsFile: info.questionsFile, unit: info.unit })));
+            return await answersResponse(projectDir, request, url, (info) =>
+              continueRun(info.intent, browserAnswersContinuation({ harnessDir: harnessDir(), slug: info.stage, questionsFile: info.questionsFile, unit: info.unit })));
           }
           if (request.method === "GET" && url.pathname === "/api/intents/propose") return proposeScopeResponse(url);
           if (request.method === "POST" && url.pathname === "/api/intents") return await intentRequestResponse(projectDir, request, publishState, runs);
           if (request.method === "DELETE" && url.pathname === "/api/intents") return withdrawIntentRequestResponse(projectDir, url, publishState);
           if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
-          if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir).intent, runnerRequirement);
+          if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir, selectionFromUrl(url)).intent, runnerRequirement);
           const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
           if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);
           if (request.method === "POST" && url.pathname === "/api/decision") {
             const submitted = request.clone();
+            const decisionContext = stateContext(projectDir, selectionFromUrl(url));
             const response = await handleDecision(request, {
               projectDir,
-              stateContext: stateContext(projectDir),
-              appendHumanTurn: (file) => appendHumanTurn(projectDir, file),
+              stateContext: decisionContext,
+              appendHumanTurn: (file) => appendHumanTurn(projectDir, file, decisionContext),
             });
             if (response.ok) {
               try {
                 const body = (await submitted.json()) as { stage?: string; unit?: string | null; decision?: "approve" | "request-changes"; notes?: string | null };
                 const { file } = (await response.clone().json()) as { file: string };
                 if (body.stage && body.decision) {
-                  continueRun(browserDecisionContinuation({
+                  continueRun(decisionContext.intent, browserDecisionContinuation({
                     harnessDir: harnessDir(),
                     slug: body.stage,
                     unit: body.unit ?? null,
@@ -1986,6 +2020,80 @@ function stop(projectDir: string): void {
   process.stdout.write(`Review UI: stopping (pid ${info.pid})\n`);
 }
 
+/**
+ * The browser-first entry: start the daemon detached (the same spawn the
+ * SessionStart hook uses, with the review UI forced on) and open the tab.
+ * From here every intent is started, driven, and reviewed in the browser; a
+ * harness session is only ever needed for the terminal path.
+ */
+async function start(projectDir: string): Promise<void> {
+  const resolved = realpathSync(projectDir);
+  const env = { ...process.env, [ENV_REVIEW_UI]: "1" };
+  const info = await ensureReviewUiDaemon(resolved, { toolsDir: import.meta.dir, env, waitMs: 8_000 });
+  if (!info || !serverInfoLooksAlive(info)) {
+    process.stderr.write(`Review UI did not start; see ${serverLogPath(resolved, env)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const harness = installedHarnessName(resolved);
+  const launch = process.env[ENV_REVIEW_RUNNER] === "0" ? null : resolveAcpLaunch(harness);
+  const requirement = acpBackendForHarness(harness)?.requirement;
+  process.stdout.write(`Review UI: ${info.url}\n`);
+  process.stdout.write(
+    launch
+      ? `Agent runner: ${launch.backend} (${launch.command.map((part) => basename(part)).join(" ")}) - Start in the browser runs the work.\n`
+      : `Agent runner: off${requirement ? ` (needs ${requirement})` : ""} - Start records requests for the terminal.\n`,
+  );
+  if (process.env[ENV_REVIEW_OPEN] !== "0") {
+    const url = reviewUiHumanUrl(resolved, env);
+    if (url) openBrowser(url);
+  }
+}
+
+/**
+ * Vendor the pinned ACP adapter for the installed harness into
+ * `<harnessDir>/tools/vendor/acp` (a normal `bun install` of the pinned
+ * package, once, with registry access). The runner prefers that copy over
+ * `bunx`, so an install copied to a host without a registry still runs.
+ * Harnesses whose agent is the CLI itself have nothing to vendor.
+ */
+async function vendorAgent(projectDir: string): Promise<void> {
+  const harness = installedHarnessName(realpathSync(projectDir));
+  const profile = acpBackendForHarness(harness);
+  if (!profile) {
+    process.stderr.write(`No ACP profile for harness ${harness ?? "?"}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!profile.vendorPackage) {
+    process.stdout.write(`${profile.backend}: the agent is the harness CLI itself (${profile.requirement}); nothing to vendor.\n`);
+    return;
+  }
+  const dir = vendorAcpDir(import.meta.dir);
+  mkdirSync(dir, { recursive: true });
+  const [name, version] = splitPinned(profile.vendorPackage);
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "aidlc-acp-vendor", private: true, dependencies: { [name]: version } }, null, 2)}\n`);
+  process.stdout.write(`Installing ${profile.vendorPackage} into ${dir}\n`);
+  // Optional dependencies are the adapters' bundled agent binaries (the Claude
+  // SDK's ~190 MB native build per platform; Codex's binary). The runner points
+  // the adapter at the harness CLI already on the machine, so they are never
+  // used - omit them and the vendored tree is a few tens of megabytes.
+  const result = Bun.spawnSync({ cmd: [process.execPath, "install", "--no-save", "--omit=optional"], cwd: dir, stdout: "inherit", stderr: "inherit" });
+  if (result.exitCode !== 0) {
+    process.stderr.write("vendor-agent: bun install failed\n");
+    process.exitCode = 1;
+    return;
+  }
+  const bin = vendoredAcpBin(import.meta.dir, profile);
+  if (!bin) {
+    process.stderr.write(`vendor-agent: ${profile.vendorBin} not found under ${dir} after install\n`);
+    process.exitCode = 1;
+    return;
+  }
+  writeFileSync(join(dir, "manifest.json"), `${JSON.stringify({ version: 1, backend: profile.backend, package: profile.vendorPackage, installed_at: new Date().toISOString() }, null, 2)}\n`);
+  process.stdout.write(`Vendored: ${bin}\nThe runner now uses it instead of bunx. Copy ${join(harnessDir(), "tools", "vendor")} with the install for offline hosts.\n`);
+}
+
 function open(projectDir: string): void {
   const url = reviewUiHumanUrl(projectDir);
   if (!url) {
@@ -2001,8 +2109,10 @@ export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   if (!existsSync(args.projectDir)) usageError(`Project directory does not exist: ${args.projectDir}`);
   if (args.command === "serve") await serve(args.projectDir);
+  else if (args.command === "start") await start(args.projectDir);
   else if (args.command === "status") status(args.projectDir, args.asJson);
   else if (args.command === "stop") stop(args.projectDir);
+  else if (args.command === "vendor-agent") await vendorAgent(args.projectDir);
   else open(args.projectDir);
 }
 

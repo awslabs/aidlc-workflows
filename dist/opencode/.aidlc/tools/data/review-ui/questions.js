@@ -2,7 +2,7 @@
 // only writes an answers-NNN.json submission; the terminal remains the place
 // where that submission is applied to the questions file.
 import { api } from "./api.js";
-import { store } from "./store.js";
+import { store, selection } from "./store.js";
 
 const HTML_TAGS = new Set([
   "h2", "h3", "p", "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
@@ -499,7 +499,7 @@ async function saveAnswers() {
       questions_file: round.path,
       source_sha256: round.sha256,
       answers,
-    });
+    }, selection());
     sessionStorage.removeItem(draftKey(round.sha256));
     // The daemon's next state push carries `submitted`; lock and say so now so
     // the click is acknowledged before it arrives.

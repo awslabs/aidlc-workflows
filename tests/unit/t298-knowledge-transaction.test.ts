@@ -43,7 +43,7 @@
 //   later read treats as valid.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
@@ -571,7 +571,7 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
     expect(collectStaleJournals(p, SPACE)).toEqual([]);
   });
 
-  test("a txn dir stamped by a REAL, DIFFERENT, still-running process survives a concurrent sync", () => {
+  test("a txn dir stamped by a REAL, DIFFERENT, still-running process survives a concurrent sync", async () => {
     // The round-9 review finding, driven cross-process rather than by trusting
     // `isPidAlive` against this test's own pid (which is trivially true and
     // proves less). A second real bun process holds a txn dir open -- mkdirs
@@ -597,32 +597,55 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
         `const until = Date.now() + 3000;\n` +
         `while (Date.now() < until) { fs.existsSync(${JSON.stringify(p)}); }\n`,
     );
-    const holderProc = spawnSync("bash", ["-c",
-      `bun ${JSON.stringify(holder)} & echo $!`], { encoding: "utf-8" });
-    const holderPid = Number(holderProc.stdout.trim().split("\n").pop());
-    expect(Number.isInteger(holderPid) && holderPid > 0, `bad holder pid: ${holderProc.stdout}`).toBe(true);
+    const holderProc = spawn("bun", [holder], {
+      env: CHILD_ENV,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const holderPid = holderProc.pid ?? -1;
+    expect(Number.isInteger(holderPid) && holderPid > 0, "holder process did not start").toBe(true);
 
+    let holderStdout = "";
+    let holderStderr = "";
+    holderProc.stdout.setEncoding("utf-8");
+    holderProc.stderr.setEncoding("utf-8");
+    const holderExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      holderProc.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    const holderReady = new Promise<void>((resolve, reject) => {
+      holderProc.stdout.on("data", (chunk: string) => {
+        holderStdout += chunk;
+        if (holderStdout.split("\n").includes(`READY ${holderPid}`)) resolve();
+      });
+      holderProc.stderr.on("data", (chunk: string) => { holderStderr += chunk; });
+      holderProc.once("error", reject);
+      holderProc.once("close", (code, signal) => {
+        reject(new Error(`holder exited before READY (code ${code}, signal ${signal}); stdout: ${holderStdout || "(empty)"}; stderr: ${holderStderr || "(empty)"}`));
+      });
+    });
+
+    const stampPath = join(journalTxnDir(p, SPACE, txnId), "writer.pid");
+    let observedStampPid = -1;
+    let exitResult: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     try {
-      // Wait for the holder's stamp to actually land (real cross-process
-      // startup, not assumed-instant).
-      const stampPath = join(journalTxnDir(p, SPACE, txnId), "writer.pid");
-      const deadline = Date.now() + 5000;
-      while (!existsSync(stampPath) && Date.now() < deadline) { /* spin */ }
-      expect(existsSync(stampPath), "the holder process never wrote its stamp").toBe(true);
+      // READY is emitted only after the child has published its own PID. Await
+      // that observable event instead of guessing how long bun startup takes.
+      await holderReady;
+      observedStampPid = Number(readFileSync(stampPath, "utf-8").trim());
+      const holderOutput = `stdout: ${holderStdout || "(empty)"}; stderr: ${holderStderr || "(empty)"}`;
+      expect(observedStampPid, `the holder process never published its own pid; ${holderOutput}`).toBe(holderPid);
+      expect(isPidAliveViaKill(holderPid), `the stamped holder exited before sync; ${holderOutput}`).toBe(true);
 
       // While the holder is still alive, collection must leave its dir alone.
       const collected = collectStaleJournals(p, SPACE);
       expect(collected).not.toContain(txnId);
       expect(existsSync(stampPath)).toBe(true);
     } finally {
-      // Let the holder finish naturally (it self-terminates after ~3s); this
-      // is not a kill, so a genuine "process exits on its own" transition is
-      // what the next assertion observes.
-      try { spawnSync("bash", ["-c", `wait ${holderPid} 2>/dev/null; true`]); } catch { /* best-effort */ }
-      const deadline2 = Date.now() + 8000;
-      while (isPidAliveViaKill(holderPid) && Date.now() < deadline2) { /* spin */ }
+      // Await the actual child rather than trying to `wait` for it from an
+      // unrelated shell (which cannot reap a process it did not spawn).
+      exitResult = await holderExit;
     }
 
+    expect(exitResult!.code, `holder failed with signal ${exitResult!.signal}; stderr: ${holderStderr}`).toBe(0);
     // Now the holder is gone: the SAME dir, same stamp file (naming a now-dead
     // pid), must be collectable.
     expect(isPidAliveViaKill(holderPid), "the holder should have exited by now").toBe(false);

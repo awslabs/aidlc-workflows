@@ -28,9 +28,10 @@ export async function refresh() {
   refreshing = (async () => {
     try {
       const intent = store.view.intent || undefined;
+      const space = store.workflow?.space || undefined;
       const [state, workflow] = await Promise.all([
-        api.get("/api/state"),
-        api.get("/api/workflow", { intent }).catch((error) => {
+        api.get("/api/state", { intent, space }),
+        api.get("/api/workflow", { intent, space }).catch((error) => {
           console.warn("[review-ui] /api/workflow unavailable", error);
           return null;
         }),

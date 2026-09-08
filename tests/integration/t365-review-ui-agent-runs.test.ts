@@ -136,7 +136,8 @@ describe("t365 review UI agent runs", () => {
   test("Start creates the record and runs the agent; both bridges round-trip; a second Start is refused", async () => {
     expect((await api("GET", "/api/intents/propose?text=fix%20the%20login%20bug")).body).toEqual({ scope: "bugfix", source: "keyword" });
 
-    const start = await api("POST", "/api/intents", { text: "Build a tiny todo CLI", space: "default", scope: "express", effort: { preset: "minimal" } });
+    expect((await api("POST", "/api/intents", { text: "x", space: "default", scope: "express", session_effort: "turbo" })).status).toBe(400);
+    const start = await api("POST", "/api/intents", { text: "Build a tiny todo CLI", space: "default", scope: "express", effort: { preset: "minimal" }, session_effort: "medium" });
     expect(start.status).toBe(201);
     expect(start.body.mode).toBe("running");
     intent = String(start.body.intent);
@@ -151,10 +152,16 @@ describe("t365 review UI agent runs", () => {
     let view = await until(intent, (candidate) => candidate.pending.some((input) => input.kind === "permission"));
     expect(view.run.state).toBe("waiting");
     expect(texts(view)).toContain(`run=default/${intent}`); // the session binding reached the agent's environment
+    // The claude profile takes the effort as a config option after session/new.
+    expect(view.run.session_effort).toBe("medium");
+    expect(texts(view)).toContain("config=effort=medium");
     const permission = view.pending.find((input) => input.kind === "permission")!;
     expect(permission.kind === "permission" && permission.tool_call.title).toBe("Run `bun test`");
 
     // A second Start while this one is live is refused and creates nothing.
+    // The scripted agent never binds its session (no SessionStart hook runs), so
+    // this run holds the project: a second Start is refused and creates nothing.
+    expect(view.run.bound).toBe(false);
     const busy = await api("POST", "/api/intents", { text: "Another thing", space: "default", scope: "express" });
     expect(busy.status).toBe(409);
     expect(String(busy.body.error)).toContain(intent);
@@ -211,6 +218,44 @@ describe("t365 review UI agent runs", () => {
     expect(texts(after)).toContain("Working on: carry on");
   }, 60_000);
 
+  test("bound sessions run several intents at once; an unbound one holds the project", async () => {
+    await stopDaemon();
+    const other = join(temp, "project-multi");
+    mkdirSync(join(other, "aidlc", "spaces", "default", "memory"), { recursive: true });
+    mkdirSync(join(other, ".claude"), { recursive: true });
+    writeFileSync(join(other, "aidlc", "active-space"), "default\n");
+    const saved = { project, infoPath };
+    project = other;
+    infoPath = serverInfoPath(other, env);
+    try {
+      await startDaemon({ FAKE_ACP_BIND: "1", FAKE_ACP_SCRIPT: "hang" });
+      const first = await api("POST", "/api/intents", { text: "First piece of work", space: "default", scope: "express" });
+      expect(first.status, JSON.stringify(first.body)).toBe(201);
+      const one = String(first.body.intent);
+      let view = await until(one, (candidate) => candidate.run?.state === "running");
+      expect(view.run.bound).toBe(true);
+      // A second intent starts while the first is still running.
+      const second = await api("POST", "/api/intents", { text: "Second piece of work", space: "default", scope: "express" });
+      expect(second.status, JSON.stringify(second.body)).toBe(201);
+      const two = String(second.body.intent);
+      expect(two).not.toBe(one);
+      view = await until(two, (candidate) => candidate.run?.state === "running" && texts(candidate).includes(`run=default/${two}`));
+      // Both live; the workflow payload marks both rows.
+      const workflow = (await api("GET", "/api/workflow")).body as { intents: Array<{ slug: string; run: string | null }> };
+      expect(workflow.intents.filter((entry) => entry.run === "running").map((entry) => entry.slug).sort()).toEqual([one, two].sort());
+      // The same intent cannot start twice.
+      expect((await api("POST", "/api/run/prompt", { intent: one })).status).toBe(409);
+      expect((await api("POST", "/api/run/cancel", { intent: one })).status).toBe(200);
+      expect((await api("POST", "/api/run/cancel", { intent: two })).status).toBe(200);
+      await until(one, (candidate) => candidate.run.state === "idle");
+    } finally {
+      await stopDaemon();
+      project = saved.project;
+      infoPath = saved.infoPath;
+    }
+    await startDaemon();
+  }, 60_000);
+
   test("every harness runs its own agent: the profile picks the command and the first prompt", async () => {
     await stopDaemon();
     // A fresh project per harness (a live run in the shared one would make Start a 409).
@@ -240,18 +285,60 @@ describe("t365 review UI agent runs", () => {
         });
         const workflow = (await api("GET", "/api/workflow")).body as { runner: boolean };
         expect(workflow.runner, harness).toBe(true);
-        const start = await api("POST", "/api/intents", { text: `Todo CLI on ${harness}`, space: "default", scope: "express" });
+        const start = await api("POST", "/api/intents", { text: `Todo CLI on ${harness}`, space: "default", scope: "express", session_effort: "high" });
         expect(start.status, JSON.stringify(start.body)).toBe(201);
         expect(start.body.mode).toBe("running");
         const view = await until(String(start.body.intent), (candidate) => candidate.run?.state === "idle");
         expect(view.run.backend).toBe(harness);
         expect(view.start_prompt).toBe(prompt);
-        expect(texts(view)).toContain(`Working on: ${prompt} (run=default/${start.body.intent})`);
+        expect(texts(view)).toContain(`Working on: ${prompt} (run=default/${start.body.intent}`);
+        // Kiro takes the effort as a launch flag; Codex and opencode have no dial, so nothing is pinned.
+        if (harness === "kiro") {
+          expect(view.run.session_effort).toBe("high");
+          expect(texts(view)).toContain("argv=--effort high");
+        } else {
+          expect(view.run.session_effort).toBeNull();
+          expect(view.effort_control).toBe(false);
+        }
       } finally {
         await stopDaemon();
         project = saved.project;
         infoPath = saved.infoPath;
       }
+    }
+    await startDaemon();
+  }, 90_000);
+
+  test("a turn that ends mid-stage is nudged with the resume prompt, at most twice", async () => {
+    await stopDaemon();
+    const other = join(temp, "project-nudge");
+    mkdirSync(join(other, "aidlc", "spaces", "default", "memory"), { recursive: true });
+    mkdirSync(join(other, ".claude"), { recursive: true });
+    writeFileSync(join(other, "aidlc", "active-space"), "default\n");
+    const saved = { project, infoPath };
+    project = other;
+    infoPath = serverInfoPath(other, env);
+    try {
+      await startDaemon({ FAKE_ACP_BIND: "1", FAKE_ACP_SCRIPT: "quiet" });
+      const start = await api("POST", "/api/intents", { text: "Nudge me", space: "default", scope: "express" });
+      expect(start.status, JSON.stringify(start.body)).toBe(201);
+      const slug = String(start.body.intent);
+      // intent-create leaves the first post-init stage in progress ([-]); the
+      // quiet agent ends every turn at once without touching it. No round or
+      // gate is open, so the daemon nudges - twice - then parks the run.
+      const view = await until(slug, (candidate) => candidate.run?.state === "idle" && candidate.events.some((event) => event.kind === "note" && /stopped 2 times/.test((event as { text: string }).text)), 30_000);
+      expect(view.run.turns).toBe(3); // Start, nudge 1, nudge 2
+      const notes = view.events.filter((event) => event.kind === "note").map((event) => (event as { text: string }).text);
+      expect(notes.filter((text) => /\(1\/2\)|\(2\/2\)/.test(text))).toHaveLength(2);
+      expect(notes.some((text) => /press Continue or reply/.test(text))).toBe(true);
+      // A human action restarts the count: Continue runs one more turn and one more nudge round begins.
+      expect((await api("POST", "/api/run/prompt", { intent: slug })).status).toBe(200);
+      const after = await until(slug, (candidate) => candidate.run?.turns >= 5, 20_000);
+      expect(after.events.filter((event) => event.kind === "note" && /\(1\/2\)/.test((event as { text: string }).text))).toHaveLength(2);
+    } finally {
+      await stopDaemon();
+      project = saved.project;
+      infoPath = saved.infoPath;
     }
     await startDaemon();
   }, 90_000);

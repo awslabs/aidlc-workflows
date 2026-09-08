@@ -47,3 +47,6 @@
 .composer-fixed { display: inline-block; padding: 4px 8px; border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 12px; cursor: help; }
 .composer-menu-note { margin: 4px 10px 6px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .composer-menu-note b { display: inline; color: var(--ink); }
+.composer-session-effort { display: flex; align-items: center; gap: 10px; padding: 6px 10px 8px; }
+.composer-session-effort span { flex: 1; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.composer-session-effort select { padding: 4px 6px; border: 1px solid var(--line2); border-radius: 6px; font: inherit; font-size: 12px; background: #fff; }

@@ -43,6 +43,7 @@ const GROUPS = [
   { id: "writing", label: "Writing up", who: "delivery, pipeline & deploy, operations" },
 ];
 const EFFORTS = ["low", "medium", "high", "xhigh"];
+const SESSION_EFFORTS = ["low", "medium", "high", "xhigh"];
 const draft = {
   space: null,
   text: "",
@@ -51,6 +52,9 @@ const draft = {
   // Group dials are effort-only, as the config policy lane defines them; model
   // ids belong to per-agent exceptions in settings, not to a run's start.
   custom: { reviewing: "medium", writing: "medium" },
+  // The harness session's own effort (Claude's /effort, Kiro's --effort): the
+  // ceiling the deciding agent runs at. null = the harness default.
+  sessionEffort: null,
   // With "Let the composer decide" and a runner, Start first asks the daemon
   // what it would pick; the proposal shows here until confirmed or changed.
   proposal: null, // { scope, source } | null
@@ -65,7 +69,7 @@ export function renderComposer() {
   const space = draft.space || store.workflow?.space || "default";
   const scope = SCOPES.find((entry) => entry.name === draft.scope);
   const preset = PRESETS.find((entry) => entry.id === draft.preset);
-  const effortLabel = preset ? preset.label : "Custom";
+  const effortLabel = `${preset ? preset.label : "Custom"}${draft.sessionEffort ? ` · ${draft.sessionEffort}` : ""}`;
   return `<section class="composer">
     <div class="composer-top">
       <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="Workspace: one team's world of intents, knowledge, and practices (aidlc/spaces/<name>)">${icon("flowchart", { size: 13 })}<span>Workspace</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
@@ -149,7 +153,7 @@ async function start(confirmed = false) {
   section?.classList.add("busy");
   try {
     const effort = draft.preset ? { preset: draft.preset } : { reviewing: draft.custom.reviewing, writing: draft.custom.writing };
-    const result = await api.post("/api/intents", { text, space, scope, effort });
+    const result = await api.post("/api/intents", { text, space, scope, effort, session_effort: draft.sessionEffort });
     draft.text = "";
     draft.proposal = null;
     if (result.mode === "running") {
@@ -230,7 +234,12 @@ function effortMenu() {
           : `<td><select data-dial-effort="${group.id}" aria-label="${group.label} effort">${EFFORTS.map((effort) => `<option ${effortFor(group) === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></td>`}
       </tr>`).join("")}
     </tbody></table>
-    <p class="composer-menu-note">The preset decides the model and effort for each agent group. Changing a dial makes this run <b>Custom</b>; deciding agents always keep the session's ceiling.</p>`;
+    <p class="composer-menu-note">The preset decides the model and effort for each agent group. Changing a dial makes this run <b>Custom</b>; deciding agents always keep the session's ceiling.</p>
+    ${runnerAvailable() && store.workflow?.runner_effort
+      ? `<div class="composer-menu-group">Session ceiling</div>
+    <div class="composer-session-effort"><span>The effort the agent session itself runs at - what deciding work inherits.</span>
+      <select data-session-effort aria-label="Session effort">${["default", ...SESSION_EFFORTS].map((level) => `<option value="${level}" ${(draft.sessionEffort || "default") === level ? "selected" : ""}>${level === "default" ? "harness default" : level}</option>`).join("")}</select></div>`
+      : ""}`;
 }
 
 function bindMenu(menu, kind, rerender) {
@@ -251,6 +260,10 @@ function bindMenu(menu, kind, rerender) {
   });
   for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; draft.proposal = null; closeMenu(); rerender(); });
   for (const button of menu.querySelectorAll("[data-pick-preset]")) button.addEventListener("click", () => { draft.preset = button.dataset.pickPreset; const entry = PRESETS.find((item) => item.id === draft.preset); draft.custom = { ...entry.efforts }; refreshMenu(menu, kind, rerender); rerender(); });
+  menu.querySelector("[data-session-effort]")?.addEventListener("change", (event) => {
+    draft.sessionEffort = event.target.value === "default" ? null : event.target.value;
+    rerender();
+  });
   for (const select of menu.querySelectorAll("[data-dial-effort]")) select.addEventListener("change", () => {
     draft.custom[select.dataset.dialEffort] = select.value;
     draft.preset = null;

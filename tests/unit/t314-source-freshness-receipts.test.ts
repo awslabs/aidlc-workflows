@@ -90,8 +90,23 @@ const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent"; // code-generation's declared reviewer
 
+const ISOLATED_GIT_ENV = {
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "core.hooksPath",
+  GIT_CONFIG_VALUE_0: "/dev/null",
+};
+
+function isolatedGitEnv(
+  extraEnv?: Record<string, string>,
+): NodeJS.ProcessEnv {
+  return { ...process.env, ...ISOLATED_GIT_ENV, ...extraEnv };
+}
+
 function git(dir: string, args: string[]): void {
-  const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const r = spawnSync("git", ["-C", dir, ...args], {
+    encoding: "utf-8",
+    env: isolatedGitEnv(),
+  });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${r.stdout}${r.stderr}`);
   }
@@ -125,7 +140,7 @@ function guarded(
   args: string[],
   extraEnv?: Record<string, string>,
 ): { rc: number; out: string } {
-  const env = { ...process.env, ...extraEnv };
+  const env = isolatedGitEnv(extraEnv);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
@@ -242,11 +257,10 @@ function recordReview(
   if (unit) baseArgs.push("--unit", unit);
   let requested = spawnSync(BUN, baseArgs, {
     encoding: "utf-8",
-    env: {
-      ...process.env,
+    env: isolatedGitEnv({
       AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
-    },
+    }),
   });
   if ((requested.status ?? -1) !== 0) {
     const expected = `${requested.stdout ?? ""}${requested.stderr ?? ""}`.match(
@@ -259,11 +273,10 @@ function recordReview(
       );
       requested = spawnSync(BUN, baseArgs, {
         encoding: "utf-8",
-        env: {
-          ...process.env,
+        env: isolatedGitEnv({
           AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
           AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
-        },
+        }),
       });
     }
   }
@@ -280,11 +293,10 @@ function recordReview(
   const args = [...baseArgs, "--verdict", verdict];
   const r = spawnSync(BUN, args, {
     encoding: "utf-8",
-    env: {
-      ...process.env,
+    env: isolatedGitEnv({
       AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
-    },
+    }),
   });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
@@ -1760,7 +1772,12 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       proj,
     ];
     const originalSource = readFileSync(src, "utf-8");
-    expect(spawnSync(BUN, request, { encoding: "utf-8" }).status).toBe(0);
+    expect(
+      spawnSync(BUN, request, {
+        encoding: "utf-8",
+        env: isolatedGitEnv(),
+      }).status,
+    ).toBe(0);
     writeFileSync(src, "export const answer = 9001; // pending mutation\n", "utf-8");
     appendFileSync(
       artifact,
@@ -1771,7 +1788,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const completion = spawnSync(
       BUN,
       [...request, "--verdict", "READY"],
-      { encoding: "utf-8" },
+      { encoding: "utf-8", env: isolatedGitEnv() },
     );
     expect(completion.status).not.toBe(0);
     expect(`${completion.stdout}${completion.stderr}`).toContain(
@@ -1781,7 +1798,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const retryWhileStale = spawnSync(
       BUN,
       [...request, "--retry-pending"],
-      { encoding: "utf-8" },
+      { encoding: "utf-8", env: isolatedGitEnv() },
     );
     expect(retryWhileStale.status).not.toBe(0);
     expect(`${retryWhileStale.stdout}${retryWhileStale.stderr}`).toContain(
@@ -1792,6 +1809,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(
       spawnSync(BUN, [...request, "--retry-pending"], {
         encoding: "utf-8",
+        env: isolatedGitEnv(),
       }).status,
     ).toBe(0);
     appendFileSync(
@@ -1802,6 +1820,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(
       spawnSync(BUN, [...request, "--verdict", "READY"], {
         encoding: "utf-8",
+        env: isolatedGitEnv(),
       }).status,
     ).toBe(0);
   });
@@ -2586,7 +2605,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const r = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
       cwd: proj,
       encoding: "utf-8",
-      env: { ...process.env, ...extraEnv },
+      env: isolatedGitEnv(extraEnv),
     });
     return { rc: r.status ?? -1, out: r.stdout ?? "" };
   }
