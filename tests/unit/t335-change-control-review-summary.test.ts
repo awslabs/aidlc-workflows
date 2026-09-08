@@ -845,3 +845,34 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
     expect(outcome.relaxed).toBe(outcome.strict);
   });
 });
+
+describe("t335 (4) the review command takes no workflow selector", () => {
+  // The selection-aware Change Control surfaces are change-control, scope-change,
+  // status, intent-create, aidlc-state.ts, and validate-grid. The review command
+  // is not one of them: a selector is refused before anything is resolved,
+  // written, or requested, with the sentence the conductor is told to act on.
+  const REFUSAL =
+    "The review command does not accept --intent/--space selectors. Switch to the target workspace first.";
+
+  for (const selector of [["--space", "alt"], ["--intent", "some-intent"]]) {
+    test(`${selector[0]} exits 1 with the exact sentence, requests nothing, writes no request file`, () => {
+      const proj = project("relaxed");
+      const dir = stageDir(proj);
+      for (const name of ["requirements.md", `${STAGE}-questions.md`]) {
+        writeFileSync(join(dir, name), `# ${name}\n`);
+      }
+      const refused = run(
+        LOG_TOOL,
+        ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", ...selector],
+        proj,
+      );
+      expect(refused.status).toBe(1);
+      expect(JSON.parse(refused.stderr.trim().split("\n").pop()!)).toEqual({ error: REFUSAL });
+      expect(refused.stdout).toBe("");
+      expect(
+        readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_REQUESTED"),
+      ).toHaveLength(0);
+      expect(existsSync(join(seededRecordDir(proj), ".aidlc-reviews"))).toBe(false);
+    });
+  }
+});
