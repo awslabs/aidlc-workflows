@@ -250,7 +250,7 @@ The box above the Inbox starts a new intent. Choose the **Workspace** (the
 space it lives in; **New workspace…** creates one), describe what you want to
 build, pick a **Workflow** — a named scope, or *Let the composer decide*, which
 proposes one from your words and asks once — and, with a runner, the
-**Session effort** (see below). **Start** (or ⌘↵) starts it.
+**Effort** (see below). **Start** (or ⌘↵) starts it.
 
 With the harness's CLI installed, Start does the whole thing: the daemon creates
 the record (the same `intent-create` the conductor runs, with the chosen
@@ -291,12 +291,12 @@ shipped `.gitignore` re-includes it), so copying or committing the tree carries 
 to hosts that cannot reach a registry. The other harnesses' agents are their own
 CLIs; there is nothing to vendor.
 
-**Session effort.** The Effort menu has one dial: *Session effort*, the effort the
-agent session itself runs at (the same thing `/effort` sets in a terminal; Kiro's
-`--effort`). The conductor thinks at that level, and so does every agent that
-inherits the session. *Harness default (level)* leaves it to your own settings and
-names what that is — the `effortLevel` your Claude settings resolve to, or Kiro's
-`cli.json` model default. Codex,
+**Effort.** The Effort menu has one dial: the effort the agent session runs at
+(the same thing `/effort` sets in a terminal; Kiro's `--effort`). The conductor
+thinks at that level, and so does every agent that inherits the session.
+*Default (level)* leaves it to your own settings and names what that is — the
+`effortLevel` your Claude settings resolve to, or Kiro's `cli.json` model
+default. Codex,
 Cursor, opencode, and Copilot expose no such dial over ACP; the control is hidden
 there.
 

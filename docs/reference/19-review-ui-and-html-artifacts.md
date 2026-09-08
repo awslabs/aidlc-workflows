@@ -182,7 +182,7 @@ and the file that says so - Claude's `effortLevel` from `.claude/settings.local.
 over `.claude/settings.json` over `~/.claude/settings.json` (`claudeDefaultSessionEffort`),
 Kiro's single `chat.modelDefaults` `output_config.effort` in `.kiro/settings/cli.json`
 (`kiroDefaultSessionEffort`); null when no file names one, and the composer's
-option reads *harness default (model default)*.
+option reads *default (model default)*.
 
 **Agent effort is project policy.** The workflow payload carries
 `models_policy` (`modelsPolicyView` in `aidlc-review-ui-workflow.ts`): the
