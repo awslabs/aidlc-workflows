@@ -1101,9 +1101,9 @@ describe("t164 doctor readiness against the shipped shell", () => {
       force: true,
     });
     const r = util(["doctor"]);
-    // The row fails and points at copying the shell from dist/.
+    // The row fails and points at `aidlc config` (the native channel).
     expect(r.out).toContain("workspace shell ready");
-    expect(r.out).toMatch(/copy the workspace shell from `dist\/claude\//);
+    expect(r.out).toContain("run `aidlc config`");
   });
 });
 

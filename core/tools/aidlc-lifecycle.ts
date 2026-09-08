@@ -27,6 +27,7 @@ import {
   emitResult,
   failure,
   globalOptions,
+  readTerminalLine,
   success,
   usage,
   valueAfter,
@@ -368,7 +369,7 @@ function requireConfirmation(argv: readonly string[], message: string): void {
   if (!process.stdin.isTTY) {
     commandError(`${message}; non-interactive use requires --yes`, EXIT.usage);
   }
-  const answer = prompt(`${message}\nContinue [y/N]:`);
+  const answer = readTerminalLine(`${message}\nContinue [y/N]:`);
   if (!/^y(?:es)?$/i.test(answer?.trim() ?? "")) {
     commandError("operation cancelled", EXIT.failure);
   }
@@ -737,14 +738,16 @@ function lifecycleFailureResult(error: unknown, argv: readonly string[]): Comman
   return failure(message, code);
 }
 
+// Same-release identity: identical path set and bytes. Modes are deliberately
+// not compared - extraction inherits the caller's umask (install.sh uses 077,
+// a later `aidlc update` uses the shell's), so modes differ between equally
+// valid installs of one release. The installed tree's own modes are enforced
+// against its recorded runtime-integrity baseline by completeVersion().
 function treesMatch(left: string, right: string): boolean {
   const leftFiles = walkFiles(left).map((path) => path.replaceAll("\\", "/"));
   const rightFiles = walkFiles(right).map((path) => path.replaceAll("\\", "/"));
   if (JSON.stringify(leftFiles) !== JSON.stringify(rightFiles)) return false;
-  return leftFiles.every((path) =>
-    sha256File(join(left, path)) === sha256File(join(right, path)) &&
-    (statSync(join(left, path)).mode & 0o777) === (statSync(join(right, path)).mode & 0o777)
-  );
+  return leftFiles.every((path) => sha256File(join(left, path)) === sha256File(join(right, path)));
 }
 
 function retainedVersions(): {
@@ -1831,10 +1834,15 @@ function humanLifecycleNarration(
       ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
     if (argv.includes("--dry-run")) {
-      return warnVerdict(
-        `Would update aidlc from ${before ?? "not installed"} to ${target}.`,
-        process.stdout,
-      );
+      return before === target
+        ? successText(
+          `You're on the latest version of aidlc (${target}); nothing to update.`,
+          process.stdout,
+        )
+        : warnVerdict(
+          `Would update aidlc from ${before ?? "not installed"} to ${target}.`,
+          process.stdout,
+        );
     }
     if (before === target) {
       return `${successText(

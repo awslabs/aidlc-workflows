@@ -74,10 +74,10 @@ const DOCTOR_HOOK_LABEL_2 = "aidlc-session-start.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
 // P4: the "aidlc-docs/ directory exists" row was retired. Doctor now checks the
 // SHIPPED workspace shell (.claude/ + aidlc/spaces/default/memory/) — the row
-// label substring is "workspace shell ready" (utility.ts:597), and its
-// remediation fix is "copy the workspace shell from `dist/claude/`" (utility.ts:598).
+// label substring is "workspace shell ready", and its remediation points the
+// user at `aidlc config` (the native channel; the copy-from-dist fix is retired).
 const DOCTOR_SHELL_LABEL = "workspace shell ready";
-const DOCTOR_SHELL_FIX = "copy the workspace shell from";
+const DOCTOR_SHELL_FIX = "run `aidlc config`";
 const STOP_AFTER_DOCTOR = { toolName: "Bash", resultIncludes: DOCTOR_HEADER } as const;
 
 describe("t22 /aidlc --doctor (SDK port)", () => {
@@ -174,8 +174,8 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   // shell-ready row FAILS, the doctor exits non-zero, and the orchestrator's
   // tool-failure handler prints the doctor stdout verbatim. The .sh grepped that
   // prose for the SPECIFIC failing-check label; here we assert the new
-  // "workspace shell ready" label AND its "copy the workspace shell from"
-  // remediation against the Bash tool_result — the failing-check label is
+  // "workspace shell ready" label AND its `aidlc config` remediation against
+  // the Bash tool_result — the failing-check label is
   // verbatim tool stdout, so this is the deterministic equivalent of the .sh grep.
   // -------------------------------------------------------------------------
   test(

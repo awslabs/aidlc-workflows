@@ -1,3 +1,4 @@
+import { readSync } from "node:fs";
 import {
   colorEnabled,
   configureColor,
@@ -455,4 +456,37 @@ export function failure(
 
 export function success(message: string, data?: unknown): CommandResult {
   return { ok: true, code: EXIT.ok, status: "ok", message, data };
+}
+
+// Reads one answer from the terminal. Bun's global `prompt()` returns `null`
+// for an empty line, which makes "press Enter to accept the default"
+// indistinguishable from a cancelled prompt. This reader returns `""` for an
+// empty line and `null` only when the input is closed (EOF), so callers can
+// treat Enter as "accept the default" and EOF as "cancel".
+export function readTerminalLine(label: string, fd = 0): string | null {
+  process.stdout.write(`${label} `);
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(4096);
+  let sawNewline = false;
+  while (!sawNewline) {
+    let read: number;
+    try {
+      read = readSync(fd, buffer, 0, buffer.length, null);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EAGAIN") {
+        Bun.sleepSync(10);
+        continue;
+      }
+      if (code === "EOF") break;
+      throw error;
+    }
+    if (read === 0) break;
+    const chunk = buffer.subarray(0, read);
+    const newline = chunk.indexOf(0x0a);
+    chunks.push(Buffer.from(newline === -1 ? chunk : chunk.subarray(0, newline)));
+    sawNewline = newline !== -1;
+  }
+  if (chunks.length === 0 && !sawNewline) return null;
+  return Buffer.concat(chunks).toString("utf-8").replace(/\r$/, "");
 }

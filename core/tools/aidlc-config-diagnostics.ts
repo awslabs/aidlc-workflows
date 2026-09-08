@@ -559,8 +559,8 @@ function runtimeRemediation(
       : "Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.";
   }
   return platform === "win32"
-    ? "Add the aidlc command directory to the Windows User or Machine PATH."
-    : "Add ~/.local/bin to the login-independent environment used by the harness, not only an interactive shell rc file.";
+    ? "Add the aidlc command directory to the Windows User or Machine PATH (System Properties > Environment Variables), then restart the harness."
+    : "Put ~/.local/bin on the PATH that GUI and hook processes inherit, not only an interactive rc file: add `export PATH=\"$HOME/.local/bin:$PATH\"` to ~/.profile (bash) or ~/.zshenv (zsh), or rerun the installer with `--profile <that-file>`; then start the harness from a new login.";
 }
 
 function binaryProbe(

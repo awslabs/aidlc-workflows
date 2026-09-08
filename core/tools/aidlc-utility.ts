@@ -3411,7 +3411,7 @@ export async function collectDoctorReport(
   results.push({
     pass: shellReady,
     label: `workspace shell ready (${harnessDir()}/ + aidlc/spaces/default/memory/)`,
-    fix: `copy the workspace shell from \`dist/${harnessDir().replace(/^\./, "")}/\` into your project root`,
+    fix: "run `aidlc config` in the project root to create the harness tree and workspace shell",
   });
 
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are

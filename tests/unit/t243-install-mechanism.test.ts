@@ -5,12 +5,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -2653,6 +2654,20 @@ describe("t243 release lifecycle", () => {
       const inspection = inspectInstalledVersion(AIDLC_VERSION);
       expect(inspection.complete).toBe(false);
       expect(inspection.reason).toContain("does not match the installed baseline");
+
+      // Mode drift is also a baseline violation. Same-release identity during
+      // `aidlc update` compares content only, so this is where modes are enforced.
+      if (process.platform !== "win32") {
+        const untouched = walkFiles(runtime).find((path) =>
+          path !== file && !path.endsWith("aidlc-stamp.json")
+        ) as string;
+        const before = statSync(join(runtime, untouched)).mode & 0o777;
+        chmodSync(join(runtime, untouched), before === 0o600 ? 0o644 : 0o600);
+        const modeDrift = inspectInstalledVersion(AIDLC_VERSION);
+        expect(modeDrift.complete).toBe(false);
+        expect(modeDrift.reason).toContain("does not match the installed baseline");
+        chmodSync(join(runtime, untouched), before);
+      }
       expect(resolvePinnedDispatch([
         "engine", "status", "--project-dir", project,
       ])).toEqual(expect.objectContaining({

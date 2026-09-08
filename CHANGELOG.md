@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.1] - 2026-09-08
+
+Fix two defects found while exercising the 2.8.0 native install on Linux and Windows: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, and `aidlc update` on an already-current install failed its integrity check under a normal shell umask. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`; no project changes are required, and `aidlc config` refreshes projects when convenient.
+
+* Pressing Enter at a bracketed default in the first-run `aidlc config` wizard (harness picker, provider, region, preset, plugins, MCP, record layer, and the final `Apply? [Y/n]` gate) now accepts the default as advertised instead of printing `Nothing written.` and exiting 2. Closing stdin (Ctrl-D) still cancels.
+* `aidlc update` on an install that is already at the latest release now reports `You're on the latest version of aidlc (X.Y.Z).` regardless of the caller's umask; previously it failed with `existing X.Y.Z runtime does not match the verified release` (exit 4) unless the shell umask was `077`. Same-release identity is now decided by path set and content; the installed tree's modes are still enforced against its own recorded integrity baseline, so trees installed by 2.8.0 under any umask keep working. New extractions use private `0600`/`0700` modes regardless of umask, matching what the bootstrap installers create. `aidlc update --dry-run` on a current install says so instead of `Would update aidlc from X to X.`
+* `aidlc doctor` no longer tells you to copy the workspace shell from `dist/<harness>/`; the remediation is `aidlc config`. The Linux/macOS runtime PATH remediation now names the file to edit (`~/.profile` or `~/.zshenv`) or the installer's `--profile` option instead of a generic instruction.
+* README: removed the pre-2.8.0 note that told users to install from a source checkout until native assets shipped.
+
 ## [2.8.0] - 2026-09-08
 
 AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.
