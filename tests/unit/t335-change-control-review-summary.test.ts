@@ -846,7 +846,7 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
   });
 });
 
-describe("t335 (4) the review command takes no workflow selector", () => {
+describe("t335 (5) the review command takes no workflow selector", () => {
   // The selection-aware Change Control surfaces are change-control, scope-change,
   // status, intent-create, aidlc-state.ts, and validate-grid. The review command
   // is not one of them: a selector is refused before anything is resolved,
