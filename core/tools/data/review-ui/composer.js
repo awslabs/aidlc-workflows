@@ -54,7 +54,8 @@ export function renderComposer() {
   const space = draft.space || store.workflow?.space || "default";
   const scope = SCOPES.find((entry) => entry.name === draft.scope);
   const sessionDial = runnerAvailable() && store.workflow?.runner_effort;
-  const effortLabel = sessionDial ? `Session effort · ${draft.sessionEffort || "default"}` : "Effort";
+  const fallback = store.workflow?.runner_default_effort;
+  const effortLabel = sessionDial ? `Session effort · ${draft.sessionEffort || (fallback ? `default (${fallback.level})` : "default")}` : "Effort";
   return `<section class="composer">
     <div class="composer-top">
       <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="Workspace: one team's world of intents, knowledge, and practices (aidlc/spaces/<name>)">${icon("flowchart", { size: 13 })}<span>Workspace</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
@@ -205,6 +206,10 @@ function scopeMenu() {
 
 function effortMenu() {
   const sessionDial = runnerAvailable() && store.workflow?.runner_effort;
+  const fallback = store.workflow?.runner_default_effort;
+  // "harness default (medium)" names what an unpinned session runs at and,
+  // in the tooltip, which settings file says so.
+  const defaultLabel = fallback ? `harness default (${fallback.level})` : "harness default (model default)";
   const policy = store.workflow?.models_policy;
   const command = store.workflow?.models_command || "aidlc config models";
   const level = (value) => value === "inherit" ? `<span class="composer-inherit" title="Follows the session's effort">inherits the session</span>` : `<b>${escapeHtml(value)}</b>`;
@@ -216,7 +221,7 @@ function effortMenu() {
     ${sessionDial
       ? `<div class="composer-menu-group">Session effort</div>
     <div class="composer-session-effort"><span>What the agent session itself thinks at - the conductor and every agent that inherits. The same dial as <code>/effort</code> in a terminal.</span>
-      <select data-session-effort aria-label="Session effort">${["default", ...SESSION_EFFORTS].map((entry) => `<option value="${entry}" ${(draft.sessionEffort || "default") === entry ? "selected" : ""}>${entry === "default" ? "harness default" : entry}</option>`).join("")}</select></div>`
+      <select data-session-effort aria-label="Session effort" title="${fallback ? escapeHtml(`Default from ${fallback.source}`) : "No settings file names an effort; the model's own default applies"}">${["default", ...SESSION_EFFORTS].map((entry) => `<option value="${entry}" ${(draft.sessionEffort || "default") === entry ? "selected" : ""}>${entry === "default" ? escapeHtml(defaultLabel) : entry}</option>`).join("")}</select></div>`
       : ""}
     <div class="composer-menu-group">Agents in this project${policy?.preset ? ` · preset <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? " · shipped defaults" : ""}</div>
     <table class="composer-policy"><tbody>${policyRows}</tbody></table>

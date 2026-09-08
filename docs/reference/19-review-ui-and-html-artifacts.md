@@ -176,7 +176,13 @@ active intent applies, as before.
 profile says how it is applied (`effort`): Claude as `session/set_config_option`
 `{configId: "effort"}` after `session/new` and after `session/load`; Kiro as
 `kiro-cli acp --effort <level>` at launch. Backends without an `effort` control
-ignore it (`RunView.effort_control` false; the composer hides the dial).
+ignore it (`RunView.effort_control` false; the composer hides the dial). The
+workflow payload's `runner_default_effort` names what an unpinned session runs at
+and the file that says so - Claude's `effortLevel` from `.claude/settings.local.json`
+over `.claude/settings.json` over `~/.claude/settings.json` (`claudeDefaultSessionEffort`),
+Kiro's single `chat.modelDefaults` `output_config.effort` in `.kiro/settings/cli.json`
+(`kiroDefaultSessionEffort`); null when no file names one, and the composer's
+option reads *harness default (model default)*.
 
 **Agent effort is project policy.** The workflow payload carries
 `models_policy` (`modelsPolicyView` in `aidlc-review-ui-workflow.ts`): the

@@ -294,7 +294,9 @@ CLIs; there is nothing to vendor.
 **Session effort.** The Effort menu has one dial: *Session effort*, the effort the
 agent session itself runs at (the same thing `/effort` sets in a terminal; Kiro's
 `--effort`). The conductor thinks at that level, and so does every agent that
-inherits the session. *Harness default* leaves it to your own settings. Codex,
+inherits the session. *Harness default (level)* leaves it to your own settings and
+names what that is — the `effortLevel` your Claude settings resolve to, or Kiro's
+`cli.json` model default. Codex,
 Cursor, opencode, and Copilot expose no such dial over ACP; the control is hidden
 there.
 

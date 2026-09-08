@@ -1723,6 +1723,7 @@ async function serve(projectDir: string): Promise<void> {
             payload.runner = runs.available;
             payload.runner_requirement = runs.available ? null : runnerRequirement;
             payload.runner_effort = runnerLaunch?.effort !== undefined;
+            payload.runner_default_effort = runnerLaunch?.defaultEffort?.(projectDir) ?? null;
             // Agent effort is project policy, not a per-intent choice: show what
             // this project runs at and where to change it.
             try {

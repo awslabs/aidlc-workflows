@@ -25,7 +25,7 @@
 // adding one is a profile row, not a branch elsewhere.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -50,6 +50,58 @@ export type SessionEffort = (typeof SESSION_EFFORT_LEVELS)[number];
 /** How a backend takes a session effort: an ACP config option after `session/new`, a launch flag, or not at all. */
 export type EffortControl = { kind: "config"; configId: string } | { kind: "flag"; flag: string };
 
+/** What a session runs at when Start pins nothing: the level and the file that says so. */
+export interface DefaultSessionEffort {
+  level: string;
+  /** Where the default comes from, as a human would name it (a settings path). */
+  source: string;
+}
+
+function readJsonFile(path: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Claude's session effort when nothing pins it: `effortLevel` in the settings
+ * the session loads, local over project over user - the same precedence the
+ * adapter's `--setting-sources user,project,local` gives the CLI. Null when no
+ * settings file names one (the model's own default applies).
+ */
+export function claudeDefaultSessionEffort(projectDir: string, home: string = homedir()): DefaultSessionEffort | null {
+  const candidates: Array<[string, string]> = [
+    [join(projectDir, ".claude", "settings.local.json"), ".claude/settings.local.json"],
+    [join(projectDir, ".claude", "settings.json"), ".claude/settings.json"],
+    [join(home, ".claude", "settings.json"), "~/.claude/settings.json"],
+  ];
+  for (const [path, source] of candidates) {
+    const level = readJsonFile(path)?.effortLevel;
+    if (typeof level === "string" && level) return { level, source };
+  }
+  return null;
+}
+
+/**
+ * Kiro's session effort when `--effort` is not passed: the `output_config.effort`
+ * of `chat.modelDefaults` in the project's `.kiro/settings/cli.json`, when the
+ * defaults name exactly one model (the shipped file does). Null otherwise.
+ */
+export function kiroDefaultSessionEffort(projectDir: string): DefaultSessionEffort | null {
+  const settings = readJsonFile(join(projectDir, ".kiro", "settings", "cli.json"));
+  const defaults = settings?.["chat.modelDefaults"];
+  if (!defaults || typeof defaults !== "object") return null;
+  const levels = new Set<string>();
+  for (const entry of Object.values(defaults as Record<string, unknown>)) {
+    const effort = (entry as { output_config?: { effort?: unknown } } | null)?.output_config?.effort;
+    if (typeof effort === "string" && effort) levels.add(effort);
+  }
+  return levels.size === 1 ? { level: [...levels][0], source: ".kiro/settings/cli.json" } : null;
+}
+
 export interface AcpLaunch {
   backend: AcpBackend;
   command: string[];
@@ -58,6 +110,8 @@ export interface AcpLaunch {
   startPrompt: string;
   /** How this backend takes a session effort, when it does. */
   effort?: EffortControl;
+  /** What a session runs at when Start pins nothing, or null when the harness's own model default applies. */
+  defaultEffort?(projectDir: string): DefaultSessionEffort | null;
 }
 
 export interface AcpBackendProfile {
@@ -77,6 +131,8 @@ export interface AcpBackendProfile {
   vendorBin?: string;
   /** How this backend takes a session effort; absent when it has no such dial over ACP. */
   effort?: EffortControl;
+  /** The session effort when nothing is pinned, read from the harness's settings; null = its model default. */
+  defaultEffort?(projectDir: string): DefaultSessionEffort | null;
 }
 
 /** `<toolsDir>/vendor/acp`: where `vendor-agent` installs the pinned adapter. */
@@ -112,6 +168,7 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     // The adapter exposes Claude's effort as a session config option (verified
     // live: values default/low/medium/high/xhigh/max).
     effort: { kind: "config", configId: "effort" },
+    defaultEffort: (projectDir) => claudeDefaultSessionEffort(projectDir),
     // Zed's adapter over the Agent SDK. The SDK needs the local `claude`
     // executable and does not search PATH for it, so it travels in the env.
     resolve(env, which, vendored) {
@@ -129,6 +186,7 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     requirement: "the `kiro-cli` CLI",
     // `kiro-cli acp --effort <level>` sets the first session's effort.
     effort: { kind: "flag", flag: "--effort" },
+    defaultEffort: (projectDir) => kiroDefaultSessionEffort(projectDir),
     // Native. The shipped `aidlc` agent carries the framework's hooks, so the
     // session must run as that agent.
     resolve(_env, which, _vendored) {
@@ -207,12 +265,12 @@ export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv 
   if (override) {
     const extra: Record<string, string> = {};
     if (profile.backend === "claude" && env.CLAUDE_CODE_EXECUTABLE) extra.CLAUDE_CODE_EXECUTABLE = env.CLAUDE_CODE_EXECUTABLE;
-    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort };
+    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort };
   }
   // A vendored adapter (vendor-agent) beats PATH and bunx: it is the pinned
   // copy an offline host carries.
   const resolved = profile.resolve(env, which, vendoredAcpBin(toolsDir, profile));
-  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort } : null;
+  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort } : null;
 }
 
 /** The launch with a session effort applied where the backend takes it as a flag. */

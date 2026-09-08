@@ -8,12 +8,14 @@
 // and a process that dies rejects the in-flight request.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AcpClient,
   AcpError,
+  claudeDefaultSessionEffort,
+  kiroDefaultSessionEffort,
   resolveAcpLaunch,
   type AcpElicitationRequest,
   type AcpLaunch,
@@ -224,5 +226,35 @@ describe("t364 review UI ACP client", () => {
     expect(overridden?.command).toEqual(["bun", "fake.ts", "--flag"]);
     const claude = resolveAcpLaunch("claude", { ...bare, CLAUDE_CODE_EXECUTABLE: "/usr/bin/true", AIDLC_ACP_CLAUDE_COMMAND: "bun fake.ts" });
     expect(claude?.env.CLAUDE_CODE_EXECUTABLE).toBe("/usr/bin/true");
+  });
+
+  test("the default session effort names the level an unpinned session runs at and the file that says so", () => {
+    // Claude: local > project > user settings `effortLevel`; none named = the model's default.
+    const project = scratch();
+    const home = scratch();
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    expect(claudeDefaultSessionEffort(project, home)).toBeNull();
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ effortLevel: "xhigh" }));
+    expect(claudeDefaultSessionEffort(project, home)).toEqual({ level: "xhigh", source: "~/.claude/settings.json" });
+    writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({ effortLevel: "high" }));
+    expect(claudeDefaultSessionEffort(project, home)).toEqual({ level: "high", source: ".claude/settings.json" });
+    writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({ effortLevel: "medium" }));
+    expect(claudeDefaultSessionEffort(project, home)).toEqual({ level: "medium", source: ".claude/settings.local.json" });
+    // A file without the key does not shadow the ones below it.
+    writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({ model: "opus" }));
+    expect(claudeDefaultSessionEffort(project, home)?.level).toBe("high");
+
+    // Kiro: the single model default's output_config.effort; ambiguous or absent = null.
+    const kiro = scratch();
+    mkdirSync(join(kiro, ".kiro", "settings"), { recursive: true });
+    expect(kiroDefaultSessionEffort(kiro)).toBeNull();
+    writeFileSync(join(kiro, ".kiro", "settings", "cli.json"), JSON.stringify({ "chat.modelDefaults": { "claude-opus-4.8": { output_config: { effort: "xhigh" } } } }));
+    expect(kiroDefaultSessionEffort(kiro)).toEqual({ level: "xhigh", source: ".kiro/settings/cli.json" });
+    writeFileSync(join(kiro, ".kiro", "settings", "cli.json"), JSON.stringify({ "chat.modelDefaults": { a: { output_config: { effort: "xhigh" } }, b: { output_config: { effort: "low" } } } }));
+    expect(kiroDefaultSessionEffort(kiro)).toBeNull();
+
+    // The resolved launch carries the resolver for the daemon to call per project.
+    expect(resolveAcpLaunch("kiro", { PATH: "/nonexistent", HOME: "/nonexistent", AIDLC_ACP_KIRO_COMMAND: "bun fake.ts" })?.defaultEffort?.(kiro)).toBeNull();
   });
 });

@@ -223,6 +223,8 @@ export interface WorkflowPayload {
   runner_requirement?: string | null;
   /** True when the runner's backend takes a session effort (Claude, Kiro). */
   runner_effort?: boolean;
+  /** What that session runs at when Start pins nothing: the level and the settings file naming it; null = the model's own default. */
+  runner_default_effort?: { level: string; source: string } | null;
   /** The project's effective per-agent model policy, for the composer to show. */
   models_policy?: ModelsPolicyView | null;
   /** How to change that policy from a terminal (`<invoke> config models`). */
