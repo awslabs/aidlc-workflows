@@ -23,6 +23,16 @@ const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const RUNTIME = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
+// Complete overrides keep PTY tests independent of shell startup PATH additions.
+const HARNESS_NAMES = [
+  "claude",
+  "codex",
+  "copilot",
+  "cursor",
+  "kiro",
+  "kiro-ide",
+  "opencode",
+] as const;
 
 afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
@@ -70,13 +80,19 @@ function detection(
 ): string {
   return JSON.stringify({
     harnesses: Object.fromEntries(
-      Object.entries(harnesses).map(([name, value]) => [
-        name,
-        {
-          ...value,
-          ...(value.found ? { path: join(bin, name === "kiro" ? "kiro-cli" : name) } : {}),
-        },
-      ]),
+      HARNESS_NAMES.map((name) => {
+        const value = harnesses[name] ?? {
+          found: false,
+          probed: name !== "kiro-ide",
+        };
+        return [
+          name,
+          {
+            ...value,
+            ...(value.found ? { path: join(bin, name === "kiro" ? "kiro-cli" : name) } : {}),
+          },
+        ];
+      }),
     ),
     aws: {
       hasCredentials: true,

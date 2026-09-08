@@ -2649,25 +2649,13 @@ describe("t243 release lifecycle", () => {
       const file = walkFiles(runtime).find((path) =>
         !path.endsWith("aidlc-stamp.json")
       ) as string;
-      writeFileSync(join(runtime, file), `${readFileSync(join(runtime, file), "utf-8")}\ntampered\n`);
+      const filePath = join(runtime, file);
+      const originalContent = readFileSync(filePath);
+      writeFileSync(filePath, Buffer.concat([originalContent, Buffer.from("\ntampered\n")]));
 
       const inspection = inspectInstalledVersion(AIDLC_VERSION);
       expect(inspection.complete).toBe(false);
       expect(inspection.reason).toContain("does not match the installed baseline");
-
-      // Mode drift is also a baseline violation. Same-release identity during
-      // `aidlc update` compares content only, so this is where modes are enforced.
-      if (process.platform !== "win32") {
-        const untouched = walkFiles(runtime).find((path) =>
-          path !== file && !path.endsWith("aidlc-stamp.json")
-        ) as string;
-        const before = statSync(join(runtime, untouched)).mode & 0o777;
-        chmodSync(join(runtime, untouched), before === 0o600 ? 0o644 : 0o600);
-        const modeDrift = inspectInstalledVersion(AIDLC_VERSION);
-        expect(modeDrift.complete).toBe(false);
-        expect(modeDrift.reason).toContain("does not match the installed baseline");
-        chmodSync(join(runtime, untouched), before);
-      }
       expect(resolvePinnedDispatch([
         "engine", "status", "--project-dir", project,
       ])).toEqual(expect.objectContaining({
@@ -2675,6 +2663,23 @@ describe("t243 release lifecycle", () => {
         message: `this project requires ${AIDLC_VERSION}, which is not installed completely`,
         remediation: `aidlc config --pin ${AIDLC_VERSION}`,
       }));
+
+      writeFileSync(filePath, originalContent);
+      expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+
+      // Mode drift is also a baseline violation. Same-release identity during
+      // `aidlc update` compares content only, so this is where modes are enforced.
+      if (process.platform !== "win32") {
+        const before = statSync(filePath).mode & 0o777;
+        chmodSync(filePath, before === 0o600 ? 0o644 : 0o600);
+        const modeDrift = inspectInstalledVersion(AIDLC_VERSION);
+        expect(modeDrift.complete).toBe(false);
+        expect(modeDrift.reason).toBe(
+          `runtime file ${file.replaceAll("\\", "/")} does not match the installed baseline`,
+        );
+        chmodSync(filePath, before);
+        expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+      }
     } finally {
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
