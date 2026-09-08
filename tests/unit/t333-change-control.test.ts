@@ -65,6 +65,14 @@ function run(tool: string, args: string[], proj: string, env: Record<string, str
   };
 }
 
+async function waitForPath(path: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
+    await Bun.sleep(10);
+  }
+}
+
 /** A project with the shipped memory and one intent on `scope`. */
 function project(scope: string, extra: string[] = []): { proj: string; state: string } {
   const proj = createTestProject();
@@ -917,6 +925,55 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain("Change Control: relaxed (from scope classic)\n");
   });
+
+  test("a memory edit after the locked policy snapshot completes one fully initialized intent", async () => {
+    const selected = selectedProject("classic");
+    const defaultBefore = snapshot(selected.proj, "default");
+    const altBefore = snapshot(selected.proj, "alt");
+    const altIntents = join(selected.proj, "aidlc", "spaces", "alt", "intents");
+    const barrier = join(selected.proj, "aidlc", ".t333-intent-create-policy");
+    const child = Bun.spawn({
+      cmd: [
+        BUN,
+        UTILITY,
+        ...CREATE,
+        "--change-control",
+        "relaxed",
+        "--space",
+        "alt",
+        "--project-dir",
+        selected.proj,
+      ],
+      env: {
+        ...process.env,
+        AIDLC_TEST_INTENT_CREATE_CHANGE_CONTROL_BARRIER: barrier,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
+
+    await waitForPath(`${barrier}.snapshotted`);
+    declareAltMemoryStrict(selected.proj);
+    writeFileSync(`${barrier}.release`, "release\n");
+
+    const [status, out, err] = await Promise.all([child.exited, stdout, stderr]);
+    expect(status, err).toBe(0);
+    const createdDir = readFileSync(join(altIntents, "active-intent"), "utf-8").trim();
+    expect(createdDir).not.toBe(selected.targetIntent);
+    expect(out).toContain(`Intent created: ${createdDir} (space: alt)`);
+
+    const state = readFileSync(join(altIntents, createdDir, "aidlc-state.md"), "utf-8");
+    expect(getField(state, CHANGE_CONTROL_FIELD)).toBe("relaxed (set by you)");
+    expect(getField(state, "Current Stage")).not.toBeNull();
+    const rows = readAuditShardEvents(selected.proj, createdDir, "alt");
+    expect(rows.map((row) => row.event)).toContain("WORKFLOW_STARTED");
+    expect(rows.map((row) => row.event)).toContain("WORKSPACE_INITIALISED");
+    expect(existsSync(join(altIntents, createdDir, "verification"))).toBe(true);
+    expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
+    expect(snapshot(selected.proj, "alt").records).toHaveLength(altBefore.records.length + 1);
+  }, 30_000);
 
   test("--intent and an unknown --space are refused before anything is created", () => {
     const selected = selectedProject("classic");

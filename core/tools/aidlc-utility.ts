@@ -5784,6 +5784,23 @@ function ensureWorkspaceDirs(
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
 }
 
+function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
+  const barrier =
+    process.env.AIDLC_TEST_INTENT_CREATE_CHANGE_CONTROL_BARRIER?.trim();
+  if (!barrier) return;
+  writeFileSync(`${barrier}.snapshotted`, "snapshotted\n", "utf-8");
+  const waitCell = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(`${barrier}.release`)) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "timed out waiting at the intent-create Change Control snapshot barrier",
+      );
+    }
+    Atomics.wait(waitCell, 0, 0, 10);
+  }
+}
+
 // intent-create - the deterministic mutation behind the engine's creation
 // directive (the engine NAMES the move read-only; this tool performs it).
 // Creates the FIRST intent in the active space on a fresh workspace, OR a new
@@ -6014,15 +6031,27 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const space = initialSelection.space;
     // The preflight above ran outside the lock; a memory edit could land in
     // between. Re-read under the lock, still BEFORE the mint, so the refusal
-    // that reaches the human is always a creation that did nothing. The state
-    // build reads memory once more to write the state line (same answer, same
-    // lock).
+    // that reaches the human is always a creation that did nothing. This locked
+    // read is the creation's policy snapshot; state construction receives the
+    // resulting value and cannot refuse after the mint because memory changed.
     const lockedMemoryStrict =
       memoryChangeControlDeclarations(projectDir, { space })
         .find((declaration) => declaration.value === "strict") ?? null;
     if (lockedMemoryStrict !== null && requestedChangeControl === "relaxed") {
       die(changeControlMemoryStrictRefusal(lockedMemoryStrict));
     }
+    const lockedScopeDef = loadScopeMapping()[scope];
+    if (!lockedScopeDef) die(`Unknown scope: ${scope}`);
+    const effectiveChangeControl =
+      lockedMemoryStrict !== null
+        ? formatChangeControl("strict", `${lockedMemoryStrict.layer}.md`)
+        : requestedChangeControl !== null
+          ? formatChangeControl(requestedChangeControl, "you")
+          : formatChangeControl(
+              lockedScopeDef.changeControl ?? "strict",
+              `scope ${scope}`,
+            );
+    waitAtIntentCreateChangeControlSnapshotBarrier();
     const created = createIntent(
       projectDir,
       slug,
@@ -6133,6 +6162,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       reviewOverride,
       created.dirName,
       created.space,
+      effectiveChangeControl,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -6149,6 +6179,7 @@ function handleIntentCreateStateBuild(
   reviewOverride: ReviewOverride | undefined,
   createdDir: string,
   createdSpace: string,
+  effectiveChangeControl: string,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -6204,26 +6235,6 @@ function handleIntentCreateStateBuild(
   const effectiveTestStrategy = testStrategyOverride
     ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
     : (scopeDef.testStrategy ?? effectiveDepth);
-  // Change Control: a memory layer that declares strict wins and names itself;
-  // otherwise the human's flag is theirs, otherwise the scope default. The
-  // source rides on the line for `--status` and the human line; only the value
-  // is ever read back.
-  const memoryStrict =
-    memoryChangeControlDeclarations(projectDir, {
-      intent: createdDir,
-      space: createdSpace,
-    }).find((declaration) => declaration.value === "strict") ?? null;
-  const requestedChangeControl = parseChangeControl(flags["change-control"]);
-  if (memoryStrict !== null && requestedChangeControl === "relaxed") {
-    die(changeControlMemoryStrictRefusal(memoryStrict));
-  }
-  const effectiveChangeControl =
-    memoryStrict !== null
-      ? formatChangeControl("strict", `${memoryStrict.layer}.md`)
-      : requestedChangeControl !== null
-        ? formatChangeControl(requestedChangeControl, "you")
-        : formatChangeControl(scopeDef.changeControl ?? "strict", `scope ${scope}`);
-
   // Compute stages to execute/skip
   const executeStages: string[] = [];
   const skipStages: string[] = [];
