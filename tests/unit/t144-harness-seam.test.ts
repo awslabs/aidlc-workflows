@@ -32,6 +32,17 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLAUDE_TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const CLAUDE_LIB = join(CLAUDE_TOOLS, "aidlc-lib.ts");
+const LIB_SIBLINGS = [
+  "aidlc-lib.ts",
+  "aidlc-settings.ts",
+  "aidlc-install-paths.ts",
+  "aidlc-distribution.ts",
+  "aidlc-artifact-vocabulary.ts",
+  "aidlc-graph.ts",
+  "aidlc-runtime-paths.ts",
+  "aidlc-stage-schema.ts",
+  "aidlc-version.ts",
+] as const;
 
 // Materialize a minimal <root>/<harness>/tools/ tree carrying the real lib
 // (plus its sibling imports) so script-path derivation sees the genuine shipped
@@ -43,7 +54,7 @@ const CLAUDE_LIB = join(CLAUDE_TOOLS, "aidlc-lib.ts");
 function libInHarnessTree(root: string, harness: string, rulesSubdir?: string): string {
   const toolsDir = join(root, harness, "tools");
   mkdirSync(join(toolsDir, "data"), { recursive: true });
-  for (const sibling of ["aidlc-lib.ts", "aidlc-artifact-vocabulary.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
+  for (const sibling of LIB_SIBLINGS) {
     cpSync(join(CLAUDE_TOOLS, sibling), join(toolsDir, sibling));
   }
   // Seed the compiled-data files (stage-graph/scope-grid) from claude — they are
@@ -105,7 +116,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     try {
       // Lib copied OUTSIDE any harness tree → derivation misses → CWD probe.
       const libCopy = join(tmp, "aidlc-lib.ts");
-      for (const sibling of ["aidlc-lib.ts", "aidlc-artifact-vocabulary.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
+      for (const sibling of LIB_SIBLINGS) {
         cpSync(join(CLAUDE_TOOLS, sibling), join(tmp, sibling));
       }
       cpSync(join(CLAUDE_TOOLS, "data"), join(tmp, "data"), { recursive: true });
@@ -137,7 +148,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     try {
       // Lib outside any harness tree → suffix strip misses → CWD marker rung.
       const libCopy = join(tmp, "aidlc-lib.ts");
-      for (const sibling of ["aidlc-lib.ts", "aidlc-artifact-vocabulary.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
+      for (const sibling of LIB_SIBLINGS) {
         cpSync(join(CLAUDE_TOOLS, sibling), join(tmp, sibling));
       }
       cpSync(join(CLAUDE_TOOLS, "data"), join(tmp, "data"), { recursive: true });

@@ -108,7 +108,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       // NOT a creation print: the gate must not name intent-create here.
       expect(d.kind).not.toBe("print");
       expect(d.kind).toBe("ask");
-      expect(d.message ?? "").not.toContain("intent-create");
+      expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
       expect(d.question).toContain("/aidlc intent <name>");
@@ -136,7 +136,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]); // positional valid-scope name, no --scope flag
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
-      expect(d.message ?? "").not.toContain("intent-create");
+      expect(d.message ?? "").not.toContain("intent create");
       expect(d.question).toContain("/aidlc intent <name>");
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
@@ -274,7 +274,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["--scope", "poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-create --scope poc");
+      expect(d.message).toContain("intent create --scope poc");
       // Read-only: next did not create anything itself.
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
@@ -283,7 +283,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-create --scope poc");
+      expect(d.message).toContain("intent create --scope poc");
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
 
@@ -291,7 +291,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["create a todo application using the express scope"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-create --scope express");
+      expect(d.message).toContain("intent create --scope express");
       expect(d.message).toContain("--arguments='create a todo application using the express scope'");
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
@@ -317,7 +317,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     // The lone created intent has a live cursor + state → the engine reads its
     // position and advances; it must NOT re-name intent-create nor prompt to pick.
     expect(d.kind).not.toBe("ask");
-    if (d.kind === "print") expect(d.message).not.toContain("intent-create");
+    if (d.kind === "print") expect(d.message).not.toContain("intent create");
     // The cursor was never disturbed.
     const cursor = readFileSync(cursorPath(proj), "utf-8").trim();
     expect(recordDirs(proj)).toContain(cursor);

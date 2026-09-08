@@ -939,11 +939,16 @@ function cli(argv: string[]): number {
 	return 0;
 }
 
-if (import.meta.main) {
+/** Dispatcher entry (`aidlc engine html <verb>`): same CLI, argv supplied. */
+export async function main(argv: string[]): Promise<void> {
 	try {
-		process.exitCode = cli(process.argv.slice(2));
+		process.exitCode = cli(argv);
 	} catch (error) {
 		process.stderr.write(`aidlc-html: ${error instanceof Error ? error.message : String(error)}\n`);
 		process.exitCode = 1;
 	}
+}
+
+if (import.meta.main) {
+	await main(process.argv.slice(2));
 }

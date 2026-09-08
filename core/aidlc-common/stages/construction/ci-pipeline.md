@@ -1,5 +1,6 @@
 ---
 slug: ci-pipeline
+name: CI Pipeline
 phase: construction
 execution: CONDITIONAL
 condition: Execute when CI pipeline needs creation or significant modification. Skip if CI already exists and is adequate.
@@ -87,7 +88,7 @@ the Construction → Operation transition and revisit the owning stage.
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage ci-pipeline --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage ci-pipeline --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval

@@ -1,7 +1,7 @@
 name: CI
 
 # Deterministic PR gate for the main line. Runs the fast contract checks
-# (dist byte-parity, typecheck, lint), the credential-free test tiers
+# (generator determinism, typecheck, lint), the credential-free test tiers
 # (smoke + unit), and the DETERMINISTIC SUBSET of integration + e2e under
 # --no-llm. The live-model tests are excluded EXPLICITLY by that flag - the
 # runner force-closes every live gate and skips the derived Claude-dependent
@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   check:
-    name: Contract checks (parity + typecheck + lint)
+    name: Contract checks (determinism + typecheck + lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -47,9 +47,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # `bun run check` = package.ts --check (dist drift guard) && typecheck
-      # (all three tsconfigs) && biome lint. Fails CI on a hand-edited or stale
-      # dist, a type error, or a lint warning.
+      # `bun run check` regenerates the projections, runs the two-build package
+      # determinism guard, then typechecks all three tsconfigs and runs Biome.
       - name: Run contract checks
         run: bun run check
 
@@ -65,6 +64,17 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # Regenerate every local projection from core/ + harness/ before the
+      # tiers run, so the suite exercises CI-built bytes from a fresh clone.
+      - name: Build the harness projections
+        run: bun scripts/package.ts
+
+      # t244 syntax-checks the generated zsh completion script with `zsh -n`;
+      # ubuntu-latest does not ship zsh, so install it to keep that assertion
+      # exercising the real shell instead of skipping.
+      - name: Install zsh (t244 completion syntax check)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
 
       # smoke + unit are the deterministic, credential-free tiers (no AWS /
       # Bedrock / live Claude). The runner exits non-zero on any failed file.
@@ -87,6 +97,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Build the harness projections
+        run: bun scripts/package.ts
 
       # --no-llm force-closes every live-model gate (Claude SDK, TUI, Kiro
       # ACP/TUI/IDE, Codex exec) and skips the derived Claude-dependent files

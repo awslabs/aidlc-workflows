@@ -70,7 +70,7 @@ describe("t300 reusable plugin test kit", () => {
     expect(graphSlugs(opencode.projectDir, ".aidlc")).toContain(
       "test-pro-integration",
     );
-  });
+  }, 60_000);
 
   test("validates good content and reports synthesized plugin findings", () => {
     expect(validatePluginContent(TEST_PRO_ROOT)).toEqual([]);

@@ -1,5 +1,6 @@
 ---
 slug: state-init
+name: State Initialization
 phase: initialization
 execution: ALWAYS
 condition: Creates full populated state file and determines routing — auto-proceeds
@@ -55,8 +56,8 @@ from the compiled stage graph and scope grid:
 - Total Stages: count EXECUTE stages only (not SKIP). Authoritative counts come
   from the compiled scope grid (`{{HARNESS_DIR}}/tools/data/scope-grid.json`),
   transposed from each stage's `scopes:` frontmatter. Run
-  `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts scope-table` for the live scope
-  counts and `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts stage-table` for the
+  `{{INVOKE}} engine gen scope-table` for the live scope
+  counts and `{{INVOKE}} engine gen stage-table` for the
   live compiled stage list.
 - Completed: set to number of completed INITIALIZATION stages (typically 3)
 - In Progress: set to first post-initialization stage name

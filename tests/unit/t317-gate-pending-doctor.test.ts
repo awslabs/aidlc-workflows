@@ -85,7 +85,7 @@ function seedAudit(
 }
 
 function runDoctor(proj: string): { status: number; out: string } {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -110,7 +110,7 @@ describe("t317 doctor gate-pending advisory", () => {
     const staleRun = runDoctor(stale);
 
     expect(staleRun.out).toMatch(
-      /\u2713\s+Approval gate pending: Feasibility & Constraints \(~\d+h\); waiting for a human, not stuck\./,
+      /ok\s+Approval gate pending: Feasibility & Constraints \(~\d+h\); waiting for a human, not stuck\./,
     );
     expect(staleRun.out).toContain("/aidlc --status");
     expect(staleRun.status).toBe(baselineRun.status);

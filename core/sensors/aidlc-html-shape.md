@@ -1,7 +1,7 @@
 ---
 id: html-shape
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-html-shape.ts
+command: {{INVOKE}} engine sensor-html-shape
 default_severity: advisory
 fire_on: gate
 description: Checks HTML stage outputs follow the offline artifact authoring contract

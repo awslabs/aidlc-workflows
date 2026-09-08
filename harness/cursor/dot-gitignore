@@ -36,7 +36,7 @@ aidlc/.aidlc-active-space-*.tmp
 aidlc/spaces/*/intents/active-intent
 aidlc/spaces/*/intents/pending-intents.json
 #
-# A vendored ACP agent adapter (`aidlc-review-ui.ts vendor-agent`) is part of the
+# A vendored ACP agent adapter (`aidlc ui vendor-agent`) is part of the
 # install so it can travel to hosts without a package registry; the blanket
 # node_modules rule above must not drop it.
 !.cursor/tools/vendor/acp/node_modules

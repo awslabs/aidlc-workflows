@@ -135,7 +135,7 @@ describe("t363 review UI intent requests", () => {
     // a bare next: the request stands in for typed text; creation is a print carrying the request id and effort
     const pickup = engine(["next"]);
     expect(pickup.kind).toBe("print");
-    expect(pickup.message).toContain("intent-create --scope express");
+    expect(pickup.message).toContain("engine intent create --scope express");
     expect(pickup.message).toContain("--arguments='Build a tiny todo CLI that stores tasks in a local JSON file'");
     expect(pickup.message).toContain(`--request ${id}`);
     expect(pickup.message).toContain("--effort minimal");

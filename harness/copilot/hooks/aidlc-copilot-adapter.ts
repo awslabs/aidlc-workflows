@@ -241,7 +241,7 @@ export async function run(
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
     const command = executable
-      ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
       : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
@@ -262,7 +262,7 @@ export async function run(
   ): { stdout: string; stderr: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
     const command = executable
-      ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
       : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
@@ -471,6 +471,9 @@ export async function run(
       if (!compiled) return { status: "unrelated" };
       args = words.slice(cursor);
     }
+    // The reshaped dispatcher routes the loop under `engine orchestrate`;
+    // classification works on the bare verb either way.
+    if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);

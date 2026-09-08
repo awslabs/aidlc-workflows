@@ -21,7 +21,7 @@ project already holds it). It is detached from the session and stops after its
 idle timeout. You do not need a session at all: from the project root,
 
 ```bash
-bun <harnessDir>/tools/aidlc-review-ui.ts start
+aidlc ui start
 ```
 
 starts the daemon detached, prints the URL and whether an agent runner is
@@ -282,7 +282,7 @@ adapters that `bunx` fetches on first use. Once, on a machine with registry
 access, run
 
 ```bash
-bun <harnessDir>/tools/aidlc-review-ui.ts vendor-agent
+aidlc ui vendor-agent
 ```
 
 It installs the pinned adapter (without the bundled agent binaries, which the

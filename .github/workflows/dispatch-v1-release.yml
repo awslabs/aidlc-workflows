@@ -1,0 +1,53 @@
+# The maintained v1 release implementation remains on v1 tags. This
+# default-branch workflow preserves a manual entry point after release.yml
+# becomes the native v2 release pipeline.
+
+name: Dispatch v1 Release
+run-name: Dispatch-only v1 Release request for ${{ inputs.tag || 'missing tag' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing v1 release tag to dispatch, for example v1.2.0'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch-v1-tag:
+    name: Dispatch request only
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_TAG: ${{ inputs.tag }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Run the tagged v1 workflow
+        run: |
+          if [[ ! "$INPUT_TAG" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::v1 release tag must match v1.MINOR.PATCH."
+            exit 1
+          fi
+          if ! gh api \
+              --method GET \
+              "repos/$REPO/contents/.github/workflows/release.yml" \
+              -f "ref=$INPUT_TAG" \
+              >/dev/null; then
+            echo "::error::$INPUT_TAG does not contain the v1 release workflow."
+            exit 1
+          fi
+          gh workflow run release.yml \
+            --ref "$INPUT_TAG" \
+            --repo "$REPO"
+          echo "::notice::Dispatch accepted. This run does not report the child Release result."
+          {
+            echo "## Dispatch accepted"
+            echo
+            echo "GitHub accepted the request for \`release.yml\` on \`$INPUT_TAG\`."
+            echo "This run does not report the outcome of the child Release workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

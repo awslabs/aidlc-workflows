@@ -178,6 +178,16 @@ function runAdapter(
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
+    // Hermetic git evaluation: the adapter's shell evaluator consults the
+    // REAL pager environment and global git config when classifying `git`
+    // commands, so a developer host with PAGER=less or a global core.pager
+    // (e.g. delta) flips the safe-git allow cases to deny. Point the global
+    // scope at an absent file and drop pager variables; command-text
+    // assignments inside individual test payloads are unaffected.
+    PAGER: undefined,
+    GIT_PAGER: undefined,
+    GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
+    GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
     AIDLC_HARNESS_DIR: ".cursor",
     ...options.env,
@@ -1200,7 +1210,6 @@ if (import.meta.main) {
     registerTaskParent(proj);
     runAdapter(proj, "guards", payload("preToolUseTask", proj));
     expect(ledgerFilesFor(proj)).toHaveLength(1);
-
     for (const target of [ledgerDirFor(proj), dispatch]) {
       const removal = runAdapter(
         proj,

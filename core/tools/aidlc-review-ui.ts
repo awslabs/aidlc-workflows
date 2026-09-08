@@ -108,6 +108,7 @@ import { handleDecision } from "./aidlc-review-ui-decision.ts";
 import { browserAnswersContinuation, browserDecisionContinuation, ENV_REVIEW_RUNNER, openQuestionsRound } from "./aidlc-review-ui-shared.ts";
 import { openCheckpointPrompt, questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import { compiledInvocationArgv } from "./aidlc-runtime-paths.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ANSWERS_BODY_BYTES = 256 * 1024;
@@ -127,7 +128,7 @@ const RAW_CSP = "default-src 'none'; img-src data: blob:; style-src 'unsafe-inli
 const APP_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const ASSET_ROOT = join(import.meta.dir, "data", "review-ui");
 
-const USAGE = `Usage: aidlc-review-ui.ts <command> [options]
+const USAGE = `Usage: aidlc ui <command> [options]
 
 Commands:
   start [--project-dir <path>]         Start the review UI for this project (detached) and open it - no
@@ -1347,16 +1348,9 @@ async function intentRequestResponse(projectDir: string, request: Request, publi
   const blocked = runs.liveRuns().find((record) => !record.bound);
   if (blocked) throw new HttpError(409, `${blocked.intent} is running in a session that is not bound to it; finish, park, or stop it before starting another intent.`);
   const label = typeof body.label === "string" && body.label.trim() ? body.label.trim() : text;
-  const args = [
-    join(import.meta.dir, "aidlc-utility.ts"),
-    "intent-create",
-    "--space", space,
-    "--scope", scope,
-    "--arguments", text,
-    "--label", label,
-  ];
+  const args = ["--space", space, "--scope", scope, "--arguments", text, "--label", label];
   if (effort) args.push("--effort", "preset" in effort ? effort.preset : `reviewing=${effort.reviewing},writing=${effort.writing}`);
-  const result = Bun.spawnSync({ cmd: [process.execPath, ...args], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync({ cmd: utilityCommand(projectDir, "intent-create", args), cwd: projectDir, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) {
     const detail = `${result.stderr.toString()}${result.stdout.toString()}`.trim().replace(/\s+/g, " ").slice(0, 300);
     throw new HttpError(500, `could not create the intent: ${detail}`);
@@ -1463,6 +1457,20 @@ function withdrawIntentRequestResponse(projectDir: string, url: URL, publishStat
   return json({ removed: id });
 }
 
+/**
+ * argv for a deterministic utility move (`intent-create`, `space-create`): the
+ * sibling tool file under bun, or this install's own `aidlc engine <noun>
+ * <verb>` route when running as the compiled binary (no tool files to run).
+ */
+function utilityCommand(projectDir: string, verb: "intent-create" | "space-create", args: readonly string[]): string[] {
+  const [noun, action] = verb.split("-");
+  // The project is named explicitly: the binary resolves it from its cwd or
+  // this flag, never from a tool file's location.
+  const scoped = [...args, "--project-dir", projectDir];
+  return compiledInvocationArgv("engine", noun, action, ...scoped)
+    ?? [process.execPath, join(import.meta.dir, "aidlc-utility.ts"), verb, ...scoped];
+}
+
 async function createSpaceResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
   const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as { name?: unknown } | null;
   const name = body && typeof body === "object" && typeof body.name === "string" ? body.name.trim().toLowerCase() : "";
@@ -1470,7 +1478,7 @@ async function createSpaceResponse(projectDir: string, request: Request, publish
   if (existsSync(join(spacesRoot(projectDir), name))) throw new HttpError(409, `workspace "${name}" already exists`);
   // The same deterministic move the terminal's `/aidlc space create <name>` runs.
   const result = Bun.spawnSync({
-    cmd: [process.execPath, join(import.meta.dir, "aidlc-utility.ts"), "space-create", name],
+    cmd: utilityCommand(projectDir, "space-create", [name]),
     cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
@@ -2029,7 +2037,12 @@ function stop(projectDir: string): void {
 async function start(projectDir: string): Promise<void> {
   const resolved = realpathSync(projectDir);
   const env = { ...process.env, [ENV_REVIEW_UI]: "1" };
-  const info = await ensureReviewUiDaemon(resolved, { toolsDir: import.meta.dir, env, waitMs: 8_000 });
+  const info = await ensureReviewUiDaemon(resolved, {
+    toolsDir: import.meta.dir,
+    launcher: compiledInvocationArgv("ui") ?? undefined,
+    env,
+    waitMs: 8_000,
+  });
   if (!info || !serverInfoLooksAlive(info)) {
     process.stderr.write(`Review UI did not start; see ${serverLogPath(resolved, env)}\n`);
     process.exitCode = 1;
@@ -2078,7 +2091,9 @@ async function vendorAgent(projectDir: string): Promise<void> {
   // SDK's ~190 MB native build per platform; Codex's binary). The runner points
   // the adapter at the harness CLI already on the machine, so they are never
   // used - omit them and the vendored tree is a few tens of megabytes.
-  const result = Bun.spawnSync({ cmd: [process.execPath, "install", "--no-save", "--omit=optional"], cwd: dir, stdout: "inherit", stderr: "inherit" });
+  // Under the compiled binary process.execPath is aidlc itself; installs need bun.
+  const bun = compiledInvocationArgv() ? (Bun.which("bun") ?? "bun") : process.execPath;
+  const result = Bun.spawnSync({ cmd: [bun, "install", "--no-save", "--omit=optional"], cwd: dir, stdout: "inherit", stderr: "inherit" });
   if (result.exitCode !== 0) {
     process.stderr.write("vendor-agent: bun install failed\n");
     process.exitCode = 1;

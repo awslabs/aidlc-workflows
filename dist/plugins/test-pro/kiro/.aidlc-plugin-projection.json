@@ -1,6 +1,0 @@
-{
-  "schema": 1,
-  "producer": "aidlc-plugin-build",
-  "plugin": "test-pro",
-  "harness": "kiro"
-}

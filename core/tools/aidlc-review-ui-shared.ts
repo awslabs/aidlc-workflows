@@ -1054,6 +1054,12 @@ export interface SpawnOptions {
   env?: NodeJS.ProcessEnv;
   /** Bun executable; defaults to the running runtime when it is bun. */
   bunPath?: string;
+  /**
+   * argv that reaches the daemon CLI (`serve --project-dir <dir>` is appended).
+   * Defaults to `bun <toolsDir>/aidlc-review-ui.ts`; a compiled `aidlc` binary
+   * passes `[aidlc, "ui"]` since it has no tool file to run.
+   */
+  launcher?: readonly string[];
 }
 
 /**
@@ -1063,14 +1069,17 @@ export interface SpawnOptions {
  */
 export function spawnReviewUiDaemon(projectDir: string, options: SpawnOptions): number | null {
   const env = options.env ?? process.env;
-  const script = join(options.toolsDir, "aidlc-review-ui.ts");
-  if (!existsSync(script)) return null;
+  let launcher = options.launcher;
+  if (!launcher) {
+    const script = join(options.toolsDir, "aidlc-review-ui.ts");
+    if (!existsSync(script)) return null;
+    launcher = [options.bunPath ?? (process.versions.bun ? process.execPath : "bun"), script];
+  }
   const home = reviewUiProjectHome(projectDir, env);
   ensurePrivateDir(home);
   const log = openSync(serverLogPath(projectDir, env), "a", 0o600);
   try {
-    const bun = options.bunPath ?? (process.versions.bun ? process.execPath : "bun");
-    const child = spawn(bun, [script, "serve", "--project-dir", resolve(projectDir)], {
+    const child = spawn(launcher[0], [...launcher.slice(1), "serve", "--project-dir", resolve(projectDir)], {
       detached: true,
       stdio: ["ignore", log, log],
       env: { ...env },

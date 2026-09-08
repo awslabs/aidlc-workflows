@@ -82,7 +82,11 @@ function runUtility(command: "status" | "doctor", enabled: boolean, strict = fal
   if (strict) env.AIDLC_REVIEW_STRICT = "1";
   else delete env.AIDLC_REVIEW_STRICT;
   const result = Bun.spawnSync({
-    cmd: [BUN, UTILITY, command, "--project-dir", project],
+    // Doctor folds passing checks into a count unless --verbose; the review-ui
+    // row is what this suite reads, so ask for every row.
+    cmd: command === "doctor"
+      ? [BUN, UTILITY, command, "--verbose", "--project-dir", project]
+      : [BUN, UTILITY, command, "--project-dir", project],
     stdout: "pipe",
     stderr: "pipe",
     env,
@@ -150,23 +154,24 @@ describe("t337 status and doctor review UI reporting", () => {
   });
 
   test("doctor reports disabled, alive, and stale states with the recovery command", () => {
+    const reviewUiRow = (run: UtilityRun): string | undefined =>
+      run.stdout.split("\n").find((line) => line.includes("review-ui:"));
     const disabled = runUtility("doctor", false);
-    expect(disabled.stdout).toContain("✓  review-ui: disabled (AIDLC_REVIEW_UI unset)");
+    expect(reviewUiRow(disabled)).toBe("  ok    review-ui: disabled (AIDLC_REVIEW_UI unset)");
 
     const aliveInfo = readServerInfo(project, { ...process.env, AIDLC_REVIEW_HOME: reviewHome });
     expect(aliveInfo).not.toBeNull();
     const alive = runUtility("doctor", true);
     // Default: the alive row prints the stable origin, which the daemon opens
     // for a typed navigation — a URL the human can actually click.
-    const aliveRow = alive.stdout.split("\n").find((line) => line.includes("review-ui: alive"));
-    expect(aliveRow).toBe(`✓  review-ui: alive — open ${aliveInfo!.url}`);
+    expect(reviewUiRow(alive)).toBe(`  ok    review-ui: alive — open ${aliveInfo!.url}`);
 
     // Strict mode: the row mints a fresh single-use link instead, and the
     // nonce it names exists on disk.
     const strictAlive = runUtility("doctor", true, true);
-    const strictRow = strictAlive.stdout.split("\n").find((line) => line.includes("review-ui: alive"));
+    const strictRow = reviewUiRow(strictAlive);
     expect(strictRow).toMatch(
-      new RegExp(`^✓  review-ui: alive — open ${aliveInfo!.url.replaceAll(".", "\\.")}open/[0-9a-f]{32} \\(single-use link, 30 min; /aidlc --status mints another\\)$`),
+      new RegExp(`^  ok    review-ui: alive — open ${aliveInfo!.url.replaceAll(".", "\\.")}open/[0-9a-f]{32} \\(single-use link, 30 min; /aidlc --status mints another\\)$`),
     );
     const minted = strictRow!.match(/open\/([0-9a-f]{32})/)![1];
     expect(existsSync(join(noncesDir(project, { ...process.env, AIDLC_REVIEW_HOME: reviewHome }), minted))).toBe(true);
@@ -177,12 +182,12 @@ describe("t337 status and doctor review UI reporting", () => {
     };
     writeServerInfo(stale, { ...process.env, AIDLC_REVIEW_HOME: reviewHome });
     const dead = runUtility("doctor", true);
-    expect(dead.stdout).toContain(
-      "✓  review-ui: enabled but daemon is not alive or reachable (warning)",
+    // A warning row, with the launcher as its fix line: the daemon runs
+    // detached and needs no harness session.
+    expect(reviewUiRow(dead)).toBe(
+      `  warn  review-ui: enabled but daemon is not alive or reachable — last known address ${aliveInfo!.url}`,
     );
-    expect(dead.stdout).toContain(
-      `bun .claude/tools/aidlc-review-ui.ts serve --project-dir ${project}`,
-    );
+    expect(dead.stdout).toContain("fix: bun .claude/tools/aidlc.ts ui start");
 
     writeServerInfo({
       ...stale,

@@ -77,4 +77,4 @@ encryption standards, or penetration test findings.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-devsecops-agent](../../guide/agents/devsecops-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-devsecops-agent.md`](../../../dist/claude/.claude/agents/aidlc-devsecops-agent.md)
+- Authored source: [`core/agents/aidlc-devsecops-agent.md`](../../../core/agents/aidlc-devsecops-agent.md)

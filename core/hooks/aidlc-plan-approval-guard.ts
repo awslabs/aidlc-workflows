@@ -70,6 +70,7 @@ import {
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
+  resolveProjectFlag,
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -626,7 +627,7 @@ async function mutationIntent(
 
 export async function run(input: string): Promise<number> {
   // Deterministic off-switch: enforcement disabled entirely.
-  if (process.env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD === "1") return 0;
+  if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") return 0;
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 

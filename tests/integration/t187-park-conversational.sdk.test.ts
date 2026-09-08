@@ -112,7 +112,7 @@ describe("t187 park + conversational carve-out (sdk): a conductor asked to pause
         const parkBash = r.toolResults.some(
           (t) =>
             (t.toolName === "Bash" || t.toolName === "Shell") &&
-            /aidlc-orchestrate\.ts\b[\s\S]*\bpark\b/.test(
+            /(?:aidlc-orchestrate\.ts\b|engine orchestrate)[\s\S]*\bpark\b/.test(
               String((t.input as Record<string, unknown>).command ?? ""),
             ),
         );

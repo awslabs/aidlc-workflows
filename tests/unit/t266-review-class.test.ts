@@ -269,7 +269,7 @@ describe("t266 review class", () => {
     );
     expect(creation.status).toBe(0);
     expect(String(creation.directive?.message)).toContain(
-      "intent-create --scope feature --review none",
+      "intent create --scope feature --review none",
     );
 
     const active = projectWithState();
@@ -280,7 +280,7 @@ describe("t266 review class", () => {
     );
     expect(changedScope.status).toBe(0);
     expect(String(changedScope.directive?.message)).toContain(
-      "scope-change --scope feature --review none",
+      "scope change --scope feature --review none",
     );
 
     const sameScope = runOrchestrateNext(
@@ -290,7 +290,7 @@ describe("t266 review class", () => {
     );
     expect(sameScope.status).toBe(0);
     expect(String(sameScope.directive?.message)).toContain(
-      "config-change --review none",
+      "config set review none",
     );
 
     const parked = projectWithState();
@@ -307,7 +307,7 @@ describe("t266 review class", () => {
     );
     expect(parkedConfig.status).toBe(0);
     expect(String(parkedConfig.directive?.message)).toContain(
-      "config-change --review none",
+      "config set review none",
     );
   });
 

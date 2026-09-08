@@ -186,7 +186,7 @@ Reply, an answer, a permission decision - resets the count and drops a scheduled
 nudge. A pointer on any human moment (`prepared`, `questions`, `confirming`,
 `awaiting-approval`, `revising`, `approved`) is never nudged.
 
-**Vendored adapters.** `aidlc-review-ui.ts vendor-agent` runs
+**Vendored adapters.** `aidlc ui vendor-agent` runs
 `bun install --omit=optional` of the profile's `vendorPackage` into
 `<toolsDir>/vendor/acp/` (`manifest.json` records backend, package, time);
 `resolveAcpLaunch` prefers `vendor/acp/node_modules/.bin/<vendorBin>` over PATH
@@ -196,7 +196,8 @@ points the adapter at the harness CLI. Every shipped `.gitignore` re-includes
 `<harnessDir>/tools/vendor/acp/node_modules` under the blanket `node_modules`
 rule.
 
-**Launcher.** `aidlc-review-ui.ts start [--project-dir]` is `ensureReviewUiDaemon`
+**Launcher.** `aidlc ui start [--project-dir]` (the public `ui` command of the
+`aidlc` dispatcher, routed to `aidlc-review-ui.ts`) is `ensureReviewUiDaemon`
 with `AIDLC_REVIEW_UI=1` forced (the same detached spawn the SessionStart hook
 uses), then prints the URL and the runner's availability and opens the tab.
 

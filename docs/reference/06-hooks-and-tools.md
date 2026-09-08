@@ -8,7 +8,7 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 ## Hook System Architecture
 
-This implementation uses seventeen hook scripts in `.claude/hooks/`. All seventeen are TypeScript (run via `bun`). All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses seventeen TypeScript hook sources in `.claude/hooks/`. A source-generated `dist/` projection invokes them through `bun`; native installs and versioned release runtimes route them through `aidlc engine hook`, `aidlc engine statusline`, or an `aidlc engine adapter` target. All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
 Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
@@ -57,9 +57,9 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 
 ### Shared Characteristics
 
-All seventeen TypeScript hooks:
+All seventeen TypeScript hook sources:
 
-- Written in TypeScript, run via `bun`
+- Are written in TypeScript and invoked through the channel's dispatcher
 - Do not need executable permissions — work identically on macOS, Linux, and native Windows PowerShell
 - Receive JSON on stdin from Claude Code
 - Use native JSON parsing (no `jq` dependency)
@@ -326,7 +326,7 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 
 1. **stdin idiom:** Mirrors `log-subagent.ts` — a TTY means no Claude Code JSON is coming (test/debug), so it allows the stop. Otherwise it reads the Stop-hook JSON, from which it needs only `stop_hook_active`.
 2. **No-op outside AIDLC:** If there is no active intent's `aidlc-state.md` under the project dir, there is nothing to enforce — it allows the stop. The frontmatter `Stop` matcher already scopes the hook to `/aidlc`; this is defence in depth so a non-AIDLC session is never blocked.
-3. **Compose the engine:** Runs `bun .claude/tools/aidlc-orchestrate.ts next --project-dir <dir>` and parses the directive `kind`. It does not re-derive state — it composes the engine.
+3. **Compose the engine:** Runs `aidlc engine orchestrate next --project-dir <dir>` through the selected channel and parses the directive `kind`. It does not re-derive state — it composes the engine.
 4. **`done` → allow:** If the directive is `done`, the workflow is complete; the hook emits nothing and exits 0 (the precedent non-blocking pattern), then clears the recursion counter.
 5. **`notice` → allow:** If the directive is `notice`, the engine has produced a terminal informational hand-off (currently the unscoped-main team Unit fan-out notice); the hook allows the stop and clears the counter without advancing state.
 6. **`parked` -> allow:** If the directive is `parked`, the workflow was intentionally parked mid-flow for a later session (`aidlc-orchestrate park`); the hook allows the stop and clears the counter, exactly like `done`. This is the supported multi-session exit: without it, the only clean stop is `done`, which an agent on a long workflow can only reach by rubber-stamping the remaining stages (#367). **Autonomy guard (#365):** the `parked` allow is suppressed under autonomous Construction (`Construction Autonomy Mode: autonomous`), so a `parked` directive there falls through to the cap-bounded block and the loop keeps moving.
@@ -665,11 +665,18 @@ roles (market research, design references, regulatory frameworks).
 
 ## Deterministic Utility Tool
 
-The file `.claude/tools/aidlc-utility.ts` is a Bun/TypeScript CLI tool that handles utility commands deterministically (no LLM reasoning needed). The conductor dispatches to it with a single Bash call:
+The file `core/tools/aidlc-utility.ts` handles utility commands deterministically
+(no LLM reasoning needed). Generated framework prose uses the dispatcher seam:
 
 ```bash
-bun .claude/tools/aidlc-utility.ts <subcommand>
+aidlc engine <noun> <verb>
 ```
+
+In source-generated `dist/` projections, `{{INVOKE}}` expands that call to
+`bun <harness-dir>/tools/aidlc.ts`; in generated `dist-release/`, versioned
+`runtime/<harness>/`, and installed native
+projects it expands to `aidlc`. Do not author a harness-specific direct script
+path for a framework command.
 
 ### Implemented Subcommands
 
@@ -684,12 +691,12 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `intent [name]` | List intents (`--json`) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
 | `space [name]` | List spaces (`--json`) or switch the active-space cursor and harness include. Normally routed from `/aidlc space [name]`. | — |
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
-| `codekb-path [--repo <name>] [--json]` | Direct-only, read-only query that prints the deterministic per-repo codekb directory. There is no `/aidlc codekb-path` route. | — |
+| `codekb-path [--repo <name>] [--json]` | Read-only query behind `aidlc engine workspace codekb`; prints the deterministic per-repo codekb directory. | — |
 | `project-description` | Direct-only, read-only query used by Intent Capture and Requirements Analysis. Marked records decode the exact `project-description.json` string; only unmarked pre-2.6.115 records fall back to `aidlc-state.md#Project`. | — |
 | `codekb-snapshot --repo <name> --paths <csv> [--json]` | Direct-only pre-scan snapshot of the shared store generation and source fingerprint. There is no `/aidlc codekb-snapshot` route. | — |
 | `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
 | `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
-| `select-plugins [names]` | Direct-only query/update for the install's enabled plugin set. There is no `/aidlc select-plugins` route. | `PLUGIN_SELECTION_CHANGED` in set mode |
+| `select-plugins [names]` | Query/update behind `aidlc engine plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`, `review`); `config-list --json` emits the structured shape. | none |
 | `config-change` | Write active workflow config. Dispatcher form: `/aidlc config set depth <value>`, `/aidlc config set test-strategy <value>`, or `/aidlc config set review <value>`. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED` |
@@ -706,11 +713,32 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 
 The user-facing `intent`, `space`, and `space-create` forms are covered in
 [CLI Commands](../guide/12-cli-commands.md) and
-[Spaces and Intents](../guide/03-spaces-and-intents.md). The `codekb-*` verbs,
-`project-description`, `document-input`, and `select-plugins` are intentionally
-invoked directly as
-`bun <harness-dir>/tools/aidlc-utility.ts <verb>`; none is an orchestrator
-command.
+[Spaces and Intents](../guide/03-spaces-and-intents.md). Use
+`aidlc engine workspace codekb` and `aidlc engine plugin select` for the corresponding
+dispatcher forms; the utility verb names are internal delegate targets.
+
+## Plugin State Tool
+
+`<harness-dir>/tools/aidlc-plugin.ts` owns the internal `aidlc engine plugin list` and
+`aidlc engine plugin sync` routes. It normalizes the proved Claude/Codex host
+inventories (or one injected current root), validates host manifests, hashes
+compose inputs, compares project stamps, and renders the three-action status
+surface. Sync composes in staging and applies one `aidlc-transaction.ts` plan;
+`--prune-missing` additionally requires full inventory, confirmation, and a
+hash-valid `plugin-owned-<key>.json` record. These paths never open a network
+connection.
+
+## Transaction Tool
+
+`core/tools/aidlc-transaction.ts` is the shared commit engine for project and
+machine mutations. Callers construct root-relative operations with expected
+destination state and source hashes, stage the complete candidate, and
+optionally validate before and after commit. The engine owns serialization,
+durability syncs, rollback, and recovery-evidence quarantine. Init, lifecycle,
+pin registration, plugin selection, and plugin sync use this implementation;
+new install-mechanism mutations must do the same rather than adding a private
+snapshot convention. See
+[Architecture: Shared transaction engine](01-architecture.md#shared-transaction-engine).
 
 ### Design Rationale
 
@@ -865,10 +893,10 @@ The transcript reader is **Claude-Code-format-specific**, and only the Claude ha
 
 ## Prerequisites
 
-1. **bun** -- Required for all 17 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
+1. **bun (source-generated projection only)** -- Required for all 17 hook sources and every TypeScript CLI tool in a locally generated `dist/<harness>/` tree (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Native release installs and versioned release runtimes route the same hooks and tools through the installed `aidlc` binary. For source projections, install bun via `curl -fsSL https://bun.sh/install | bash`; on Windows use `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. It must be on PATH for non-interactive shells.
 2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
-No other prerequisites: every hook and tool is TypeScript run via bun, so no `jq`, `sed`, `awk`, Git Bash, or WSL is required on any platform.
+No other prerequisites: copy installs run every hook and tool through bun, while native installs use the compiled dispatcher. Neither channel requires `jq`, `sed`, `awk`, Git Bash, or WSL for hook execution.
 
 ---
 

@@ -24,8 +24,8 @@
 //
 // Source under test (read directly):
 //   dist/claude/.claude/skills/aidlc/SKILL.md — the /aidlc orchestrator prose.
-//     - the forwarding loop invokes aidlc-orchestrate (engine), calling its
-//       `next` and `report` subcommands and acting on the emitted `directive`.
+//     - the forwarding loop invokes the native dispatcher, calling the engine's
+//       `next` and `report` routes and acting on the emitted `directive`.
 //     - the prose flag-dispatch handlers (Composable Flag Extraction, prose
 //       jump-direction "FORWARD JUMP", the Unknown-depth / Unknown-test-strategy
 //       / mutual-exclusivity error wordings) are ABSENT — the engine owns them.
@@ -38,9 +38,9 @@
 // Each assertion hard-codes the expected literal independently of the source.
 //
 // Old TAP -> new test parity (1:1, no guarantee dropped, several STRONGER):
-//   .sh test 1  (grep 'aidlc-orchestrate')               -> "loop invokes the orchestration engine (aidlc-orchestrate)"
-//   .sh test 2  (grep 'aidlc-orchestrate.ts next')       -> "loop calls the engine's next subcommand"
-//   .sh test 3  (grep 'aidlc-orchestrate.ts report')     -> "loop calls the engine's report subcommand"
+//   .sh test 1  (grep engine route)                      -> "loop invokes the orchestration engine"
+//   .sh test 2  (grep native next route)                 -> "loop calls the engine's next subcommand"
+//   .sh test 3  (grep native report route)               -> "loop calls the engine's report subcommand"
 //   .sh test 4  (grep 'directive')                       -> "loop acts on the engine's directive"
 //   .sh test 5  (grep -v 'Composable Flag Extraction')   -> "no prose Composable Flag Extraction handler"
 //   .sh test 6  (grep -v 'FORWARD JUMP')                 -> "no prose jump-direction computation"
@@ -59,6 +59,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 // here is the TS port of that same path (fixtures.ts:42).
 const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SKILL = readFileSync(SKILL_PATH, "utf-8");
+const ORCHESTRATE_INVOKE = "bun .claude/tools/aidlc.ts engine orchestrate";
 
 describe("t41 SKILL.md forwarding-loop contract (migrated from t41-jump-flag-validation.sh, plan 15)", () => {
   test("SKILL.md exists and is non-empty (precondition)", () => {
@@ -69,16 +70,16 @@ describe("t41 SKILL.md forwarding-loop contract (migrated from t41-jump-flag-val
   });
 
   // --- Tests 1-4: the forwarding loop is present and consults the engine ---
-  test("1: loop invokes the orchestration engine (aidlc-orchestrate) [.sh test 1]", () => {
-    expect(SKILL.includes("aidlc-orchestrate")).toBe(true);
+  test("1: loop invokes the orchestration engine [.sh test 1]", () => {
+    expect(SKILL.includes(ORCHESTRATE_INVOKE)).toBe(true);
   });
 
   test("2: loop calls the engine's next subcommand [.sh test 2]", () => {
-    expect(SKILL.includes("aidlc-orchestrate.ts next")).toBe(true);
+    expect(SKILL.includes(`${ORCHESTRATE_INVOKE} next`)).toBe(true);
   });
 
   test("3: loop calls the engine's report subcommand [.sh test 3]", () => {
-    expect(SKILL.includes("aidlc-orchestrate.ts report")).toBe(true);
+    expect(SKILL.includes(`${ORCHESTRATE_INVOKE} report`)).toBe(true);
   });
 
   test("4: loop acts on the engine's directive [.sh test 4]", () => {

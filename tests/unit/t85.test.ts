@@ -21,7 +21,7 @@
 //       affirmed (informational)").
 //   - within PRACTICES_STALENESS_DAYS (90, aidlc-utility.ts:321) -> pass=true,
 //       "affirmed N day(s) ago" with NO "advisory".
-//   - beyond 90 days -> pass=true, "affirmed N days ago (advisory — > 90
+//   - beyond 90 days -> pass=true, "affirmed N days ago (advisory: > 90
 //       days; consider re-running practices-discovery)".
 //   - unparseable ISO -> pass=FALSE, "timestamp unreadable" + the bad value
 //       echoed in the fix clause. This is the ONLY failing check the .sh
@@ -32,8 +32,8 @@
 //       hand-edited timestamp N day(s) ahead)" (regression for the MINOR fix
 //       that pre-fix produced "affirmed -26525 days ago").
 //
-// The report renderer (aidlc-utility.ts:1359-1369) prints `✓  <label>` for
-// a passing check and `✗  <label> — <fix>` for a failing one, so the .sh's
+// The report renderer prints `ok <label>` for a passing check and
+// `fail <label>` plus a following fix line for a failing one, so the .sh's
 // `grep -qE "✓.*Practices staleness…"` and `grep -q "Practices staleness:
 // timestamp unreadable"` map directly onto the combined output here.
 //
@@ -115,7 +115,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-utility.ts doctor --project-dir <p>`. Mirrors `bun "$UTIL" doctor --project-dir "$PROJ"`. */
 function doctor(p: string): CliResult {
-  const res = spawnSync(BUN, [TOOL, "doctor", "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, "doctor", "--verbose", "--project-dir", p], {
     encoding: "utf-8",
   });
   return {
@@ -184,9 +184,9 @@ describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-do
     expect(r.out).toContain(
       "Practices staleness: never affirmed (informational)",
     );
-    // STRONGER: the passing-check `✓ ` prefix is rendered for this row.
+    // STRONGER: the passing-check ok verdict is rendered for this row.
     expect(r.out).toMatch(
-      /✓ {2}Practices staleness: never affirmed \(informational\)/,
+      /ok {4}Practices staleness: never affirmed \(informational\)/,
     );
   });
 
@@ -210,10 +210,10 @@ describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-do
     const p = seededProject();
     setAffirmedTimestamp(p, isoDaysAgo(180));
     const r = doctor(p);
-    // pass=true (✓ on the practices-staleness line) but carries "advisory"
+    // pass=true (ok on the practices-staleness line) but carries "advisory"
     // AND the threshold value "> 90 days".
     expect(r.out).toMatch(
-      /✓ {2}Practices staleness: affirmed \d+ days ago \(advisory/,
+      /ok {4}Practices staleness: affirmed \d+ days ago \(advisory/,
     );
     expect(r.out).toContain("> 90 days");
   });
@@ -239,9 +239,9 @@ describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-do
     expect(r.out).toContain(
       "Practices staleness: never affirmed (informational)",
     );
-    // STRONGER: `✓ ` prefix asserted.
+    // STRONGER: the ok verdict is asserted.
     expect(r.out).toMatch(
-      /✓ {2}Practices staleness: never affirmed \(informational\)/,
+      /ok {4}Practices staleness: never affirmed \(informational\)/,
     );
   });
 
@@ -251,7 +251,7 @@ describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-do
     setAffirmedTimestamp(p, "2099-01-01T00:00:00Z");
     const r = doctor(p);
     expect(r.out).toMatch(
-      /✓ {2}Practices staleness: affirmed in the future/,
+      /ok {4}Practices staleness: affirmed in the future/,
     );
     expect(r.out).toContain("clock skew");
   });

@@ -113,7 +113,7 @@ const TEAM_B_SLUG = "teamb";
  * active, the engine then advances/scope-changes A (Branch 10) instead of
  * creating - a verified live failure: the conductor ran `scope-change --scope poc`
  * on A, rewriting A's state Scope feature→poc. The journey wants the
- * mints-unconditionally handler (aidlc-utility.ts intent-create, :1995), so we
+ * mints-unconditionally handler (aidlc.ts engine intent create, :1995), so we
  * instruct the conductor to invoke that tool verbatim and NOT touch the active
  * intent. (This is the SKILL.md run-then-continue shape, named explicitly.)
  */
@@ -121,7 +121,7 @@ function intentCreationToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
-    `bun .claude/tools/aidlc-utility.ts intent-create --scope ${scope} --arguments ${JSON.stringify(args)}`
+    `bun .claude/tools/aidlc.ts engine intent create --scope ${scope} --arguments ${JSON.stringify(args)}`
   );
 }
 
@@ -265,7 +265,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           .map(shellCommand)
           .filter((command): command is string => command !== undefined);
         const r2Next = r2Commands.filter((command) =>
-          /aidlc-orchestrate\.ts["']?\s+next\b/.test(command)
+          /(?:aidlc-orchestrate\.ts["']?|engine orchestrate)\s+next\b/.test(command)
         );
         expect(r2Next.length).toBeGreaterThan(0);
         for (const command of r2Next) {
@@ -273,7 +273,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           expect(command).toMatch(/--stage(?:=|\s+)(?:["'])?reverse-engineering\b/);
         }
         const r2Reports = r2Commands.filter((command) =>
-          /aidlc-orchestrate\.ts["']?\s+report\b/.test(command)
+          /(?:aidlc-orchestrate\.ts["']?|engine orchestrate)\s+report\b/.test(command)
         );
         expect(
           r2Reports,
@@ -298,7 +298,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         ).toBe(false);
         expect(
           r2Commands.some((command) =>
-            /aidlc-orchestrate\.ts["']?\s+park\b/.test(command)
+            /(?:aidlc-orchestrate\.ts["']?|engine orchestrate)\s+park\b/.test(command)
           ),
         ).toBe(false);
         // Resolve A's record dir up front (hoisted above the codekb asserts) so we
@@ -404,7 +404,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolResult: { resultIncludes: `Active space → ${TEAM_B_SLUG}` },
+          stopAfterToolResult: { resultIncludes: `Active space -> ${TEAM_B_SLUG}` },
         });
         expect(activeSpace(root)).toBe(TEAM_B_SLUG); // the active-space cursor moved
 
@@ -431,7 +431,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolResult: { resultIncludes: "Active space → default" },
+          stopAfterToolResult: { resultIncludes: "Active space -> default" },
         });
         expect(activeSpace(root)).toBe("default");
         // A's WORKFLOW STATE survived the round trip untouched (the cursor flip is

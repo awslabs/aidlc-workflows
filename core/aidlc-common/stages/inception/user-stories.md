@@ -73,7 +73,7 @@ Create the `user-stories-assessment` artifact at its `directive.produces` path, 
 - If skipping: what alternative coverage exists (e.g., requirements alone are sufficient)
 
 If skipping, run
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage user-stories --result skipped --reason "<reason>"`.
+`{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason "<reason>"`.
 The engine records the skip and advances to the next in-scope stage.
 
 ### Step 3: Load Prior Context
@@ -177,7 +177,7 @@ only with a named downstream stage and `N/A` only with a justification:
 After verifying the three lead artifacts and all three contribution files, run:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report \
+{{INVOKE}} engine orchestrate report \
   --stage user-stories --result awaiting-approval
 ```
 

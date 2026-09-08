@@ -22,7 +22,7 @@
 //       still succeeds, because writers create their own parent chain. This is
 //       the disproof case for "trimming the dir breaks a late write".
 //
-// MECHANISM. SPAWNs the real shipped engine CLI (`aidlc-utility.ts intent-create`)
+// MECHANISM. SPAWNs the real shipped engine CLI (`aidlc.ts engine intent create`)
 // against temp project dirs, so the actual creation path runs end to end and the
 // assertions read disk truth. Zero tokens, zero network.
 

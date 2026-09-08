@@ -3,11 +3,25 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { runOrchestrateNext } from "../harness/fixtures.ts";
+import {
+  AIDLC_MEMORY_SRC,
+  AIDLC_SRC,
+  runOrchestrateNext,
+} from "../harness/fixtures.ts";
 import {
   buildPluginProjection,
   composePluginFixture,
@@ -19,8 +33,31 @@ const TIMEOUT_MS = 60_000;
 setDefaultTimeout(TIMEOUT_MS);
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
+  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
+
+function copyClaudeInstall(project: string): void {
+  mkdirSync(project, { recursive: true });
+  cpSync(AIDLC_SRC, join(project, ".claude"), { recursive: true });
+  if (existsSync(AIDLC_MEMORY_SRC)) {
+    cpSync(AIDLC_MEMORY_SRC, join(project, "aidlc"), { recursive: true });
+  }
+}
+
+function composeTestPro(project: string, pluginBuilt: string): void {
+  const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
+    cwd: project,
+    encoding: "utf-8",
+    timeout: TIMEOUT_MS - 5_000,
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: pluginBuilt,
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+    },
+  });
+  if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
+}
 
 function graphPath(project: string): string {
   return join(project, ".claude", "tools", "data", "stage-graph.json");
@@ -48,13 +85,32 @@ function grid(project: string): Record<string, { stages: Record<string, string> 
   return JSON.parse(readFileSync(gridPath(project), "utf-8"));
 }
 
-function runUtility(project: string, args: string[]) {
+function runUtility(project: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(BUN, [join(project, ".claude", "tools", "aidlc-utility.ts"), ...args], {
     cwd: project,
     encoding: "utf-8",
     timeout: TIMEOUT_MS - 5_000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+      ...env,
+    },
   });
+}
+
+function surfaceSnapshot(root: string): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory).sort()) {
+      const path = join(directory, entry);
+      const rel = prefix ? `${prefix}/${entry}` : entry;
+      if (lstatSync(path).isDirectory()) visit(path, rel);
+      else snapshot[rel] = readFileSync(path).toString("base64");
+    }
+  };
+  visit(root, "");
+  return snapshot;
 }
 
 function runOrchestrate(project: string, args: string[]) {
@@ -172,7 +228,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(table).toContain("| test-pro-integration |");
     expect(table).not.toContain("| code-generation |");
 
-    const doctor = runUtility(project, ["doctor"]);
+    const doctor = runUtility(project, ["doctor", "--verbose"]);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain("Enabled plugins: test-pro");
 
@@ -395,19 +451,58 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
   });
 
   test("late-step failure rolls back harness, graph, and grid then regenerates restored selection", () => {
-    const beforeHarness = readFileSync(harnessPath(project), "utf-8");
-    const beforeGraph = readFileSync(graphPath(project), "utf-8");
-    const beforeGrid = readFileSync(gridPath(project), "utf-8");
+    const proj = join(tmp, "late-selection-failure");
+    copyClaudeInstall(proj);
+    composeTestPro(proj, pluginBuilt);
+    const selected = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(selected.status, selected.stdout + selected.stderr).toBe(0);
+    const beforeHarness = readFileSync(harnessPath(proj), "utf-8");
+    const beforeGraph = readFileSync(graphPath(proj), "utf-8");
+    const beforeGrid = readFileSync(gridPath(proj), "utf-8");
 
-    const blocker = join(project, ".claude", "skills", "test-pro-integration");
+    const blocker = join(proj, ".claude", "skills", "test-pro-integration");
+    rmSync(blocker, { recursive: true, force: true });
     writeFileSync(blocker, "not a directory\n", "utf-8");
 
-    const result = runUtility(project, ["select-plugins", "aidlc,test-pro"]);
+    const result = runUtility(proj, ["select-plugins", "aidlc,test-pro"]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Restored harness.json, stage-graph.json, scope-grid.json");
-    expect(readFileSync(harnessPath(project), "utf-8")).toBe(beforeHarness);
-    expect(readFileSync(graphPath(project), "utf-8")).toBe(beforeGraph);
-    expect(readFileSync(gridPath(project), "utf-8")).toBe(beforeGrid);
+    expect(result.stderr).toContain("select-plugins failed");
+    expect(readFileSync(harnessPath(proj), "utf-8")).toBe(beforeHarness);
+    expect(readFileSync(graphPath(proj), "utf-8")).toBe(beforeGraph);
+    expect(readFileSync(gridPath(proj), "utf-8")).toBe(beforeGrid);
+  });
+
+  test("shared transaction fault restores every selection surface and cleans staging", () => {
+    const proj = join(tmp, "selection-transaction-fault");
+    copyClaudeInstall(proj);
+    composeTestPro(proj, pluginBuilt);
+    const before = surfaceSnapshot(join(proj, ".claude"));
+
+    const result = runUtility(
+      proj,
+      ["select-plugins", "aidlc"],
+      { AIDLC_PLUGIN_SELECT_FAIL_AFTER: "1" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("injected transaction failure after operation 1");
+    expect(surfaceSnapshot(join(proj, ".claude"))).toEqual(before);
+    expect(existsSync(join(proj, ".aidlc-transaction.lock"))).toBe(false);
+    expect(readdirSync(proj).some((entry) => entry.startsWith(".aidlc-txn-"))).toBe(false);
+    expect(result.stdout).not.toContain("Enabled plugins:");
+  });
+
+  test("audit append failure rolls the committed selection surfaces back", () => {
+    const proj = join(tmp, "selection-audit-fault");
+    copyClaudeInstall(proj);
+    composeTestPro(proj, pluginBuilt);
+    const intentDir = seedActiveWorkflow(proj, "feature");
+    writeFileSync(join(intentDir, "audit"), "not a directory\n");
+    const before = surfaceSnapshot(join(proj, ".claude"));
+
+    const result = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(result.status).not.toBe(0);
+    expect(surfaceSnapshot(join(proj, ".claude"))).toEqual(before);
+    expect(result.stdout).not.toContain("Enabled plugins:");
   });
 
   test("closure guard names the disabled producer plugin, producer, artifact, and consumer", () => {

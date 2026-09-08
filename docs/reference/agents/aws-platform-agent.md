@@ -77,4 +77,4 @@ approved service catalog, or cost baselines.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-aws-platform-agent](../../guide/agents/aws-platform-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-aws-platform-agent.md`](../../../dist/claude/.claude/agents/aidlc-aws-platform-agent.md)
+- Authored source: [`core/agents/aidlc-aws-platform-agent.md`](../../../core/agents/aidlc-aws-platform-agent.md)

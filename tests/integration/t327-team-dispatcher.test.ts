@@ -922,10 +922,10 @@ describe("t327 team construction dispatcher", () => {
         "HEAD",
       ],
     );
-    const detected = run(UTILITY, ["doctor"], stale.project);
+    const detected = run(UTILITY, ["doctor", "--verbose"], stale.project);
     expect(detected.status).not.toBe(0);
     expect(detected.out).toContain("Unit claim stamp stale");
-    expect(detected.out).toContain("✗  Unit claim activity:");
+    expect(detected.out).toContain("fail  Unit claim activity:");
     expect(detected.out).toContain("no observed ref movement");
     expect(detected.out).toContain("Orphan Unit claim refs");
 
@@ -939,7 +939,7 @@ describe("t327 team construction dispatcher", () => {
     cleanCache.claims.awaiting.observed_at = new Date().toISOString();
     cleanCache.claims.claimed.observed_at = new Date().toISOString();
     writeFileSync(cleanCachePath, `${JSON.stringify(cleanCache, null, 2)}\n`);
-    const cleanDoctor = run(UTILITY, ["doctor"], clean.project);
+    const cleanDoctor = run(UTILITY, ["doctor", "--verbose"], clean.project);
     expect(cleanDoctor.out).not.toContain("Unit claim stamp stale");
     expect(cleanDoctor.out).not.toContain("no observed ref movement");
     expect(cleanDoctor.out).not.toContain("Orphan Unit claim refs");
@@ -959,11 +959,11 @@ describe("t327 team construction dispatcher", () => {
       upgradeCachePath,
       `${JSON.stringify(upgradeCache, null, 2)}\n`,
     );
-    const upgradeDoctor = run(UTILITY, ["doctor"], upgrade.project);
+    const upgradeDoctor = run(UTILITY, ["doctor", "--verbose"], upgrade.project);
     expect(upgradeDoctor.out).toContain(
       "Unit claim activity baseline missing (advisory)",
     );
-    expect(upgradeDoctor.out).not.toContain("✗  Unit claim activity:");
+    expect(upgradeDoctor.out).not.toContain("fail  Unit claim activity:");
 
     git(
       clean.project,
@@ -973,7 +973,7 @@ describe("t327 team construction dispatcher", () => {
         "HEAD",
       ],
     );
-    const unrelated = run(UTILITY, ["doctor"], clean.project);
+    const unrelated = run(UTILITY, ["doctor", "--verbose"], clean.project);
     expect(unrelated.out).not.toContain("Orphan Unit claim refs");
 
     const moved = boardFixture();
@@ -1031,7 +1031,7 @@ describe("t327 team construction dispatcher", () => {
     expect(refreshedCache.claims.claimed.observed_at).not.toBe(
       "2026-08-18T00:00:00Z",
     );
-    const movedDoctor = run(UTILITY, ["doctor"], moved.project);
+    const movedDoctor = run(UTILITY, ["doctor", "--verbose"], moved.project);
     expect(movedDoctor.out).not.toContain("no observed ref movement");
   });
 
@@ -1072,7 +1072,7 @@ describe("t327 team construction dispatcher", () => {
     );
     expect(board.out).not.toContain("Unit Progress derivation requires");
 
-    const doctor = run(UTILITY, ["doctor"], project);
+    const doctor = run(UTILITY, ["doctor", "--verbose"], project);
     expect(doctor.out).not.toContain("Unit claim stamp stale");
     expect(doctor.out).not.toContain("Unit claim activity");
     expect(doctor.out).not.toContain("Orphan Unit claim refs");
