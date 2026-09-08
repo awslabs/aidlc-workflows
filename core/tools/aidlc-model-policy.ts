@@ -45,7 +45,6 @@ export type ModelHarness =
   | "copilot"
   | "cursor"
   | "kiro"
-  | "kiro-ide"
   | "opencode";
 export type ModelPolicyLayer =
   | "agent-exception"
@@ -134,14 +133,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: true,
     groupEffort: false,
     message:
-      "Kiro CLI cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults.",
-  }),
-  "kiro-ide": Object.freeze({
-    model: false,
-    effort: false,
-    groupEffort: false,
-    message:
-      "Kiro IDE cannot express model or effort policy; its md-only agent surfaces carry no model keys, so set the chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
+      "Kiro cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults, which Kiro CLI reads. Kiro IDE does not read that file, so set its chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
   }),
   cursor: Object.freeze({
     model: false,
@@ -345,7 +337,7 @@ export function profileGroups(
 }
 
 function tierHarness(harness: ModelHarness): TierHarness {
-  return harness === "kiro-ide" ? "kiro" : harness;
+  return harness;
 }
 
 function projectedEffort(value: ReturnType<typeof projectTier>): ModelEffort | undefined {

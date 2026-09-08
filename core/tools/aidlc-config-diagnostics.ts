@@ -635,12 +635,9 @@ const HARNESS_CLI: Record<
   },
   kiro: {
     command: "kiro-cli",
-    required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
-  },
-  "kiro-ide": {
     required: false,
-    install: "Kiro IDE has no required separate CLI for this project surface.",
+    install:
+      "Open this project in Kiro IDE, or install Kiro CLI and ensure `kiro-cli --version` works.",
   },
   opencode: {
     command: "opencode",
@@ -899,7 +896,7 @@ export function requiredProviderActions(
   if (record.provider === "other") return ["non-bedrock-provider-configuration"];
   if (record.provider !== "amazon-bedrock") return [];
   const actions: ProviderPendingActionId[] = ["bedrock-model-access"];
-  if (harness === "kiro-ide") actions.push("kiro-ide-chat-model");
+  if (harness === "kiro") actions.push("kiro-ide-chat-model");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
   return actions;
@@ -1711,7 +1708,7 @@ export function trustFilesForHarness(
       join(process.env.CODEX_HOME || join(process.env.HOME || homedir(), ".codex"), "config.toml"),
     );
   }
-  if (harness === "kiro" || harness === "kiro-ide") {
+  if (harness === "kiro") {
     const agentsDir = join(projectDir, harnessDir, "agents");
     if (existsSync(agentsDir)) {
       files.push(
@@ -1731,7 +1728,7 @@ export function trustFilesForHarness(
       );
     }
   }
-  if (harness === "kiro-ide") {
+  if (harness === "kiro") {
     files.push(join(projectDir, ".vscode", "settings.json"));
   }
   if (harness === "cursor") {
@@ -1755,7 +1752,7 @@ export function trustStatus(
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
   }
-  if (harness === "kiro-ide") {
+  if (harness === "kiro") {
     const path = join(projectDir, ".vscode", "settings.json");
     try {
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;

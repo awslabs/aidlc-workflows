@@ -538,7 +538,7 @@ function attachLegacyKiroPlanApprovalChoices(
   if (
     !projectDir ||
     prepared.marker?.stage !== "code-generation" ||
-    installedHarnessName(projectDir) !== "kiro-ide"
+    installedHarnessName(projectDir) !== "kiro"
   ) {
     return { prepared };
   }
@@ -737,7 +737,7 @@ const IS_COMPILED = isCompiledExecutable();
 function isKiroRoutingHarness(): boolean {
   if (IS_COMPILED) {
     const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro" || explicit === "kiro-ide";
+    return explicit === "kiro";
   }
   const invokedScript = (process.argv[1] ?? "").replaceAll("\\", "/");
   if (/(^|\/)\.kiro\/tools\/aidlc-orchestrate\.ts$/.test(invokedScript)) {
@@ -747,11 +747,11 @@ function isKiroRoutingHarness(): boolean {
     const parsed = JSON.parse(
       readFileSync(join(TOOLS_DIR, "data", "harness.json"), "utf-8"),
     ) as { name?: unknown };
-    return parsed.name === "kiro" || parsed.name === "kiro-ide";
+    return parsed.name === "kiro";
   } catch {
     // Authored core and compiled binaries can lack generated metadata.
     const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro" || explicit === "kiro-ide";
+    return explicit === "kiro";
   }
 }
 

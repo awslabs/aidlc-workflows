@@ -1148,14 +1148,13 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
   copilot: ".aidlc",
   cursor: ".cursor",
   kiro: ".kiro",
-  "kiro-ide": ".kiro",
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
@@ -2214,33 +2213,13 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       return 1;
     }
     let input = "";
-    if (action.harness !== "kiro-ide") {
+    // One channel now: the Kiro row serves Kiro IDE 1.x and Kiro CLI, and both
+    // write and close stdin, so a single read serves every target. The one
+    // exception is the notice that asks a Kiro IDE 0.x host to upgrade — that
+    // host opens stdin and never closes it, so reading here would hang before
+    // the notice could be printed.
+    if (action.target !== "legacy-ide-notice") {
       input = await readStdin();
-    } else if (
-      action.target === "audit-and-sensors" ||
-      action.target === "log-subagent" ||
-      action.target === "plan-approval-guard" ||
-      action.target === "record-human-turn" ||
-      action.target === "rebuild-stage-graph" ||
-      action.target === "session-start" ||
-      action.target === "continue-workflow" ||
-      action.target === "verb-intercept" ||
-      action.target === "terminal-command-guard"
-    ) {
-      // Mirror the adapter entry point's dual-generation channel contract.
-      // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
-      // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
-      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
-      const legacyPayload = process.env.USER_PROMPT ?? "";
-      if (legacyPayload.trim().length > 0) {
-        input = legacyPayload;
-      } else if (!process.stdin.isTTY) {
-        // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
-        // entry points share one contract.
-        const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
-        input = await readStdinWithTimeout(ceiling);
-      }
     }
     return await mod.run(action.target, input, action.extraArgs);
   } finally {
@@ -2962,7 +2941,7 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (
     route?.routeOnly === "hook" ||
     route?.routeOnly === "statusline" ||
-    (route?.routeOnly === "adapter" && withoutProjectDirFlag(argv)[2] !== "kiro-ide")
+    (route?.routeOnly === "adapter" && withoutProjectDirFlag(argv)[3] !== "legacy-ide-notice")
   ) {
     await readStdin();
   }

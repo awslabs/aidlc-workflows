@@ -107,7 +107,6 @@ const MODEL_HARNESSES = [
   "copilot",
   "cursor",
   "kiro",
-  "kiro-ide",
   "opencode",
 ] as const;
 const PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
@@ -701,7 +700,7 @@ export const AIDLC_SETTINGS_SCHEMA = {
                 type: "object",
                 additionalProperties: false,
                 properties: Object.fromEntries(
-                  ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]
+                  ["claude", "codex", "copilot", "cursor", "kiro", "opencode"]
                     .map((name) => [name, { type: "string", minLength: 1 }]),
                 ),
               },

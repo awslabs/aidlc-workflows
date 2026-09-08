@@ -510,7 +510,6 @@ function modelHarness(value: string): ModelHarness {
     value === "copilot" ||
     value === "cursor" ||
     value === "kiro" ||
-    value === "kiro-ide" ||
     value === "opencode"
   ) {
     return value;
