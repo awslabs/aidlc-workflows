@@ -2,10 +2,12 @@
 //
 // The box above the Inbox where a new intent starts: which workspace (a team's
 // world under aidlc/spaces/), what to build, which workflow (a scope, or let
-// the composer decide), and how much effort to spend (a preset from the config
-// policy lane - the preset decides model and effort per agent group - or a
-// custom dial). With an agent runner on the daemon, Start creates the intent
-// and runs the agent right here; the browser follows it in the Agent panel.
+// the composer decide), and the session effort the run's agent session itself
+// thinks at. Which effort each *agent* runs at is project policy (`aidlc config
+// models`, committed with the project) - the Effort menu shows it read-only so
+// the human sees what the run will use; it is not a per-intent choice. With an
+// agent runner on the daemon, Start creates the intent and runs the agent right
+// here; the browser follows it in the Agent panel.
 // Without one, Start records a pending request and the next bare `/aidlc` in a
 // terminal session picks it up and creates the intent as if the words had been
 // typed there.
@@ -30,30 +32,13 @@ const SCOPES = [
   { name: "enterprise", depth: "Comprehensive", description: "Regulated enterprise feature, full audit trail" },
 ];
 
-// The effort-only presets from the config policy lane (PR #756): they set
-// group efforts, never model ids, and never touch the deciding group.
-const PRESETS = [
-  { id: "thorough", label: "Thorough", summary: "Reviewers think hardest", efforts: { reviewing: "xhigh", writing: "medium" } },
-  { id: "balanced", label: "Balanced", summary: "The shipped default", efforts: { reviewing: "medium", writing: "medium" } },
-  { id: "minimal", label: "Minimal", summary: "Lighter reviews, brief write-ups", efforts: { reviewing: "medium", writing: "low" } },
-];
-const GROUPS = [
-  { id: "deciding", label: "Deciding", who: "design, implementation, product, security, quality", fixed: true },
-  { id: "reviewing", label: "Reviewing", who: "product lead, architecture reviewer" },
-  { id: "writing", label: "Writing up", who: "delivery, pipeline & deploy, operations" },
-];
-const EFFORTS = ["low", "medium", "high", "xhigh"];
 const SESSION_EFFORTS = ["low", "medium", "high", "xhigh"];
 const draft = {
   space: null,
   text: "",
   scope: null, // null = let the composer decide
-  preset: "balanced",
-  // Group dials are effort-only, as the config policy lane defines them; model
-  // ids belong to per-agent exceptions in settings, not to a run's start.
-  custom: { reviewing: "medium", writing: "medium" },
-  // The harness session's own effort (Claude's /effort, Kiro's --effort): the
-  // ceiling the deciding agent runs at. null = the harness default.
+  // The agent session's own effort (Claude's /effort, Kiro's --effort): what the
+  // conductor and every agent without a pin run at. null = the harness default.
   sessionEffort: null,
   // With "Let the composer decide" and a runner, Start first asks the daemon
   // what it would pick; the proposal shows here until confirmed or changed.
@@ -68,8 +53,8 @@ function runnerAvailable() {
 export function renderComposer() {
   const space = draft.space || store.workflow?.space || "default";
   const scope = SCOPES.find((entry) => entry.name === draft.scope);
-  const preset = PRESETS.find((entry) => entry.id === draft.preset);
-  const effortLabel = `${preset ? preset.label : "Custom"}${draft.sessionEffort ? ` · ${draft.sessionEffort}` : ""}`;
+  const sessionDial = runnerAvailable() && store.workflow?.runner_effort;
+  const effortLabel = sessionDial ? `Session effort · ${draft.sessionEffort || "default"}` : "Effort";
   return `<section class="composer">
     <div class="composer-top">
       <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="Workspace: one team's world of intents, knowledge, and practices (aidlc/spaces/<name>)">${icon("flowchart", { size: 13 })}<span>Workspace</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
@@ -78,7 +63,7 @@ export function renderComposer() {
     <div class="composer-bottom">
       <button type="button" class="composer-chip" data-menu="scope" aria-haspopup="menu">${icon("textBulletListTree", { size: 13 })}<span>Workflow</span><b>${scope ? `${escapeHtml(scope.name)} · ${escapeHtml(scope.depth)}` : "Let the composer decide"}</b>${icon("chevronDown", { size: 12 })}</button>
       <span class="composer-hint">⌘↵ to start</span>
-      <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu" title="How much effort the run spends - the preset sets the models and effort for every agent group">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
+      <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu" title="The effort the agent session thinks at, and what each agent runs at under this project's policy">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
     </div>
     ${draft.proposal ? `<div class="composer-proposal"><span>The composer proposes <b>${escapeHtml(draft.proposal.scope)}</b>${draft.proposal.source === "keyword" ? " from your words" : " (the default)"}.</span><button type="button" class="btn primary" data-proposal-start>Start as ${escapeHtml(draft.proposal.scope)}</button><button type="button" class="btn" data-proposal-change>Pick another</button></div>` : ""}
@@ -152,8 +137,7 @@ async function start(confirmed = false) {
   starting = true;
   section?.classList.add("busy");
   try {
-    const effort = draft.preset ? { preset: draft.preset } : { reviewing: draft.custom.reviewing, writing: draft.custom.writing };
-    const result = await api.post("/api/intents", { text, space, scope, effort, session_effort: draft.sessionEffort });
+    const result = await api.post("/api/intents", { text, space, scope, session_effort: draft.sessionEffort });
     draft.text = "";
     draft.proposal = null;
     if (result.mode === "running") {
@@ -220,26 +204,24 @@ function scopeMenu() {
 }
 
 function effortMenu() {
-  const preset = PRESETS.find((entry) => entry.id === draft.preset);
-  const effortFor = (group) => (preset ? preset.efforts[group.id] : draft.custom[group.id]) || "medium";
+  const sessionDial = runnerAvailable() && store.workflow?.runner_effort;
+  const policy = store.workflow?.models_policy;
+  const command = store.workflow?.models_command || "aidlc config models";
+  const level = (value) => value === "inherit" ? `<span class="composer-inherit" title="Follows the session's effort">inherits the session</span>` : `<b>${escapeHtml(value)}</b>`;
+  const policyRows = policy
+    ? `${policy.groups.map((group) => `<tr><th><b>${escapeHtml(group.label)}</b><small>${escapeHtml(group.agents.join(", "))}</small></th><td>${group.mixed ? `<b>${escapeHtml(group.effort)}</b>` : level(group.effort)}</td></tr>`).join("")}
+      ${policy.exceptions.map((entry) => `<tr class="composer-exception"><th><b>${escapeHtml(entry.agent)}</b><small>exception · ${escapeHtml(entry.group)}</small></th><td>${level(entry.effort || "inherit")}${entry.model ? `<small>${escapeHtml(entry.model)}</small>` : ""}</td></tr>`).join("")}`
+    : `<tr><td colspan="2"><small>No installed harness this daemon can read the policy for.</small></td></tr>`;
   return `<div class="composer-menu-title">Effort</div>
-    <div class="composer-presets">
-      ${PRESETS.map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.preset === entry.id}" data-pick-preset="${entry.id}"><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}
-    </div>
-    <div class="composer-menu-group">What ${preset ? preset.label : "Custom"} means</div>
-    <table class="composer-dial"><thead><tr><th></th><th>Effort</th></tr></thead><tbody>
-      ${GROUPS.map((group) => `<tr data-group="${group.id}"><th><b>${group.label}</b><small>${escapeHtml(group.who)}</small></th>
-        ${group.fixed
-          ? `<td><span class="composer-fixed" title="Deciding work always inherits the session's model and ceiling; presets and dials never lower it.">session ceiling</span></td>`
-          : `<td><select data-dial-effort="${group.id}" aria-label="${group.label} effort">${EFFORTS.map((effort) => `<option ${effortFor(group) === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></td>`}
-      </tr>`).join("")}
-    </tbody></table>
-    <p class="composer-menu-note">The preset decides the model and effort for each agent group. Changing a dial makes this run <b>Custom</b>; deciding agents always keep the session's ceiling.</p>
-    ${runnerAvailable() && store.workflow?.runner_effort
-      ? `<div class="composer-menu-group">Session ceiling</div>
-    <div class="composer-session-effort"><span>The effort the agent session itself runs at - what deciding work inherits.</span>
-      <select data-session-effort aria-label="Session effort">${["default", ...SESSION_EFFORTS].map((level) => `<option value="${level}" ${(draft.sessionEffort || "default") === level ? "selected" : ""}>${level === "default" ? "harness default" : level}</option>`).join("")}</select></div>`
-      : ""}`;
+    ${sessionDial
+      ? `<div class="composer-menu-group">Session effort</div>
+    <div class="composer-session-effort"><span>What the agent session itself thinks at - the conductor and every agent that inherits. The same dial as <code>/effort</code> in a terminal.</span>
+      <select data-session-effort aria-label="Session effort">${["default", ...SESSION_EFFORTS].map((entry) => `<option value="${entry}" ${(draft.sessionEffort || "default") === entry ? "selected" : ""}>${entry === "default" ? "harness default" : entry}</option>`).join("")}</select></div>`
+      : ""}
+    <div class="composer-menu-group">Agents in this project${policy?.preset ? ` · preset <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? " · shipped defaults" : ""}</div>
+    <table class="composer-policy"><tbody>${policyRows}</tbody></table>
+    ${policy?.honesty ? `<p class="composer-menu-note">${escapeHtml(policy.honesty)}</p>` : ""}
+    <p class="composer-menu-note">Agent effort is project policy, committed with the project and shared by every intent. Change it in a terminal: <code>${escapeHtml(command)}</code> (presets, group dials, per-agent exceptions).</p>`;
 }
 
 function bindMenu(menu, kind, rerender) {
@@ -259,20 +241,8 @@ function bindMenu(menu, kind, rerender) {
     }
   });
   for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; draft.proposal = null; closeMenu(); rerender(); });
-  for (const button of menu.querySelectorAll("[data-pick-preset]")) button.addEventListener("click", () => { draft.preset = button.dataset.pickPreset; const entry = PRESETS.find((item) => item.id === draft.preset); draft.custom = { ...entry.efforts }; refreshMenu(menu, kind, rerender); rerender(); });
   menu.querySelector("[data-session-effort]")?.addEventListener("change", (event) => {
     draft.sessionEffort = event.target.value === "default" ? null : event.target.value;
     rerender();
   });
-  for (const select of menu.querySelectorAll("[data-dial-effort]")) select.addEventListener("change", () => {
-    draft.custom[select.dataset.dialEffort] = select.value;
-    draft.preset = null;
-    refreshMenu(menu, kind, rerender);
-    rerender();
-  });
-}
-
-function refreshMenu(menu, kind, rerender) {
-  menu.innerHTML = kind === "effort" ? effortMenu() : kind === "scope" ? scopeMenu() : spaceMenu();
-  bindMenu(menu, kind, rerender);
 }

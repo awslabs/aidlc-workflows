@@ -212,7 +212,6 @@ import {
   effectiveUnitGateRhythm,
   activeSpace,
   allPendingIntentRequests,
-  intentEffortLabel,
   pendingIntentRequestForText,
   type PendingIntentRequest,
 } from "./aidlc-lib.ts";
@@ -1757,14 +1756,11 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
   // A request made in the review UI: creation consumes its envelope (so it
-  // leaves the Inbox exactly when the record exists) and records the effort it
-  // asked for. The request found by id on pickup, or by its exact text when the
-  // conductor reaches creation through the compose or confirm asks.
+  // leaves the Inbox exactly when the record exists). The request is found by
+  // id on pickup, or by its exact text when the conductor reaches creation
+  // through the compose or confirm asks.
   const request = flags.request ?? pendingIntentRequestForText(projectDir, description);
-  if (request) {
-    cmd.push(`--request ${request.id}`);
-    if (request.effort) cmd.push(`--effort ${shellArg(intentEffortLabel(request.effort).replace(/^reviewing (\w+) · writing (\w+)$/, "reviewing=$1,writing=$2"))}`);
-  }
+  if (request) cmd.push(`--request ${request.id}`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).

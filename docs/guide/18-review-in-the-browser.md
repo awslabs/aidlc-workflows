@@ -249,13 +249,12 @@ rewrites the canonical questions file.
 The box above the Inbox starts a new intent. Choose the **Workspace** (the
 space it lives in; **New workspace…** creates one), describe what you want to
 build, pick a **Workflow** — a named scope, or *Let the composer decide*, which
-proposes one from your words and asks once — and an **Effort** preset
-(*Thorough · Balanced · Minimal*; the preset sets the effort for each agent
-group, and the menu shows what it means). **Start** (or ⌘↵) starts it.
+proposes one from your words and asks once — and, with a runner, the
+**Session effort** (see below). **Start** (or ⌘↵) starts it.
 
 With the harness's CLI installed, Start does the whole thing: the daemon creates
 the record (the same `intent-create` the conductor runs, with the chosen
-workflow and the effort in the record's `Effort` field) and launches the
+workflow) and launches the
 harness's own agent, bound to that intent, prompting it with the words you would
 have typed. You never touch a terminal. With *Let the composer decide*, Start
 first shows what the composer would pick from your words (or the default
@@ -292,11 +291,20 @@ shipped `.gitignore` re-includes it), so copying or committing the tree carries 
 to hosts that cannot reach a registry. The other harnesses' agents are their own
 CLIs; there is nothing to vendor.
 
-**Session ceiling.** The Effort menu's *Session ceiling* pins the effort the agent
-session itself runs at (Claude's `/effort`, Kiro's `--effort`) — what deciding
-work inherits, separate from the preset's per-group efforts. *Harness default*
-leaves it to your own settings. Codex, Cursor, opencode, and Copilot expose no
-such dial over ACP; the control is hidden there.
+**Session effort.** The Effort menu has one dial: *Session effort*, the effort the
+agent session itself runs at (the same thing `/effort` sets in a terminal; Kiro's
+`--effort`). The conductor thinks at that level, and so does every agent that
+inherits the session. *Harness default* leaves it to your own settings. Codex,
+Cursor, opencode, and Copilot expose no such dial over ACP; the control is hidden
+there.
+
+Which effort each *agent* runs at is not a per-intent choice. It is the project's
+model policy — `aidlc config models` (a preset, per-group dials for Deciding /
+Reviewing / Writing up, or per-agent exceptions), committed with the project and
+shared by every intent. The same menu shows that policy read-only: each group
+with its agents and effort (*inherits the session* when nothing pins it), any
+exceptions, and the command to change it. What you see there is what the run
+will use.
 
 **Several intents at once.** Each run is bound to its own intent (the
 SessionStart hook binds the agent's session), so you can Start a second intent

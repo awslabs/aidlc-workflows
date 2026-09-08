@@ -113,12 +113,11 @@ describe("t363 review UI intent requests", () => {
     expect((await authorized("/api/intents", { method: "POST", body: JSON.stringify({ text: "   " }) })).status).toBe(400);
     expect((await authorized("/api/intents", { method: "POST", body: JSON.stringify({ text: "x", scope: "no-such-scope" }) })).status).toBe(400);
     expect((await authorized("/api/intents", { method: "POST", body: JSON.stringify({ text: "x", space: "nowhere" }) })).status).toBe(404);
-    expect((await authorized("/api/intents", { method: "POST", body: JSON.stringify({ text: "x", effort: { preset: "maximal" } }) })).status).toBe(400);
 
-    // a request with an explicit workflow and a preset
+    // a request with an explicit workflow
     const created = await authorized("/api/intents", {
       method: "POST",
-      body: JSON.stringify({ text: "Build a tiny todo CLI that stores tasks in a local JSON file", space: "default", scope: "express", effort: { preset: "minimal" } }),
+      body: JSON.stringify({ text: "Build a tiny todo CLI that stores tasks in a local JSON file", space: "default", scope: "express" }),
     });
     expect(created.status).toBe(201);
     const { id } = (await created.json()) as { id: string };
@@ -130,19 +129,18 @@ describe("t363 review UI intent requests", () => {
     // the Inbox sees it
     const workflow = (await (await authorized("/api/workflow")).json()) as { intents: Array<Record<string, unknown>> };
     const row = workflow.intents.find((entry) => entry.slug === id);
-    expect(row).toMatchObject({ status: "requested", scope: "express", needs: { kind: "request" }, request: { id, effort: "minimal" } });
+    expect(row).toMatchObject({ status: "requested", scope: "express", needs: { kind: "request" }, request: { id } });
 
-    // a bare next: the request stands in for typed text; creation is a print carrying the request id and effort
+    // a bare next: the request stands in for typed text; creation is a print carrying the request id
     const pickup = engine(["next"]);
     expect(pickup.kind).toBe("print");
     expect(pickup.message).toContain("engine intent create --scope express");
     expect(pickup.message).toContain("--arguments='Build a tiny todo CLI that stores tasks in a local JSON file'");
     expect(pickup.message).toContain(`--request ${id}`);
-    expect(pickup.message).toContain("--effort minimal");
 
-    // run the creation move the conductor would run: the envelope is consumed, the record carries the effort
+    // run the creation move the conductor would run: the envelope is consumed
     const create = Bun.spawnSync({
-      cmd: [process.execPath, UTILITY, "intent-create", "--scope", "express", "--arguments=Build a tiny todo CLI that stores tasks in a local JSON file", "--label", "todo cli", "--request", id, "--effort", "minimal"],
+      cmd: [process.execPath, UTILITY, "intent-create", "--scope", "express", "--arguments=Build a tiny todo CLI that stores tasks in a local JSON file", "--label", "todo cli", "--request", id],
       cwd: project,
       env,
       stdout: "pipe",
@@ -155,7 +153,6 @@ describe("t363 review UI intent requests", () => {
     const dirName = registry[0].dirName;
     const state = readFileSync(join(project, "aidlc", "spaces", "default", "intents", dirName, "aidlc-state.md"), "utf-8");
     expect(state).toContain("- **Scope**: express");
-    expect(state).toContain("- **Effort**: minimal");
     expect(state).toContain("- **Project**: Build a tiny todo CLI that stores tasks in a local JSON file");
     const after = (await (await authorized("/api/workflow")).json()) as { intents: Array<Record<string, unknown>> };
     expect(after.intents.some((entry) => entry.status === "requested")).toBe(false);
@@ -174,7 +171,7 @@ describe("t363 review UI intent requests", () => {
 
     const created = await authorized("/api/intents", {
       method: "POST",
-      body: JSON.stringify({ text: "Rework how the reporting service paginates very large exports", space: "default", scope: null, effort: { reviewing: "high", writing: "low" } }),
+      body: JSON.stringify({ text: "Rework how the reporting service paginates very large exports", space: "default", scope: null }),
     });
     expect(created.status).toBe(201);
     const { id } = (await created.json()) as { id: string };
@@ -188,7 +185,6 @@ describe("t363 review UI intent requests", () => {
     const create = engine(["next", "--scope", "feature", "--", "Rework how the reporting service paginates very large exports"]);
     expect(create.kind).toBe("print");
     expect(create.message).toContain(`--request ${id}`);
-    expect(create.message).toContain("--effort reviewing=high,writing=low");
 
     // withdrawn from the browser: gone from the file and the payload
     expect((await authorized(`/api/intents?id=${encodeURIComponent(id)}`, { method: "DELETE" })).status).toBe(200);

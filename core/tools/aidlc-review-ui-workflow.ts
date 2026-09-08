@@ -31,9 +31,20 @@ import {
   type AuditShardEvent,
   type IntentRegistryEntry,
   type StageEntry,
-  intentEffortLabel,
   readPendingIntentRequests,
 } from "./aidlc-lib.ts";
+import {
+  HARNESS_HONESTY,
+  MODEL_GROUPS,
+  isModelHarness,
+  modelPolicyIsEmpty,
+  readAgentTiers,
+  resolveModelPolicy,
+  type ModelGroup,
+} from "./aidlc-model-policy.ts";
+import { modelPolicyForHarness, resolveAidlcSettings } from "./aidlc-settings.ts";
+import { resolveTierCap } from "./aidlc-tiers.ts";
+import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   listFeedbackFiles,
   parseQuestionsMarkdown,
@@ -130,8 +141,79 @@ export interface WorkflowIntent {
   /** The daemon's agent run for this intent (`aidlc-review-ui-runs.ts`), when one exists. */
   run?: "starting" | "running" | "waiting" | "idle" | "ended" | "failed" | null;
   updated_at: string | null;
-  /** A review-UI request not yet picked up by a session: its exact text and asked-for effort. */
-  request?: { id: string; text: string; effort: string | null };
+  /** A review-UI request not yet picked up by a session: its exact text. */
+  request?: { id: string; text: string };
+}
+
+/**
+ * The project's effective model policy (`aidlc config models`), as the
+ * composer shows it: which effort and model each agent group and exception
+ * runs at. Read-only in the browser - the policy is project-wide and set in
+ * the terminal, never per intent.
+ */
+export interface ModelsPolicyView {
+  harness: string;
+  /** The recorded preset, or null when only dials/exceptions or shipped defaults apply. */
+  preset: string | null;
+  /** True when nothing is recorded: every agent follows the shipped tier defaults. */
+  shipped_defaults: boolean;
+  groups: Array<{
+    id: ModelGroup;
+    label: string;
+    /** Agents in this group that take the group's effective effort (not exceptions). */
+    agents: string[];
+    /** The group's effort when every non-exception agent agrees; "inherit" = the session's. */
+    effort: string;
+    /** Distinct efforts when the group's agents disagree without exceptions (tier caps). */
+    mixed: boolean;
+  }>;
+  /** Per-agent exceptions recorded in the policy. */
+  exceptions: Array<{ agent: string; group: ModelGroup; model: string | null; effort: string | null }>;
+  /** What this harness cannot express, when the policy asks for something it drops. */
+  honesty: string | null;
+}
+
+/** Null when the project has no installed harness the policy vocabulary knows. */
+export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
+  const installed = discoverProjectHarnesses(projectDir)[0];
+  if (!installed || !isModelHarness(installed.distribution)) return null;
+  const harness = installed.distribution;
+  const resolved = resolveAidlcSettings(projectDir);
+  const policy = modelPolicyForHarness(resolved.models, harness);
+  const tiers = readAgentTiers(installed.root);
+  const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
+  const effective = Object.entries(tiers)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, tier]) => resolveModelPolicy(policy, name, tier, harness, cap));
+  const shortName = (agent: string): string => agent.replace(/^aidlc-/, "").replace(/-agent$/, "");
+  const groups = (Object.keys(MODEL_GROUPS) as ModelGroup[]).map((id) => {
+    const members = effective.filter((item) => item.group === id && item.layer !== "agent-exception");
+    const efforts = [...new Set(members.map((item) => item.effort ?? "inherit"))];
+    return {
+      id,
+      label: MODEL_GROUPS[id].label,
+      agents: members.map((item) => shortName(item.agent)),
+      effort: efforts.length === 1 ? efforts[0] : efforts.join(" / "),
+      mixed: efforts.length > 1,
+    };
+  });
+  const exceptions = effective
+    .filter((item) => item.layer === "agent-exception")
+    .map((item) => ({
+      agent: shortName(item.agent),
+      group: item.group,
+      // The resolver spells "no model pin" as the literal "inherit".
+      model: item.model && item.model !== "inherit" ? item.model : null,
+      effort: item.effort ?? null,
+    }));
+  return {
+    harness,
+    preset: policy?.preset ?? null,
+    shipped_defaults: modelPolicyIsEmpty(policy),
+    groups,
+    exceptions,
+    honesty: effective.some((item) => item.unexpressed.length > 0) ? HARNESS_HONESTY[harness].message : null,
+  };
 }
 
 export interface WorkflowPayload {
@@ -141,6 +223,10 @@ export interface WorkflowPayload {
   runner_requirement?: string | null;
   /** True when the runner's backend takes a session effort (Claude, Kiro). */
   runner_effort?: boolean;
+  /** The project's effective per-agent model policy, for the composer to show. */
+  models_policy?: ModelsPolicyView | null;
+  /** How to change that policy from a terminal (`<invoke> config models`). */
+  models_command?: string;
   space: string;
   spaces: string[];
   intent: string | null;
@@ -638,7 +724,7 @@ export function workflowPayload(
       current_stage: null,
       needs: { kind: "request", label: "Waiting for a session" },
       updated_at: request.created_at,
-      request: { id: request.id, text: request.text, effort: intentEffortLabel(request.effort) || null },
+      request: { id: request.id, text: request.text },
     });
   }
   // The payload's `intent` is the record directory name, exactly what

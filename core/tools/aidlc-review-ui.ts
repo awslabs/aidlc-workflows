@@ -39,9 +39,6 @@ import {
   appendPendingIntentRequest,
   harnessDir,
   installedHarnessName,
-  INTENT_EFFORT_LEVELS,
-  INTENT_EFFORT_PRESETS,
-  type IntentEffort,
   removePendingIntentRequest,
   selectionAwareDefaultScope,
   validScopes,
@@ -106,9 +103,9 @@ import {
 } from "./aidlc-review-ui-render.ts";
 import { handleDecision } from "./aidlc-review-ui-decision.ts";
 import { browserAnswersContinuation, browserDecisionContinuation, ENV_REVIEW_RUNNER, openQuestionsRound } from "./aidlc-review-ui-shared.ts";
-import { openCheckpointPrompt, questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
+import { modelsPolicyView, openCheckpointPrompt, questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { compiledInvocationArgv } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, compiledInvocationArgv } from "./aidlc-runtime-paths.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ANSWERS_BODY_BYTES = 256 * 1024;
@@ -1282,24 +1279,8 @@ interface IntentRequestBody {
   text: string;
   space?: string;
   scope?: string | null;
-  effort?: unknown;
   label?: string;
   session_effort?: string | null;
-}
-
-function parseEffortBody(value: unknown): IntentEffort | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "object") throw new HttpError(400, "invalid effort");
-  const record = value as Record<string, unknown>;
-  if (typeof record.preset === "string") {
-    if (!(INTENT_EFFORT_PRESETS as readonly string[]).includes(record.preset)) throw new HttpError(400, "unknown effort preset");
-    return { preset: record.preset as IntentEffort extends { preset: infer P } ? P : never } as IntentEffort;
-  }
-  const levels = INTENT_EFFORT_LEVELS as readonly string[];
-  if (typeof record.reviewing === "string" && typeof record.writing === "string" && levels.includes(record.reviewing) && levels.includes(record.writing)) {
-    return { reviewing: record.reviewing, writing: record.writing } as IntentEffort;
-  }
-  throw new HttpError(400, "invalid effort");
 }
 
 async function readJsonBody(request: Request, maximum: number): Promise<unknown> {
@@ -1337,10 +1318,9 @@ async function intentRequestResponse(projectDir: string, request: Request, publi
     if (typeof body.scope !== "string" || !validScopes().has(body.scope)) throw new HttpError(400, "unknown workflow");
     scope = body.scope;
   }
-  const effort = parseEffortBody(body.effort);
   const sessionEffort = parseSessionEffort(body.session_effort);
   if (!runs.available || scope === null) {
-    const stored = appendPendingIntentRequest(projectDir, space, { text, scope, effort });
+    const stored = appendPendingIntentRequest(projectDir, space, { text, scope });
     publishState();
     return json({ id: stored.id, space, created_at: stored.created_at, mode: "requested" }, 201);
   }
@@ -1349,7 +1329,6 @@ async function intentRequestResponse(projectDir: string, request: Request, publi
   if (blocked) throw new HttpError(409, `${blocked.intent} is running in a session that is not bound to it; finish, park, or stop it before starting another intent.`);
   const label = typeof body.label === "string" && body.label.trim() ? body.label.trim() : text;
   const args = ["--space", space, "--scope", scope, "--arguments", text, "--label", label];
-  if (effort) args.push("--effort", "preset" in effort ? effort.preset : `reviewing=${effort.reviewing},writing=${effort.writing}`);
   const result = Bun.spawnSync({ cmd: utilityCommand(projectDir, "intent-create", args), cwd: projectDir, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) {
     const detail = `${result.stderr.toString()}${result.stdout.toString()}`.trim().replace(/\s+/g, " ").slice(0, 300);
@@ -1744,6 +1723,14 @@ async function serve(projectDir: string): Promise<void> {
             payload.runner = runs.available;
             payload.runner_requirement = runs.available ? null : runnerRequirement;
             payload.runner_effort = runnerLaunch?.effort !== undefined;
+            // Agent effort is project policy, not a per-intent choice: show what
+            // this project runs at and where to change it.
+            try {
+              payload.models_policy = modelsPolicyView(projectDir);
+            } catch {
+              payload.models_policy = null;
+            }
+            payload.models_command = `${aidlcInvocation()} config models`;
             return json(payload);
           }
           if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir, url));

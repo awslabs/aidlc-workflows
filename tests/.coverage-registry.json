@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 845,
+    "total": 841,
     "enumeratedByClass": {
-      "function": 541,
+      "function": 537,
       "audit": 93,
       "scope": 11,
       "stage": 33,
@@ -2915,20 +2915,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:INTENT_EFFORT_LEVELS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:INTENT_EFFORT_PRESETS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2937,13 +2923,6 @@
     {
       "unitClass": "function",
       "unitId": "function:intentDirNameBase",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:intentEffortLabel",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3764,13 +3743,6 @@
     {
       "unitClass": "function",
       "unitId": "function:parseFieldArgs",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:parseIntentEffort",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

@@ -22887,12 +22887,6 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
 // per machine).
 // ---------------------------------------------------------------------------
 export const PENDING_INTENT_REQUESTS_FILE = "pending-intents.json";
-export const INTENT_EFFORT_PRESETS = ["thorough", "balanced", "minimal"] as const;
-export const INTENT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
-
-export type IntentEffort =
-  | { preset: (typeof INTENT_EFFORT_PRESETS)[number] }
-  | { reviewing: (typeof INTENT_EFFORT_LEVELS)[number]; writing: (typeof INTENT_EFFORT_LEVELS)[number] };
 
 export interface PendingIntentRequest {
   id: string;
@@ -22900,7 +22894,6 @@ export interface PendingIntentRequest {
   text: string;
   /** A shipped scope name, or null for "let the composer decide". */
   scope: string | null;
-  effort: IntentEffort | null;
   created_at: string;
   source: "review-ui";
 }
@@ -22946,7 +22939,6 @@ export function appendPendingIntentRequest(
     id: `req-${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`,
     text: request.text,
     scope: request.scope,
-    effort: request.effort,
     created_at: new Date().toISOString(),
     source: "review-ui",
   };
@@ -22984,27 +22976,6 @@ export function pendingIntentRequestForText(projectDir: string, description: str
   if (!description) return null;
   const wanted = description.trim();
   return allPendingIntentRequests(projectDir).find((request) => request.text.trim() === wanted) ?? null;
-}
-
-/** "balanced" or "reviewing high · writing low" - the state file's Effort field. */
-export function intentEffortLabel(effort: IntentEffort | null | undefined): string {
-  if (!effort) return "";
-  if ("preset" in effort) return effort.preset;
-  return `reviewing ${effort.reviewing} · writing ${effort.writing}`;
-}
-
-/** Parse the `--effort` flag as `intent-create` receives it: a preset name, or `reviewing=<l>,writing=<l>`. */
-export function parseIntentEffort(raw: string | undefined): IntentEffort | null {
-  if (!raw) return null;
-  const value = raw.trim().toLowerCase();
-  if ((INTENT_EFFORT_PRESETS as readonly string[]).includes(value)) return { preset: value as IntentEffort extends { preset: infer P } ? P : never } as IntentEffort;
-  const parts = Object.fromEntries(value.split(",").map((part) => part.split("=").map((piece) => piece.trim())));
-  const reviewing = parts.reviewing;
-  const writing = parts.writing;
-  if ((INTENT_EFFORT_LEVELS as readonly string[]).includes(reviewing) && (INTENT_EFFORT_LEVELS as readonly string[]).includes(writing)) {
-    return { reviewing, writing } as IntentEffort;
-  }
-  throw new Error(`Unknown effort "${raw}". Use ${INTENT_EFFORT_PRESETS.join(", ")}, or reviewing=<level>,writing=<level> with levels ${INTENT_EFFORT_LEVELS.join(", ")}.`);
 }
 
 export function isoTimestamp(): string {

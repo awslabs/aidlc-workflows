@@ -192,9 +192,6 @@ import {
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
   idSuffix,
-  type IntentEffort,
-  intentEffortLabel,
-  parseIntentEffort,
   removePendingIntentRequest,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -5833,12 +5830,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
-  let effort: IntentEffort | null = null;
-  try {
-    effort = parseIntentEffort(flags.effort);
-  } catch (e) {
-    die(errorMessage(e));
-  }
   // `--space <name>`: create in a named workspace rather than the session's or
   // the cursor's. The review daemon passes it (the composer chose the
   // workspace); the terminal path leaves it unset. Unknown names fail before
@@ -6048,7 +6039,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       reviewOverride,
       created.dirName,
       created.space,
-      effort,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
   // The record exists: the review-UI request it fulfils leaves the Inbox now,
@@ -6068,7 +6058,6 @@ function handleIntentCreateStateBuild(
   reviewOverride: ReviewOverride | undefined,
   createdDir: string,
   createdSpace: string,
-  effort: IntentEffort | null = null,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -6282,7 +6271,6 @@ function handleIntentCreateStateBuild(
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
 - **HTML Artifacts**: ${htmlArtifactsRequested() ? "on" : "off"}
-- **Effort**: ${intentEffortLabel(effort)}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State

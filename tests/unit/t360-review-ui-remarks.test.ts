@@ -1,5 +1,60 @@
-import { describe, expect, test } from "bun:test";
-import { parseReviewUiRemarks } from "../../core/tools/aidlc-review-ui-workflow.ts";
+import { afterAll, describe, expect, test } from "bun:test";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { modelsPolicyView, parseReviewUiRemarks } from "../../core/tools/aidlc-review-ui-workflow.ts";
+import { invalidateSettingsCache, projectSettingsPath } from "../../core/tools/aidlc-settings.ts";
+
+const ROOT = join(import.meta.dir, "..", "..");
+const temps: string[] = [];
+afterAll(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
+
+// The composer's Effort menu: what each agent group runs at under the
+// project's `aidlc config models` policy - read-only, never per intent.
+describe("review UI models policy view", () => {
+  test("shipped defaults: reviewers at the measured baseline, everyone else inherits the session", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-t360-policy-"));
+    temps.push(project);
+    cpSync(join(ROOT, "dist", "claude", ".claude"), join(project, ".claude"), { recursive: true });
+    const view = modelsPolicyView(project);
+    expect(view).not.toBeNull();
+    expect(view).toMatchObject({ harness: "claude", preset: null, shipped_defaults: true, exceptions: [], honesty: null });
+    const byId = Object.fromEntries(view!.groups.map((group) => [group.id, group]));
+    expect(byId.deciding).toMatchObject({ effort: "inherit", mixed: false });
+    expect(byId.deciding.agents).toContain("architect");
+    expect(byId.reviewing).toMatchObject({ effort: "medium", mixed: false, agents: ["architecture-reviewer", "product-lead"] });
+    expect(byId["writing-up"]).toMatchObject({ effort: "inherit", mixed: false });
+  });
+
+  test("a recorded preset and a per-agent exception show as the group's effort and an exception row", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-t360-policy-"));
+    temps.push(project);
+    cpSync(join(ROOT, "dist", "claude", ".claude"), join(project, ".claude"), { recursive: true });
+    const settings = projectSettingsPath(project);
+    writeFileSync(settings, `${JSON.stringify({
+      schemaVersion: 1,
+      models: { schemaVersion: 1, preset: "thorough", agents: { architect: { effort: "xhigh" } } },
+    }, null, 2)}\n`);
+    invalidateSettingsCache(settings);
+    const view = modelsPolicyView(project)!;
+    expect(view.preset).toBe("thorough");
+    expect(view.shipped_defaults).toBe(false);
+    const reviewing = view.groups.find((group) => group.id === "reviewing")!;
+    expect(reviewing.effort).toBe("xhigh");
+    const deciding = view.groups.find((group) => group.id === "deciding")!;
+    expect(deciding.agents).not.toContain("architect");
+    expect(view.exceptions).toEqual([{ agent: "architect", group: "deciding", model: null, effort: "xhigh" }]);
+  });
+
+  test("a project without a harness the policy vocabulary knows has no view", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-t360-policy-"));
+    temps.push(project);
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    expect(modelsPolicyView(project)).toBeNull();
+  });
+});
 
 describe("review UI sent remarks", () => {
   test("parses artifact, location, quote, body, and edit diff", () => {

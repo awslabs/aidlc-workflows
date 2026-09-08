@@ -2,7 +2,7 @@
 // over ACP (a scripted agent stands in for Claude).
 //
 // What a consumer observes: POST /api/intents with a workflow creates the
-// record (its `Effort` recorded) and starts a run bound to it; the agent's
+// record and starts a run bound to it (its session effort applied); the agent's
 // permission request and form question wait in /api/run until the browser
 // answers and the turn then ends; a second Start while a run is live is
 // refused (409) and nothing is created; the workflow payload marks the intent's
@@ -137,14 +137,13 @@ describe("t365 review UI agent runs", () => {
     expect((await api("GET", "/api/intents/propose?text=fix%20the%20login%20bug")).body).toEqual({ scope: "bugfix", source: "keyword" });
 
     expect((await api("POST", "/api/intents", { text: "x", space: "default", scope: "express", session_effort: "turbo" })).status).toBe(400);
-    const start = await api("POST", "/api/intents", { text: "Build a tiny todo CLI", space: "default", scope: "express", effort: { preset: "minimal" }, session_effort: "medium" });
+    const start = await api("POST", "/api/intents", { text: "Build a tiny todo CLI", space: "default", scope: "express", session_effort: "medium" });
     expect(start.status).toBe(201);
     expect(start.body.mode).toBe("running");
     intent = String(start.body.intent);
     expect(intent).toMatch(/^\d{6}-build-a-tiny-todo-cli/);
-    // The record is real (state file, Effort recorded) and no envelope was left behind.
+    // The record is real (state file) and no envelope was left behind.
     const state = readFileSync(join(project, "aidlc", "spaces", "default", "intents", intent, "aidlc-state.md"), "utf-8");
-    expect(state).toContain("**Effort**: minimal");
     expect(state).toContain("**Scope**: express");
     expect(readPendingIntentRequests(project, "default")).toEqual([]);
 
