@@ -222,7 +222,8 @@ function makeSeed(
 function clone(remote: string, label: string): string {
   const dir = mkdtempSync(join(tmpdir(), `aidlc-inc3-${label}-`));
   rmSync(dir, { recursive: true, force: true });
-  git(tmpdir(), ["clone", remote, dir]);
+  // Git's local clone optimization can race with source-repository updates.
+  git(tmpdir(), ["clone", "--no-local", remote, dir]);
   tempDirs.push(dir);
   git(dir, ["config", "user.name", label]);
   git(dir, ["config", "user.email", `${label}@example.test`]);
