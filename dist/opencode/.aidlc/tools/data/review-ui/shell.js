@@ -2,6 +2,7 @@
 import { api } from "./api.js";
 import { decisionInFlight, store } from "./store.js";
 import { icon } from "./icons.js";
+import { bindComposer, closeMenu as closeComposerMenu, renderComposer } from "./composer.js";
 
 const ICONS = {
   inbox: icon("mailInbox", { size: 18 }),
@@ -395,7 +396,10 @@ function intentGroups() {
 function renderInbox() {
   const visible = store.view.kind === "inbox";
   inbox.hidden = !visible;
-  if (!visible) return;
+  if (!visible) {
+    closeComposerMenu();
+    return;
+  }
   overview.hidden = true;
   empty.hidden = true;
   document.getElementById("viewer").hidden = true;
@@ -406,6 +410,7 @@ function renderInbox() {
     return;
   }
   inbox.innerHTML = `<div class="inbox-page">
+    ${renderComposer()}
     <div class="inbox-heading"><div><p>Workspace · ${escapeHtml(store.workflow.space || "default")}</p><h1>Inbox</h1><span>Human moments across every intent in this workspace.</span></div><b>${needsYouCount()} ${needsYouCount() === 1 ? "needs" : "need"} you</b></div>
     ${groups
       .map(
@@ -419,6 +424,7 @@ function renderInbox() {
       )
       .join("")}
   </div>`;
+  bindComposer(inbox, renderInbox);
 }
 
 function allSearchItems() {
