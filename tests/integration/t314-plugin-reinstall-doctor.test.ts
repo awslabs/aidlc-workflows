@@ -33,7 +33,7 @@ function graph(project: string): Array<{ slug?: string }> {
 function runDoctor(project: string) {
   return spawnSync(
     BUN,
-    [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor"],
+    [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--verbose"],
     {
       cwd: project,
       encoding: "utf-8",

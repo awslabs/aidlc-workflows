@@ -90,7 +90,8 @@ drop-logged during plugin compose.
 
 **`tier` names the kind of work; the packager projects it into per-harness
 model/effort keys.** You never author raw `model:` or `effort:` in core agent
-frontmatter -- those are projection OUTPUTS in `dist/<harness>/`, derived from
+frontmatter -- those are projection OUTPUTS in the ignored local
+`dist/<harness>/` tree and versioned release runtime, derived from
 the tier table in `core/tools/aidlc-tiers.ts`. Pick `judgment` for any persona
 whose work is multi-constraint reasoning that cascades downstream --
 interpreting ambiguous intent, weighing architectural trade-offs under dense
@@ -174,7 +175,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
    `support_agents` frontmatter of each stage file (`core/aidlc-common/stages/<phase>/<slug>.md`)
-   where it leads or supports, then recompile (`bun .claude/tools/aidlc-graph.ts compile`)
+   where it leads or supports, then recompile (`aidlc engine graph compile`)
    so `stage-graph.json` regenerates. Never hand-edit `stage-graph.json` — it is
    a build artifact, and the next compile overwrites a manual change (see
    [Adding a Stage](02-adding-a-stage.md#4-regenerate-the-harnesses-so-stage-graphjson-recompiles)).

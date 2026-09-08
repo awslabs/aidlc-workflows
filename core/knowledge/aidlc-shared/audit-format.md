@@ -205,7 +205,7 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `HEALTH_CHECKED` | `--doctor` completed | Timestamp, Request, Details | `tools/aidlc-utility.ts handleDoctor` |
+| `HEALTH_CHECKED` | `--doctor` completed | Timestamp, Request, Details | `tools/aidlc-doctor.ts` via the shared utility collector |
 
 ### Error/Recovery Events (2 events)
 

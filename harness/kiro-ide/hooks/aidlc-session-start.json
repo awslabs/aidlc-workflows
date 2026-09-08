@@ -5,7 +5,7 @@
       "name": "aidlc-session-start",
       "trigger": "SessionStart",
       "description": "Starts an AIDLC session: notes the session opened and gives the assistant the current workflow context.",
-      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts session-start" }
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide session-start" }
     }
   ]
 }

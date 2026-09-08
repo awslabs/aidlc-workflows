@@ -11,8 +11,8 @@
 // SKILL — EXCEPT harness/kiro-ide/skills/aidlc/SKILL.md, which was a stale fork
 // byte-identical to kiro CLI's SKILL at origin/main and never re-synced across the
 // 43-commit stack. It shipped GREEN because NO test reads a per-harness conductor
-// SKILL: `package.ts --check` only proves dist==authored, so a self-consistent-
-// but-stale authored SKILL passes. This gate closes that hole in BOTH directions:
+// SKILL: package determinism cannot detect a self-consistent but stale authored
+// SKILL. This gate closes that hole in BOTH directions:
 //   (a) NEGATIVE — the retired `/aidlc --init` command (a bare `--init` flag
 //       token; `git init`/`npm init` are NOT the aidlc command, same predicate as
 //       t174) must be ABSENT from every shipped conductor SKILL.
@@ -25,8 +25,8 @@
 // carries a bare `--init`, so the POSITIVE set needs no per-harness carve-out.
 // The gate asserts the shipped AUTHORED surface
 // (harness/<h>/skills/aidlc/SKILL.md), the FIRST surface that defines a
-// harness's orchestrator vocabulary; dist is its byte-parity-guarded copy
-// (t148/package.ts --check), so gating the authored source covers every tree.
+// harness's orchestrator vocabulary; dist is regenerated from that source, so
+// gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -119,6 +119,15 @@ const LEARNINGS_QUESTION_TOKENS = [
   "one-option",
   "even when `surface` returns zero candidates",
   "never infer `Nothing to add`",
+];
+
+const CONFIG_ALIAS_TOKENS = [
+  "--config [section]",
+  "**In-session configuration (`--config [section]`).**",
+  "config <section> --show --json",
+  "config <section> <explicit value flags> --yes",
+  "Never invent values",
+  "do not call `next`",
 ];
 
 const APPROVAL_REPORT_TOKEN =
@@ -261,6 +270,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL carries the in-session config contract", () => {
+    const missing: string[] = [];
+    const blocks = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of CONFIG_ALIAS_TOKENS) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+      const start = body.indexOf("**In-session configuration");
+      const end = body.indexOf("**Autonomous reviewer boundary.**");
+      expect(start, `${rel} lacks config alias block`).toBeGreaterThan(-1);
+      expect(end, `${rel} lacks config alias end anchor`).toBeGreaterThan(start);
+      const block = body.slice(start, end).trim();
+      blocks.set(block, [...(blocks.get(block) ?? []), rel]);
+    }
+    expect(missing).toEqual([]);
+    expect([...blocks.values()]).toHaveLength(1);
+    expect([...blocks.values()][0]).toEqual(skills);
   });
 
   test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {

@@ -3,11 +3,13 @@
 AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
 Codex CLI, Cursor, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
-packager (`scripts/package.ts`) regenerates each committed `dist/<harness>/`
-tree. Adding another harness is **one directory and one manifest row** — the
-engine, methodology, and harness-dir/rules resolution take no `core/` edits at
-all; the lone optional exception is a per-harness `--doctor` arm (see Step 2).
-This page walks the contract.
+packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
+under `dist/<harness>/` and its native counterpart under
+`dist-release/<harness>/`. Adding another harness is **one directory and one
+manifest row** — the engine, methodology, projection ownership, and
+harness-dir/rules resolution take no `core/` edits at all; the lone optional
+exception is a per-harness `--doctor` arm (see Step 2). This page walks the
+contract.
 
 > Three senses of "harness" in this repo: **`harness/`** (top-level — the
 > per-CLI distribution surfaces this page is about), **`docs/harness-engineering/`**
@@ -27,17 +29,29 @@ harness/
 scripts/
   package.ts               # bun scripts/package.ts [<name>] [--check]
   manifest-types.ts        # the HarnessManifest contract every manifest implements
-dist/<name>/               # GENERATED, committed, drift-guarded
+dist/<name>/               # GENERATED Bun-invocation channel
+dist-release/<name>/       # GENERATED native-aidlc channel
 ```
 
-`core/` prose names the harness directory with the `{{HARNESS_DIR}}` token; the
-packager substitutes whatever `harnessDir` the manifest declares (`.claude` /
-`.kiro` / `.codex` / your `.foo`). `.ts` is byte-copied untransformed — the
-runtime `harnessDir()` seam in `core/tools/aidlc-lib.ts` derives the directory
-from the shipped layout at execution time (open-set: it reads the dir name from
-the tool's own path, not a hardcoded list), so the same tool sources run in
-every tree. The acceptance gate is **byte-parity**: regenerating a harness must
-reproduce its committed dist exactly (`package.ts --check`).
+`core/` prose names the harness directory with `{{HARNESS_DIR}}`, calls the
+framework through `{{INVOKE}}`, and uses `{{TOOL_PREFIX}}` where a generated
+prefix is required. The packager substitutes the declared directory plus one of
+two invocation policies:
+
+| Channel | `{{INVOKE}}` | `{{TOOL_PREFIX}}` |
+|---------|--------------|-------------------|
+| `dist/` | `bun <harness-dir>/tools/aidlc.ts` | `bun <harness-dir>/tools/` |
+| `dist-release/` | `aidlc` | `aidlc ` |
+
+The transform applies to Markdown and structured command surfaces
+(`.json`/`.toml`/`.hook`), and to invocation tokens in TypeScript; it is not a
+general source rewrite. The runtime `harnessDir()` seam in
+`core/tools/aidlc-lib.ts` still derives the directory from the shipped layout
+(open-set: the tool's own path, not a hardcoded list), so the same authored tool
+sources run in every tree. The acceptance gate is **generator determinism**:
+`package.ts --check` builds both channels and every plugin projection twice in
+independent temporary roots, then byte-compares the complete outputs. It does
+not read local `dist/` or `dist-release/`.
 
 The packager **discovers** harnesses by scanning `harness/` for a `manifest.ts`,
 so a new dir is built by the default `bun scripts/package.ts` and `--check` with
@@ -50,12 +64,25 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 (`scripts/manifest-types.ts`). The fields:
 
 - `name` / `harnessDir` — the dir the token substitutes to (e.g. `.foo`).
+- `productName` / `configNextStep` — user-facing projection metadata consumed by
+  lifecycle and `aidlc config`; keep host commands exact.
+- `rootIntegrations` — every project-root file emitted by the normal projection,
+  each with an explicit init merge policy (`managed-block`, `json-map`,
+  `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and
+  exact legacy adoption hashes here. The packager rejects an emitted top-level
+  entry that is neither a managed directory nor a declared root integration.
+- `nativeRootIntegrations` (optional) — release-channel-only root files, such as
+  a trust seed, with the same merge contract plus an authored `src`.
+- `tierFlavor` — selects the existing Claude/Codex/Kiro/OpenCode agent
+  model/effort projection shape. It is manifest data, never inferred from
+  `name`.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for
   in-tree harnesses (claude, kiro, kiro-ide); codex emits them instead.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
-  `harness/<name>/<src>` into the dist (`.md` get token substitution).
+  `harness/<name>/<src>` into each channel (supported text formats get token
+  substitution).
   `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).
 - `orchestratorSkillPath` (optional) — project-root-relative path to the
   assembled orchestrator `SKILL.md`. It defaults to
@@ -78,13 +105,25 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   reads the rename — so a real install resolves both facts without hardcoding.
   This is the seam that makes `rulesRename` purely manifest data: set it here and
   every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
+- `onboarding` — render a host onboarding file from
+  `core/templates/onboarding.md`, or `null` when `emit.ts` owns it.
 - `skipRunnerGen` — set when the harness ships no `<harnessDir>/skills/` (Codex
   emits its skill tree to `.agents/skills/` via `emit`); the packager then skips
   the standard runner-gen step.
 - `emit` — the optional plugin (Step 3), `null` for harnesses that need none.
+- `plugin` (optional) — the host plugin manifest directory and delivery kind.
+  Omitting it derives `<harnessDir>-plugin` plus store delivery; set `kind:
+  "kiro"` only for a folder-drop host.
 
 Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
-rename + `harnessFiles` (agent JSONs, adapter, the project-root AGENTS.md).
+rename + `harnessFiles` (agent JSONs, adapter, the project-root AGENTS.md);
+Codex demonstrates native-only root integration and imperative emission.
+
+The packager writes `tools/data/harness.json`, `aidlc-stamp.json`, and
+`aidlc-projection.json` from these fields. The first is runtime configuration;
+the stamp identifies version/distribution/harness; the projection descriptor is
+the install ownership contract. `aidlc config` will reject an inconsistent or
+unsafe descriptor, so do not generate parallel metadata in `emit.ts`.
 
 ## Step 2 — the hook adapter (the per-harness shim)
 
@@ -93,8 +132,8 @@ Core hooks consume Claude-shaped stdin as the normal form. A new harness ships
 listed in `harnessFiles`) that normalizes the harness's hook
 payloads into that contract and subprocess-pipes to the shared core hook.
 Never split a core hook into logic+adapter — the core bodies stay byte-shared
-across all harnesses (the `--check` proves it: every `.ts` in a dist is
-byte-identical to its `core/` source).
+across all harnesses apart from the explicit invocation-token projection.
+`--check` proves both generated forms came from the same source.
 
 Wire the adapter to the harness's events the harness's own way: Kiro registers
 targets in `agents/aidlc.json`; Codex emits `hooks.json`. Register only events
@@ -129,41 +168,53 @@ matching `agent_type`).
 
 Structural divergence a declarative row can't express is `emit.ts` — a plugin
 the manifest references that the packager calls with an `EmitContext`
-(`coreRoot`, `harnessRoot`, `distRoot`, `harnessDir`, `substituteToken`,
-`tierCap`). The emitter writes its outputs beneath `distRoot`. Codex's is the
-worked example:
+(`repoRoot`, `coreRoot`, `harnessRoot`, `harnessName`, `distRoot`,
+`harnessDir`, channel-aware `substituteToken`, `tierCap`). The emitter writes
+its outputs beneath `distRoot`. Codex's is the worked example:
 `config.toml`, `hooks.json`, the hook-trust pre-seed, the `AGENTS.md` merge, the
 agent-TOML transpositions, and the `.agents/skills/` tree (composed from
 `core/tools/aidlc-runner-gen.ts`'s exported render functions under
 `AIDLC_HARNESS_DIR`, never reimplemented). Harnesses whose surfaces are all
 authored files (Claude, Kiro) set `emit: null`.
 
-Under `--check`, the packager supplies a temporary `distRoot`, runs the same
-emitter, then compares the complete generated root with the committed
-distribution. Emit-owned files outside `<harnessDir>` (for example
-`.agents/skills/` and the root `AGENTS.md`) therefore participate in the same
-missing, differing, and orphan checks as declarative outputs.
+Under `--check`, the packager supplies two independent temporary `distRoot`
+sets, runs the same emitter once per channel in each build, then compares the
+two complete generated roots. Emit-owned files outside `<harnessDir>` (for
+example `.agents/skills/` and the root `AGENTS.md`) therefore participate in the
+same missing, differing, and orphan checks as declarative outputs. Always pass
+emitted command text through `ctx.substituteToken`; otherwise an emitter can
+silently put a Bun command into the native channel.
 
-## Step 4 — the one transform class
+## Step 4 — the bounded transform classes
 
-The only permitted text transform is the slash-anchored harness-dir family:
-`{{HARNESS_DIR}}` → the harness dir in `.md` prose, plus the rules-dir rename.
-No blind `sed`. Truthful harness-specific literals in `core/` (the
-`$CLAUDE_PROJECT_DIR` note, the harness-dir enumeration in workspace-detection)
-carry no token and pass through unchanged — the core-hygiene test
-(`t146-core-hygiene`) guards against a new raw path literal slipping in.
+Permitted transforms are the harness/rules projection, the two invocation
+tokens, declared tier/frontmatter additions, and the native host-surface
+rewrites in `rewriteNativeInvocations`. That native pass updates command
+allowlists, hook/adapter/statusline routes, onboarding runtime text, and native
+trust entries, then rejects any surviving token or Bun invocation into an AIDLC
+tool/hook. No blind `sed`. Truthful harness-specific literals in `core/` (the
+`$CLAUDE_PROJECT_DIR` note, the harness-dir enumeration in
+workspace-detection) carry no token and pass through unchanged; the core-hygiene
+and native-projection tests guard the boundary.
 
 ## Step 5 — tests + the gate
 
-- A packaging-parity test (`t145`) runs `package.ts --check`; it covers every
-  harness with a manifest automatically.
+- A package-determinism test (`t145`) runs `package.ts --check`; it covers both
+  channels for every discovered harness plus every plugin projection without
+  requiring generated trees on disk.
+- `t243-install-mechanism` asserts copy projections keep Bun invocations,
+  release projections contain no AIDLC Bun invocation, metadata is safe and
+  exhaustive, and native-only integrations appear only in `dist-release/`.
+- `t238-build-binaries` compiles the native dispatcher and exercises every
+  generated harness runtime without Bun on `PATH`.
 - A `<name>` hook-adapter contract test pipes live-captured payloads through the
   adapter and asserts the observable core-hook effect.
 - Live journeys ship as e2e gated on a `skipReason()` (a `AIDLC_<NAME>_*_LIVE=1`
   env + the binary present + authenticated) so they skip cleanly in the
   deterministic tier and run green locally before a port merges.
 
-Run `bun scripts/package.ts <name>` to regenerate, `--check` to drift-guard, and
+Run `bun scripts/package.ts <name>` to materialize both local channels,
+`--check` to prove deterministic generation, and
 the deterministic suite (`bash tests/run-tests.sh --smoke --unit --integration
 -P 8`) plus the live journey to gate.
 

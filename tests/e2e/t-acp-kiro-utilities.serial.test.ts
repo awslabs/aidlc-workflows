@@ -19,7 +19,7 @@
 // t-acp-kiro-journey-workspace leg, which drives terminal verbs to end_turn and
 // asserts on disk rather than on stopAfterToolTitle.
 //
-// The byte-verbatim status/doctor/help output ("AI-DLC Health Check", the nine
+// The byte-verbatim status/doctor/help output ("AI-DLC doctor", the nine
 // scopes, "No active AI-DLC workflow found.", …) has NO home on the ACP surface
 // anymore; it is covered deterministically by the SDK twins (t20 status / t22
 // doctor / t23 help — drive the real /aidlc flag and assert the Bash
@@ -118,7 +118,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         // would never fire); the conductor only relays prose. Drive to the
         // natural end_turn and assert the deterministic surfaces: clean turn end
         // + the read-only state byte no-op. The verbatim per-check labels
-        // ("AI-DLC Health Check", the Kiro-specific checks, "workspace shell
+        // ("AI-DLC doctor", the Kiro-specific checks, "workspace shell
         // ready (.kiro/ …)") are covered by the SDK twin t22 + the CLI twin t27
         // (see header). (NB doctor still appends HEALTH_CHECKED to an existing
         // audit shard, so this case asserts only the STATE no-op, not an

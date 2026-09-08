@@ -73,11 +73,8 @@ const SKILLS_DIR = IS_COPILOT
   : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
 const COMPOSE_LOCK_RETRIES = 600;
-const SCOPE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled scope grid via `bun aidlc-utility.ts scope-table` - do NOT hand-edit -->";
+const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
-const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
@@ -129,7 +126,11 @@ function slugFromPath(path: string): string {
   return path.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, "");
 }
 
+const SAFE_PLUGIN_KEY = /^[a-z][a-z0-9-]*$/;
+
 function pluginNameFromRoot(): string {
+  const supplied = process.env.AIDLC_PLUGIN_KEY?.trim();
+  if (supplied && SAFE_PLUGIN_KEY.test(supplied)) return supplied;
   if (!PLUGIN_ROOT) return "plugin";
   for (const md of [
     ".claude-plugin",
@@ -141,16 +142,42 @@ function pluginNameFromRoot(): string {
   ]) {
     try {
       const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
-      if (typeof m?.name === "string" && m.name.trim()) {
-        const hostName = m.name.trim();
-        // Emitted AIDLC plugins use aidlc-<name> as the host package ID while
-        // stage/scope ownership uses the logical <name>.
-        return hostName.startsWith("aidlc-") ? hostName.slice("aidlc-".length) : hostName;
+      if (typeof m?.name === "string" && m.name.startsWith("aidlc-")) {
+        const key = m.name.slice("aidlc-".length);
+        if (SAFE_PLUGIN_KEY.test(key)) return key;
       }
     } catch { /* try next / fall through */ }
   }
+  const fromContent = firstPluginFieldInPlugin();
+  if (fromContent) return fromContent;
   const parts = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
   return parts[parts.length - 2] || parts[parts.length - 1] || "plugin";
+}
+
+function firstPluginFieldInPlugin(): string | null {
+  const roots = ["stages", "scopes", "contributions"];
+  const visit = (dir: string): string | null => {
+    if (!existsSync(dir)) return null;
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) {
+        const nested = visit(path);
+        if (nested) return nested;
+        continue;
+      }
+      if (!entry.endsWith(".md")) continue;
+      const match = readFileSync(path, "utf-8").match(
+        /^plugin:\s*([a-z][a-z0-9-]*)\s*$/m,
+      );
+      if (match) return match[1];
+    }
+    return null;
+  };
+  for (const root of roots) {
+    const found = visit(join(PLUGIN_ROOT, root));
+    if (found) return found;
+  }
+  return null;
 }
 
 // The plugin's stable IDENTITY, computed once up front so every per-plugin
@@ -159,7 +186,8 @@ function pluginNameFromRoot(): string {
 // plugin-root basename: a projection root is `dist/plugins/<name>/<harness>`, so
 // its basename is the harness leaf (claude/kiro), shared by every plugin — keying
 // on it would let two plugins on one harness clobber each other's drops/retry
-// files. Prefer the manifest `name`; fall back to the parent-dir <name> segment.
+// files. Transactional sync injects the normalized host-manifest key; direct
+// compatibility composition derives the same key from that manifest.
 const PLUGIN_NAME = pluginNameFromRoot();
 const PLUGIN_KEY = PLUGIN_NAME.replace(/[^\w.-]/g, "_");
 
@@ -294,7 +322,10 @@ function selectCommandForPlugin(): string {
   const selected = selectedPlugins();
   const names = new Set<string>(selected ?? ["aidlc"]);
   names.add(PLUGIN_NAME);
-  return `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${[...names].sort().join(",")}`;
+  const selection = [...names].sort().join(",");
+  return NATIVE_RUNTIME
+    ? `aidlc engine plugin select ${selection}`
+    : `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
 }
 
 function installedToolCommand(tool: "utility" | "graph" | "runner", args: string[]): string[] {
@@ -307,11 +338,12 @@ function installedToolCommand(tool: "utility" | "graph" | "runner", args: string
     };
     return [process.execPath, join(HARNESS_DIR, "tools", files[tool]), ...args];
   }
-  if (tool === "utility") return [executable, "gen", ...args];
-  if (tool === "graph") return [executable, "graph", ...args];
-  if (args[0] === "write") return [executable, "gen", "runners", ...args.slice(1)];
-  if (args[0] === "scopes") return [executable, "gen", "runner-scopes", ...args.slice(1)];
-  if (args[0] === "list") return [executable, "gen", "runner-list", ...args.slice(1)];
+  if (tool === "utility") return [executable, "engine", "gen", ...args];
+  if (tool === "graph") return [executable, "engine", "graph", ...args];
+  if (args[0] === "write") return [executable, "engine", "gen", "runners", ...args.slice(1)];
+  if (args[0] === "check") return [executable, "engine", "gen", "runners", "--check", ...args.slice(1)];
+  if (args[0] === "scopes") return [executable, "engine", "gen", "runner-scopes", ...args.slice(1)];
+  if (args[0] === "list") return [executable, "engine", "gen", "runner-list", ...args.slice(1)];
   throw new Error(`No compiled dispatcher route for aidlc-runner-gen ${args.join(" ")}`);
 }
 
@@ -341,7 +373,6 @@ function installedToolEnv(): NodeJS.ProcessEnv {
 
 function refreshSkillGeneratedRegion(
   verb: "scope-table" | "stage-table",
-  beginMarker: string,
   endMarker: string,
 ): void {
   const skillMd = installedOrchestratorSkillPath();
@@ -351,11 +382,15 @@ function refreshSkillGeneratedRegion(
   }
 
   const before = readFileSync(skillMd, "utf-8").replace(/\r\n/g, "\n");
-  if (!before.includes(beginMarker)) {
+  const kind = verb === "stage-table" ? "stage graph" : "scope grid";
+  const beginMatch = before.match(
+    new RegExp(`<!-- BEGIN: compiled ${kind}[^\\n]* -->`),
+  );
+  if (!beginMatch || beginMatch.index === undefined) {
     recordDrop(`${verb} refresh skipped: SKILL.md missing BEGIN marker`, "advisory");
     return;
   }
-  const beginIdx = before.indexOf(beginMarker);
+  const beginIdx = beginMatch.index;
   const endIdx = before.indexOf(endMarker, beginIdx);
   if (endIdx === -1) {
     recordDrop(`${verb} refresh failed: SKILL.md missing END marker after BEGIN marker`);
@@ -374,7 +409,10 @@ function refreshSkillGeneratedRegion(
   }
 
   const region = (r.stdout || "").replace(/\r\n/g, "\n").replace(/\n$/, "");
-  if (!region.includes(beginMarker) || !region.includes(endMarker)) {
+  if (
+    !new RegExp(`<!-- BEGIN: compiled ${kind}[^\\n]* -->`).test(region) ||
+    !region.includes(endMarker)
+  ) {
     recordDrop(`aidlc-utility ${verb} emitted an invalid generated region`);
     return;
   }
@@ -2403,8 +2441,8 @@ try {
       if (retryPending) {
         try { rmSync(retryMarker, { force: true }); } catch { /* best-effort */ }
       }
-      refreshSkillGeneratedRegion("stage-table", STAGE_TABLE_BEGIN, STAGE_TABLE_END);
-      refreshSkillGeneratedRegion("scope-table", SCOPE_TABLE_BEGIN, SCOPE_TABLE_END);
+      refreshSkillGeneratedRegion("stage-table", STAGE_TABLE_END);
+      refreshSkillGeneratedRegion("scope-table", SCOPE_TABLE_END);
     }
   }
 

@@ -109,7 +109,7 @@ nav = [
       "reference/10-knowledge-system.md",
       "reference/16-artifact-vocabulary.md",
       "reference/18-plugin-mechanism.md",
-      "reference/19-commit-provenance.md",
+      "reference/20-commit-provenance.md",
     ] },
     { "Agent Reference" = [
       { "Overview" = "reference/agents/README.md" },

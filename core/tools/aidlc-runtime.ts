@@ -809,6 +809,12 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   return { written: runtimeGraphPath(projectDir) };
 }
 
+export function compileRuntime(
+  projectDir: string,
+): { skipped?: string; written?: string } {
+  return compile({ projectDir });
+}
+
 // Empty-graph short-circuit for the "state exists, no audit / no
 // WORKFLOW_STARTED" cases. Writes a valid graph with empty stages array
 // so downstream readers don't have to special-case absence.
@@ -1371,7 +1377,7 @@ function tryRun(label: string, handler: SubcommandHandler): SubcommandHandler {
 }
 
 const handleCompile: SubcommandHandler = (_rest, projectDir) => {
-  const result = compile({ projectDir });
+  const result = compileRuntime(projectDir);
   if (result.skipped) {
     process.exit(0);
   }

@@ -1892,7 +1892,7 @@ function runCore(
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
     : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),

@@ -269,11 +269,11 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           session: conductor,
           prompt: `/aidlc --scope feature "build auth across both repos"`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
+          stopAfterToolTitle: /aidlc\.ts engine intent create/,
           keepAlive: true,
         });
         const out1 = r1.toolCalls
-          .filter((t) => t.title.includes("aidlc-utility.ts intent-create"))
+          .filter((t) => t.title.includes("aidlc.ts engine intent create"))
           .map((t) => t.output.join(""))
           .join("");
         expect(out1).toContain("State initialized:");
@@ -404,7 +404,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           session: offer,
           prompt: "Yes — start a second intent for the metrics dashboard.",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
+          stopAfterToolTitle: /aidlc\.ts engine intent create/,
           keepAlive: true,
         });
         expect(offerR2.toolCallIssues).toEqual([]);
@@ -481,7 +481,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           session: space,
           prompt: `/aidlc --scope poc "teamB onboarding flow"`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
+          stopAfterToolTitle: /aidlc\.ts engine intent create/,
           keepAlive: true,
         });
         expect(teamBCreation.toolCallIssues).toEqual([]);

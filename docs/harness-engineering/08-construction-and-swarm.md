@@ -303,7 +303,7 @@ in [State and Audit](../guide/10-state-and-audit.md).
 - **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — the
   culmination of this guide. You have shaped every data surface in `core/`; the
   last step is rendering that core onto a *new* CLI: one `harness/<name>/`
-  directory, a manifest row, a hook adapter, and the byte-parity gate.
+  directory, a manifest row, a hook adapter, and the package determinism gate.
 - Back to [the Harness Engineer Guide overview](00-overview.md) for the full map
   of data surfaces you shape.
 - [Developer Reference § Skill System](../reference/17-skill-system.md) for the

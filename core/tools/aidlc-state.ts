@@ -107,6 +107,7 @@ import {
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
   resolveReviewClass,
+  resolveProjectFlag,
   resolveWorkflowSelection,
   sourceClaimCovers,
   sourceBaselineAuditFields,
@@ -2045,7 +2046,7 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
   let directive: unknown = null;
   for (let attempts = 0; attempts < 1_000; attempts++) {
     const command = executable
-      ? [executable, ...subargs]
+      ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
           fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
@@ -2126,7 +2127,7 @@ function requireEngineRoutedWaveUnit(
   let directive: unknown = null;
   for (let attempts = 0; attempts < 1_000; attempts++) {
     const command = executable
-      ? [executable, ...subargs]
+      ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
           fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
@@ -2376,7 +2377,7 @@ function handleCount(args: string[]): void {
 // dodge the TDZ - the dispatch that calls this guard runs at module load.)
 
 function artifactGuardDisabled(): boolean {
-  return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
+  return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD") === "1";
 }
 
 // Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
@@ -2547,7 +2548,7 @@ function priorAcceptedSourceFields(
 // approve/reject test changes behaviour; the dedicated backstop test clears it
 // to exercise the real reconciliation.
 function revisionBackstopDisabled(): boolean {
-  return process.env.AIDLC_SKIP_REVISION_BACKSTOP === "1";
+  return resolveProjectFlag("AIDLC_SKIP_REVISION_BACKSTOP") === "1";
 }
 
 // Resolve the directories a stage's produces[] artifacts would live under,

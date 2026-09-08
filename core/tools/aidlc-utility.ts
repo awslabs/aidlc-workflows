@@ -1,7 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
   existsSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -28,12 +30,8 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
-  adaptLegacyResult,
-  buildBundle,
   type LegacyDoctorResult,
-  mergeFindings,
   redactSecretPatterns,
-  runDoctorAnalysis,
 } from "./aidlc-doctor-bundle.ts";
 import {
   artifactsRegistryFor,
@@ -50,7 +48,16 @@ import {
   validateScope,
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
+import {
+  TRUSTED_COMMAND_PREFIX,
+  TRUSTED_COMMAND_TOKENS,
+  trustedCommand,
+} from "./aidlc-command.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
+import {
+  instructionFileDoctorCheck,
+  runtimeDoctorChecks,
+} from "./aidlc-config-diagnostics.ts";
 import {
   type cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -148,6 +155,7 @@ import {
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
+  resolveProjectFlag,
   selectionAwareDefaultScope,
   resolveDefaultScope,
   projectDescriptionFilePath,
@@ -188,12 +196,31 @@ import {
 } from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
+  copyProjectSurfaces,
+  projectDiffPlan,
+} from "./aidlc-plugin.ts";
+import { executePlan } from "./aidlc-transaction.ts";
+import {
+  aidlcInvocation,
+  aidlcDispatcherInvocation,
+  aidlcToolInvocation,
   compiledExecutable,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import {
+  activeVersion,
+  binRoot,
+  commandPath,
+  inspectProjectPinTarget,
+  inspectInstalledVersion,
+  installRoot,
+  readActiveExecutable,
+  rollbackVersionPath,
+  versionRoot as installedVersionRoot,
+} from "./aidlc-install-paths.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -352,7 +379,7 @@ function appendAuditEvent(
 // Previously hardcoded counts drifted as scopes evolved; sourcing from
 // the live mapping makes that impossible.
 
-const HELP_TEXT_HEAD = `AI-DLC — AI-Driven Development Life Cycle
+const HELP_TEXT_HEAD = `AI-DLC - AI-Driven Development Life Cycle
 
 Usage: /aidlc [command]
 
@@ -362,6 +389,7 @@ Scopes (set depth, test strategy, and stage count):
 const HELP_TEXT_TAIL = `
 Utilities:
   --status          Show current workflow progress (read-only)
+  --config [section]  Configure models, runtime, providers, trust, flags, or project in-session
   --claim <unit>    Atomically claim a team-owned Unit in this checkout
   --release <unit>  Release a Unit claim from the unscoped main checkout
   unit adopt <unit>  Adopt the checked-out live claim branch in a fresh clone
@@ -407,7 +435,7 @@ Utilities:
   --help            Show this help message
 
 Other:
-  <description>     Describe what to build — scope is auto-detected
+  <description>     Describe what to build - scope is auto-detected
   (no arguments)    Resume existing workflow, or start fresh if none exists
 
 Examples:
@@ -440,7 +468,7 @@ export function renderHelpText(): string {
     const ts = def.testStrategy
       ? `, ${def.testStrategy.toLowerCase()} test strategy`
       : "";
-    const desc = def.description ? ` — ${def.description}` : "";
+    const desc = def.description ? ` - ${def.description}` : "";
     const defaultMarker = name === defaultScope ? " (default)" : "";
     const countStr =
       execute === total ? `All ${total} stages` : `${execute} of ${total} stages`;
@@ -467,29 +495,6 @@ function handleVersion(): void {
 // select-plugins
 // ---------------------------------------------------------------------------
 
-interface FileSnapshot {
-  path: string;
-  exists: boolean;
-  bytes: string;
-}
-
-function snapshotFile(path: string): FileSnapshot {
-  return {
-    path,
-    exists: existsSync(path),
-    bytes: existsSync(path) ? readFileSync(path, "utf-8") : "",
-  };
-}
-
-function restoreSnapshot(snapshot: FileSnapshot): void {
-  if (snapshot.exists) {
-    mkdirSync(dirname(snapshot.path), { recursive: true });
-    writeFileSync(snapshot.path, snapshot.bytes, "utf-8");
-  } else if (existsSync(snapshot.path)) {
-    rmSync(snapshot.path, { force: true });
-  }
-}
-
 function resetSelectionSensitiveCaches(): void {
   _resetHarnessDataForTests();
   _resetStageGraphForTests();
@@ -499,20 +504,6 @@ function resetSelectionSensitiveCaches(): void {
 function mutableHarnessDataPath(projectDir: string): string {
   return resolveHarnessPath(
     ["tools", "data", "harness.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function stageGraphDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "stage-graph.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function scopeGridDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "scope-grid.json"],
     { mutable: true, projectDir },
   );
 }
@@ -592,11 +583,11 @@ function writePluginSelection(projectDir: string, names: string[]): void {
 function runBunTool(projectDir: string, rel: string, args: string[], label: string): void {
   let dispatcherArgs: string[];
   if (rel === "aidlc-graph.ts") {
-    dispatcherArgs = ["graph", ...args];
+    dispatcherArgs = ["engine", "graph", ...args];
   } else if (rel === "aidlc-runner-gen.ts" && args[0] === "write") {
-    dispatcherArgs = ["gen", "runners", ...args.slice(1)];
+    dispatcherArgs = ["engine", "gen", "runners", ...args.slice(1)];
   } else if (rel === "aidlc-runner-gen.ts" && args[0] === "scopes") {
-    dispatcherArgs = ["gen", "runner-scopes", ...args.slice(1)];
+    dispatcherArgs = ["engine", "gen", "runner-scopes", ...args.slice(1)];
   } else {
     throw new Error(`No dispatcher route for ${rel} ${args.join(" ")}`);
   }
@@ -681,7 +672,10 @@ function replaceGeneratedRegion(
   if (after !== before) writeFileSync(path, after, "utf-8");
 }
 
-export function regenerateSelectionSurfaces(projectDir: string): void {
+export function regenerateSelectionSurfaces(
+  projectDir: string,
+  displayProjectDir = projectDir,
+): void {
   runBunTool(projectDir, "aidlc-graph.ts", ["compile"], "aidlc-graph compile");
   resetSelectionSensitiveCaches();
   const skillsDir = resolveSkillsPath([], { mutable: true, projectDir });
@@ -690,7 +684,9 @@ export function regenerateSelectionSurfaces(projectDir: string): void {
     runBunTool(projectDir, "aidlc-runner-gen.ts", ["scopes"], "aidlc-runner-gen scopes");
   } else {
     process.stdout.write(
-      `note: runner regeneration skipped: ${skillsDir} not present in this install\n`,
+      `note: runner regeneration skipped: ${
+        resolveSkillsPath([], { mutable: true, projectDir: displayProjectDir })
+      } not present in this install\n`,
     );
   }
   resetSelectionSensitiveCaches();
@@ -970,21 +966,14 @@ function removePluginFragments(content: string, plugin: string): string {
   return out;
 }
 
-// Strip the merged contributions of every named plugin from installed stage
-// source. Mutated stage files are snapshotted into `snapshots` FIRST so the
-// caller's rollback restores them; consumed sidecars are snapshotted then
-// deleted (compose re-records on re-enable).
+// Strip the merged contributions of every named plugin from staged stage
+// source. The caller commits the resulting staged-project diff through the
+// shared transaction engine; consumed sidecars are deleted in staging and
+// compose recreates them when the plugin is re-enabled.
 function stripDisabledPluginContributions(
   plugins: readonly string[],
-  snapshots: FileSnapshot[],
 ): string[] {
   const stagesRoot = installedStagesRoot();
-  const touched = new Set<string>();
-  const snapshotOnce = (path: string): void => {
-    if (touched.has(path)) return;
-    snapshots.push(snapshotFile(path));
-    touched.add(path);
-  };
   const stripped: string[] = [];
   for (const plugin of plugins) {
     const sidecar = pluginContribSidecarPath(plugin);
@@ -1026,14 +1015,12 @@ function stripDisabledPluginContributions(
         }
         content = removePluginFragments(content, plugin);
         if (content !== before) {
-          snapshotOnce(path);
           writeFileSync(path, content, "utf-8");
           pluginTouched = true;
         }
       }
     }
     if (existsSync(sidecar)) {
-      snapshotOnce(sidecar);
       rmSync(sidecar, { force: true });
       pluginTouched = true;
     }
@@ -1141,25 +1128,52 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     // plugin has no composed contributions to strip).
     const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
-    const snapshots = [
-      snapshotFile(mutableHarnessDataPath(projectDir)),
-      snapshotFile(stageGraphDataPath(projectDir)),
-      snapshotFile(scopeGridDataPath(projectDir)),
-    ];
-
+    const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
+    const stagedProject = join(stagingRoot, "project");
     try {
-      // Strip disabled plugins' merged contributions BEFORE recompiling, so the
-      // regenerated graph no longer carries their produces/sensors/consumes/
-      // scopes on core stages. Mutated stage files join `snapshots`, so the catch-side
-      // rollback restores them too. Re-enabling restores contributions on the
-      // next session start (the plugin's own compose hook re-merges).
-      const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
-      writePluginSelection(projectDir, names);
-      regenerateSelectionSurfaces(projectDir);
-      appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
-        "Previous Selection": previousSelection,
-        "New Selection": newSelection,
+      const selectedHarness = harnessDir();
+      copyProjectSurfaces(projectDir, stagedProject, selectedHarness);
+      const envKeys = [
+        "AIDLC_RUNTIME_PROJECT_DIR",
+        "AIDLC_PROJECT_DIR",
+        "AIDLC_HARNESS_DIR",
+        "AIDLC_RUNTIME_HARNESS_ROOT",
+      ] as const;
+      const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      let strippedPlugins: string[] = [];
+      try {
+        process.env.AIDLC_RUNTIME_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_HARNESS_DIR = selectedHarness;
+        process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
+        resetSelectionSensitiveCaches();
+        // Strip disabled contributions in staging before recompiling. The live
+        // project remains byte-untouched until the shared transaction commits.
+        strippedPlugins = stripDisabledPluginContributions(disabling);
+        writePluginSelection(stagedProject, names);
+        regenerateSelectionSurfaces(stagedProject, projectDir);
+      } finally {
+        for (const key of envKeys) {
+          const value = saved[key];
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        resetSelectionSensitiveCaches();
+      }
+      const plan = projectDiffPlan(projectDir, stagedProject, selectedHarness);
+      const failAfter = Number(process.env.AIDLC_PLUGIN_SELECT_FAIL_AFTER ?? "0");
+      executePlan(plan, {
+        failAfter: Number.isInteger(failAfter) && failAfter > 0
+          ? failAfter
+          : undefined,
+        validateCommitted: () => {
+          appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
+            "Previous Selection": previousSelection,
+            "New Selection": newSelection,
+          });
+        },
       });
+      resetSelectionSensitiveCaches();
       if (strippedPlugins.length > 0) {
         process.stdout.write(
           `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
@@ -1167,19 +1181,10 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
     } catch (err) {
-      const original = errorMessage(err);
-      let recoveryMessage = "";
-      try {
-        for (const snapshot of snapshots) restoreSnapshot(snapshot);
-        resetSelectionSensitiveCaches();
-        regenerateSelectionSurfaces(projectDir);
-        recoveryMessage =
-          " Restored harness.json, stage-graph.json, scope-grid.json, and any stripped stage files, then re-ran the regeneration chain against the restored selection.";
-      } catch (recoveryErr) {
-        recoveryMessage =
-          ` Restore was attempted, but regeneration against the restored selection also failed: ${errorMessage(recoveryErr)}.`;
-      }
-      die(`select-plugins failed: ${original}.${recoveryMessage}`);
+      resetSelectionSensitiveCaches();
+      die(`select-plugins failed: ${errorMessage(err)}`);
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
     }
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -1556,7 +1561,7 @@ To get started:
     // hasn't called `advance` yet, so Current Stage still points here. Tell
     // the user honestly rather than showing "Running" on a completed stage.
     const displayName = currentEntry?.name ?? currentStage;
-    statusLine = `${displayName} approved — ready to advance`;
+    statusLine = `${displayName} approved - ready to advance`;
   }
 
   // Checkbox counts - filter to the EFFECTIVE plan when scope is known: the
@@ -1640,26 +1645,26 @@ To get started:
     const earliest = directlyStale[0] ?? validity.issues[0]?.stage ?? null;
     if (validity.warnings.length > 0) {
       validityOutput =
-        "Validity:       Inspection partly unavailable — advisory; routing continues\n" +
+        "Validity:       Inspection partly unavailable - advisory; routing continues\n" +
         `Directly stale: ${directlyStale.join(", ") || "none"}\n` +
         `Revalidate:     ${needsRevalidation.join(", ") || "none"}\n` +
         `Untracked:      ${validity.untracked.join(", ") || "none"}\n` +
         `Warnings:       ${validity.warnings.join(" ")}\n`;
     } else if (validity.issues.length > 0) {
       validityOutput =
-        "Validity:       Drift detected — advisory; routing continues\n" +
+        "Validity:       Drift detected - advisory; routing continues\n" +
         `Directly stale: ${directlyStale.join(", ") || "none"}\n` +
         `Revalidate:     ${needsRevalidation.join(", ") || "none"}\n` +
         `Suggested redo: ${earliest ? `/aidlc --stage ${earliest}` : "none"}\n` +
         `Untracked:      ${validity.untracked.join(", ") || "none"}\n`;
     } else if (validity.untracked.length > 0) {
       validityOutput =
-        "Validity:       Untracked completions — advisory; routing continues\n" +
+        "Validity:       Untracked completions - advisory; routing continues\n" +
         `Untracked:      ${validity.untracked.join(", ")}\n`;
     }
   } catch (error) {
     validityOutput =
-      "Validity:       Inspection unavailable — advisory; routing continues\n" +
+      "Validity:       Inspection unavailable - advisory; routing continues\n" +
       `Warnings:       ${errorMessage(error)}\n`;
   }
 
@@ -1671,7 +1676,7 @@ Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
-Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` — ${skipped} skipped` : ""}
+Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
 Phase Progress:
 ${phaseProgress}
@@ -1885,6 +1890,61 @@ function pushNamingAdvisory(
   });
 }
 
+function codexNativeTrustHashes(hooksPath: string): string[] {
+  const eventNames: Record<string, string> = {
+    SessionStart: "session_start",
+    UserPromptSubmit: "user_prompt_submit",
+    PreToolUse: "pre_tool_use",
+    PostToolUse: "post_tool_use",
+    PermissionRequest: "permission_request",
+    PreCompact: "pre_compact",
+    PostCompact: "post_compact",
+    SubagentStart: "subagent_start",
+    SubagentStop: "subagent_stop",
+    Stop: "stop",
+  };
+  const parsed = JSON.parse(readFileSync(hooksPath, "utf-8")) as {
+    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown }> }>>;
+  };
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(record).sort().map((key) => [key, sortKeys(record[key])]),
+      );
+    }
+    return value;
+  };
+  const hashes: string[] = [];
+  for (const [event, groups] of Object.entries(parsed.hooks ?? {})) {
+    const eventName = eventNames[event];
+    if (!eventName || !Array.isArray(groups)) continue;
+    for (const group of groups) {
+      for (const hook of group.hooks ?? []) {
+        if (
+          typeof hook.command !== "string" ||
+          !hook.command.startsWith(`${trustedCommand("adapter codex")} `)
+        ) continue;
+        const identity = {
+          event_name: eventName,
+          hooks: [{
+            async: false,
+            command: hook.command,
+            timeout: 600,
+            type: "command",
+          }],
+        };
+        hashes.push(
+          `sha256:${
+            createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")
+          }`,
+        );
+      }
+    }
+  }
+  return hashes;
+}
 function truncatePluginDoctorText(value: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping C0/DEL controls from plugin-supplied text is the point of this line.
   const sanitized = value.replace(/[\u0000-\u001f\u007f]/g, "");
@@ -2216,7 +2276,7 @@ function appendPluginDoctorChecks(
           {
             fix: fix ?? "review this plugin-provided finding",
             id,
-            severity: "warning",
+            severity: "warn",
           },
         ));
       } else {
@@ -2262,25 +2322,415 @@ function appendPluginDoctorChecks(
   }
 }
 
-function handleDoctor(projectDir: string, flags: Record<string, string> = {}): void {
-  const results: DoctorCheckResult[] = [];
-  const isWindows = process.platform === "win32";
+export type DoctorCheck = {
+  pass: boolean;
+  severity?: "warn";
+  label: string;
+  fix?: string;
+};
 
-  // 1. bun installed — check PATH (Bun.which handles Windows .exe suffix automatically)
-  const bunHome = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "";
-  const bunFound = Bun.which("bun") !== null || (bunHome !== "" && existsSync(bunHome));
+export type DoctorReport = {
+  checks: DoctorCheck[];
+  passed: number;
+  warnings: number;
+  failed: number;
+};
+
+function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck[] {
+  const marker = "harness.json contains legacy policy key(s)";
+  const indexes = checks.flatMap((check, index) =>
+    check.fix?.includes(marker) ? [index] : []
+  );
+  if (indexes.length === 0) return [...checks];
+  const direct = indexes
+    .map((index) => checks[index].fix ?? "")
+    .sort((left, right) => left.length - right.length)[0];
+  const details =
+    /^(.*harness\.json): harness\.json contains legacy policy key\(s\) ([^.]+)\./
+      .exec(direct);
+  const path = details?.[1] ?? "tools/data/harness.json";
+  const keys = details?.[2] ?? "models or flags";
+  const collapsed: DoctorCheck = {
+    pass: false,
+    label: `Harness data: legacy policy key(s) ${keys} in ${path}`,
+    fix: direct,
+  };
+  const first = indexes[0];
+  const duplicates = new Set(indexes);
+  return checks.flatMap((check, index) =>
+    index === first ? [collapsed] : duplicates.has(index) ? [] : [check]
+  );
+}
+
+function projectedFileRepair(
+  distribution: string,
+  relativePath: string,
+): string {
+  const invoke = aidlcInvocation();
+  if (invoke === "aidlc") {
+    return `run \`${invoke} config --force\` to restore ${relativePath} from the installed runtime`;
+  }
+  return `restore ${relativePath} from git, or re-copy \`dist/${distribution}/${relativePath}\` from the aidlc-workflows checkout`;
+}
+
+export async function collectDoctorReport(
+  projectDir: string,
+  extraChecks: readonly DoctorCheck[] = [],
+): Promise<DoctorReport> {
+  const results: DoctorCheck[] = [];
+  results.push(...runtimeDoctorChecks(projectDir, harnessDir()));
+  results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
+  const compiled = isCompiledExecutable();
+
+  const installedVersion = activeVersion();
+  if (compiled || installedVersion) {
+    const installedState = installedVersion
+      ? inspectInstalledVersion(installedVersion)
+      : { complete: false, distributions: [], reason: "active version marker unavailable" };
+    const distributions = installedState.distributions;
+    const runtimeReady = installedState.complete && distributions.length > 0;
+    results.push({
+      pass: installedVersion !== null && runtimeReady,
+      label: installedVersion && runtimeReady
+        ? `Installed runtime: ${installedVersion} [${distributions.join(", ")}]`
+        : installedVersion && installedState.complete
+        ? `Installed runtime ${installedVersion} has no harness installed`
+        : installedVersion
+        ? `Installed runtime ${installedVersion} is incomplete: ${installedState.reason ?? "unknown reason"}`
+        : "Installed runtime: active version marker unavailable",
+      fix: installedState.complete
+        ? `run \`${aidlcInvocation()} config --harness <name>\``
+        : `run \`${aidlcInvocation()} config --harness <name>\``,
+    });
+    const command = commandPath();
+    const expectedExecutable = installedVersion
+      ? join(installedVersionRoot(installedVersion), process.platform === "win32" ? "aidlc.exe" : "aidlc")
+      : "";
+    let pointerValid = false;
+    try {
+      pointerValid = Boolean(expectedExecutable) &&
+        existsSync(command) &&
+        statSync(command).isFile() &&
+        readActiveExecutable() === resolve(expectedExecutable);
+    } catch {
+      pointerValid = false;
+    }
+    results.push({
+      pass: pointerValid,
+      label: pointerValid
+        ? `Command pointer: ${command} -> ${installedVersion}`
+        : installedVersion
+        ? `Command pointer is missing or does not select active version ${installedVersion}`
+        : "Command pointer is missing or does not select an active version",
+      fix: "re-run `aidlc update --version <version> --from <release-directory>`",
+    });
+
+    const rollbackPath = rollbackVersionPath();
+    if (existsSync(rollbackPath)) {
+      const rollback = readFileSync(rollbackPath, "utf-8").trim();
+      let rollbackState: ReturnType<typeof inspectInstalledVersion> = {
+        complete: false,
+        distributions: [],
+        reason: "invalid version marker",
+      };
+      try {
+        rollbackState = inspectInstalledVersion(rollback);
+      } catch {
+        // The diagnostic below reports an invalid marker as ineligible.
+      }
+      const eligible = rollback !== installedVersion && rollbackState.complete;
+      results.push({
+        pass: eligible,
+        label: eligible
+          ? `Rollback target: ${rollback} is complete and eligible`
+          : `Rollback target is not eligible: ${JSON.stringify(rollback)}`,
+        fix: "run `aidlc use <version>` with a complete retained version",
+      });
+    } else {
+      results.push({ pass: true, label: "Rollback target: none recorded" });
+    }
+
+    const pinsPath = join(installRoot(), "pins.json");
+    let stalePins: string[] = [];
+    try {
+      const pins = existsSync(pinsPath)
+        ? JSON.parse(readFileSync(pinsPath, "utf-8")) as Record<string, unknown>
+        : {};
+      stalePins = Object.keys(pins).filter((path) => !existsSync(path)).sort();
+    } catch {
+      stalePins = ["<malformed pins.json>"];
+    }
+    results.push({
+      pass: stalePins.length === 0,
+      severity: stalePins.length > 0 ? "warn" : undefined,
+      label: stalePins.length === 0
+        ? "Project pin registry: no stale registrations"
+        : `Project pin registry: stale registrations: ${stalePins.join(", ")}`,
+      fix: "run a pinned command from the moved project to self-heal its registration",
+    });
+
+    if (compiled) {
+      const currentHarnessDir = harnessDir();
+      const currentHarnessName = runtimeHarnessName(projectDir, currentHarnessDir);
+      const commands: string[] = [];
+      const collectCommands = (value: unknown): void => {
+        if (Array.isArray(value)) {
+          for (const item of value) collectCommands(item);
+        } else if (value && typeof value === "object") {
+          for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+            if (
+              (key === "command" || key === "bash" || key === "powershell") &&
+              typeof item === "string"
+            ) commands.push(item);
+            else collectCommands(item);
+          }
+        }
+      };
+      const harnessRoot = join(projectDir, currentHarnessDir);
+      const trustFiles = [
+        join(harnessRoot, "settings.json"),
+        join(harnessRoot, "hooks.json"),
+        join(projectDir, ".vscode", "settings.json"),
+      ];
+      if (currentHarnessDir === ".cursor") {
+        trustFiles.push(join(harnessRoot, "cli.json"));
+      }
+      if (currentHarnessName === "copilot") {
+        trustFiles.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+      }
+      const agentsDir = join(harnessRoot, "agents");
+      if (existsSync(agentsDir)) {
+        trustFiles.push(...readdirSync(agentsDir)
+          .filter((name) => name.endsWith(".json"))
+          .map((name) => join(agentsDir, name)));
+      }
+      const hooksDir = join(harnessRoot, "hooks");
+      if (existsSync(hooksDir)) {
+        trustFiles.push(...readdirSync(hooksDir)
+          .filter((name) => name.endsWith(".kiro.hook"))
+          .map((name) => join(hooksDir, name)));
+      }
+      for (const path of trustFiles) {
+        if (!existsSync(path)) continue;
+        try {
+          const parsed = JSON.parse(readFileSync(path, "utf-8"));
+          collectCommands(parsed);
+          const allowed = (parsed as {
+            toolsSettings?: { execute_bash?: { allowedCommands?: unknown } };
+          }).toolsSettings?.execute_bash?.allowedCommands;
+          if (Array.isArray(allowed)) {
+            commands.push(...allowed.filter((entry): entry is string => typeof entry === "string"));
+          }
+          const permissions = (parsed as {
+            permissions?: { allow?: unknown };
+          }).permissions?.allow;
+          if (Array.isArray(permissions)) {
+            commands.push(...permissions.filter((entry): entry is string => typeof entry === "string"));
+          }
+          const trusted = (parsed as {
+            kiroAgent?: unknown;
+            "kiroAgent.trustedCommands"?: unknown;
+          })["kiroAgent.trustedCommands"];
+          if (Array.isArray(trusted)) {
+            commands.push(...trusted.filter((entry): entry is string => typeof entry === "string"));
+          }
+        } catch {
+          // Existing structure checks report malformed host configuration.
+        }
+      }
+      const legacy = commands.filter((command) =>
+        /\bbun\s+[^\n]*(?:\/(?:tools|hooks)\/aidlc|\\?\.kiro\/tools\/)/.test(command)
+      );
+      let nativeHooks = commands.some((command) =>
+        ["hook", "adapter", "statusline"].some((noun) =>
+          command.includes(`${TRUSTED_COMMAND_PREFIX} ${noun}`)
+        )
+      );
+      let nativePermission = false;
+      if (currentHarnessDir === ".claude") {
+        nativePermission = commands.includes(`Bash(${trustedCommand("*")})`) &&
+          !commands.includes("Bash");
+      } else if (currentHarnessDir === ".kiro") {
+        nativePermission = commands.includes(trustedCommand(".*")) ||
+          commands.includes(trustedCommand("*"));
+      } else if (currentHarnessDir === ".codex") {
+        const rules = join(harnessRoot, "rules", "default.rules");
+        const seed = join(harnessRoot, "trust-seed.toml");
+        const hooks = join(harnessRoot, "hooks.json");
+        let hashes: string[] = [];
+        try {
+          hashes = existsSync(hooks) ? codexNativeTrustHashes(hooks) : [];
+        } catch {
+          hashes = [];
+        }
+        const seedText = existsSync(seed) ? readFileSync(seed, "utf-8") : "";
+        nativePermission =
+          existsSync(rules) &&
+          readFileSync(rules, "utf-8").includes(
+            `prefix_rule(pattern = [${
+              TRUSTED_COMMAND_TOKENS.map((token) => JSON.stringify(token)).join(", ")
+            }], decision = "allow")`,
+          ) &&
+          hashes.length > 0 &&
+          hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
+      } else if (currentHarnessDir === ".cursor") {
+        nativePermission = commands.includes(`Shell(${trustedCommand("*")})`);
+      } else if (currentHarnessName === "copilot") {
+        // Copilot has no project command allowlist. Its folder-trust contract
+        // is checked separately below; this row verifies native hook wiring.
+        nativePermission = nativeHooks;
+      } else if (currentHarnessName === "opencode") {
+        const configPath = ["opencode.json", "opencode.jsonc"]
+          .map((name) => join(projectDir, name))
+          .find(existsSync);
+        try {
+          const config = configPath
+            ? Bun.JSONC.parse(readFileSync(configPath, "utf-8")) as {
+              permission?: { bash?: Record<string, unknown> };
+            }
+            : {};
+          nativePermission =
+            config.permission?.bash?.[trustedCommand("*")] === "allow";
+        } catch {
+          nativePermission = false;
+        }
+        nativeHooks = existsSync(
+          join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts"),
+        );
+      }
+      const nativeTrustReady = legacy.length === 0 && nativeHooks && nativePermission;
+      results.push({
+        pass: nativeTrustReady,
+        label: nativeTrustReady
+          ? "Native command trust: host hooks and permission entries select the installed `aidlc` command"
+          : `Native command trust is incomplete: ${legacy.length} Bun-shaped entr${
+            legacy.length === 1 ? "y" : "ies"
+          }, native hooks ${nativeHooks ? "present" : "missing"}, native permission/trust ${
+            nativePermission ? "present" : "missing"
+          }`,
+        fix: `refresh the project with \`${aidlcInvocation()} config\``,
+      });
+    }
+  } else {
+    results.push({
+      pass: true,
+      label: "Execution mode: source checkout (no machine runtime expected)",
+    });
+  }
+
+  // Project-domain transactions (init, plugin sync) root at the project dir,
+  // so this scan runs on every channel, not only under an installed machine
+  // runtime.
+  const stagingRoots = new Set([projectDir]);
+  if (compiled || installedVersion) {
+    stagingRoots.add(installRoot());
+    stagingRoots.add(binRoot());
+    stagingRoots.add(dirname(installRoot()));
+    stagingRoots.add(dirname(dirname(installRoot())));
+  }
+  const abandoned: string[] = [];
+  const recovery: string[] = [];
+  for (const root of stagingRoots) {
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root)) {
+      if (/^\.aidlc-txn-[0-9a-f-]+$/.test(entry)) abandoned.push(join(root, entry));
+      if (/^\.aidlc-recovery-\d+-[0-9a-f-]+$/.test(entry)) {
+        recovery.push(join(root, entry));
+      }
+    }
+  }
+  abandoned.sort();
+  recovery.sort();
   results.push({
-    pass: bunFound,
-    label: "bun installed (required for CLI tools and hooks)",
-    fix: isWindows
-      ? "install via `npm install -g bun` or `powershell -c \"irm bun.sh/install.ps1 | iex\"`"
-      : "install via `curl -fsSL https://bun.sh/install | bash`",
+    pass: abandoned.length === 0,
+    label: abandoned.length === 0
+      ? "Transaction staging: no abandoned directories"
+      : `Transaction staging: ${abandoned.length} abandoned path(s): ${abandoned.join(", ")}`,
+    fix: "finish any active AI-DLC command, then rerun the command to trigger the safe staging sweep",
+  });
+  results.push({
+    pass: recovery.length === 0,
+    label: recovery.length === 0
+      ? "Transaction recovery: no quarantined directories"
+      : `Transaction recovery: ${recovery.length} quarantined path(s): ${recovery.join(", ")}`,
+    fix:
+      "inspect each listed directory, recover any needed files, then remove the directory manually",
   });
 
-  // 2. Hook presence — every framework hook is TypeScript, run via bun (no
-  // executable bit needed). The core hook bodies ship in EVERY harness tree; the
-  // Kiro and Codex trees additionally carry an authored stdin adapter that wires
-  // them up.
+  const projectStamp = join(projectDir, harnessDir(), "tools", "data", "aidlc-stamp.json");
+  if (existsSync(projectStamp)) {
+    try {
+      const stamp = JSON.parse(readFileSync(projectStamp, "utf-8")) as {
+        frameworkVersion?: string;
+        distribution?: string;
+      };
+      const stampVersion = stamp.frameworkVersion ?? "unknown";
+      const currentMajor = AIDLC_VERSION.split(".")[0];
+      const stampMajor = stampVersion.split(".")[0];
+      results.push({
+        pass: stampVersion === AIDLC_VERSION || stampMajor === currentMajor,
+        severity: stampVersion !== AIDLC_VERSION && stampMajor === currentMajor ? "warn" : undefined,
+        label: stampVersion === AIDLC_VERSION
+          ? `Project runtime stamp: ${stampVersion} (${stamp.distribution ?? "unknown"})`
+          : `Project runtime stamp: ${stampVersion}; selected engine: ${AIDLC_VERSION}`,
+        fix: `run \`${aidlcInvocation()} config\` or select the machine release with \`${aidlcInvocation()} use ${stampVersion}\``,
+      });
+    } catch {
+      results.push({
+        pass: false,
+        label: "Project runtime stamp is malformed",
+        fix: `refresh the project with \`${aidlcInvocation()} config\``,
+      });
+    }
+  }
+
+  const pinPath = join(projectDir, ".aidlc-version");
+  if (existsSync(pinPath)) {
+    const pinned = readFileSync(pinPath, "utf-8").trim();
+    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(pinned)) {
+      results.push({
+        pass: false,
+        label: `Project pin is malformed: ${JSON.stringify(pinned)}`,
+        fix: `run \`${aidlcInvocation()} config --unpin\` or write one strict semver`,
+      });
+    } else {
+      const distribution = (() => {
+        try {
+          return JSON.parse(readFileSync(projectStamp, "utf-8")).distribution as string;
+        } catch {
+          return null;
+        }
+      })();
+      let pinState: ReturnType<typeof inspectInstalledVersion> = {
+        complete: false,
+        distributions: [],
+      };
+      try {
+        pinState = inspectInstalledVersion(pinned, distribution);
+      } catch {
+        // The diagnostic below reports invalid or incomplete installed state.
+      }
+      results.push({
+        pass: pinState.complete,
+        label: pinState.complete
+          ? `Project pin: ${pinned} is installed`
+          : `Project pin: ${pinned} is not installed completely`,
+        fix: `run \`${aidlcInvocation()} config --pin ${pinned}\``,
+      });
+      const targetState = inspectProjectPinTarget(projectDir, pinned);
+      results.push({
+        pass: targetState.valid,
+        label: targetState.valid
+          ? `Project pin target: ${pinned} resolves before engine startup`
+          : `Project pin target: ${targetState.reason ?? "invalid"}`,
+        fix: `run \`${aidlcInvocation()} config --pin ${pinned}\``,
+      });
+    }
+  }
+
+  // 2. Hook presence. Shipped projects route hook targets through the native
+  // command; direct source execution may still invoke these TypeScript files.
+  // The Kiro and Codex trees also carry the authored host adapter.
   const harness = harnessDir();
   const harnessName = runtimeHarnessName(projectDir, harness);
   const isCopilot = harnessName === "copilot";
@@ -2311,9 +2761,31 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       // in settings.json (hook command paths like
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
+      const parsed = JSON.parse(raw) as unknown;
+      const commands: string[] = [];
+      const collectCommands = (value: unknown): void => {
+        if (Array.isArray(value)) return void value.forEach(collectCommands);
+        if (!value || typeof value !== "object") return;
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+          if (key === "command" && typeof item === "string") commands.push(item);
+          else collectCommands(item);
+        }
+      };
+      collectCommands(parsed);
       const refs = new Set<string>();
-      for (const m of raw.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
-        refs.add(m[0]);
+      const dispatcher =
+        '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
+      for (const command of commands) {
+        for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
+          refs.add(match[0]);
+        }
+        const dispatcherHook = new RegExp(
+          `${dispatcher}\\s+engine\\s+hook\\s+([A-Za-z0-9_-]+)\\b`,
+        ).exec(command);
+        if (dispatcherHook) refs.add(`aidlc-${dispatcherHook[1]}.ts`);
+        if (new RegExp(`${dispatcher}\\s+engine\\s+statusline\\b`).test(command)) {
+          refs.add("aidlc-statusline.ts");
+        }
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -2325,8 +2797,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       // verified, so say so rather than silently checking nothing).
       results.push({
         pass: false,
-        label: "Hook contract: settings.json unreadable — cannot verify wired hooks",
-        fix: "restore .claude/settings.json (copy from `dist/claude/.claude/settings.json`)",
+        label: "Hook contract: settings.json unreadable - cannot verify wired hooks",
+        fix: projectedFileRepair("claude", ".claude/settings.json"),
       });
     } else if (expectedHooks.length === 0) {
       // settings.json parsed but wires no aidlc hooks — also loud (a stripped
@@ -2334,7 +2806,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       results.push({
         pass: false,
         label: "Hook contract: settings.json wires no aidlc-*.ts hooks",
-        fix: "restore the hooks block in .claude/settings.json (copy from `dist/claude/.claude/settings.json`)",
+        fix: projectedFileRepair("claude", ".claude/settings.json"),
       });
     } else {
       for (const h of expectedHooks) {
@@ -2482,7 +2954,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       });
     }
     if (harness === ".aidlc") {
-      // Two harnesses ship the .aidlc engine dir; the adapter file names the
+      // Two harnesses ship the .aidlc runtime dir; the adapter file names the
       // flavor. Copilot: a hooks/ shim inside the engine dir (wired by
       // .github/hooks/aidlc.json). opencode: a plugin in the .opencode shell.
       const copilotAdapter = join(projectDir, harness, "hooks", "aidlc-copilot-adapter.ts");
@@ -2490,14 +2962,20 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         results.push({
           pass: existsSync(copilotAdapter),
           label: "hooks/aidlc-copilot-adapter.ts present (hook shim)",
-          fix: "copy from `dist/copilot/.aidlc/hooks/aidlc-copilot-adapter.ts`",
+          fix: projectedFileRepair(
+            "copilot",
+            ".aidlc/hooks/aidlc-copilot-adapter.ts",
+          ),
         });
       } else {
         const adapterPath = join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
         results.push({
           pass: existsSync(adapterPath),
           label: "plugin/aidlc-opencode-adapter.ts present (hook wiring)",
-          fix: "copy from `dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts`",
+          fix: projectedFileRepair(
+            "opencode",
+            ".opencode/plugin/aidlc-opencode-adapter.ts",
+          ),
         });
       }
     }
@@ -2514,109 +2992,48 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     results.push({
       pass: hasJsonAgent || existsSync(markdownAgentPath),
       label: "agents/aidlc.{json,md} present (conductor wiring)",
-      fix: "copy from `dist/kiro/.kiro/agents/aidlc.json` (Kiro CLI) or `dist/kiro-ide/.kiro/agents/aidlc.md` (Kiro IDE)",
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc.md")} (Kiro IDE)`,
     });
     if (hasJsonAgent) {
       const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
       results.push({
         pass: existsSync(cliSettingsPath),
         label: "settings/cli.json present (workspace default-agent activation)",
-        fix: "copy from `dist/kiro/.kiro/settings/cli.json` (or use `kiro-cli chat --agent aidlc`)",
+        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
       });
     }
   } else if (harness === ".codex") {
-    for (const [file, what, from] of [
-      ["config.toml", "model/provider/sandbox config", "dist/codex/.codex/config.toml"],
-      ["hooks.json", "hook wiring", "dist/codex/.codex/hooks.json"],
-      ["rules/default.rules", "permission prefix rules", "dist/codex/.codex/rules/default.rules"],
+    for (const [file, what] of [
+      ["config.toml", "model/provider/sandbox config"],
+      ["hooks.json", "hook wiring"],
+      ["rules/default.rules", "permission prefix rules"],
     ] as const) {
       results.push({
         pass: existsSync(join(projectDir, harness, file)),
         label: `${file} present (${what})`,
-        fix: `copy from \`${from}\``,
+        fix: projectedFileRepair("codex", `.codex/${file}`),
       });
     }
-    // Minimum Codex version pin (G10): 0.139.0 introduced real role names in
-    // SubagentStart/Stop and hyphenated agent-TOML resolution; 0.145.0 also
-    // drains compact-source SessionStart hooks immediately after a mid-turn
-    // compaction. Older versions either break agent attribution/transposition
-    // or let the first post-compaction continuation run without the restored
-    // workflow mission.
-    const MIN_CODEX = [0, 145, 0] as const;
-    const codexVer = Bun.spawnSync(["codex", "--version"], { stdout: "pipe", stderr: "ignore" });
-    const verText = (codexVer.stdout?.toString() ?? "").trim();
-    const verMatch = verText.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!verMatch) {
-      results.push({
-        pass: false,
-        label: "codex CLI on PATH",
-        fix: "install Codex CLI >= 0.145.0 (https://developers.openai.com/codex)",
-      });
-    } else {
-      const v = [Number(verMatch[1]), Number(verMatch[2]), Number(verMatch[3])];
-      const ok =
-        v[0] > MIN_CODEX[0] ||
-        (v[0] === MIN_CODEX[0] &&
-          (v[1] > MIN_CODEX[1] || (v[1] === MIN_CODEX[1] && v[2] >= MIN_CODEX[2])));
-      results.push({
-        pass: ok,
-        label: `codex CLI version ${verMatch[0]} >= 0.145.0 (immediate compact-session reload + subagent attribution + agent TOML resolution)`,
-        fix: "upgrade Codex CLI to 0.145.0 or later",
-      });
-    }
-    // Hook trust pre-seed reminder (advisory pass-with-label): untrusted
-    // project hooks never fire (the bypass flag does not run them either).
+    // Hook trust reminder: untrusted project hooks never fire.
     results.push({
       pass: true,
-      label:
-        "hook trust: ensure [hooks.state] entries are pre-seeded in $CODEX_HOME/config.toml (`bun scripts/package.ts codex trust --project <dir>`) or run one TUI trust pass",
+      label: compiled
+        ? "hook trust: merge the shipped native trust-seed.toml entries into $CODEX_HOME/config.toml or run one TUI trust pass"
+        : "hook trust: pre-seed [hooks.state] with `bun scripts/package.ts codex trust --project <dir>` or run one TUI trust pass",
     });
   } else if (harness === ".aidlc" && isCopilot) {
     // Copilot (CLI + VS Code, one install): the wiring config is
     // .github/hooks/aidlc.json; skills and personas ride .github/{skills,agents}.
-    for (const [file, what, from] of [
-      [".github/hooks/aidlc.json", "hook wiring", "dist/copilot/.github/hooks/aidlc.json"],
-      [".github/skills/aidlc/SKILL.md", "/aidlc entry point", "dist/copilot/.github/skills/aidlc/SKILL.md"],
-      [".github/agents/aidlc-developer-agent.md", "persona custom agents", "dist/copilot/.github/agents/"],
-      ["AGENTS.md", "onboarding + method imports", "dist/copilot/AGENTS.md"],
+    for (const [file, what] of [
+      [".github/hooks/aidlc.json", "hook wiring"],
+      [".github/skills/aidlc/SKILL.md", "/aidlc entry point"],
+      [".github/agents/aidlc-developer-agent.md", "persona custom agents"],
+      ["AGENTS.md", "onboarding + method imports"],
     ] as const) {
       results.push({
         pass: existsSync(join(projectDir, file)),
         label: `${file} present (${what})`,
-        fix: `copy from \`${from}\``,
-      });
-    }
-    // Copilot CLI version floor: 1.0.74 is the line this port was verified
-    // against (PascalCase hook registration delivering snake_case payloads,
-    // hookSpecificOutput deny honored, SubagentStart/Stop events, and
-    // --output-format json). The CLI is optional when only VS Code
-    // drives the install, so a missing binary is advisory, not a failure.
-    const MIN_COPILOT = [1, 0, 74] as const;
-    // Bun.spawnSync THROWS (ENOENT) on a missing executable rather than
-    // returning - probe with Bun.which first so a VS Code-only install (no
-    // CLI) gets the advisory branch instead of aborting the whole doctor.
-    const copilotBin = Bun.which("copilot");
-    const copilotVer = copilotBin
-      ? Bun.spawnSync([copilotBin, "--version"], { stdout: "pipe", stderr: "ignore" })
-      : null;
-    const verText = (copilotVer?.stdout?.toString() ?? "").trim();
-    const verMatch = verText.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!verMatch) {
-      results.push({
-        pass: true,
-        label:
-          "copilot CLI not on PATH — fine when VS Code agent mode drives this install; for CLI use install @github/copilot >= 1.0.74",
-      });
-    } else {
-      const v = [Number(verMatch[1]), Number(verMatch[2]), Number(verMatch[3])];
-      const ok =
-        v[0] > MIN_COPILOT[0] ||
-        (v[0] === MIN_COPILOT[0] &&
-          (v[1] > MIN_COPILOT[1] || (v[1] === MIN_COPILOT[1] && v[2] >= MIN_COPILOT[2])));
-      results.push({
-        pass: ok,
-        label: `copilot CLI version ${verMatch[0]} >= 1.0.74 (PascalCase hook registration + deny/block channels verified on this line)`,
-        fix: "run `copilot update` or `npm i -g @github/copilot`",
+        fix: projectedFileRepair("copilot", file),
       });
     }
     // Folder trust: untrusted project hooks silently never fire (no warning
@@ -2637,7 +3054,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         results.push({
           pass: true,
           label:
-            "~/.copilot/config.json absent — fine for VS Code-only installs; for the CLI, one interactive run records folder trust (hooks silently no-op untrusted)",
+            "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
         });
       } else {
         const raw = readFileSync(configPath, "utf-8");
@@ -2674,24 +3091,24 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     results.push({
       pass: true,
       label:
-        "headless runs: set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for `copilot -p` sessions — repo hooks are off by default in prompt mode",
+        "headless runs: set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for `copilot -p` sessions - repo hooks are off by default in prompt mode",
     });
   } else if (harness === ".cursor") {
     // Cursor: hooks.json (the hook wiring), cli.json (permissions), and the
     // standing + phase method rule pointers are all inside .cursor/.
-    for (const [file, what, from] of [
-      ["hooks.json", "hook wiring", "dist/cursor/.cursor/hooks.json"],
-      ["cli.json", "Shell(bun) permission pre-approval", "dist/cursor/.cursor/cli.json"],
-      ["rules/aidlc.mdc", "standing method rule (alwaysApply read instruction)", "dist/cursor/.cursor/rules/aidlc.mdc"],
-      ["rules/aidlc-phase-ideation.mdc", "Ideation phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-ideation.mdc"],
-      ["rules/aidlc-phase-inception.mdc", "Inception phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-inception.mdc"],
-      ["rules/aidlc-phase-construction.mdc", "Construction phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-construction.mdc"],
-      ["rules/aidlc-phase-operation.mdc", "Operation phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-operation.mdc"],
+    for (const [file, what] of [
+      ["hooks.json", "hook wiring"],
+      ["cli.json", "Shell(bun) permission pre-approval"],
+      ["rules/aidlc.mdc", "standing method rule (alwaysApply read instruction)"],
+      ["rules/aidlc-phase-ideation.mdc", "Ideation phase rule (agent-decided read instruction)"],
+      ["rules/aidlc-phase-inception.mdc", "Inception phase rule (agent-decided read instruction)"],
+      ["rules/aidlc-phase-construction.mdc", "Construction phase rule (agent-decided read instruction)"],
+      ["rules/aidlc-phase-operation.mdc", "Operation phase rule (agent-decided read instruction)"],
     ] as const) {
       results.push({
         pass: existsSync(join(projectDir, harness, file)),
         label: `${file} present (${what})`,
-        fix: `copy from \`${from}\``,
+        fix: projectedFileRepair("cursor", `.cursor/${file}`),
       });
     }
   } else if (harness === ".aidlc") {
@@ -2703,19 +3120,19 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     results.push({
       pass: existsSync(opencodeJson) || existsSync(opencodeJsonc),
       label: "opencode.json or opencode.jsonc present (permissions + method instructions glob)",
-      fix: "copy `dist/opencode/opencode.json` beside .opencode/, or merge it into opencode.jsonc",
+      fix: projectedFileRepair("opencode", "opencode.json"),
     });
     results.push({
       pass: existsSync(join(projectDir, ".opencode", "command", "aidlc.md")),
       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
-      fix: "copy from `dist/opencode/.opencode/command/aidlc.md`",
+      fix: projectedFileRepair("opencode", ".opencode/command/aidlc.md"),
     });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
       pass: existsSync(settingsPath),
       label: "settings.json present",
-      fix: "copy from `dist/claude/.claude/settings.json`",
+      fix: projectedFileRepair("claude", ".claude/settings.json"),
     });
   }
 
@@ -2732,7 +3149,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   ) {
     results.push({
       pass: true,
-      label: `Multi-harness install detected (${harness} + ${otherTrees.join(" + ")}) with an active workflow — supported but untested; keep all trees at the same framework version`,
+      label: `Multi-harness install detected (${harness} + ${otherTrees.join(" + ")}) with an active workflow - supported but untested; keep all trees at the same framework version`,
     });
   }
 
@@ -2740,11 +3157,11 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // Only observable inside a Claude Code session (where settings.json env is exposed
   // to Bash invocations). When doctor is invoked directly via bun, the env is unset
   // and we report "unset — no project default" as a pass.
-  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
   if (envScope === "") {
     results.push({
       pass: true,
-      label: "AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)",
+      label: "AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)",
     });
   } else if (validScopes().has(envScope)) {
     results.push({
@@ -2800,7 +3217,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         ? "Plugin selection flags: harness.json agrees with stage-graph.json"
         : `Plugin selection flags: ${disagreements.length} disagreement(s)`,
       fix: disagreements.length > 0
-        ? `${disagreements.join("; ")} - run \`bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins ${
+        ? `${disagreements.join("; ")} - run \`${aidlcDispatcherInvocation("plugin select")} ${
             selected === null ? knownPluginNames().join(",") : [...selected].sort().join(",")
           }\` to recover`
         : undefined,
@@ -2856,7 +3273,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           ? `Enabled stage compile coverage: ${missingEnabled.length} enabled stage file(s) missing from the full graph`
           : `Enabled stage compile coverage: ${missingEnabled.length} uncompiled stage file(s) - no selection active, see the Uncompiled stage files advisory`,
       fix: torn
-        ? `${missingEnabled.join("; ")} - recover with \`bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins ${
+        ? `${missingEnabled.join("; ")} - recover with \`${aidlcDispatcherInvocation("plugin select")} ${
             [...(selected as ReadonlySet<string>)].sort().join(",")
           }\``
         : undefined,
@@ -2940,7 +3357,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           ? "Plugin selection vs active workflows: no stranded dependencies"
           : `Plugin selection vs active workflows: ${stranded.length} stranded dependency(ies)`,
         fix: stranded.length > 0
-          ? `${stranded.join("; ")} - re-enable the plugin(s) with \`bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins\`, or complete/park the workflow(s)`
+          ? `${stranded.join("; ")} - re-enable the plugin(s) with \`${aidlcDispatcherInvocation("plugin select")}\`, or complete/park the workflow(s)`
           : undefined,
       });
 
@@ -2978,7 +3395,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
 
   // 5. Workspace shell ready (P4: no --init artifact to check). With auto-create
   // there is no scaffolded aidlc-docs/ to verify; readiness is the SHIPPED SHELL
-  // the user copies from dist/: the harness engine dir (.claude/.kiro/.codex)
+  // the user copies from dist/: the metadata-declared harness engine directory
   // present AND the default space's memory dir present (the source of truth the
   // native include resolves). When both are present the first /aidlc auto-creates
   // with no ceremony; a missing piece means the dist/ copy was incomplete.
@@ -3212,7 +3629,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: "health dir exists but heartbeat files are unreadable — verify permissions and hook registration",
+      fix: "health dir exists but heartbeat files are unreadable - verify permissions and hook registration",
     });
   }
 
@@ -3347,7 +3764,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         const manual = !leak.cleared;
         results.push({
           pass: false,
-          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — ${outcome}`,
+          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`,
           fix: manual
             ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
             : "the stale lock was cleared automatically; re-run your /aidlc command",
@@ -4024,7 +4441,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         label = `Orphan audit: 0 (${reconciled} reconciled)`;
       }
       if (unknownReasonCount > 0) {
-        label += `; ${unknownReasonCount} PRACTICES_OVERRIDE row(s) with unknown Reason — track for follow-up`;
+        label += `; ${unknownReasonCount} PRACTICES_OVERRIDE row(s) with unknown Reason - track for follow-up`;
       }
       results.push({ pass: true, label });
     } else {
@@ -4090,7 +4507,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           } else {
             results.push({
               pass: true,
-              label: `Practices staleness: affirmed ${ageDays} days ago (advisory — > ${PRACTICES_STALENESS_DAYS} days; consider re-running practices-discovery)`,
+              label: `Practices staleness: affirmed ${ageDays} days ago (advisory: > ${PRACTICES_STALENESS_DAYS} days; consider re-running practices-discovery)`,
             });
           }
         }
@@ -4183,7 +4600,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         ? "Cycle detection: 0 cycles"
         : `Cycle detection: ${cycles.length} cycle(s) found`,
       fix: cycles.length > 0
-        ? `cycles: ${cycles.map((c) => c.join(" → ")).join("; ")}`
+        ? `cycles: ${cycles.map((c) => c.join(" -> ")).join("; ")}`
         : undefined,
     });
   } catch (e) {
@@ -4240,8 +4657,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       }
     }
     const uncompiledHint = uncompiledPluginStages.length > 0
-      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`/aidlc plugin sync\` (or \`bun ${harnessDir()}/tools/aidlc-utility.ts plugin-sync\` with the plugin root environment set); run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` for other authored stages`
-      : ` - run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them`;
+      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`/aidlc plugin sync\` (or \`bun ${harnessDir()}/tools/aidlc-utility.ts plugin-sync\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
+      : ` - run \`${aidlcToolInvocation("graph")} compile\` to include them`;
     results.push({
       pass: true,
       label: uncompiledStages.length === 0
@@ -4491,7 +4908,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         });
       } else {
         const detail = drifts
-          .map((d) => `${d.file} ## ${d.heading} ⇄ org "${d.orgSentence}"`)
+          .map((d) => `${d.file} ## ${d.heading} <-> org "${d.orgSentence}"`)
           .join("; ");
         results.push({
           pass: true,
@@ -4576,7 +4993,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
     if (unpaired.length > 0) {
       const unpairedDetail = unpaired
-        .map((u) => `unpaired: ${u.file} → ${u.sensor} (no stage binds it)`)
+        .map((u) => `unpaired: ${u.file} -> ${u.sensor} (no stage binds it)`)
         .join("; ");
       coverageLabel = `${coverageLabel}; ${unpairedDetail}`;
     }
@@ -4611,7 +5028,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     for (const sp of listSpaces(projectDir)) {
       for (const i of listIntents(projectDir, sp.name)) {
         if (i.uuid !== "" && i.dirName === null) {
-          danglingRows.push(`${sp.name}/${i.slug} (uuid ${i.uuid.slice(0, 8)}…)`);
+          danglingRows.push(`${sp.name}/${i.slug} (uuid ${i.uuid.slice(0, 8)}...)`);
         } else if (i.uuid === "" && i.status === "unknown") {
           orphanDirs.push(`${sp.name}/${i.dirName}`);
         }
@@ -4619,7 +5036,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
     const total = danglingRows.length + orphanDirs.length;
     if (total === 0) {
-      results.push({ pass: true, label: "Intent registry: all rows ⇄ record dirs reconciled" });
+      results.push({ pass: true, label: "Intent registry: all rows match their record dirs" });
     } else {
       const detail = [
         danglingRows.length > 0 ? `${danglingRows.length} row(s) with a missing dir [${danglingRows.join(", ")}]` : "",
@@ -4627,7 +5044,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       ].filter(Boolean).join("; ");
       results.push({
         pass: true,
-        label: `Intent registry: ${total} record-dir mismatch (advisory — likely a hand-renamed intent dir): ${detail}. Fix: set the row's \`dirName\` in the space's intents.json to the on-disk dir name, or rename the dir back.`,
+        label: `Intent registry: ${total} record-dir mismatch (advisory - likely a hand-renamed intent dir): ${detail}. Fix: set the row's \`dirName\` in the space's intents.json to the on-disk dir name, or rename the dir back.`,
       });
     }
   } catch (e) {
@@ -4667,6 +5084,9 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  results.push(...extraChecks);
+  const reportResults = collapseLegacyPolicyChecks(results);
+
   // Cold-safe gate: only emit audit when an audit trail already exists. On a
   // pristine project (no audit shard / flat audit.md) doctor prints its health
   // report and creates NOTHING — it stays a pure read-only diagnostic. On an
@@ -4681,58 +5101,18 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // One fresh analysis, shared by the live report AND the --export writer
-  // (issue #575, Arden #3): the structured condition->remedy findings and the
-  // reconstructed timeline are computed ONCE here. A plain --doctor renders
-  // these findings alongside the legacy check rows, so gate-unresolved /
-  // runtime-graph-stale / cold-hook and the rest surface live too - the live
-  // output and the export can never diverge. The analysis performs no writes.
-  const analysis = runDoctorAnalysis(projectDir);
-
-  // Print report
-  let output = "AI-DLC Health Check\n";
-  output += `${"\u2500".repeat(37)}\n`;
   let passed = 0;
+  let warnings = 0;
   let failed = 0;
-  for (const r of results) {
-    if (r.pass) {
-      output += `\u2713  ${r.label}`;
-      if (r.severity === "warning" && r.fix) output += ` \u2014 ${r.fix}`;
-      output += "\n";
+  for (const r of reportResults) {
+    if (r.severity === "warn") {
+      warnings++;
+    } else if (r.pass) {
       passed++;
     } else {
-      output += `\u2717  ${r.label}`;
-      if (r.fix) output += ` — ${r.fix}`;
-      output += "\n";
       failed++;
     }
   }
-  // Structured diagnosis findings (workflow timeline analysis) are ADVISORY and
-  // never change doctor's exit code: they render for visibility but do not count
-  // toward `failed`. Only the legacy environment/config checks above drive the
-  // exit status, so a plain `/aidlc --doctor` keeps its pre-existing contract \u2014
-  // a workflow-level diagnosis (which can be a soft, workflow-in-progress signal)
-  // must not flip the exit code that CI and scripts gate on. Info is omitted from
-  // the live view to keep it terse; the export carries the full set.
-  const diagErrors = analysis.findings.filter((f) => f.severity === "error");
-  const diagWarnings = analysis.findings.filter((f) => f.severity === "warning");
-  if (diagErrors.length > 0 || diagWarnings.length > 0) {
-    output += `${"\u2500".repeat(37)}\n`;
-    output += "Workflow diagnosis (advisory):\n";
-    for (const f of diagErrors) {
-      output += `\u2717  [${f.id}] ${f.summary}`;
-      if (f.remedy) output += ` (${f.remedy})`;
-      output += "\n";
-    }
-    for (const f of diagWarnings) {
-      output += `!  [${f.id}] ${f.summary}\n`;
-    }
-  }
-
-  output += `${"\u2500".repeat(37)}\n`;
-  output += `${passed} passed, ${failed} failed\n`;
-
-  process.stdout.write(output);
 
   // Audit only if audit.md already existed when doctor started (cold-safe —
   // see auditExists above). A pristine project gets the stdout report and no
@@ -4744,64 +5124,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // --export: after the live report, write a redacted diagnostic report from
-  // the SAME analysis this run already computed (issue #575). No second read,
-  // no cached diagnosis. The export write never changes doctor's exit code.
-  // `--export` is a bare boolean flag; accept it whether the arg parser recorded
-  // it as "true" (bare) or a stray token followed it, so a trailing word can
-  // never silently disable the export.
-  if ("export" in flags) {
-    try {
-      const tsToken = fsSafeTimestamp();
-      // A bare `--output` (no value) parses to "true"; treat that as an error
-      // rather than creating a directory literally named "true".
-      if (flags.output === "true") {
-        throw new Error("--output requires a directory path (e.g. --output /tmp/aidlc-report)");
-      }
-      const outParent = flags.output
-        ? flags.output
-        : join(projectDir, "aidlc", "diagnostics");
-      mkdirSync(outParent, { recursive: true });
-      // Merge the legacy environment/config checks (bun present, hooks wired,
-      // settings intact) into the exported analysis so report.md/report.json
-      // carry the SAME findings the live report shows — the bundle exists so
-      // the maintainer does NOT need the user's project, so a failing env check
-      // must reach it. The live render (above) and the exit code are untouched;
-      // this only enriches what buildBundle serializes. (Arden round-3 #1.)
-      const analysisForExport = {
-        ...analysis,
-        findings: mergeFindings(results.map(adaptLegacyResult), analysis.findings),
-      };
-      const report = buildBundle(outParent, analysisForExport, tsToken);
-      let out = "\nDiagnostic report created:\n";
-      out += `  ${report.archivePath ?? report.bundleDir}\n\n`;
-      out += "Findings:\n";
-      const topFindings = report.findings.filter((f) => f.severity !== "info").slice(0, 20);
-      if (topFindings.length === 0) {
-        out += "  (no errors or warnings)\n";
-      } else {
-        for (const f of topFindings) out += `  ${f.severity.toUpperCase()} ${f.id}\n`;
-      }
-      out += "\nNo source files or artifact bodies were included.\n";
-      if (report.manualShareNote) out += `\n${report.manualShareNote}\n`;
-      process.stdout.write(out);
-    } catch (e) {
-      // Export failure must not mask the live doctor result; report and go on.
-      process.stdout.write(`\nDiagnostic report could not be created: ${errorMessage(e)}\n`);
-    }
-  }
-
-  // Exit non-zero on any check failure so CI and scripts get a clear
-  // signal. Doctor's stdout carries the diagnostic regardless of exit
-  // code — the orchestrator's tool-failure handler was updated in this
-  // same change to print stdout (not stderr) for doctor.
-  process.exit(failed > 0 ? 1 : 0);
-}
-
-// A filesystem-safe UTC timestamp token (isoTimestamp has colons that some
-// filesystems reject in names): 2026-07-14T15:26:31Z → 20260714T152631Z.
-function fsSafeTimestamp(): string {
-  return isoTimestamp().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  return { checks: reportResults, passed, warnings, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -6089,7 +6412,7 @@ function printIntentListing(
     out += `${marker} ${i.dirName ?? i.slug}  [${i.status}]\n`;
   }
   if (!active) {
-    out += `\n(no active intent — switch with /aidlc intent <name>)\n`;
+    out += `\n(no active intent - switch with /aidlc intent <name>)\n`;
   }
   process.stdout.write(out);
 }
@@ -6202,7 +6525,7 @@ function handleIntent(
     clearSessionRebindOffer(projectDir, sid);
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   }
-  process.stdout.write(`Active intent → ${match.dirName} (space: ${space})\n`);
+  process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
 }
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
@@ -6271,9 +6594,9 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   // own resolver; the CLI-native include is the ambient channel). Surgical
   // in-place rewrite of the pointer segment only — preserves all engine wiring.
   const repointed = repointHarnessIncludes(projectDir, target);
-  process.stdout.write(`Active space → ${target}\n`);
+  process.stdout.write(`Active space -> ${target}\n`);
   if (repointed.length > 0) {
-    process.stdout.write(`  repointed ${repointed.length} harness include(s) → ${target}\n`);
+    process.stdout.write(`  repointed ${repointed.length} harness include(s) -> ${target}\n`);
   }
 }
 
@@ -7286,7 +7609,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   }
 
   process.stdout.write(
-    `Scope changed: ${oldScope} → ${newScope}
+    `Scope changed: ${oldScope} -> ${newScope}
 Stages in scope: ${executeStages.length} (${deltaStr})
 Approval gates: ${gates}
 Depth: ${effectiveDepth}
@@ -7657,14 +7980,14 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (newDepth !== undefined) {
     process.stdout.write(
       depthChanging
-        ? `Depth changed: ${oldDepth} → ${newDepth}\n`
+        ? `Depth changed: ${oldDepth} -> ${newDepth}\n`
         : `Depth is already ${newDepth}\n`
     );
   }
   if (newStrategy !== undefined) {
     process.stdout.write(
       strategyChanging
-        ? `Test strategy changed: ${oldStrategy} → ${newStrategy}\n`
+        ? `Test strategy changed: ${oldStrategy} -> ${newStrategy}\n`
         : `Test strategy is already ${newStrategy}\n`
     );
   }
@@ -7672,7 +7995,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     const display = storedReview === "" ? "adversarial (stage defaults)" : storedReview;
     process.stdout.write(
       reviewChanging
-        ? `Review override changed: ${oldReview || "none"} → ${display}\n`
+        ? `Review override changed: ${oldReview || "none"} -> ${display}\n`
         : `Review override is already ${display}\n`
     );
   }
@@ -7682,25 +8005,18 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
-  if (
-    process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
-  ) {
-    die(
-      "Direct aidlc-utility set-status is blocked: there is nothing for you to do here. " +
-        "The workflow's position updates on its own as stages start and outcomes are reported. " +
-        "Run /aidlc --status to see where things stand. " +
-        "(status synchronization is owned by the sync-workflow-state hook.)",
-    );
-  }
+export function setStatus(
+  projectDir: string,
+  flags: Record<string, string>,
+): { phase: string; stage: string; agent: string } {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
+  if (!existsSync(sp)) throw new Error(NO_STATE_FILE_MESSAGE);
 
   const stage = flags.stage;
-  if (!stage) die("--stage is required for set-status");
+  if (!stage) throw new Error("--stage is required for set-status");
 
   const entry = findStageBySlug(stage);
-  if (!entry) die(`Unknown stage: ${stage}`);
+  if (!entry) throw new Error(`Unknown stage: ${stage}`);
 
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
@@ -7732,7 +8048,23 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
     recordHookDrop(projectDir, "active-directive", errorMessage(e));
   }
 
-  process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
+  return { phase, stage, agent };
+}
+
+function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  if (
+    process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
+  ) {
+    die(
+      "Direct aidlc-utility set-status is blocked: status synchronization is owned by the sync-workflow-state hook.",
+    );
+  }
+  try {
+    const result = setStatus(projectDir, flags);
+    process.stdout.write(`${JSON.stringify({ updated: true, ...result })}\n`);
+  } catch (error) {
+    die(errorMessage(error));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7824,7 +8156,7 @@ export function findScopeByKeyword(kw: string): string[] {
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const SCOPE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled scope grid via `bun aidlc-utility.ts scope-table` - do NOT hand-edit -->";
+  `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("gen scope-table")}\` - do NOT hand-edit -->`;
 const SCOPE_TABLE_END =
   "<!-- END: compiled scope grid -->";
 
@@ -7907,7 +8239,7 @@ function checkGeneratedTableRegion(
   }
 
   console.error(
-    `SKILL.md ${verb} region is out of date. Refresh it from \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}\`.`
+    `SKILL.md ${verb} region is out of date. Refresh it from \`${aidlcDispatcherInvocation(`gen ${verb}`)}\`.`
   );
   process.exit(1);
 }
@@ -7945,7 +8277,7 @@ function handleScopeTable(
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
+  `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("gen stage-table")}\` - do NOT hand-edit -->`;
 const STAGE_TABLE_END =
   "<!-- END: compiled stage graph -->";
 
@@ -8118,7 +8450,7 @@ function handleDetectScope(
 // ---------------------------------------------------------------------------
 
 function handleResolveEnvScope(): void {
-  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
   if (envScope === "") {
     return; // unset — no output, exit 0
   }
@@ -8209,7 +8541,7 @@ export async function main(argv: string[]): Promise<void> {
       unitMain(["participate", "--project-dir", projectDir]);
       break;
     case "doctor":
-      handleDoctor(projectDir, flags);
+      await (await import("./aidlc-doctor.ts")).main(rawArgs);
       break;
     case "intent-create":
       handleIntentCreate(projectDir, flags);

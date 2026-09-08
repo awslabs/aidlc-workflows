@@ -157,13 +157,13 @@ but do not yet have committed release versions.
   reviewed-source evidence is committed into the intent record and
   `aidlc attest resolve` maps any commit or diff range back to its owning
   units, intents, and drift status — no hooks, trailers, or session state
-  required (see [Commit Provenance](reference/19-commit-provenance.md)).
+  required (see [Commit Provenance](reference/20-commit-provenance.md)).
   On top of that foundation, the session-start hook anchors recent manual
   commits automatically (a bounded, idempotent `SOURCE_COMMITTED` sweep);
   the explicit `attest anchor` verb remains for CI and deep backfills.
 - Two commit-provenance fidelity gaps stay open behind that foundation, both
   reported in `resolve`'s `warnings[]` today (see
-  [Commit Provenance §8](reference/19-commit-provenance.md)):
+  [Commit Provenance §8](reference/20-commit-provenance.md)):
   **one byte form** — review evidence hashes working-tree bytes while commit
   listings read repository blobs, so LFS, `core.autocrlf`, working-tree
   encodings, and submodule gitlinks can report unchanged content as `drifted`.

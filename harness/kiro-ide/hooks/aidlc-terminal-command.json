@@ -5,7 +5,7 @@
       "name": "aidlc-terminal-command",
       "trigger": "UserPromptSubmit",
       "description": "Runs deterministic AIDLC utility commands before the model when this IDE generation exposes the submitted prompt.",
-      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts verb-intercept" }
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide verb-intercept" }
     }
   ]
 }

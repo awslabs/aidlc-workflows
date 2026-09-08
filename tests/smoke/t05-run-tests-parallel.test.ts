@@ -635,7 +635,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
           MSYS2_ARG_CONV_EXCL: inheritedMsysExclusion,
         },
       );
-      expect(r.status).toBe(0);
+      expect(r.status, r.out).toBe(0);
       expect(r.out).toContain("=== START tZZ-git-config-t05.test.ts ===");
 
       const traceEvents = readFileSync(gitTrace, "utf8")

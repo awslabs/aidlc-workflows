@@ -1,18 +1,299 @@
 // Status line: Display aidlc workflow position in the terminal status area
 // Registered via statusLine setting in settings.json
-// Invoked via: bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts
-import { existsSync, readFileSync } from "node:fs";
+// Invoked via: {{INVOKE}} engine statusline
 import {
-  displaySlugFromDirName,
-  listIntents,
-  listSpaces,
-  loadAgents,
-  resolveWorkflowSelection,
-  resolveProjectDirFromHook,
-  stateFilePathForSelection,
-  validSessionId,
-} from "../tools/aidlc-lib.ts";
-import { sessionUsageAggregate } from "../tools/aidlc-usage.ts";
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const DEFAULT_SPACE = "default";
+const KNOWN_HARNESS_DIRS = [
+  ".claude",
+  ".kiro",
+  ".codex",
+  ".cursor",
+  ".aidlc",
+] as const;
+
+type IntentRow = {
+  uuid?: unknown;
+  slug?: unknown;
+  status?: unknown;
+  dirName?: unknown;
+};
+
+type StatuslineIntent = {
+  slug: string;
+  dirName: string | null;
+};
+
+function resolveStatuslineProjectDir(
+  importMetaUrl: string,
+  workspaceProjectDir?: string,
+): string {
+  for (const value of [
+    process.env.AIDLC_PROJECT_DIR,
+    workspaceProjectDir,
+    process.env.CLAUDE_PROJECT_DIR,
+  ]) {
+    if (value) {
+      return isAbsolute(value) ? value : resolve(process.cwd(), value);
+    }
+  }
+  const scriptDir = dirname(fileURLToPath(importMetaUrl));
+  if (basename(scriptDir) === "hooks") {
+    const harnessRoot = dirname(scriptDir);
+    if (basename(harnessRoot).startsWith(".")) return dirname(harnessRoot);
+  }
+  const cwd = process.cwd();
+  for (const harness of KNOWN_HARNESS_DIRS) {
+    if (existsSync(join(cwd, harness))) return cwd;
+  }
+  return cwd;
+}
+
+function workspaceRoot(projectDir: string): string {
+  return join(projectDir, "aidlc");
+}
+
+function activeSpace(projectDir: string): string {
+  try {
+    const value = readFileSync(
+      join(workspaceRoot(projectDir), "active-space"),
+      "utf-8",
+    ).trim();
+    if (value) return value;
+  } catch {
+    // The default space is valid on a fresh shell.
+  }
+  return DEFAULT_SPACE;
+}
+
+function spacesRoot(projectDir: string): string {
+  return join(workspaceRoot(projectDir), "spaces");
+}
+
+function intentsDir(projectDir: string, space: string): string {
+  return join(spacesRoot(projectDir), space, "intents");
+}
+
+function listIntentDirs(projectDir: string, space: string): string[] {
+  try {
+    return readdirSync(intentsDir(projectDir, space))
+      .filter((name) =>
+        existsSync(join(intentsDir(projectDir, space), name, "aidlc-state.md"))
+      )
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function activeIntent(
+  projectDir: string,
+  space = activeSpace(projectDir),
+): string | null {
+  const root = intentsDir(projectDir, space);
+  try {
+    const value = readFileSync(join(root, "active-intent"), "utf-8").trim();
+    if (value && existsSync(join(root, value, "aidlc-state.md"))) return value;
+  } catch {
+    // Fall through to the lone-record rule.
+  }
+  const dirs = listIntentDirs(projectDir, space);
+  return dirs.length === 1 ? dirs[0] : null;
+}
+
+// The statusline is a read-only display on the hot path, so it carries LOCAL
+// lite copies of the lib's session-selection helpers instead of importing
+// aidlc-lib.ts (startup cost). Semantics mirror validSessionId /
+// readSessionBinding / resolveWorkflowSelection / stateFilePathForSelection:
+// a per-session binding (written by the session hooks) pins the displayed
+// space/intent; anything malformed or stale degrades to the shared cursors.
+type StatuslineSelection = { space: string; intent: string | null };
+
+function validSessionId(sessionId: string | undefined): string | null {
+  const raw = sessionId ?? "";
+  const safe = raw
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 180);
+  if (!safe || safe === "." || safe === "..") return null;
+  return safe === raw ? raw : null;
+}
+
+function readSessionBinding(
+  projectDir: string,
+  sessionId: string,
+): StatuslineSelection | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(
+        join(
+          workspaceRoot(projectDir),
+          ".aidlc-sessions",
+          `${sessionId}.binding.json`,
+        ),
+        "utf-8",
+      ),
+    );
+    if (parsed === null || typeof parsed !== "object") return null;
+    const record = parsed as Record<string, unknown>;
+    const space = record.space;
+    const intent = record.intent;
+    if (typeof space !== "string" || !/^[a-z][a-z0-9-]*$/.test(space)) {
+      return null;
+    }
+    if (
+      intent !== null &&
+      (typeof intent !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(intent))
+    ) {
+      return null;
+    }
+    if (typeof record.boundAt !== "string" || record.boundAt.length === 0) {
+      return null;
+    }
+    if (
+      intent !== null &&
+      !existsSync(join(intentsDir(projectDir, space), intent, "aidlc-state.md"))
+    ) {
+      return null;
+    }
+    return { space, intent: intent as string | null };
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkflowSelection(
+  projectDir: string,
+  sessionId?: string,
+): StatuslineSelection {
+  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  if (binding) return binding;
+  const space = activeSpace(projectDir);
+  return { space, intent: activeIntent(projectDir, space) };
+}
+
+function stateFilePathForSelection(
+  projectDir: string,
+  selection: StatuslineSelection,
+): string {
+  const root = selection.intent === null
+    ? intentsDir(projectDir, selection.space)
+    : join(intentsDir(projectDir, selection.space), selection.intent);
+  return join(root, "aidlc-state.md");
+}
+
+function listSpaces(projectDir: string): string[] {
+  const names = new Set<string>([DEFAULT_SPACE]);
+  try {
+    for (const name of readdirSync(spacesRoot(projectDir))) {
+      if (statSync(join(spacesRoot(projectDir), name)).isDirectory()) {
+        names.add(name);
+      }
+    }
+  } catch {
+    // Fresh workspace: default only.
+  }
+  return [...names].sort();
+}
+
+function recordDirMatches(row: IntentRow, dirName: string): boolean {
+  if (typeof row.dirName === "string") return row.dirName === dirName;
+  if (typeof row.slug !== "string" || typeof row.uuid !== "string") return false;
+  const id = row.uuid.replace(/-/g, "").slice(-16);
+  return dirName === `${row.slug}-${id}`;
+}
+
+function displaySlugFromDirName(dirName: string): string {
+  const dated = /^\d{6}-(.+)$/.exec(dirName);
+  return dated ? dated[1] : dirName.replace(/-[0-9a-f]+$/, "");
+}
+
+function listIntents(
+  projectDir: string,
+  space = activeSpace(projectDir),
+): StatuslineIntent[] {
+  const dirs = listIntentDirs(projectDir, space);
+  let rows: IntentRow[] = [];
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(intentsDir(projectDir, space), "intents.json"), "utf-8"),
+    );
+    if (Array.isArray(parsed)) rows = parsed;
+  } catch {
+    // Orphan directories still appear below.
+  }
+  const claimed = new Set<string>();
+  const intents = rows.map((row): StatuslineIntent => {
+    const dirName = dirs.find((dir) => recordDirMatches(row, dir)) ?? null;
+    if (dirName) claimed.add(dirName);
+    return {
+      slug: typeof row.slug === "string"
+        ? row.slug
+        : dirName
+        ? displaySlugFromDirName(dirName)
+        : "",
+      dirName,
+    };
+  });
+  for (const dirName of dirs) {
+    if (!claimed.has(dirName)) {
+      intents.push({ slug: displaySlugFromDirName(dirName), dirName });
+    }
+  }
+  return intents;
+}
+
+function agentsDir(projectDir: string): string | null {
+  if (process.env.AIDLC_AGENTS_DIR) return process.env.AIDLC_AGENTS_DIR;
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  if (basename(scriptDir) === "hooks") {
+    const shipped = join(dirname(scriptDir), "agents");
+    if (existsSync(shipped)) return shipped;
+  }
+  const declared = process.env.AIDLC_HARNESS_DIR;
+  if (declared && existsSync(join(projectDir, declared, "agents"))) {
+    return join(projectDir, declared, "agents");
+  }
+  for (const harness of KNOWN_HARNESS_DIRS) {
+    const candidate = join(projectDir, harness, "agents");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function frontmatterScalar(body: string, key: string): string {
+  const frontmatter = body.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+  return new RegExp(`^${key}:\\s*(.+)$`, "m").exec(frontmatter)?.[1].trim() ??
+    "";
+}
+
+function loadAgentDisplayMap(projectDir: string): Record<string, string> {
+  const dir = agentsDir(projectDir);
+  if (!dir) return {};
+  const map: Record<string, string> = {};
+  try {
+    for (const file of readdirSync(dir).filter((name) => name.endsWith(".md"))) {
+      const body = readFileSync(join(dir, file), "utf-8");
+      const name = frontmatterScalar(body, "name");
+      const display = frontmatterScalar(body, "display_name");
+      if (!name || !display) continue;
+      if (Object.hasOwn(map, name)) return {};
+      map[name] = display;
+    }
+  } catch {
+    return {};
+  }
+  return map;
+}
 
 type Input = {
   session_id?: string;
@@ -24,22 +305,6 @@ type Input = {
   // required for the cost render.
   transcript_path?: string;
 };
-
-async function resolveProjectDir(input: Input): Promise<string> {
-  // Method 1: explicit dispatcher/plugin routing.
-  if (process.env.AIDLC_PROJECT_DIR) return process.env.AIDLC_PROJECT_DIR;
-
-  // Method 2: stdin JSON (statusline-only — the host pipes workspace here).
-  const fromStdin = input.workspace?.project_dir;
-  if (fromStdin) return fromStdin;
-
-  // Methods 3-5: the shared hook seam — CLAUDE_PROJECT_DIR, then script-path
-  // derivation and CWD probe across ALL harness dirs (.claude/.kiro/.codex).
-  // Using the seam (rather than a private .claude-hardcoded copy) keeps this
-  // hook harness-neutral like the other 9 core hooks: a future kiro/codex
-  // statusline resolves its own project root instead of only ever .claude.
-  return resolveProjectDirFromHook(import.meta.url);
-}
 
 function abbreviateModel(modelId: string): string {
   if (!modelId) return "";
@@ -108,20 +373,11 @@ const STAGE_DISPLAY: Record<string, string> = {
 // loadAgents(). The `orchestrator` pseudo-entry is seeded explicitly —
 // state files can carry `Active Agent: orchestrator` during orchestrator-
 // driven transitions, but there's no corresponding agent file.
-let _agentDisplayCache: Record<string, string> | null = null;
-
-function agentDisplayMap(): Record<string, string> {
-  if (!_agentDisplayCache) {
-    const map: Record<string, string> = { orchestrator: "Orchestrator" };
-    try {
-      for (const a of loadAgents()) map[a.slug] = a.display_name;
-    } catch {
-      // Hooks fail open in this repo by design: a broken agent roster must
-      // never kill the statusline.
-    }
-    _agentDisplayCache = map;
-  }
-  return _agentDisplayCache;
+function agentDisplayMap(projectDir: string): Record<string, string> {
+  return {
+    orchestrator: "Orchestrator",
+    ...loadAgentDisplayMap(projectDir),
+  };
 }
 
 function extractField(text: string, label: string): string {
@@ -205,6 +461,17 @@ export function costSegment(
 ): string {
   try {
     if (!projectDir) return "";
+    const ledger = join(
+      projectDir,
+      "aidlc",
+      ".aidlc-sessions",
+      "usage-ledger.json",
+    );
+    if (!existsSync(ledger)) return "";
+    const require = createRequire(import.meta.url);
+    const { sessionUsageAggregate } = require(
+      "../tools/aidlc-usage.ts",
+    ) as typeof import("../tools/aidlc-usage.ts");
     const t = sessionUsageAggregate(
       projectDir,
       transcriptPath,
@@ -262,15 +529,15 @@ function buildRightSide(
 // record has a registry row; otherwise it falls back to the record dir name
 // minus its `-id8` disambiguator (an orphan / hand-created record).
 function orientationPrefix(projectDir: string, sessionId?: string): string {
-  const selection = resolveWorkflowSelection(projectDir, { sessionId });
+  const selection = resolveWorkflowSelection(projectDir, sessionId);
   const space = selection.space;
   const activeDir = selection.intent;
   if (activeDir === null) return ""; // flat-legacy / no record → no prefix
-  const intents = listIntents(projectDir, space, activeDir);
+  const intents = listIntents(projectDir, space);
   const match = intents.find((i) => i.dirName === activeDir);
   const slug = match?.slug || displaySlugFromDirName(activeDir);
   const segments: string[] = [];
-  if (listSpaces(projectDir, space).length > 1) segments.push(space);
+  if (listSpaces(projectDir).length > 1) segments.push(space);
   segments.push(slug);
   return `${segments.join(" · ")} · `;
 }
@@ -301,7 +568,10 @@ async function main(stdinText: string): Promise<void> {
     // ignore malformed stdin; fall through to derived project dir
   }
 
-  const projectDir = await resolveProjectDir(input);
+  const projectDir = resolveStatuslineProjectDir(
+    import.meta.url,
+    input.workspace?.project_dir,
+  );
   const sessionId = validSessionId(input.session_id) ?? undefined;
   const modelShort = abbreviateModel(input.model?.id ?? "");
   const ctxRaw = input.model?.id ? input.context_window?.used_percentage : undefined;
@@ -310,7 +580,7 @@ async function main(stdinText: string): Promise<void> {
   const right = buildRightSide(modelShort, ctxInt, cost);
 
   const selection = projectDir
-    ? resolveWorkflowSelection(projectDir, { sessionId })
+    ? resolveWorkflowSelection(projectDir, sessionId)
     : null;
   const stateFile =
     projectDir && selection
@@ -329,7 +599,7 @@ async function main(stdinText: string): Promise<void> {
   const status = statusMatch ? statusMatch[1].replace(/\r$/, "").trim() : "";
 
   const stageDisplay = STAGE_DISPLAY[stage] ?? stage;
-  const agentDisplay = agentDisplayMap()[agent] ?? agent;
+  const agentDisplay = agentDisplayMap(projectDir)[agent] ?? agent;
   const { done, total } = phaseProgress(state, phase);
   const bar = total > 0 ? progressBar(done, total) : "";
   const phaseProg = total > 0 ? `${done}/${total}` : "";

@@ -23,8 +23,8 @@
 //       words elsewhere (the engine's own comments, docs/, reference chapters)
 //       stay legal by construction, because they are outside the scanned set.
 //
-// The gate reads the AUTHORED surfaces; dist is their byte-parity-guarded copy
-// (t145 / package.ts --check), so gating the authored source covers every tree.
+// The gate reads the AUTHORED surfaces; dist is regenerated from those sources,
+// so gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

@@ -75,9 +75,9 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
 
 ```
 Loop:
-  1. directive = `bun .claude/tools/aidlc-orchestrate.ts next $ARGUMENTS`
+  1. directive = `aidlc engine orchestrate next $ARGUMENTS`
   2. act on directive.kind
-  3. `bun .claude/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
+  3. `aidlc engine orchestrate report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
   4. repeat unless directive.kind == done
 ```
 
@@ -101,7 +101,7 @@ On the interactive path the conductor holds the loop, because only it can ask th
 
 ## 4. Plural skills, runners, and the shared spine
 
-The orchestrator is one skill among many. Each harness ships a plural set under its skills directory (`<harness-dir>/skills/`, e.g. `dist/claude/.claude/skills/`): the base `aidlc` orchestrator, one **stage-runner** per runnable stage (core stages use `aidlc-<slug>`; plugin-owned stages use their bare plugin-prefixed slug), one **scope-runner** per `runner: true` scope (core scopes use `aidlc-<scope>`; plugin-owned scopes use their bare name), the read-only session skills (`aidlc-session-cost`, `aidlc-replay`, `aidlc-outcomes-pack`), and `aidlc-init`. All of the routing-and-execution knowledge lives once in the **shared spine** authored at `core/aidlc-common/` (shipped as `<harness-dir>/aidlc-common/`): the `conductor.md` persona, the `protocols/`, and the 33 stage files under `stages/{initialization,ideation,inception,construction,operation}/`.
+The orchestrator is one skill among many. Each harness ships a plural set under its installed skills directory (`<harness-dir>/skills/`, e.g. `.claude/skills/`): the base `aidlc` orchestrator, one **stage-runner** per runnable stage (core stages use `aidlc-<slug>`; plugin-owned stages use their bare plugin-prefixed slug), one **scope-runner** per `runner: true` scope (core scopes use `aidlc-<scope>`; plugin-owned scopes use their bare name), the read-only session skills (`aidlc-session-cost`, `aidlc-replay`, `aidlc-outcomes-pack`), and `aidlc-init`. All of the routing-and-execution knowledge lives once in the **shared spine** authored at `core/aidlc-common/` (shipped as `<harness-dir>/aidlc-common/`): the `conductor.md` persona, the `protocols/`, and the 33 stage files under `stages/{initialization,ideation,inception,construction,operation}/`.
 
 The runner skills are generated, never hand-written, by `tools/aidlc-runner-gen.ts`:
 
@@ -116,10 +116,10 @@ Two drift guards keep the on-disk runner sets pinned to their sources: `aidlc-ru
 
 Scope is a file-authored primitive, the same muscle memory as authoring a sensor or an agent. There is **no `scope-mapping.json`** — it has been removed from the shipped tree. Scope identity and stage membership are split across two file-authored surfaces, transposed into a compiled grid:
 
-1. **Identity** lives in one file per scope at `dist/claude/.claude/scopes/aidlc-<name>.md` — frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `review_cap`, and `runner`) plus prose describing the scope. The shipped set is `bugfix`, `classic`, `enterprise`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
+1. **Identity** is authored in one file per scope at `core/scopes/aidlc-<name>.md` and projected to `<harness-dir>/scopes/` — frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `review_cap`, and `runner`) plus prose describing the scope. The shipped set is `bugfix`, `classic`, `enterprise`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
 2. **Membership** lives in each stage's `scopes:` frontmatter — the list of scopes for which that stage is EXECUTE.
 
-`bun .claude/tools/aidlc-graph.ts compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
+`aidlc engine graph compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
 
 Adding a scope is purely additive: drop `.claude/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, and regenerate the human-readable summary table in `SKILL.md`. No dispatch-logic edit is required, and the drift guards prevent the on-disk set from diverging.
 

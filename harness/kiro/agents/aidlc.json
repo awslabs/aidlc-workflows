@@ -62,80 +62,80 @@
   "hooks": {
     "agentSpawn": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts session-start"
+        "command": "{{INVOKE}} engine adapter kiro session-start"
       }
     ],
     "userPromptSubmit": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts verb-intercept",
+        "command": "{{INVOKE}} engine adapter kiro verb-intercept",
         "timeout_ms": 30000
       }
     ],
     "preToolUse": [
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard",
+        "command": "{{INVOKE}} engine adapter kiro state-transition-guard",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts guard-tool-call",
+        "command": "{{INVOKE}} engine adapter kiro guard-tool-call",
         "timeout_ms": 15000
       },
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "command": "{{INVOKE}} engine adapter kiro review-freeze",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "command": "{{INVOKE}} engine adapter kiro review-freeze",
         "timeout_ms": 15000
       },
       {
         "matcher": "subagent",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts deliver-stage-rules",
+        "command": "{{INVOKE}} engine adapter kiro deliver-stage-rules",
         "timeout_ms": 15000
       },
       {
         "matcher": "subagent",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
         "timeout_ms": 15000
       },
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
         "timeout_ms": 15000
       }
     ],
     "postToolUse": [
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors",
+        "command": "{{INVOKE}} engine adapter kiro audit-and-sensors",
         "timeout_ms": 120000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts rebuild-stage-graph",
+        "command": "{{INVOKE}} engine adapter kiro rebuild-stage-graph",
         "timeout_ms": 45000
       },
       {
         "matcher": "todo_list",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts sync-workflow-state"
+        "command": "{{INVOKE}} engine adapter kiro sync-workflow-state"
       },
       {
         "matcher": "subagent",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts log-subagent"
+        "command": "{{INVOKE}} engine adapter kiro log-subagent"
       }
     ],
     "stop": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts continue-workflow",
+        "command": "{{INVOKE}} engine adapter kiro continue-workflow",
         "timeout_ms": 30000
       }
     ]

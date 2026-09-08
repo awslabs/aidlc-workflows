@@ -73,20 +73,27 @@ const env = {
   PLUGIN_ROOT: pluginRoot,
 };
 const aidlc = Bun.which("aidlc");
+let installedSyncSucceeded = false;
 
 if (aidlc) {
-  const synced = spawnSync(aidlc, ["plugin", "sync"], {
+  const synced = spawnSync(aidlc, ["engine", "plugin", "sync"], {
     cwd: projectRoot,
     env,
-    stdio: "inherit",
+    encoding: "utf-8",
   });
-  if (synced.status === 0) process.exit(0);
+  if (synced.stdout) process.stdout.write(synced.stdout);
+  if (synced.stderr) process.stderr.write(synced.stderr);
+  installedSyncSucceeded = synced.status === 0;
 }
 
-const compose = join(pluginRoot, "hooks", "compose.ts");
-const fallback = spawnSync(process.execPath, [compose], {
-  cwd: projectRoot,
-  env,
-  stdio: "inherit",
-});
-process.exit(fallback.status ?? 1);
+if (!installedSyncSucceeded) {
+  const compose = join(pluginRoot, "hooks", "compose.ts");
+  const fallback = spawnSync(process.execPath, [compose], {
+    cwd: projectRoot,
+    env,
+    encoding: "utf-8",
+  });
+  if (fallback.stdout) process.stdout.write(fallback.stdout);
+  if (fallback.stderr) process.stderr.write(fallback.stderr);
+  process.exitCode = fallback.status ?? 1;
+}

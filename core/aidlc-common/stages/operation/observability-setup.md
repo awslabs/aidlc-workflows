@@ -80,7 +80,7 @@ Create CloudWatch dashboard configurations, alarm definitions (with severity, SN
 ### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage observability-setup --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage observability-setup --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 5: Present Completion & Request Approval

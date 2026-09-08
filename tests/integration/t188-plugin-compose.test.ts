@@ -17,7 +17,7 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
@@ -53,7 +53,7 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
+  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 
 function fileInventory(root: string, relative = ""): string[] {
@@ -132,7 +132,7 @@ function parseHookDrops(raw: string): HookDrop[] {
 }
 
 function comparablePath(path: string): string {
-  const absolute = resolve(path);
+  const absolute = realpathSync.native(resolve(path));
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -147,7 +147,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     tmp = mkdtempSync(join(tmpdir(), "aidlc-t188-"));
 
     // 1. Build every manifest-discovered projection into tmp via the target-dir
-    //    seam. This exercises the real emitter without mutating committed dist.
+    //    seam. This exercises the real emitter without mutating local dist.
     for (const harness of HARNESS_MATRIX) {
       const built = join(tmp, "plugin", harness.name);
       buildPluginProjection(PLUGIN, harness.name, built);
@@ -546,7 +546,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       stderr?: unknown;
       error?: unknown;
     };
-    expect(invocation.argv).toEqual(["plugin", "sync"]);
+    expect(invocation.argv).toEqual(["engine", "plugin", "sync"]);
     expect(invocation.status).toBe(0);
     expect(invocation.signal).toBeNull();
     expect(invocation.stdout).toBe("plugin sync complete: 1 plugin(s)\n");
@@ -1931,7 +1931,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
     const mf = join(root, ".claude-plugin", "plugin.json");
     const manifest = JSON.parse(readFileSync(mf, "utf-8"));
-    manifest.name = name;
+    manifest.name = `aidlc-${name}`;
     writeFileSync(mf, JSON.stringify(manifest));
     for (const [rel, body] of Object.entries(files)) {
       const path = join(root, rel);
@@ -3413,7 +3413,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     require("node:fs").mkdirSync(hd, { recursive: true });
     writeFileSync(join(hd, "session-start.last"), "2026-07-08T00:00:00Z"); // heartbeat present
     writeFileSync(join(hd, "plugin-compose.drops"), `${dropLines.join("\n")}\n`);
-    const r = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "doctor"], {
+    const r = spawnSync(BUN, [
+      join(proj, ".claude", "tools", "aidlc-utility.ts"),
+      "doctor",
+      "--verbose",
+    ], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
     });
@@ -3421,8 +3425,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const dropRowLines = out.split("\n").filter((l) => l.includes("Hook drops"));
     return {
       out,
-      failRow: dropRowLines.some((l) => l.includes("✗")),
-      passRow: dropRowLines.some((l) => l.includes("✓")),
+      failRow: dropRowLines.some((l) => l.trimStart().startsWith("fail")),
+      passRow: dropRowLines.some((l) => l.trimStart().startsWith("ok")),
     };
   }
 

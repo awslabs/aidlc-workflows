@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 825,
+    "total": 827,
     "enumeratedByClass": {
-      "function": 523,
+      "function": 525,
       "audit": 92,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 303,
+      "function": 305,
       "audit": 50,
       "scope": 11,
       "stage": 11,
@@ -3955,6 +3955,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:projectFlags",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t295-config-choices.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
@@ -4671,6 +4683,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveProjectFlag",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t295-config-choices.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8339,6 +8363,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t297-config-alias.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
           "mechanism": "cli"
         },
@@ -9525,10 +9553,6 @@
         },
         {
           "file": "tests/unit/t20.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         },
         {

@@ -935,19 +935,19 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          `bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard ${config.name}`,
+          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}`,
         timeout_ms: 15000,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "fs_write",
         command:
-          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
         timeout_ms: 15000,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
         timeout_ms: 15000,
       });
     }
@@ -1220,7 +1220,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         session_id: sid,
         tool_name: "shell",
         tool_input: {
-          command: "bun .kiro/tools/aidlc-utility.ts intent-create --scope poc",
+          command: "bun .kiro/tools/aidlc.ts engine intent create --scope poc",
         },
         tool_response: {
           items: [

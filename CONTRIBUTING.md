@@ -14,13 +14,18 @@ AI-DLC ships to many CLI harnesses (today Claude Code, Kiro CLI, Kiro IDE, Codex
 
 - **`core/`** — the harness-neutral source of truth (tools, stages, agents, rules, scopes, sensors, knowledge, hooks, session skills). **Edit here.**
 - **`harness/<name>/`** — the thin per-harness surface (`manifest.ts`, the orchestrator skill, harness-specific files). **Edit here.**
-- **`dist/<harness>/`** — generated, committed, and drift-guarded. **Never hand-edit** — `bun scripts/package.ts --check` fails CI on any drift.
+- **`dist/<harness>/`** — ignored local Bun copy-channel projection. **Never hand-edit or commit.**
+- **`dist-release/<harness>/`** — ignored local native-`aidlc` release projection. **Never hand-edit or commit.**
+
+Both generated trees are materialized from `core/` + `harness/`.
+`bun scripts/package.ts --check` builds both channels twice in independent
+temporary roots and fails if their bytes differ.
 
 After editing `core/` or `harness/<name>/`, regenerate the distributions:
 
 ```bash
-bun scripts/package.ts            # regenerate every dist/<harness>/
-bun scripts/package.ts --check    # byte-parity drift guard (run in CI)
+bun scripts/package.ts            # regenerate dist/ + dist-release/ for every harness
+bun scripts/package.ts --check    # two-build determinism guard (run in CI)
 ```
 
 Adding a whole new harness? See [Porting to a New Harness](docs/harness-engineering/09-porting-to-a-new-harness.md).
@@ -44,9 +49,9 @@ AI-DLC separates stages, agents, skills, templates, and artifacts. Each concept 
 
 Before submitting a PR, verify:
 
-- You edited the hand-authored source in `core/` or `harness/<name>/`, **not** `dist/`.
-- You ran `bun scripts/package.ts` and committed the regenerated `dist/` trees alongside your source change.
-- `bun scripts/package.ts --check` reports no drift.
+- You edited the hand-authored source in `core/` or `harness/<name>/`, **not** `dist/` or `dist-release/`.
+- You ran `bun scripts/package.ts` to materialize the ignored local projections.
+- `bun scripts/package.ts --check` reports deterministic output.
 - `bun tests/run-tests.ts` passes (see [Testing](docs/reference/09-testing.md)).
 - User-visible changes bump `core/tools/aidlc-version.ts`, the README version badge, and add a matching `CHANGELOG.md` entry in the same commit (see the Changelog Policy in [`AGENTS.md`](AGENTS.md)).
 - Stale stage names, paths, or flags do not remain in examples, docs, or generated output (grep `docs/` and `README.md` when renaming anything).

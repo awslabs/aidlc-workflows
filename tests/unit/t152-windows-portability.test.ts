@@ -134,6 +134,10 @@ describe("t152 Windows portability guard", () => {
     expect(typeCheck).toContain('`${result.stdout ?? ""}${result.stderr ?? ""}`');
     expect(typeCheck).toContain("stdout.split(/\\r?\\n/)");
     expect(typeCheck).toContain("parseTscOutput(output)");
+    expect(typeCheck).toContain(
+      'const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;',
+    );
+    expect(typeCheck).not.toMatch(/spawnSync\(\s*"bunx",\s*\[\s*"tsc"/);
   });
 
   test("Windows forced termination uses one shared deadline", () => {

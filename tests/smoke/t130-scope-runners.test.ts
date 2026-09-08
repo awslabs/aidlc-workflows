@@ -170,14 +170,18 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // ===========================================================================
   // The shell drives the engine with the baked scope (1 test).
   // Spot-check bugfix carries the engine forwarding-loop call with its scope —
-  // the .sh's substring grep for "aidlc-orchestrate.ts next --scope bugfix".
+  // the Bun source-channel form for an orchestrate next call.
   // ===========================================================================
   test("aidlc-bugfix: shell drives the engine with --scope bugfix [.sh test f]", () => {
     const body = readFileSync(runnerPath("bugfix"), "utf-8");
-    expect(body).toContain("aidlc-orchestrate.ts next --scope bugfix");
+    expect(body).toContain(
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix",
+    );
     // STRONGER: the generator renders the same forwarding-loop call.
     const rendered = renderRunner("bugfix", DISCOVERED.bugfix?.description ?? "");
-    expect(rendered).toContain("aidlc-orchestrate.ts next --scope bugfix");
+    expect(rendered).toContain(
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix",
+    );
   });
 
   // ===========================================================================

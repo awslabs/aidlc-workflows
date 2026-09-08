@@ -9,6 +9,28 @@ which session events fire, where config lives. Each chapter here covers one
 harness's install steps, prerequisites, and the handful of behaviours that
 differ from the neutral methodology.
 
+## Install first
+
+The recommended first-run path for every harness is the checksum-verified native
+installer followed by `aidlc config`:
+
+```bash
+tmp="$(mktemp -d)"
+curl -fsSL \
+  https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  -o "$tmp/install.sh"
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config
+```
+
+The installer always includes every harness runtime. `aidlc config --harness <name>` selects the project surface. Host prerequisites still apply: Codex requires
+the target project to be a Git repository for project hook discovery.
+
+On Windows, download `install.ps1` and invoke it as
+`& $installer`.
+
 Pick your harness:
 
 | Harness | Invoke | Chapter |
@@ -22,6 +44,18 @@ Pick your harness:
 | **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `/aidlc` | [AI-DLC on GitHub Copilot](copilot.md) — one install for both surfaces, the `.github/` merge, folder trust, what's different on Copilot. |
 
 AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**.
+
+For a manual copy, download a specific release's `aidlc-runtime-X.Y.Z.tar.gz`, extract
+it, and copy from `runtime/<harness>/`; do not copy generated trees from a
+repository checkout. Framework developers may instead run
+`bun scripts/package.ts` in a source checkout to materialize the ignored local
+`dist/` and `dist-release/` outputs. Each harness chapter keeps the manual-copy
+instructions under a clearly labeled alternative.
+
+After `aidlc update`, run `aidlc doctor` to see project/runtime version skew
+and refresh each project with `aidlc config` between workflows. Config refuses an
+active-workflow refresh, protecting running work from changed stage or graph
+definitions.
 
 This set is open: a new harness gets its own chapter here, added from the same
 template. For *building* a new harness (the source contract — manifest, hook

@@ -227,7 +227,7 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
     });
   }
   const ENGINE_REPORT_RE =
-    /aidlc-orchestrate\.ts\s+report\s+--stage|engine-owned.*report/i;
+    /(?:aidlc-orchestrate\.ts|engine orchestrate)\s+report\s+--stage|engine-owned.*report/i;
 
   for (const slug of ENGINE_REPORT_STAGES) {
     test(`engine-owned transition: ${slug} steps report the stage outcome`, () => {

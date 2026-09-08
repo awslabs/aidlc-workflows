@@ -86,7 +86,11 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
             projectDir: proj,
             answerScript: APPROVE_ALL,
             timeoutMs: DRIVE_TIMEOUT_MS,
-            stopAfterToolResult: { toolName: "Bash", resultIncludes: "Recomposed:" },
+            stopAfterToolResult: {
+              toolName: "Bash",
+              resultIncludes: "Recomposed:",
+              inputExcludes: "--dry-run",
+            },
           },
         );
 

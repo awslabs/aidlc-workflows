@@ -79,4 +79,4 @@ classification schemes, or regulatory interpretations.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-compliance-agent](../../guide/agents/compliance-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-compliance-agent.md`](../../../dist/claude/.claude/agents/aidlc-compliance-agent.md)
+- Authored source: [`core/agents/aidlc-compliance-agent.md`](../../../core/agents/aidlc-compliance-agent.md)

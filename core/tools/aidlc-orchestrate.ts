@@ -169,6 +169,7 @@ import {
   resolveBoltDag,
   type BoltDagResolution,
   resolveProjectDir,
+  resolveProjectFlag,
   resolveWorkflowSelection,
   scopeCostSummary,
   selectionAwareDefaultScope,
@@ -226,6 +227,9 @@ import {
 // and utility never imports this module - no cycle).
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
 import {
+  aidlcDispatcherInvocation,
+  aidlcInvocation,
+  aidlcToolInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveHarnessRoot,
@@ -675,10 +679,10 @@ function toolPath(file: string): string {
 function toolCommand(toolFile: string, args: string[]): string[] {
   if (IS_COMPILED) {
     if (toolFile === "aidlc-utility.ts" && args[0] === "resolve-env-scope") {
-      return [process.execPath, "scope", "resolve-env", ...args.slice(1)];
+      return [process.execPath, "engine", "scope", "resolve-env", ...args.slice(1)];
     }
     if (toolFile === "aidlc-jump.ts") {
-      return [process.execPath, "jump", ...args];
+      return [process.execPath, "engine", "jump", ...args];
     }
     throw new Error(`No compiled dispatcher route for ${toolFile} ${args.join(" ")}`);
   }
@@ -1407,6 +1411,8 @@ interface ParsedFlags {
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
+  config?: boolean; // --config [section]: terminal in-session project configuration alias
+  configSection?: ConfigSection;
   resume?: boolean; // --resume: continue an existing workflow directly
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME creation directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
@@ -1425,6 +1431,16 @@ interface ParsedFlags {
   parseError?: string;
 }
 
+const CONFIG_SECTIONS = [
+  "models",
+  "runtime",
+  "providers",
+  "trust",
+  "flags",
+  "project",
+] as const;
+type ConfigSection = (typeof CONFIG_SECTIONS)[number];
+
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled
 // out by the caller before this runs; here we read scope/stage/phase/depth/
 // test-strategy, the boolean mode flags (--resume/--single), and detect a
@@ -1441,6 +1457,25 @@ function parseNextFlags(args: string[]): ParsedFlags {
   // verb-intercept seam and the engine must never disagree on what is terminal.
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { readOnly: "--help" };
+  }
+  const configIndex = args.indexOf("--config");
+  if (configIndex >= 0) {
+    const trailing = args.slice(configIndex + 1);
+    if (
+      configIndex !== 0 ||
+      trailing.length > 1 ||
+      (trailing.length === 1 &&
+        !(CONFIG_SECTIONS as readonly string[]).includes(trailing[0]))
+    ) {
+      return {
+        parseError:
+          "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
+      };
+    }
+    return {
+      config: true,
+      ...(trailing[0] ? { configSection: trailing[0] as ConfigSection } : {}),
+    };
   }
   const pluginCommand = parsePluginCommand(args);
   if (pluginCommand.kind !== "not-plugin") return { pluginCommand };
@@ -1471,13 +1506,16 @@ function parseNextFlags(args: string[]): ParsedFlags {
       flags.readOnly = a;
       continue;
     }
-    // Allowlisted trailing args for `--doctor`: `--export` (boolean) and
-    // `--output <dir>`. Recognised ONLY once `--doctor` has matched, so they
+    // Allowlisted trailing args for `--doctor`: `--export` and `--verbose`
+    // (booleans), plus `--output <dir>`. Recognised ONLY once `--doctor` has matched, so they
     // never leak into another read-only flag or into freeform intent text.
     // Kept as a fixed allowlist (mirrored by classifyTerminalCommand in
     // aidlc-lib.ts) so an arbitrary token can never ride the read-only path
     // into the tool. The value of `--output` is the following non-flag token.
-    if (flags.readOnly === "--doctor" && (a === "--export" || a === "--output")) {
+    if (
+      flags.readOnly === "--doctor" &&
+      (a === "--export" || a === "--output" || a === "--verbose")
+    ) {
       flags.readOnlyArgs = flags.readOnlyArgs ?? [];
       flags.readOnlyArgs.push(a);
       if (a === "--output") {
@@ -1631,7 +1669,7 @@ function createPrintDirective(
   projectDir: string,
   description?: string,
 ): PrintDirective {
-  const cmd = [`intent-create --scope ${scope}`];
+  const cmd = [`--scope ${scope}`];
   let labelHint = "";
   if (description && description.length > 0) {
     // Shell-quote the freeform description so multi-word intents survive intact.
@@ -1652,7 +1690,7 @@ function createPrintDirective(
   // Omit the parenthetical when the scope does not resolve (fixture trees).
   const clause = costClause(scope, projectDir);
   const cost = clause ? ` (${clause})` : "";
-  const runCmd = `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\``;
+  const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
     ? printDirective(
       `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
@@ -1731,7 +1769,7 @@ function composeDispatchDirective(
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
-    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
+    `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
     `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   const directive = printDirective(parts.join(" "));
@@ -1916,7 +1954,7 @@ function resolveScope(
   if (flags.positionalScope && flags.positionalScope.length > 0) {
     return { scope: flags.positionalScope, source: "positional" };
   }
-  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
   if (envScope.length > 0) {
     if (validScopes().has(envScope)) return { scope: envScope, source: "env" };
     // Only installed-but-disabled scopes participate in selection-aware
@@ -3771,7 +3809,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // latch would make the two predicates disagree about the same command. The
   // same reasoning keeps it before the flag-validation early returns: an
   // errored command still counted on the transcript path.
-  if (!flags.readOnly && !flags.workspaceCommand) touchEngineMarker(projectDir);
+  if (!flags.readOnly && !flags.config && !flags.workspaceCommand) {
+    touchEngineMarker(projectDir);
+  }
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
@@ -3785,6 +3825,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     flags.review &&
     (
       flags.readOnly ||
+      flags.config ||
       flags.workspaceCommand ||
       flags.compose ||
       flags.newScope ||
@@ -3834,7 +3875,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.workspaceCommand && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.config && !flags.workspaceCommand && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report &&
@@ -3863,11 +3904,29 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       if (counter >= 0 && latchTurn === counter) {
         emit({
           kind: "done",
-          reason: `The read-only/navigation command (${label}) already ran this turn and its output was shown above. This was a read-only utility or a workspace switch, not workflow work — there is nothing to advance. The workflow is unchanged; if one is active it remains paused where it was. STOP.`,
+          reason: `The terminal command (${label}) already ran this turn and its output was shown above. This was a utility, configuration request, or workspace switch, not workflow work - there is nothing to advance. The workflow is unchanged; if one is active it remains paused where it was. STOP.`,
         });
         return;
       }
     } catch { /* advisory: guard is best-effort, never blocks a real next */ }
+  }
+
+  // Branch 1a - in-session configuration alias. Unlike the read-only utilities,
+  // config may mutate project policy, but the routing decision is still
+  // terminal and must happen before state inspection so it can never fall into
+  // the active stage. The conductor owns the human conversation; deterministic
+  // config commands own every read and write.
+  if (flags.config) {
+    const invoke = aidlcInvocation();
+    const selected = flags.configSection;
+    const show = selected
+      ? `${invoke} config ${selected} --show --json`
+      : `${invoke} config <section> --show --json`;
+    const target = selected ? `the ${selected} section` : "project configuration";
+    emit(printDirective(
+      `Configure ${target} conversationally. Read current state first with \`${show}\`; for a bare request, ask which sections the human wants to consider, and skip any section they leave unchanged. Use the native question picker for enumerable choices. Land each accepted change with exactly one \`${invoke} config <section> <explicit value flags> --yes\` command, relaying the human's answers verbatim as flags; show the exact command and its output. Never invent values, regions, or plugin names, and never run bare \`${invoke} config --yes\`. After the changes land, or after the human declines, STOP: do NOT run \`next\`, advance, resume, or run any workflow stage.`,
+    ));
+    return;
   }
 
   // Branch 1 — read-only utility flags dispatch FIRST, before any state
@@ -3886,14 +3945,20 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // harnessDir() so the directive names the right tree on every harness.
   if (flags.readOnly) {
     const sub = flags.readOnly.replace(/^--/, "");
-    // Carry the allowlisted trailing args (`--doctor --export [--output <dir>]`)
+    // Carry the allowlisted trailing args
+    // (`--doctor [--verbose] [--export] [--output <dir>]`)
     // into the named command so the documented export surface reaches the tool
     // through the real routing path, not just a direct invocation.
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
       ? ` ${flags.readOnlyArgs.join(" ")}`
       : "";
+    const command = sub === "status"
+      ? aidlcDispatcherInvocation("status")
+      : sub === "help"
+      ? aidlcDispatcherInvocation("orchestrate help")
+      : `${aidlcInvocation()} ${sub}`;
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${command}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -3920,9 +3985,18 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       return;
     }
     const [verb, ...tail] = argv;
+    const route = verb === "intent-create"
+      ? "intent create"
+      : verb === "space-create"
+      ? "space create"
+      : verb === "intent"
+      ? `intent ${tail[0] && !tail[0].startsWith("--") ? tail.shift() : "list"}`
+      : verb === "space"
+      ? `space ${tail[0] && !tail[0].startsWith("--") ? tail.shift() : "list"}`
+      : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop.`,
+      `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.`,
     ));
     return;
   }
@@ -3938,9 +4012,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     }
     const argv = command.kind === "help" ? ["help"] : command.argv;
     const [verb, ...tail] = argv;
+    const routeVerb = verb === "select-plugins" ? "select" : verb.replace(/^plugin-/, "");
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${aidlcDispatcherInvocation(`plugin ${routeVerb}`)}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -4090,7 +4165,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     emit(printDirective(
-      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` ` +
+      `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
         "to clear the park marker, then re-run `next --resume` to continue.",
     ));
     return;
@@ -4274,12 +4349,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       validScopes().has(flags.scope) &&
       flags.scope !== currentStateScope
     ) {
-      const parts = [`scope-change --scope ${flags.scope}`];
+      const parts = [`--scope ${flags.scope}`];
       if (flags.depth) parts.push(`--depth ${flags.depth}`);
       if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
       if (flags.review) parts.push(`--review ${flags.review}`);
       emit(printDirective(
-        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
+        `Run \`${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -4290,12 +4365,18 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       (!flags.scope || flags.scope === currentStateScope) &&
       (flags.depth || flags.testStrategy || flags.review)
     ) {
-      const parts = ["config-change"];
-      if (flags.depth) parts.push(`--depth ${flags.depth}`);
-      if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
-      if (flags.review) parts.push(`--review ${flags.review}`);
+      const route = flags.depth
+        ? `config set depth ${flags.depth}`
+        : flags.testStrategy
+        ? `config set test-strategy ${flags.testStrategy}`
+        : `config set review ${flags.review}`;
+      const extra = flags.depth && flags.testStrategy
+        ? ` --test-strategy ${flags.testStrategy}`
+        : flags.review && (flags.depth || flags.testStrategy)
+        ? ` --review ${flags.review}`
+        : "";
       emit(printDirective(
-        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
+        `Run \`${aidlcDispatcherInvocation(route)}${extra}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -6638,7 +6719,7 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
     ));
     return;
   }
@@ -6944,7 +7025,7 @@ function spawnState(
   subArgs: string[],
 ): { exitCode: number; stdout: string; stderr: string } {
   const command = IS_COMPILED
-    ? [process.execPath, "state", ...subArgs, "--project-dir", projectDir]
+    ? [process.execPath, "engine", "state", ...subArgs, "--project-dir", projectDir]
     : [
         process.execPath,
         fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
@@ -7119,7 +7200,7 @@ function checkEnsembleEvidence(
     !isGated ||
     !requiresEnsembleEvidence(node) ||
     options.settledSwarm === true ||
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE") === "1"
   ) {
     return { ok: true };
   }
@@ -7525,7 +7606,7 @@ function handleResumeReport(
   if (choice.includes("redo")) {
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
     emit(printDirective(
-      `Redo accepted at "${slug}". Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
+      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
     ));
     return;
   }
@@ -7831,7 +7912,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         sequence.push(["revise", slug, "--unit", unit]);
       } else {
         if (
-          process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
+          resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1" &&
           !flags.userInput?.trim()
         ) {
           emit(errorDirective(
@@ -7893,7 +7974,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     isGated &&
     stageCheckbox.state !== "completed" &&
     readAutonomyMode(stateContent) !== "autonomous" &&
-    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
+    resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
 
   if (flags.overrideBlockingSensors) {
     if (

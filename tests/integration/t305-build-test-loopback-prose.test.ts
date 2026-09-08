@@ -147,8 +147,13 @@ describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
 
 describe("t305 construction protocol module — Build-and-Test failure loop-back subsection", () => {
   test("authored Construction module is byte-aligned across every dist", () => {
+    // The copy channel expands the authored `{{INVOKE}}` seam to
+    // `bun <harnessDir>/tools/aidlc.ts`; fold both projections back before the
+    // byte comparison so real prose drift still fails.
     const normalize = (body: string, harnessDir: string) =>
-      body.replaceAll(harnessDir, "{{HARNESS_DIR}}");
+      body
+        .replaceAll(harnessDir, "{{HARNESS_DIR}}")
+        .replaceAll("bun {{HARNESS_DIR}}/tools/aidlc.ts", "{{INVOKE}}");
     expect(normalize(CONSTRUCTION_PROTOCOL, ".claude")).toBe(
       AUTHORED_CONSTRUCTION_PROTOCOL,
     );

@@ -145,7 +145,7 @@ the story's row in `unit-of-work-story-map.md`:
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage units-generation --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage units-generation --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval

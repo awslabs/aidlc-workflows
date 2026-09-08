@@ -592,7 +592,7 @@ The swarm taxonomy has seven events. Six emit from the stateless referee `aidlc-
 
 ### Commit provenance
 
-One enrichment event. `aidlc attest anchor` records that a commit was observed to land reviewed source claims — one row per involved intent per (commit, repo), deduplicated on re-anchor and skipped when a `SWARM_SOURCE_MERGED` receipt already binds the same (commit, repo). `aidlc attest resolve` never reads these rows: attribution is a pure function of committed content, so an unanchored commit resolves identically. See the [commit provenance chapter](19-commit-provenance.md).
+One enrichment event. `aidlc attest anchor` records that a commit was observed to land reviewed source claims — one row per involved intent per (commit, repo), deduplicated on re-anchor and skipped when a `SWARM_SOURCE_MERGED` receipt already binds the same (commit, repo). `aidlc attest resolve` never reads these rows: attribution is a pure function of committed content, so an unanchored commit resolves identically. See the [commit provenance chapter](20-commit-provenance.md).
 
 | Event | Emitter | Trigger |
 |---|---|---|
