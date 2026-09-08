@@ -9,6 +9,7 @@ keywords:
 description: CVE response
 skeleton: off
 runner: true
+change_control: strict
 ---
 
 # security-patch scope
@@ -19,6 +20,8 @@ patch must do (requirements-analysis), capture the security constraint
 (nfr-requirements), fix and test (code-generation, build-and-test), then
 ship through the deployment stages so the patch actually reaches
 production.
+
+Change Control defaults to strict: a patch whose inputs move after approval is approved again before it ships.
 
 ## Why these stages, why skip those
 

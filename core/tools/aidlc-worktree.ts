@@ -50,6 +50,7 @@ import {
   type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
+  workspaceSourceFailureSuffix,
   workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
@@ -441,7 +442,12 @@ function handleCreate(args: string[]): void {
 
   const wtPath = worktreePath(pd, slug);
   if (existsSync(wtPath)) {
-    errorWithSlug(slug, `Worktree directory already exists: ${wtPath}`);
+    errorWithSlug(
+      slug,
+      `Worktree directory already exists: ${wtPath}. If BOLT_COMPLETED was recorded ` +
+        "without AUDIT_MERGED, finish the existing Bolt complete/merge and audit-merge " +
+        "path instead of creating another worktree.",
+    );
   }
 
   const branchName = `bolt-${slug}`;
@@ -1643,7 +1649,7 @@ function assertAggregateSourceBeforeMerge(
   if (current === null) {
     errorWithSlug(
       slug,
-      "refusing to merge: the main checkout source aggregate is unbindable",
+      `refusing to merge: the main checkout source aggregate is unbindable${workspaceSourceFailureSuffix()}`,
     );
   }
   const chain = currentSwarmSourceMergeChain(

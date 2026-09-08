@@ -61,13 +61,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  recordArtifactWriteViaHook,
   runOrchestrateNext,
   seedAuditFile,
   seededAuditShard,
@@ -78,6 +78,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationContentHash,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -433,7 +434,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       `${JSON.stringify({
         version: 1,
         stage: "feasibility",
-        state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+        state_sha256: stateDigest(state),
       })}\n`,
     );
     expect(
@@ -503,11 +504,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
 
     const artifact = join(stageDir, "requirements.md");
     writeFileSync(artifact, "# Requirements\n");
-    appendAuditEntry(
-      "ARTIFACT_CREATED",
-      { File: artifact, Tool: "Write" },
-      proj,
-    );
+    recordArtifactWriteViaHook(proj, artifact);
 
     const result = runSummaryGuarded(TOOL, [
       "report",
@@ -585,11 +582,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     ]) {
       const artifact = join(stageDir, `${name}.md`);
       writeFileSync(artifact, `# ${name}\n`);
-      appendAuditEntry(
-        "ARTIFACT_CREATED",
-        { File: artifact, Tool: "Write" },
-        proj,
-      );
+      recordArtifactWriteViaHook(proj, artifact);
     }
 
     const result = runSummaryGuarded(TOOL, [
@@ -640,11 +633,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     );
     const artifact = join(stageDir, "requirements.md");
     writeFileSync(artifact, "# Requirements\n");
-    appendAuditEntry(
-      "ARTIFACT_CREATED",
-      { File: artifact, Tool: "Write" },
-      proj,
-    );
+    recordArtifactWriteViaHook(proj, artifact);
 
     const result = runSummaryGuarded(TOOL, [
       "report",

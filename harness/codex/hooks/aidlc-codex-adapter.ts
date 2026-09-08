@@ -775,20 +775,26 @@ switch (target) {
     // state existing (same self-gate as the core record-human-turn hook) so a prompt in a
     // project that never ran the framework does not scaffold audit shards.
     // Fail-open: a record-human-turn failure must never block the turn. Advisory, no stdout.
-    const responseText =
-      explicitHumanSelectionText(codex.tool_response) ||
-      codex.prompt ||
-      codex.user_prompt ||
-      codex.message ||
-      "";
-    runCoreWithStderr(
-      "aidlc-record-human-turn.ts",
-      JSON.stringify({
-        hook_event_name: "UserPromptSubmit",
-        ...(codex.session_id ? { session_id: codex.session_id } : {}),
-        prompt: responseText,
-      }),
-    );
+    //
+    // A structured request_user_input selection is forwarded as the tool
+    // response it is, never as typed prompt text: the core hook records the
+    // Plan Approval choice from either channel, but the break-glass override
+    // phrase counts only when the human typed it as a prompt.
+    const selectionText = explicitHumanSelectionText(codex.tool_response);
+    const forwarded =
+      codex.tool_name === "request_user_input"
+        ? {
+            hook_event_name: "PostToolUse",
+            ...(codex.session_id ? { session_id: codex.session_id } : {}),
+            tool_name: "request_user_input",
+            tool_response: { answer: selectionText },
+          }
+        : {
+            hook_event_name: "UserPromptSubmit",
+            ...(codex.session_id ? { session_id: codex.session_id } : {}),
+            prompt: codex.prompt || codex.user_prompt || codex.message || "",
+          };
+    runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
     persistResponse("", 0);
     return 0;
   }

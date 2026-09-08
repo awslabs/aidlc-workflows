@@ -590,7 +590,7 @@ if (target === "guard-tool-call") {
 // --- state-transition-guard: engine ownership of lifecycle mutations -------
 if (target === "state-transition-guard") {
   const tool = kiro.tool_name ?? "";
-  if (tool !== "shell" && tool !== "execute_bash") process.exit(0);
+  if (canonicalTool(tool) !== "Bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
   const registeredAgent = extraArgs[0] ?? "";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -870,7 +870,9 @@ function canonicalTool(
   }
   if (name === "str_replace" || name === "fs_append") return "Edit";
   if (["read", "fs_read", "read_file", "read_files"].includes(name)) return "Read";
-  if (name === "shell" || name === "execute_bash") return "Bash";
+  // `execute_pwsh` is the same shell tool on a Windows host; a name the guards
+  // did not recognise failed open there instead of being guarded.
+  if (name === "shell" || name === "execute_bash" || name === "execute_pwsh") return "Bash";
   return name;
 }
 

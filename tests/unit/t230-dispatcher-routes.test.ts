@@ -476,6 +476,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config change-control maps to the change-control verb",
+      routerArgs: ["engine", "config", "set", "change-control", "relaxed"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["change-control", "relaxed"],
+      fixture: true,
+    },
+    {
       name: "plugin select maps to select-plugins",
       routerArgs: ["engine", "plugin", "select"],
       tool: "aidlc-utility.ts",

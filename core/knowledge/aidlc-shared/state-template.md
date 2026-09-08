@@ -28,6 +28,7 @@ Authoritative generated views:
 - **Stages to Skip**: [comma-separated stage numbers with reasons, or none]
 - **Depth**: [Minimal/Standard/Comprehensive]
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
+- **Change Control**: [strict/relaxed, then its source in parentheses: `(from scope <name>)`, `(from <layer>.md)`, or `(set by you)`; written at intent creation with the resolved value, rewritten by `/aidlc --change-control` or the plain-chat request, read by value only]
 
 ## Workspace State
 - **Project Root**: [project-relative path, normally `.`; re-derived at runtime, never trusted as an absolute path]

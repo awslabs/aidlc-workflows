@@ -75,8 +75,10 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // it to 85; Unit ownership and gate-rhythm configuration take it to 87;
 // pinned Unit merge completion takes it to 88; PIPELINE_LINK_COMPLETED takes it
 // to 89; SWARM_SOURCE_MERGED takes it to 90; PLAN_APPROVAL_RECORDED takes it
-// to 91.
-const CANONICAL_COUNT = 91;
+// to 91; CHANGE_CONTROL_SET and CHANGE_ACCEPTED (Change Control) take it to 93;
+// PLAN_APPROVAL_OVERRIDDEN and GUARD_DISABLED (the human-only break-glass exit and
+// the audited guard off-switch) take it to 95.
+const CANONICAL_COUNT = 95;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

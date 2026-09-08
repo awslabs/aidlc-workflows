@@ -98,7 +98,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 91-event audit trail plus persistent state, team knowledge, and learned rules
+- 95-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare

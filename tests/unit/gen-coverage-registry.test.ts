@@ -901,6 +901,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t328 drives the shipped log, human-turn, and begin CLIs so protected
     // challenge/response receipts and cross-process lock ordering are genuine.
     "unit/t328-plan-approval-runtime-authority.test.ts",
+    // t337 spawns the shipped doctor to pin the "Workspace source boundary
+    // binds" row, which reads a real source walk against a real workspace.
+    "unit/t337-source-boundary-reason.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
@@ -947,6 +950,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",
+    "integration/t328-authority-rebinding.test.ts",
     "integration/t39.test.ts",
     "integration/t45.test.ts",
     "integration/t49.test.ts",
@@ -1101,6 +1105,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t30-hook-session-end.test.ts",
     "unit/t31.test.ts",
     "unit/t33.test.ts",
+    "unit/t331-guard-deadlock-liveness.test.ts",
+    "unit/t332-summary-authorization.test.ts",
+    "unit/t333-change-control.test.ts",
+    "unit/t334-change-control-plan-approval.test.ts",
+    "unit/t335-change-control-review-summary.test.ts",
+    "unit/t336-change-control-surfaces.test.ts",
     "unit/t34.test.ts",
     "unit/t35.test.ts",
     "unit/t36.test.ts",

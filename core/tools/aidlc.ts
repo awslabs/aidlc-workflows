@@ -741,7 +741,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },
@@ -811,7 +811,7 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "get", "list"],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
@@ -819,6 +819,7 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
+      "set change-control": "change-control",
       get: "config-get",
       list: "config-list",
     },
@@ -827,7 +828,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -1503,6 +1504,13 @@ function handleConfig(route: Route, argv: string[]): Action {
     const missing = requireValue("config", "set review", value);
     if (missing) return missing;
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
+  }
+  if (key === "change-control") {
+    // The per-intent Change Control flip is its own utility verb (it rewrites
+    // the state line and logs CHANGE_CONTROL_SET), not a config-change field.
+    const missing = requireValue("config", "set change-control", value);
+    if (missing) return missing;
+    return { type: "delegate", tool: TOOLS.utility, args: ["change-control", value, ...argv.slice(4)] };
   }
   return nounError("config", key ? `set ${key}` : "set");
 }

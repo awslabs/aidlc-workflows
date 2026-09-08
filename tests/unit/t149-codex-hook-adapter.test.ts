@@ -31,7 +31,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -54,6 +53,7 @@ import {
   setActiveSpaceCursor,
   writeSessionBinding,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -175,7 +175,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     kind: "run-stage",
     stage: "code-generation",
     unit,
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,

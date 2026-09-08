@@ -22,7 +22,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -46,6 +45,7 @@ import {
   writeActiveDirectiveMarker,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -222,7 +222,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     kind: "run-stage",
     stage: "code-generation",
     unit,
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
@@ -337,6 +337,31 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(r.code).toBe(2);
         expect(r.stderr).toContain("Code generation cannot");
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1bc: execute_pwsh normalises to Bash in the plan-approval-guard path like execute_bash", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const verdict = (toolName: string) =>
+        runAdapter(dir, "plan-approval-guard", {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: toolName,
+          tool_input: { command: "sort input.txt -o src/blocked.txt" },
+        });
+      const bash = verdict("execute_bash");
+      expect(bash.code).toBe(2);
+      expect(bash.stderr).toContain("Code generation cannot");
+      // On a Windows host the same shell tool is named execute_pwsh: guarded, not
+      // failed open, with the identical verdict and reason.
+      const pwsh = verdict("execute_pwsh");
+      expect(pwsh.code).toBe(2);
+      expect(pwsh.stderr).toBe(bash.stderr);
+      expect(pwsh.stdout).toBe(bash.stdout);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
