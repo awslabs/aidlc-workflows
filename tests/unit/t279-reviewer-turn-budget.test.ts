@@ -231,7 +231,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         "before changing an existing `## Review` section, record the request",
       );
       const hydrate = labelled.indexOf(
-        "aidlc-review-brief.ts context",
+        "engine review-brief context",
         request,
       );
       const deletion = labelled.indexOf(
@@ -378,7 +378,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       const labelled = `harness ${harness.name} module\n${module}`;
       // Request-first, hydrate dispositions, then delete, on every dispatch.
       expect(labelled).toContain("DELETE the existing `## Review` section");
-      expect(labelled).toContain("aidlc-review-brief.ts context");
+      expect(labelled).toContain("engine review-brief context");
       expect(labelled).toContain(
         "durable human dispositions from the audit ledger",
       );

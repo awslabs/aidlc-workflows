@@ -148,7 +148,7 @@ Immediately after each human reuse decision, record that repo's
 current-attempt exemption:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-state.ts reuse-artifact reverse-engineering --decision keep --artifacts "<codekb-path output>" [--repo <repo>] [--single]
+{{INVOKE}} engine state reuse-artifact reverse-engineering --decision keep --artifacts "<codekb-path output>" [--repo <repo>] [--single]
 ```
 
 Use one row per reused registered repo. For an unrecorded single-repo workspace,
@@ -162,7 +162,7 @@ Immediately before Step 2, take one compare-and-swap snapshot for every repo
 selected for scanning:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-snapshot --repo <repo> --paths <source paths> --json
+{{INVOKE}} engine workspace codekb-snapshot --repo <repo> --paths <source paths> --json
 ```
 
 Choose `<source paths>` as follows:
@@ -242,7 +242,7 @@ contains `## Developer Code Scan Results`, `### Scan Coverage`, and
 `## Handoff Summary`. Then mint link 1 before dispatching the architect:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent --artifact "<developer scan handoff path>" [--repo <repo>] [--single]
+{{INVOKE}} engine log link --stage reverse-engineering --link aidlc-developer-agent --artifact "<developer scan handoff path>" [--repo <repo>] [--single]
 ```
 
 The logger requires the handoff to have been written in the current stage
@@ -350,7 +350,7 @@ Publish the complete candidate through the compare-and-swap utility, using the
 exact snapshot values captured immediately before Step 2:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-publish \
+{{INVOKE}} engine workspace codekb-publish \
   --repo <repo> \
   --staged <record>/.aidlc-codekb-stage-<repo>/ \
   --paths <snapshot paths> \
@@ -385,7 +385,7 @@ After the architect return has been read and all 9 artifacts for that repo are
 present, mint the final-link receipt:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
+{{INVOKE}} engine log link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
 ```
 
 Do not report completion until every selected repo's chain has both receipts.

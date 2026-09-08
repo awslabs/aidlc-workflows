@@ -750,8 +750,8 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
 describe("t299 (5) authored consumers use the same contract", () => {
   test("Code Generation creates, fingerprints, and dispatches the contract", () => {
     const stage = read(STAGE_REL);
-    expect(stage).toContain("aidlc-testing-posture.ts render");
-    expect(stage).toContain("aidlc-testing-posture.ts fingerprint");
+    expect(stage).toContain("engine testing-posture render");
+    expect(stage).toContain("engine testing-posture fingerprint");
     expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
     expect(stage).toContain("BDD");
     expect(stage).toContain("ATDD");

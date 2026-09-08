@@ -149,7 +149,7 @@ If the plan presented to the user omits test file steps, add them before present
 **Test ordering follows one deterministic Testing Contract.** Run:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts render
+{{INVOKE}} engine testing-posture render
 ```
 
 Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
@@ -207,14 +207,14 @@ run:
 Run the unit-bound form when `directive.unit` is present:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<directive.unit>"
+{{INVOKE}} engine testing-posture fingerprint --unit "<directive.unit>"
 ```
 
 For a zero-Unit directive, use the explicit `--stage-level` target; the tool then resolves the stage-level
 `<record>/construction/code-generation/` evidence:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --stage-level
+{{INVOKE}} engine testing-posture fingerprint --stage-level
 ```
 
 Write the returned hash into the Plan Approval section as
@@ -234,7 +234,7 @@ back to canonical `Approve Plan` or `Request Changes` for `[Answer]:`,
 Before presenting, record the exact prompt identity:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation \
+{{INVOKE}} engine log decision --stage code-generation \
   --checkpoint plan-approval \
   --session "<Runtime Session from SessionStart context>" \
   --questions-file "<code-generation-record>/code-generation-questions.md" \
@@ -249,7 +249,7 @@ after the human explicitly responds, using the exact unlettered choice
 `Approve Plan` or `Request Changes`, then immediately run the matching receipt:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation \
+{{INVOKE}} engine log answer --stage code-generation \
   --checkpoint plan-approval \
   --session "<same Runtime Session>" \
   --questions-file "<code-generation-record>/code-generation-questions.md" \

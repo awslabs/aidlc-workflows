@@ -26,7 +26,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 1. **Invoke reviewer sub-agent.** Before every dispatch, not only the first,
    and before changing an existing `## Review` section, record the request:
-   `bun {{HARNESS_DIR}}/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`;
+   `{{INVOKE}} engine log review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`;
    add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an
    isolated stage run. This request-first ordering is mandatory for a
    stale-source recovery: the validated pending recovery request suspends the
@@ -58,7 +58,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    handle it in this order:
    1. On a re-dispatch (adversarial iteration greater than 1, a Part 0 revision
       re-review, or stale-receipt recovery), run
-      `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts context --stage "<directive.stage>"`;
+      `{{INVOKE}} engine review-brief context --stage "<directive.stage>"`;
       add `--unit "<directive.unit>"` on a per-unit review. Retain the complete
       stdout as `Prior findings (carry IDs forward)` for the dispatch brief.
       The tool overlays durable human dispositions from the audit ledger, so
@@ -202,7 +202,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
-   `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;
+   `{{INVOKE}} engine review-brief review --stage "<directive.stage>" --why <first|revision|stale>`;
    on the final `gate: true` re-entry of a per-unit stage, omit `--unit` because
    that one human decision covers every Unit and approval records dispositions
    for every Unit's open findings. Unit-filtered `context` output remains mandatory for
