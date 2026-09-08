@@ -554,9 +554,17 @@ export function targetTriple(): string {
   const os = platform() === "darwin" ? "darwin" : platform() === "win32" ? "windows" : "linux";
   const arch = process.arch === "arm64" ? "arm64" : "x64";
   const report = process.report?.getReport?.() as { header?: { glibcVersionRuntime?: string } } | undefined;
+  const muslArch = process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch;
+  const muslLoader = os === "linux" && [
+    "/lib/ld-musl-" + muslArch + ".so.1",
+    "/usr/lib/ld-musl-" + muslArch + ".so.1",
+    "/lib/libc.musl-" + muslArch + ".so.1",
+    "/usr/lib/libc.musl-" + muslArch + ".so.1",
+  ].some(existsSync);
+  // Bun-compiled binaries may not expose process.report; absence alone does not mean musl.
   const libc = process.env.AIDLC_LIBC?.trim().toLowerCase() ||
-    (os === "linux" && !report?.header?.glibcVersionRuntime ? "musl" : "glibc");
-  return `${os}-${arch}${os === "linux" && libc === "musl" ? "-musl" : ""}`;
+    (os === "linux" && !report?.header?.glibcVersionRuntime && muslLoader ? "musl" : "glibc");
+  return os + "-" + arch + (os === "linux" && libc === "musl" ? "-musl" : "");
 }
 
 // Only a `--project-dir` before the `--` delimiter selects the project; tokens
