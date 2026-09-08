@@ -161,6 +161,19 @@ but do not yet have committed release versions.
   On top of that foundation, the session-start hook anchors recent manual
   commits automatically (a bounded, idempotent `SOURCE_COMMITTED` sweep);
   the explicit `attest anchor` verb remains for CI and deep backfills.
+- Two commit-provenance fidelity gaps stay open behind that foundation, both
+  reported in `resolve`'s `warnings[]` today (see
+  [Commit Provenance §8](reference/19-commit-provenance.md)):
+  **one byte form** — review evidence hashes working-tree bytes while commit
+  listings read repository blobs, so LFS, `core.autocrlf`, working-tree
+  encodings, and submodule gitlinks can report unchanged content as `drifted`.
+  Reconciling them changes what the `Unit Source Fingerprint` is computed over,
+  so it needs its own change with a migration story for existing receipts.
+  **Records read from the queried commit** — receipts, manifests, and evidence
+  come from the working tree, so a local `resolve <old-commit>` sees today's
+  record rather than that commit's. Reading them out of `head`'s tree is the fix
+  and is blocked for layouts where the record lives outside the queried repo
+  (multi-repo intents, a record at the workspace roof).
 
 ### Governed feedback loops
 

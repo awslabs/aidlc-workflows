@@ -172,6 +172,20 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(bothSelectors.rc).toBe(1);
     expect(JSON.parse(bothSelectors.stderr).error).toContain("not both");
 
+    const bothCommitForms = attest(["resolve", "abc", "--commit", "def"], project);
+    expect(bothCommitForms.rc).toBe(1);
+    expect(JSON.parse(bothCommitForms.stderr).error).toContain("pass either <commit> or --commit <rev>");
+
+    // A flag the OTHER verb owns is a usage error, never silently ignored: a
+    // pipeline writing `resolve --commit X` must not get a report about HEAD.
+    const foreignOnResolve = attest(["resolve", "--reconcile"], project);
+    expect(foreignOnResolve.rc).toBe(1);
+    expect(JSON.parse(foreignOnResolve.stderr).error).toContain("resolve does not accept --reconcile");
+
+    const foreignOnAnchor = attest(["anchor", "--diff", "a..b", "--fail-on", "drifted"], project);
+    expect(foreignOnAnchor.rc).toBe(1);
+    expect(JSON.parse(foreignOnAnchor.stderr).error).toContain("anchor does not accept --diff, --fail-on");
+
     const badFailOn = attest(["resolve", "--fail-on", "bogus"], project);
     expect(badFailOn.rc).toBe(1);
     expect(JSON.parse(badFailOn.stderr).error).toContain("--fail-on accepts a comma-separated subset of drifted,unattested,unverifiable,indeterminate");
@@ -252,9 +266,82 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     report = JSON.parse(attest(["resolve", "--diff", `${c2}...${c3}`], project).stdout);
     expect(report.base).toBe(c2); // merge-base of an ancestor pair is the ancestor
     expect(pathStatus(report, "app.ts")?.status).toBe("verified");
+
+    // --commit <rev> is the flag form of the positional and selects the same
+    // commit (it used to be parsed and then ignored, silently reporting HEAD).
+    report = JSON.parse(attest(["resolve", "--commit", c2], project).stdout);
+    expect(report.mode).toBe("commit");
+    expect(report.head).toBe(c2);
+    expect(pathStatus(report, "app.ts")?.status).toBe("drifted");
+
+    // Report-wide transparency fields: the record is read from the working tree,
+    // and byte-form conversion is announced rather than silently drifting paths.
+    expect(report.recordSource).toBe("worktree");
+    expect(report.warnings).toEqual([]);
+    git(project, ["config", "core.autocrlf", "true"]);
+    report = JSON.parse(attest(["resolve", c2], project).stdout);
+    expect(report.warnings.join("\n")).toContain("core.autocrlf=true");
+    expect(report.warnings.join("\n")).toContain("can report drifted");
   }, 60000);
 
-  test("resolve falls back from tampered committed evidence to the local copy, then fails closed", () => {
+  test("resolve excludes the harness shell of a repo that carries the workspace shell", () => {
+    const { project, record } = runtimeFixture();
+    // A real install ships its shell dir beside the record; nobody reviews it,
+    // so it must classify `excluded` (framework surface), not `unattested`.
+    mkdirSync(join(project, ".claude", "tools", "data"), { recursive: true });
+    writeFileSync(join(project, ".claude", "tools", "data", "harness.json"), `${JSON.stringify({ name: "claude" })}\n`);
+    writeFileSync(join(project, ".claude", "settings.json"), "{}\n");
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const head = commitAll(project, "install the harness shell");
+
+    const report = JSON.parse(attest(["resolve", head, "--fail-on", "unattested"], project).stdout);
+    expect(pathStatus(report, ".claude/settings.json")?.status).toBe("excluded");
+    expect(pathStatus(report, ".claude/tools/data/harness.json")?.status).toBe("excluded");
+    expect(report.summary.unattested).toBe(0);
+  }, 60000);
+
+  test("resolve and anchor refuse a shallow-clone boundary instead of diffing the root tree", () => {
+    const { project, record } = runtimeFixture();
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    commitAll(project, "second commit so a depth-1 clone truncates history");
+
+    // `--depth 1` needs a URL: git ignores it for plain local-path clones.
+    const shallow = mkdtempSync(join(tmpdir(), "aidlc-t312-shallow-"));
+    dirs.push(shallow);
+    const cloned = spawnSync("git", ["clone", "-q", "--depth", "1", `file://${project}`, shallow], { encoding: "utf-8" });
+    expect(cloned.status).toBe(0);
+    expect(existsSync(join(shallow, ".git", "shallow"))).toBe(true);
+    const head = git(shallow, ["rev-parse", "HEAD"]);
+
+    // The boundary commit reports no parents, but its commit object names one:
+    // treating that as a root commit would classify the entire checkout.
+    const refused = attest(["resolve", head], shallow);
+    expect(refused.rc).toBe(1);
+    expect(refused.stdout).toBe("");
+    const error = JSON.parse(refused.stderr).error;
+    expect(error).toContain("shallow-clone boundary");
+    expect(error).toContain("fetch-depth: 0");
+
+    expect(JSON.parse(attest(["anchor"], shallow).stderr).error).toContain("shallow-clone boundary");
+
+    // The sweep keeps going: boundaries are reported, never attributed.
+    const swept = attest(["anchor", "--reconcile", "--max-commits", "10"], shallow);
+    expect(swept.rc).toBe(0);
+    const report = JSON.parse(swept.stdout);
+    expect(report.boundaries).toEqual([head]);
+    expect(report.anchored).toEqual([]);
+    expect(report.unattributed).toEqual([]);
+    expect(readAllAuditShards(shallow)).not.toContain("**Event**: SOURCE_COMMITTED");
+
+    // Deepening the clone restores normal resolution of the same commit.
+    expect(spawnSync("git", ["-C", shallow, "fetch", "-q", "--deepen", "1"], { encoding: "utf-8" }).status).toBe(0);
+    const deepened = attest(["resolve", head], shallow);
+    expect(deepened.rc).toBe(0);
+    expect(pathStatus(JSON.parse(deepened.stdout), "app.ts")?.status).toBe("drifted");
+  }, 60000);
+
+  test("resolve verifies only committed evidence: the gitignored local snapshot never verifies", () => {
     const { project, record } = runtimeFixture();
     review(project, record, "alpha", [{ path: "app.ts" }]);
     const c1 = git(project, ["rev-parse", "HEAD"]);
@@ -267,27 +354,39 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const hash12 = /^reviewed-source-([0-9a-f]{12})\.tsv$/.exec(evidenceName)?.[1] as string;
     const localPath = join(record, ".aidlc-source-review", "code-generation", `unit-alpha-${hash12}.tsv`);
 
-    // Tampered committed evidence no longer hashes to the receipt fingerprint;
-    // the pre-dual-write local copy still binds, so resolution degrades, not fails.
-    writeFileSync(committedPath, "tampered\n");
+    // Committed evidence verifies; the local copy is byte-identical but ignored.
+    expect(readFileSync(localPath)).toEqual(readFileSync(committedPath));
     let report = JSON.parse(attest(["resolve", c1], project).stdout);
     expect(pathStatus(report, "app.ts")?.status).toBe("verified");
-    expect(report.units[0].evidenceSource).toBe("local");
+    expect(report.units[0].evidenceSource).toBe("committed");
 
-    // No candidate binds: fail closed as unverifiable, naming the tamper.
-    rmSync(localPath);
+    // Tampered committed evidence fails closed even though the intact local copy
+    // still hashes to the fingerprint: honouring gitignored bytes would make the
+    // verdict machine-dependent — `verified` here, `unverifiable` in every clone.
+    writeFileSync(committedPath, "tampered\n");
     const failing = attest(["resolve", c1, "--fail-on", "unverifiable"], project);
     expect(failing.rc).toBe(3);
     report = JSON.parse(failing.stdout);
     expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
     expect(pathStatus(report, "app.ts")?.reason).toContain("does not hash to the receipt fingerprint");
+    expect(pathStatus(report, "app.ts")?.reason).toContain("no clone can read it");
+    expect(report.units[0].evidenceSource).toBe("local"); // located, reported, never trusted
     expect(report.units[0].claimsSource).toBe("manifest-unverified"); // coverage survives via the manifest
 
-    // Evidence entirely absent (a record that predates committed evidence).
+    // A pre-dual-write record (local copy only) is honestly unverifiable, and the
+    // reason names the re-review that would commit evidence.
     rmSync(committedPath);
     report = JSON.parse(attest(["resolve", c1], project).stdout);
     expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
+    expect(pathStatus(report, "app.ts")?.reason).toContain("only in the gitignored machine-local snapshot");
+    expect(report.units[0].evidenceSource).toBe("local");
+
+    // Nothing left at all: still unverifiable, naming what is missing.
+    rmSync(localPath);
+    report = JSON.parse(attest(["resolve", c1], project).stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
     expect(pathStatus(report, "app.ts")?.reason).toContain("reviewed-source evidence not found");
+    expect(report.units[0].evidenceSource).toBeNull();
   }, 60000);
 
   test("resolve fails closed as indeterminate on cross-shard same-timestamp READY receipts", () => {
@@ -319,6 +418,63 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(pathStatus(report, "app.ts")?.status).toBe("indeterminate");
     expect(pathStatus(report, "app.ts")?.reason).toContain("same timestamp in different audit shards");
     expect(report.units[0].fullyLanded).toBeNull();
+  }, 30000);
+
+  test("resolve fails closed when two records claim a path with the same-timestamp receipt", () => {
+    const { project, record } = fixture();
+    const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+    const second = join(intentsRoot, "rival-intent");
+    mkdirSync(second, { recursive: true });
+    writeFileSync(join(second, "aidlc-state.md"), "# State\n- **Scope**: feature\n", "utf-8");
+    writeFileSync(join(intentsRoot, "intents.json"), `${JSON.stringify([
+      { uuid: "80000000-0000-4000-8000-000000000001", slug: "fixture", dirName: "fixture-intent", status: "active", repos: [] },
+      { uuid: "80000000-0000-4000-8000-000000000002", slug: "rival", dirName: "rival-intent", status: "active", repos: [] },
+    ])}\n`);
+
+    // Two intents, two units, one claimed path, identical receipt timestamps:
+    // "newest claim wins" names no winner, so ordering by (space, intent, unit)
+    // would hand the path to whichever record sorts first. Fail closed instead.
+    const receipt = (unit: string) => [
+      "# AI-DLC Audit Log",
+      "## Review Completed",
+      "**Timestamp**: 2026-09-07T10:00:00Z",
+      "**Event**: REVIEW_COMPLETED",
+      "**Stage**: code-generation",
+      `**Unit**: ${unit}`,
+      `**Reviewer**: ${REVIEWER}`,
+      "**Verdict**: READY",
+      `**Unit Source Fingerprint**: sha256:${"a".repeat(64)}`,
+      "",
+      "---",
+      "",
+    ].join("\n");
+    for (const [dir, unit] of [[record, "alpha"], [second, "beta"]] as const) {
+      writeManifest(dir, unit, [{ path: "app.ts" }]);
+      mkdirSync(join(dir, "audit"), { recursive: true });
+      writeFileSync(join(dir, "audit", "clone-a.md"), receipt(unit));
+    }
+
+    const c1 = git(project, ["rev-parse", "HEAD"]);
+    const failing = attest(["resolve", c1, "--fail-on", "indeterminate"], project);
+    expect(failing.rc).toBe(3);
+    const report = JSON.parse(failing.stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("indeterminate");
+    expect(pathStatus(report, "app.ts")?.reason).toContain("different records");
+
+    // An ambiguous path is not anchored either — reporting it is resolve's job.
+    const anchored = JSON.parse(attest(["anchor", "--commit", c1], project).stdout);
+    expect(anchored.anchored).toEqual([]);
+    expect(anchored.unattributed).toEqual([c1]);
+    expect(readAllAuditShards(project)).not.toContain("**Event**: SOURCE_COMMITTED");
+
+    // Break the tie by one second and the newer record owns the path again.
+    writeFileSync(
+      join(second, "audit", "clone-a.md"),
+      receipt("beta").replace("10:00:00Z", "10:00:01Z"),
+    );
+    const resolved = JSON.parse(attest(["resolve", c1], project).stdout);
+    expect(pathStatus(resolved, "app.ts")).toMatchObject({ unit: "beta", intent: "rival-intent" });
+    expect(pathStatus(resolved, "app.ts")?.status).toBe("unverifiable"); // fabricated fingerprint binds nothing
   }, 30000);
 
   test("anchor appends deduplicated SOURCE_COMMITTED enrichment and --reconcile sweeps first-parent history", () => {

@@ -1,6 +1,19 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.3] - 2026-09-08
+
+Harden commit provenance against the cases an adversarial review found: units built in swarm worktrees now carry their review evidence home, shallow clones refuse to answer instead of answering wrongly, and evidence that only exists in a gitignored machine-local snapshot no longer verifies anything. **Upgrade:** replace the `dist/<harness>/` shell. If your CI pipeline already runs `aidlc attest resolve --fail-on ...`, re-check two things before merging: the checkout must have real history (`fetch-depth: 0`), and paths that previously passed on a machine-local snapshot now report `unverifiable` until the unit's next per-unit review commits its evidence.
+
+* `aidlc attest resolve` and `anchor` now refuse a commit whose parent is missing from a shallow clone, with an error naming the fix (`git fetch --deepen 1`, or `fetch-depth: 0`), instead of diffing it against the empty tree and classifying every file in the repository. `anchor --reconcile` reports such commits in a new `boundaries[]` array and keeps going.
+* Units finalized in a swarm worktree now merge their committed reviewed-source evidence into the main intent record alongside the source manifest, so their paths resolve as `verified` from a fresh clone. Finalizing refuses if that evidence is missing or changed underneath it.
+* Reviewed-source evidence that exists only in the gitignored machine-local snapshot no longer verifies a path. Such paths report `unverifiable` and say so, because no other clone — including CI — can read that file. Re-run the per-unit review to commit evidence.
+* `resolve` accepts `--commit <rev>` as well as the positional form, and each verb now rejects the other's flags (`resolve does not accept --reconcile`) rather than silently ignoring them.
+* Two receipts with the same timestamp claiming the same path from different intent records now fail closed as `indeterminate` instead of letting record read order pick a winner; `anchor` leaves those paths unattributed.
+* Path exclusion now recognizes a harness shell (`.claude/`, `.kiro/`, …) inside a repository that carries the workspace shell, so shell files report `excluded` instead of `unattested`.
+* `resolve` reports a new `warnings[]` array and `recordSource` field: it warns when the repository's byte form is normalized (`core.autocrlf`, `.gitattributes`) or when the intent record has uncommitted local changes, both of which can make a verdict reflect your worktree rather than the queried commit.
+* The documented CI recipe now uses the three-dot range `origin/main...HEAD` and names all four failable statuses; the two-dot form silently skipped paths changed on the base branch.
+
 ## [2.7.2] - 2026-09-07
 
 Commit provenance: any git commit or diff range can now be traced back to the reviewed units of work that own its changed paths, from any clone — including a bare CI checkout — with no hooks, commit trailers, or session state involved. Per-unit review evidence is now committed into the intent record, and the new `aidlc attest` tool resolves attribution and drift from committed content alone. **Upgrade:** refresh your `dist/<harness>/` shell; records reviewed before this version have no committed evidence, so their paths resolve as `unverifiable` in fresh clones until their next per-unit review dual-writes it.
@@ -10,6 +23,7 @@ Commit provenance: any git commit or diff range can now be traced back to the re
 * New `aidlc attest anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` appends `SOURCE_COMMITTED` audit events for commits that landed reviewed claims — enrichment only, `resolve` never reads them. Anchors deduplicate per intent on (commit, repo), skip commits already bound by `SWARM_SOURCE_MERGED`, and `--reconcile` walks first-parent history bounded by `--max-commits` (default 100). `SOURCE_COMMITTED` joins the CLI-protected set: the audit CLI refuses to append it directly.
 * Anchoring runs automatically: on every real session start the framework's session-start hook sweeps the last 25 first-parent commits and anchors any that landed reviewed claims, so commits made manually between sessions gain `SOURCE_COMMITTED` rows with no command to remember. The sweep is idempotent, best-effort (it never blocks session startup, and no-ops in non-git projects), skipped on compaction resumes, and disabled by `AIDLC_SKIP_SESSION_ANCHOR=1`; the explicit `anchor` verb remains for CI checkouts and deeper backfills.
 * The audit taxonomy grows to 92 events (new Commit Provenance category); the new `docs/reference/19-commit-provenance.md` chapter documents the attribution model, evidence format, and fail-closed semantics.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

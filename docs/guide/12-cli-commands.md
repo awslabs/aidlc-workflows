@@ -1156,17 +1156,21 @@ Answers "which reviewed unit of work owns this commit's changes, and does the co
 
 | Subcommand | What it does |
 |------------|--------------|
-| `resolve [<commit>]` | Read-only. Attribute the commit's first-parent delta (default `HEAD`) to reviewed units and classify each changed path: `verified` (committed content equals the reviewed content), `drifted` (reviewed but edited since), `unattested` (no unit claims it), `unverifiable` (evidence missing or tampered — fails closed), `indeterminate` (ambiguous receipts — fails closed), `excluded` (framework shell/record paths). JSON report on stdout |
+| `resolve [<commit>]` | Read-only. Attribute the commit's first-parent delta (default `HEAD`) to reviewed units and classify each changed path: `verified` (committed content equals the reviewed content), `drifted` (reviewed but edited since), `unattested` (no unit claims it), `unverifiable` (evidence missing, tampered, or only in the gitignored local snapshot — fails closed), `indeterminate` (ambiguous receipts — fails closed), `excluded` (framework shell/record paths). JSON report on stdout. `--commit <rev>` is accepted as a flag form of the positional |
 | `resolve --diff <base>..<head>` | Same classification over an arbitrary range (`...` uses the merge-base, matching PR semantics) |
-| `resolve … --fail-on drifted,unattested` | Exit 3 when any path matches one of the named statuses — the CI gate form. Accepts any subset of `drifted,unattested,unverifiable,indeterminate` |
+| `resolve … --fail-on drifted,unattested,unverifiable,indeterminate` | Exit 3 when any path matches one of the named statuses — the CI gate form. Accepts any subset of the four; **name all four unless you mean to let unverified paths through** — omitting `unverifiable` passes paths whose reviewed content nothing could check |
 | `anchor [--commit <rev>]` | Append a `SOURCE_COMMITTED` audit row recording that the commit landed reviewed claims. Enrichment only — `resolve` never reads anchors, so unanchored manual commits lose nothing. Runs automatically at session start (a bounded, idempotent sweep of recent commits); the verb remains for CI checkouts and deeper backfills |
 | `anchor --reconcile [--max-commits <n>]` | Sweep first-parent history (default 100 commits) and backfill anchors for attributable commits; already-anchored and swarm-merged commits are skipped, unattributable ones reported |
 
 ```
-bun .claude/tools/aidlc-attest.ts resolve --diff origin/main..HEAD --fail-on drifted,unattested
+# CI gate: three-dot (merge-base) range, all four failable statuses
+bun .claude/tools/aidlc-attest.ts resolve --diff origin/main...HEAD \
+  --fail-on drifted,unattested,unverifiable,indeterminate
 ```
 
-Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `--intent <dir>`. See the [Commit Provenance](../reference/19-commit-provenance.md) reference chapter for the evidence model and status semantics.
+Two details make or break that recipe. Use `...` (three dots): `origin/main..HEAD` diffs the *tips*, so anything that landed on `origin/main` after the branch point shows up as a change of this branch and false-fails. And fetch enough history — a shallow checkout (`actions/checkout` defaults to depth 1) has no parent commit for the boundary, which `resolve` reports as an error rather than silently classifying the whole tree; set `fetch-depth: 0`.
+
+Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `--intent <dir>`; each verb rejects the other's flags rather than ignoring them. See the [Commit Provenance](../reference/19-commit-provenance.md) reference chapter for the evidence model and status semantics.
 
 ### Session skills — report on a workflow
 

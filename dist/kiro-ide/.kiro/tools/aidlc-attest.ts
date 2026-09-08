@@ -22,10 +22,18 @@
 //   drifted       covered by a reviewed claim but head differs from reviewed
 //   unattested    no unit's claims cover the path
 //   unverifiable  covered, but the receipt or its evidence cannot bind content
-//                 (unbindable fingerprint, missing or hash-mismatched bytes)
-//   indeterminate covered, but two same-timestamp READY receipts in different
-//                 shards make "newest" causally unordered (fail closed)
-//   excluded      framework shell/record path (aidlc/, .aidlc/, sensor dirs)
+//                 (unbindable fingerprint, missing or hash-mismatched bytes, or
+//                 evidence that exists only in the gitignored local snapshot)
+//   indeterminate covered, but two same-timestamp READY receipts make "newest"
+//                 causally unordered — in different shards, or in different
+//                 records claiming the same path (fail closed both ways)
+//   excluded      framework shell/record path (aidlc/, .aidlc/, sensor dirs, and
+//                 the harness shell dirs of a workspace-shell-carrying repo)
+//
+// Report `warnings` name conditions that can distort a report without changing
+// any single path's classification — repository byte-form conversion, and an
+// intent record whose working-tree state differs from the queried commit (the
+// record is read from the working tree, not from head's tree).
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -37,6 +45,7 @@ import {
   auditBlockField,
   errorMessage,
   gitCommitSourceListing,
+  intentsDir,
   isGitRepoDir,
   listIntents,
   listSpaces,
@@ -112,6 +121,11 @@ export interface ResolveReport {
   units: UnitReport[];
   summary: Record<PathStatus, number>;
   failOn: string[];
+  /** Where receipts, manifests, and evidence were read from. Today always the
+   *  working tree — see `warnings` when that differs from the queried commit. */
+  recordSource: "worktree";
+  /** Conditions that can distort the whole report; never fail the gate by themselves. */
+  warnings: string[];
 }
 
 export interface AnchorReport {
@@ -129,6 +143,9 @@ export interface AnchorReport {
   }>;
   skipped: Array<{ commit: string; space: string; intent: string; reason: string }>;
   unattributed: string[];
+  /** Shallow-clone boundary commits: their delta is unknowable, so they are
+   *  neither anchored nor reported unattributed. */
+  boundaries: string[];
 }
 
 export interface ResolveOptions {
@@ -168,10 +185,36 @@ function resolveCommitish(dir: string, ref: string): string | null {
   return parsed.status === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
 }
 
-function commitParents(dir: string, sha: string): string[] | null {
+/** Parents as traversal reports them, plus whether `sha` is a shallow-clone
+ *  boundary. A grafted commit still names its parents inside the commit object,
+ *  so an empty traversal result there means "truncated clone", not "root
+ *  commit" — the two must not share the root-tree diff path. */
+function commitParentage(
+  dir: string,
+  sha: string,
+): { parents: string[]; shallow: boolean } | null {
   const listed = git(dir, ["rev-list", "--parents", "-n", "1", sha]);
   if (listed.status !== 0) return null;
-  return listed.stdout.trim().split(/\s+/).slice(1);
+  const parents = listed.stdout
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .filter((parent) => parent.length > 0);
+  if (parents.length > 0) return { parents, shallow: false };
+  const object = git(dir, ["cat-file", "commit", sha]);
+  if (object.status !== 0) return null;
+  const header = object.stdout.split("\n\n", 1)[0] ?? "";
+  const named = header.split("\n").filter((line) => line.startsWith("parent ")).length;
+  return { parents: [], shallow: named > 0 };
+}
+
+function shallowBoundaryError(sha: string): Error {
+  return new Error(
+    `${sha} is a shallow-clone boundary: its parent commit is absent, so its ` +
+      `delta cannot be computed (a root-tree diff would classify every file in ` +
+      `the tree). Deepen the clone first — git fetch --deepen 1, or check out ` +
+      `with fetch-depth: 0.`,
+  );
 }
 
 /** Changed paths of base..head (both sides of renames; null base = full root tree). */
@@ -313,7 +356,11 @@ function parseManifestClaims(
     } else if (recordedRepos.length === 0) {
       canonicalRepo = "";
     } else {
-      return null; // multi-repo intent requires per-write repo
+      // Multi-repo intents require a per-write repo. Review-time validation
+      // (readUnitSourceManifest) already rejects a manifest that omits it, so a
+      // manifest behind a READY receipt cannot land here — this is the strict
+      // reader refusing to guess, not a live case.
+      return null;
     }
     const normalized = normalizeManifestSourcePath(path);
     if ("reason" in normalized) return null;
@@ -445,6 +492,22 @@ function buildOwnershipIndex(
                 problem = `evidence at ${posixRelative(projectDir, candidate.path)} is not a parseable unit source listing`;
                 continue;
               }
+              if (candidate.source === "local") {
+                // The local snapshot is gitignored, so honouring it would make the
+                // verdict depend on the machine: the authoring checkout would say
+                // `verified` where every clone (and CI) says `unverifiable`. Keep it
+                // as a diagnostic pointer only — never as verification bytes, and
+                // never at the cost of a committed-evidence problem already found.
+                evidencePath = candidate.path;
+                evidenceSource = "local";
+                problem =
+                  problem === null
+                    ? "reviewed-source evidence exists only in the gitignored machine-local " +
+                      "snapshot, which no clone can read; re-review the unit to dual-write " +
+                      "committed evidence"
+                    : `${problem}; the gitignored machine-local snapshot does hash to the fingerprint, but no clone can read it`;
+                break;
+              }
               evidenceListing = parsed.listing;
               manifestSha = parsed.manifestSha256;
               evidencePath = candidate.path;
@@ -514,9 +577,10 @@ function posixRelative(from: string, to: string): string {
   return relative(from, to).split(sep).join("/");
 }
 
-/** Deterministic owner precedence: newest receipt wins; same-timestamp owners
- *  from different records order by (space, intent, unit) so overlapping claims
- *  across intents resolve stably. */
+/** Total order for stable *listing* of owners: newest receipt last, ties broken
+ *  by (space, intent, unit). The lexicographic tail keeps report output
+ *  deterministic — it is deliberately NOT an ownership decision, which is why
+ *  `owningUnit` reports same-timestamp ties instead of silently taking the tail. */
 function compareOwners(a: UnitOwnership, b: UnitOwnership): number {
   if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
   const aKey = `${a.space}\0${a.intent}\0${a.unit}`;
@@ -524,16 +588,30 @@ function compareOwners(a: UnitOwnership, b: UnitOwnership): number {
   return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
 }
 
+interface OwnerResolution {
+  /** Newest covering owner under `compareOwners`. */
+  owner: UnitOwnership;
+  /** Another covering owner shares that newest timestamp, so "newest wins"
+   *  cannot name a single owner: fail closed rather than pick lexicographically. */
+  ambiguous: boolean;
+}
+
 function owningUnit(
   ownerships: UnitOwnership[],
   key: string,
-): UnitOwnership | null {
+): OwnerResolution | null {
   const owners = ownerships.filter(
     (owner) => owner.claims !== null && sourceClaimCovers(key, owner.claims),
   );
   if (owners.length === 0) return null;
   owners.sort(compareOwners);
-  return owners[owners.length - 1];
+  const owner = owners[owners.length - 1];
+  return {
+    owner,
+    ambiguous: owners.some(
+      (other) => other !== owner && other.timestamp === owner.timestamp,
+    ),
+  };
 }
 
 // --- resolve ---
@@ -560,23 +638,26 @@ function classifyPath(
   ownerships: UnitOwnership[],
   headListing: WorkspaceSourceListing,
 ): PathReport {
-  if (sourcePathIsExcluded(path, query.carriesShell)) {
+  if (sourcePathIsExcluded(path, query.carriesShell, query.carriesShell ? query.dir : undefined)) {
     return { path, status: "excluded" };
   }
   const key = sourcePathKey(query.keyRepo, path);
-  const owner = owningUnit(ownerships, key);
-  if (owner === null) return { path, status: "unattested" };
+  const resolved = owningUnit(ownerships, key);
+  if (resolved === null) return { path, status: "unattested" };
+  const owner = resolved.owner;
   const attributed = {
     path,
     unit: owner.unit,
     space: owner.space,
     intent: owner.intent,
   };
-  if (owner.tie) {
+  if (owner.tie || resolved.ambiguous) {
     return {
       ...attributed,
       status: "indeterminate",
-      reason: "two READY receipts with the same timestamp in different audit shards",
+      reason: owner.tie
+        ? "two READY receipts with the same timestamp in different audit shards"
+        : "two same-timestamp READY receipts in different records claim this path",
     };
   }
   if (owner.evidenceListing === null) {
@@ -616,6 +697,50 @@ function unitFullyLanded(
     }
   }
   return true;
+}
+
+/** Review evidence hashes working-tree bytes; commit listings hash repository
+ *  bytes with checkout filters deliberately off. Where the repo converts between
+ *  the two forms, unchanged content can report `drifted`, so say so up front. */
+function byteFormWarning(query: RepoQuery, head: string): string | null {
+  const autocrlf = git(query.dir, ["config", "--get", "core.autocrlf"])
+    .stdout.trim()
+    .toLowerCase();
+  const converts = autocrlf === "true" || autocrlf === "input";
+  const attributes = git(query.dir, ["cat-file", "-e", `${head}:.gitattributes`]).status === 0;
+  if (!converts && !attributes) return null;
+  const cause = converts
+    ? `core.autocrlf=${autocrlf}${attributes ? " and .gitattributes" : ""}`
+    : ".gitattributes";
+  return (
+    `${cause} may convert bytes between the working tree and the repository; ` +
+    `reviewed evidence records working-tree bytes while this report reads repository ` +
+    `bytes, so converted paths (CRLF, LFS pointers, encodings) can report drifted`
+  );
+}
+
+/** Receipts and evidence come from the working tree, not from head's tree, so a
+ *  checkout whose record differs from the queried commit resolves against
+ *  different receipts than a clone of that commit would. */
+function recordDriftWarning(
+  query: RepoQuery,
+  projectDir: string,
+  space: string | undefined,
+  head: string,
+): string | null {
+  if (!query.carriesShell) return null; // record lives outside the queried repo
+  const rel = posixRelative(projectDir, intentsDir(projectDir, space)).split("/")[0];
+  if (rel.length === 0 || rel === ".." || rel.startsWith("../")) return null;
+  const changed = git(query.dir, ["diff", "--quiet", head, "--", rel]).status !== 0;
+  const untracked =
+    git(query.dir, ["ls-files", "--others", "--exclude-standard", "--", rel]).stdout.trim()
+      .length > 0;
+  if (!changed && !untracked) return null;
+  return (
+    `the intent record under ${rel}/ differs between the working tree and ${head}; ` +
+    `receipts, manifests, and evidence were read from the working tree, so a clone ` +
+    `of ${head} may classify these paths differently`
+  );
 }
 
 export function runResolve(
@@ -671,9 +796,10 @@ export function runResolve(
     if (sha === null) {
       throw new Error(`cannot resolve commit ${JSON.stringify(options.commit ?? "HEAD")} in ${query.dir}`);
     }
-    const parents = commitParents(query.dir, sha);
-    if (parents === null) throw new Error(`cannot read parents of ${sha}`);
-    base = parents[0] ?? null; // merge commits resolve their first-parent delta
+    const parentage = commitParentage(query.dir, sha);
+    if (parentage === null) throw new Error(`cannot read parents of ${sha}`);
+    if (parentage.shallow) throw shallowBoundaryError(sha);
+    base = parentage.parents[0] ?? null; // merge commits resolve their first-parent delta
     head = sha;
   }
 
@@ -734,6 +860,11 @@ export function runResolve(
       fullyLanded: unitFullyLanded(owner, query, headListing),
     }));
 
+  const warnings = [
+    byteFormWarning(query, head),
+    recordDriftWarning(query, projectDir, options.space, head),
+  ].filter((warning): warning is string => warning !== null);
+
   const report: ResolveReport = {
     contract: 1,
     repo: query.name,
@@ -745,6 +876,8 @@ export function runResolve(
     units,
     summary,
     failOn,
+    recordSource: "worktree",
+    warnings,
   };
   const failSet = new Set(failOn);
   return { report, failed: pathReports.some((path) => failSet.has(path.status)) };
@@ -791,9 +924,10 @@ export function runAnchor(
       .filter((line) => line.length > 0)
       .map((line) => line.split(/\s+/));
   } else {
-    const parents = commitParents(query.dir, start);
-    if (parents === null) throw new Error(`cannot read parents of ${start}`);
-    rows = [[start, ...parents]];
+    const parentage = commitParentage(query.dir, start);
+    if (parentage === null) throw new Error(`cannot read parents of ${start}`);
+    if (parentage.shallow) throw shallowBoundaryError(start);
+    rows = [[start, ...parentage.parents]];
   }
 
   const { ownerships, intents } = buildOwnershipIndex(projectDir, options.space, options.intent);
@@ -810,16 +944,30 @@ export function runAnchor(
     anchored: [],
     skipped: [],
     unattributed: [],
+    boundaries: [],
   };
 
   for (const [commit, ...parents] of rows) {
+    if (parents.length === 0) {
+      // Parentless: either a true root commit (diff against the root tree) or a
+      // shallow boundary whose parent is simply absent. Attributing a boundary's
+      // whole tree would anchor every reviewed unit to it, so skip and report.
+      const parentage = commitParentage(query.dir, commit);
+      if (parentage?.shallow) {
+        report.boundaries.push(commit);
+        continue;
+      }
+    }
     const paths = changedPaths(query.dir, parents[0] ?? null, commit);
     if (paths === null) throw new Error(`git diff failed for commit ${commit} in ${query.dir}`);
     const attributed = new Map<string, { space: string; intent: string; units: Set<string>; paths: number }>();
     for (const path of paths) {
-      if (sourcePathIsExcluded(path, query.carriesShell)) continue;
-      const owner = owningUnit(ownerships, sourcePathKey(query.keyRepo, path));
-      if (owner === null) continue;
+      if (sourcePathIsExcluded(path, query.carriesShell, query.carriesShell ? query.dir : undefined)) {
+        continue;
+      }
+      const resolved = owningUnit(ownerships, sourcePathKey(query.keyRepo, path));
+      if (resolved === null || resolved.ambiguous) continue; // ambiguity is resolve's to report
+      const owner = resolved.owner;
       const intentKey = `${owner.space}\0${owner.intent}`;
       const entry = attributed.get(intentKey) ?? {
         space: owner.space,
@@ -886,8 +1034,9 @@ export function runAnchor(
 // --- CLI entry point ---
 
 const USAGE = `Usage:
-  aidlc attest resolve [<commit>] [--diff <base>..<head>] [--repo <name>]
-                       [--space <name>] [--intent <dir>] [--fail-on <statuses>]
+  aidlc attest resolve [<commit>|--commit <rev>] [--diff <base>..<head>]
+                       [--repo <name>] [--space <name>] [--intent <dir>]
+                       [--fail-on <statuses>]
   aidlc attest anchor [--commit <rev>] [--reconcile] [--max-commits <n>]
                       [--repo <name>] [--space <name>] [--intent <dir>]
 
@@ -895,10 +1044,32 @@ resolve  Read-only: attribute a diff/commit's changed paths to reviewed units
          and classify each against committed reviewed-source evidence
          (verified | drifted | unattested | unverifiable | indeterminate |
          excluded). --fail-on drifted,unattested exits 3 when matched.
-resolve <commit> resolves that commit's first-parent delta (default HEAD).
+resolve <commit> (or --commit <rev>) resolves that commit's first-parent delta
+         (default HEAD).
 anchor   Append SOURCE_COMMITTED enrichment events for commits that landed
          reviewed claims (deduplicated; --reconcile walks first-parent
          history, bounded by --max-commits, default 100).`;
+
+/** Each verb accepts only its own flags: a flag the other verb owns is a usage
+ *  error, never a silently ignored argument (`resolve --commit X` used to report
+ *  HEAD while looking like it honoured X). */
+const RESOLVE_FLAGS = new Set(["diff", "commit", "repo", "space", "intent", "fail-on"]);
+const ANCHOR_FLAGS = new Set(["commit", "reconcile", "max-commits", "repo", "space", "intent"]);
+
+function rejectForeignFlags(
+  flags: Record<string, string | boolean>,
+  allowed: ReadonlySet<string>,
+  verb: string,
+): void {
+  const foreign = Object.keys(flags)
+    .filter((name) => !allowed.has(name))
+    .sort();
+  if (foreign.length > 0) {
+    throw new Error(
+      `${verb} does not accept ${foreign.map((name) => `--${name}`).join(", ")}\n${USAGE}`,
+    );
+  }
+}
 
 function printError(message: string): void {
   process.stderr.write(`${JSON.stringify({ error: message })}\n`);
@@ -941,13 +1112,17 @@ export function main(argv: string[]): void {
   try {
     switch (subcommand) {
       case "resolve": {
+        rejectForeignFlags(flags, RESOLVE_FLAGS, "resolve");
         if (positional.length > 1) throw new Error(`at most one <commit> positional, got ${positional.length}`);
+        if (positional.length === 1 && flags.commit !== undefined) {
+          throw new Error("pass either <commit> or --commit <rev>, not both");
+        }
         const { report, failed } = runResolve(projectDir, {
           repo: flags.repo as string | undefined,
           space: flags.space as string | undefined,
           intent: flags.intent as string | undefined,
           diff: flags.diff as string | undefined,
-          commit: positional[0],
+          commit: (flags.commit as string | undefined) ?? positional[0],
           failOn:
             flags["fail-on"] === undefined
               ? []
@@ -958,6 +1133,7 @@ export function main(argv: string[]): void {
         break;
       }
       case "anchor": {
+        rejectForeignFlags(flags, ANCHOR_FLAGS, "anchor");
         if (positional.length > 0) throw new Error("anchor takes no positionals; use --commit <rev>");
         const report = runAnchor(projectDir, {
           repo: flags.repo as string | undefined,

@@ -263,7 +263,7 @@ export const ROUTES: readonly Route[] = [
       { command: "attest <verb>", summary: "resolve commits/diffs to reviewed units; anchor commits" },
     ],
     all: [
-      "resolve [commit] [--diff <base>..<head>] [--fail-on <statuses>]",
+      "resolve [commit|--commit <rev>] [--diff <base>..<head>] [--fail-on <statuses>]",
       "anchor [--commit <rev>] [--reconcile]",
     ],
   },

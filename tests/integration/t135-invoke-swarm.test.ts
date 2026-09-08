@@ -781,7 +781,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(finalizeOut).toContain('"converged": 1');
   }, 60000);
 
-  test("6d: finalize lands reviewed record artifacts and the bound source manifest", () => {
+  test("6d: finalize lands reviewed record artifacts, the bound source manifest, and its evidence", () => {
     setupReferee();
     if (wtproj === undefined) throw new Error("referee fixture was not created");
     const unitRecord = join(
@@ -800,6 +800,25 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
       unit: "win",
       version: 1,
     });
+
+    // The manifest lands a CLAIM; the reviewed-source evidence is what makes the
+    // claim verifiable from a clone (aidlc-attest.ts). Both must cross out of the
+    // worktree — a manifest alone would resolve `unverifiable` on main forever.
+    const fingerprint = /\*\*Unit Source Fingerprint\*\*: sha256:([0-9a-f]{64})/.exec(
+      auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED")),
+    )?.[1];
+    expect(fingerprint).toBeDefined();
+    if (fingerprint === undefined) return;
+    const evidence = join(
+      unitRecord,
+      `reviewed-source-${fingerprint.slice(0, 12)}.tsv`,
+    );
+    expect(existsSync(evidence)).toBe(true);
+    // Its sha256 IS the receipt's fingerprint — the transfer cannot silently
+    // substitute bytes, and the committed record is self-verifying.
+    expect(createHash("sha256").update(readFileSync(evidence)).digest("hex")).toBe(
+      fingerprint,
+    );
     // Application source still lands only through the later, correlated
     // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
     expect(existsSync(join(wtproj, "win.txt"))).toBe(false);

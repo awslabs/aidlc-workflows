@@ -816,10 +816,10 @@ Resolves git commits/diffs back to the reviewed units of work that own each chan
 
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
-| `resolve [<commit>] [--diff <base>..<head>] [--fail-on <statuses>]` | Read-only: classify each changed path as `verified` \| `drifted` \| `unattested` \| `unverifiable` \| `indeterminate` \| `excluded` against the owning unit's newest READY receipt. Exit 3 when `--fail-on` matches | — |
+| `resolve [<commit>\|--commit <rev>] [--diff <base>..<head>] [--fail-on <statuses>]` | Read-only: classify each changed path as `verified` \| `drifted` \| `unattested` \| `unverifiable` \| `indeterminate` \| `excluded` against the owning unit's newest READY receipt. Exit 3 when `--fail-on` matches | — |
 | `anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` | Record that a commit landed reviewed claims (deduplicated per intent; `--reconcile` sweeps first-parent history, default bound 100). Enrichment only — `resolve` never reads anchors. The session-start hook runs this sweep automatically (bound 25); the verb remains for CI and deeper backfills | `SOURCE_COMMITTED` |
 
-Both verbs accept `--repo <name>`, `--space <name>`, `--intent <dir>`, and `--project-dir <path>`.
+Both verbs accept `--repo <name>`, `--space <name>`, `--intent <dir>`, and `--project-dir <path>`, and reject each other's verb-specific flags (`resolve --reconcile`, `anchor --diff`) as usage errors instead of ignoring them.
 
 ---
 
