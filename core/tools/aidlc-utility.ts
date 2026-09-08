@@ -79,6 +79,7 @@ import {
   assertChangeControlLedgerWritable,
   CHANGE_CONTROL_FIELD,
   CHANGE_CONTROL_VALUES,
+  type ChangeControlMemoryDeclaration,
   changeControlMemoryStrictRefusal,
   formatChangeControl,
   memoryChangeControlDeclarations,
@@ -134,6 +135,7 @@ import {
   loadScopeMetadataAll,
   MERGE_SUCCEEDED_TAG_REGEX,
   migrateFlatLayout,
+  needsFlatMigration,
   nextInScopeStage,
   PHASES,
   parseArgs,
@@ -323,6 +325,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "review",
   "change-control",
   "repos",
+  "space",
   "project-dir",
 ] as const;
 const INTENT_CREATE_DESCRIPTIVE_FLAGS = ["scope", "arguments", "label"] as const;
@@ -358,6 +361,14 @@ function validateIntentCreateFlagValues(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
+  // Creation names the new intent itself, so an --intent selector has nothing
+  // to select; --space is the one selector creation takes (the target space).
+  if (flags.intent !== undefined || missingValueFlags.has("intent")) {
+    die(
+      "intent-create does not accept --intent: it creates a new intent and names " +
+        "it itself. Use --space <name> to choose the space it is created in.",
+    );
+  }
   const invalid = INTENT_CREATE_VALUE_FLAGS.filter(
     (name) =>
       missingValueFlags.has(name) ||
@@ -389,12 +400,19 @@ function validateIntentCreateFlagValues(
 function appendAuditEvent(
   projectDir: string,
   event: string,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  intent?: string,
+  space?: string,
 ): void {
-  if (holdsAuditLock(projectDir)) {
-    appendAuditEntryUnlocked(event, fields, projectDir);
+  // Held on either bucket this process could own: the workspace sentinel (the
+  // creation transaction) or the named record's own per-intent bucket.
+  const held =
+    holdsAuditLock(projectDir) ||
+    (intent !== undefined && holdsAuditLock(projectDir, intent, space));
+  if (held) {
+    appendAuditEntryUnlocked(event, fields, projectDir, intent, space);
   } else {
-    appendAuditEntry(event, fields, projectDir);
+    appendAuditEntry(event, fields, projectDir, intent, space);
   }
 }
 
@@ -5714,11 +5732,13 @@ function phasesWithExecuteStages(scope: string): Set<string> {
 // by the agent's own file tool, which creates its parent chain on first write,
 // and every deterministic reader of a phase dir guards on existence. This only
 // ever creates: an older record that already carries all five keeps them.
-function ensureWorkspaceDirs(projectDir: string, scope: string): void {
-  // docsDir() default-resolves the active intent's record dir (or the flat
-  // fallback when no intent resolves) — the cursor set by createIntent/migration
-  // points it at the created intent.
-  const record = docsDir(projectDir);
+function ensureWorkspaceDirs(
+  projectDir: string,
+  scope: string,
+  intent: string,
+  space: string,
+): void {
+  const record = docsDir(projectDir, intent, space);
   mkdirSync(record, { recursive: true });
   // Lazy per-phase artifact dirs, in-scope phases only (stages write reports here).
   for (const phase of phasesWithExecuteStages(scope)) {
@@ -5729,14 +5749,14 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   mkdirSync(join(record, "verification"), { recursive: true });
   // The shared CodeKB parent is safe to inspect before any repository has been
   // analyzed. Per-repo stores remain lazy and appear only when RE writes them.
-  mkdirSync(dirname(codekbDir(projectDir, "_")), { recursive: true });
+  mkdirSync(dirname(codekbDir(projectDir, "_", space)), { recursive: true });
   // SPACE-level domain knowledge dir (NOT per-intent): vision §"Spaces" makes
   // knowledge a sibling of memory/codekb/intents under spaces/<space>/, so team
   // domain knowledge accumulates across every intent in the space rather than
   // being trapped in one intent's record. Free-form, empty at bootstrap. The
   // engine's per-agent METHODOLOGY knowledge ships separately under
   // <harness>/knowledge/ (untouched). Lazy ensure-exists — never SEED.
-  mkdirSync(knowledgeDir(projectDir), { recursive: true });
+  mkdirSync(knowledgeDir(projectDir, space), { recursive: true });
   // Engine-only-install self-heal: recover an ENGINE-ONLY install. Normally the
   // workspace shell (aidlc/spaces/default/memory/) ships as a SIBLING of the
   // engine dir (the packager's emitMemory → MEMORY_DST), so a complete dist/
@@ -5844,7 +5864,55 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       `Unknown Change Control value: "${flags["change-control"]}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
     );
   }
-  const initialSelection = resolveWorkflowSelection(projectDir);
+  // The creation target. An explicit --space is the one selector creation takes:
+  // the intent is created under that space, that space's memory layers govern
+  // its Change Control, and the refusal rows land under that space (main seeds
+  // errorSelection from the same flag). Without the flag the session binding or
+  // the active-space cursor decides, as before. A space that does not exist is
+  // refused: creating a space is a separate, deliberate move.
+  if (flags.space !== undefined) {
+    const spaces = listSpaces(projectDir);
+    if (!spaces.some((s) => s.name === flags.space)) {
+      die(
+        `Unknown space "${flags.space}". Existing: ${spaces.map((s) => s.name).join(", ")}. ` +
+          "intent-create only creates in an existing space; create the space first " +
+          "(/aidlc space create <name>, or legacy /aidlc space-create <name>).",
+      );
+    }
+  }
+  const initialSelection = resolveWorkflowSelection(projectDir, { space: flags.space });
+
+  // Preflight the target space's Change Control memory BEFORE any mutation. The
+  // state build re-reads it under the lock to write the state line; checking
+  // here means a refused creation creates nothing: no record dir, no registry
+  // row, no cursor move, no audit rows.
+  const requestedChangeControl = parseChangeControl(flags["change-control"]);
+  let preflightMemoryStrict: ChangeControlMemoryDeclaration | null;
+  try {
+    preflightMemoryStrict =
+      memoryChangeControlDeclarations(projectDir, { space: initialSelection.space })
+        .find((declaration) => declaration.value === "strict") ?? null;
+  } catch (e) {
+    die(errorMessage(e));
+  }
+  if (preflightMemoryStrict !== null && requestedChangeControl === "relaxed") {
+    die(changeControlMemoryStrictRefusal(preflightMemoryStrict));
+  }
+  // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
+  // creation (below, under the lock). An explicit other space cannot be honored
+  // on that same run, so refuse instead of silently creating somewhere else.
+  if (
+    flags.space !== undefined &&
+    flags.space !== DEFAULT_SPACE &&
+    needsFlatMigration(projectDir)
+  ) {
+    die(
+      "intent-create refused: this project still has the flat aidlc-docs/ layout, " +
+        `which the first creation migrates into the "${DEFAULT_SPACE}" space. Run ` +
+        "intent-create once without --space to migrate it, then create in " +
+        `"${flags.space}".`,
+    );
+  }
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -5944,6 +6012,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       );
     }
     const space = initialSelection.space;
+    // The preflight above ran outside the lock; a memory edit could land in
+    // between. Re-read under the lock, still BEFORE the mint, so the refusal
+    // that reaches the human is always a creation that did nothing. The state
+    // build reads memory once more to write the state line (same answer, same
+    // lock).
+    const lockedMemoryStrict =
+      memoryChangeControlDeclarations(projectDir, { space })
+        .find((declaration) => declaration.value === "strict") ?? null;
+    if (lockedMemoryStrict !== null && requestedChangeControl === "relaxed") {
+      die(changeControlMemoryStrictRefusal(lockedMemoryStrict));
+    }
     const created = createIntent(
       projectDir,
       slug,
@@ -5956,11 +6035,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const ts = isoTimestamp();
 
     // ---- Audit bootstrap + creation events (relocated from the old --init) ----
+    //
+    // Every write from here on names the CREATED record explicitly. The
+    // default-resolving helpers follow the session binding or the active-space
+    // cursor, and an explicit --space is neither: without the selection they
+    // would land the new workflow's rows and state in the active space's intent.
 
     // audit.md: header-only bootstrap if absent. WORKFLOW_STARTED is the creation
-    // event; SESSION_STARTED is owned by the SessionStart hook. This resolves to
-    // the created intent's per-clone audit shard (cursor set above).
-    const auditPath = auditFilePath(projectDir);
+    // event; SESSION_STARTED is owned by the SessionStart hook.
+    const auditPath = auditFilePath(projectDir, created.dirName, created.space);
     if (!existsSync(auditPath)) {
       mkdirSync(dirname(auditPath), { recursive: true });
       writeFileSync(auditPath, `# AI-DLC Audit Log\n`, "utf-8");
@@ -5972,7 +6055,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
-      ...sourceBaselineAuditFields(projectDir, "code-generation"),
+      ...sourceBaselineAuditFields(
+        projectDir,
+        "code-generation",
+        created.dirName,
+        created.space,
+      ),
       ...(reviewOverride !== undefined
         ? {
             "Review Override":
@@ -5980,9 +6068,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           }
         : {}),
       // Record the intent's repo span at creation (P7). Omitted when no repos were
-      // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
+      // captured (legacy single-repo / fresh greenfield: the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
-    });
+    }, created.dirName, created.space);
 
     // PHASE_STARTED for the Init phase — Init always runs. Other phases emit
     // PHASE_STARTED at their boundary (via aidlc-state.ts advance) or
@@ -5994,7 +6082,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       Phase: "initialization",
       "Stage count": String(initStageCount),
       Scope: scope,
-    });
+    }, created.dirName, created.space);
 
     // PHASE_SKIPPED — one per phase the scope excludes entirely (no EXECUTE
     // stages in that phase). Captures the scope decision at workflow creation so
@@ -6010,14 +6098,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           Phase: phase,
           Scope: scope,
           Reason: `scope ${scope} excludes ${phase}`,
-        });
+        }, created.dirName, created.space);
       }
     }
 
     appendAuditEvent(projectDir, "STAGE_STARTED", {
       Stage: "workspace-scaffold",
       Agent: "orchestrator",
-    });
+    }, created.dirName, created.space);
 
     // ---- Ensure-exists record dirs (lazy; SEED ships the shell) ----
     // The shipped shell already carries spaces/default/memory + native includes.
@@ -6025,17 +6113,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // per IN-SCOPE phase (a scope-excluded phase gets none), verification/, and
     // the space-level knowledge/ dir. All idempotent: skip any dir that already
     // exists, and never remove one.
-    ensureWorkspaceDirs(projectDir, scope);
+    ensureWorkspaceDirs(projectDir, scope, created.dirName, created.space);
 
     const phaseDirDetail = `${runningPhases.size} in-scope phase dirs + verification/ + space-level knowledge/ ensured`;
     appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
       Request: `/aidlc ${flags.arguments || scope}`,
       Details: `${phaseDirDetail} (shell shipped by SEED)`,
-    });
+    }, created.dirName, created.space);
     appendAuditEvent(projectDir, "STAGE_COMPLETED", {
       Stage: "workspace-scaffold",
       Details: phaseDirDetail,
-    });
+    }, created.dirName, created.space);
 
     handleIntentCreateStateBuild(
       projectDir,
@@ -6069,7 +6157,7 @@ function handleIntentCreateStateBuild(
   appendAuditEvent(projectDir, "STAGE_STARTED", {
     Stage: "workspace-detection",
     Agent: "orchestrator",
-  });
+  }, createdDir, createdSpace);
 
   const scan = detectWorkspace(projectDir);
   const uninitSubmodules = scan.submodules.filter((s) => !s.initialized);
@@ -6093,18 +6181,18 @@ function handleIntentCreateStateBuild(
       uninitSubmodules.length > 0
         ? `Deterministic rule-based scan; ${submoduleRemedy}`
         : "Deterministic rule-based scan",
-  });
+  }, createdDir, createdSpace);
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "workspace-detection",
     Details: `Classified ${scan.projectType}; languages=${scan.languages}; frameworks=${scan.frameworks}`,
-  });
+  }, createdDir, createdSpace);
 
   // ---- State init (stage 0.3) ----
 
   appendAuditEvent(projectDir, "STAGE_STARTED", {
     Stage: "state-init",
     Agent: "orchestrator",
-  });
+  }, createdDir, createdSpace);
 
   const graph = loadStageGraph();
   const scopeMapping = loadScopeMapping();
@@ -6331,10 +6419,10 @@ ${stageProgress}
 `;
 
   writeFileAtomic(
-    projectDescriptionFilePath(projectDir),
+    projectDescriptionFilePath(projectDir, createdDir, createdSpace),
     `${JSON.stringify(rawProjectDesc)}\n`,
   );
-  writeStateFile(projectDir, stateContent);
+  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
 
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
@@ -6344,11 +6432,11 @@ ${stageProgress}
     Frameworks: scan.frameworks,
     "Build System": scan.buildSystem,
     Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
-  });
+  }, createdDir, createdSpace);
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
     Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
-  });
+  }, createdDir, createdSpace);
 
   // Phase hand-off: initialization → first post-init phase. The state file
   // advertises Current Stage = first post-init, so the audit must reflect
@@ -6361,23 +6449,22 @@ ${stageProgress}
       "From phase": "initialization",
       "To phase": firstPostInitEntry.phase,
       "Stages completed": String(completedInit),
-    });
+    }, createdDir, createdSpace);
     appendAuditEvent(projectDir, "PHASE_VERIFIED", {
       "Phase boundary": `initialization → ${firstPostInitEntry.phase}`,
-    });
+    }, createdDir, createdSpace);
     appendAuditEvent(projectDir, "PHASE_STARTED", {
       Phase: firstPostInitEntry.phase,
       Scope: scope,
-    });
+    }, createdDir, createdSpace);
     appendAuditEvent(projectDir, "STAGE_STARTED", {
       Stage: firstPostInit,
       Agent: firstPostInitAgent,
-    });
+    }, createdDir, createdSpace);
   }
 
-  // Combined stdout summary (intent created + state-build). The active-intent
-  // cursor + the record dir were set by createIntent above; the state file lives
-  // under the created intent's record (resolved by writeStateFile's default).
+  // Combined stdout summary (intent created + state-build). The state file and
+  // every row above name the created record explicitly.
   const submoduleWarningLine =
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
@@ -8660,7 +8747,7 @@ export async function main(argv: string[]): Promise<void> {
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] [--repos <name,...>] " +
-        "[--project-dir <path>]\n",
+        "[--space <name>] [--project-dir <path>]\n",
     );
     return;
   }

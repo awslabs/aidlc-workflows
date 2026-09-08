@@ -828,3 +828,140 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     expect(existsSync(emptyIntents) ? readdirSync(emptyIntents).sort() : null).toEqual(beforeEmpty);
   });
 });
+
+describe("t333 (8) intent-create --space is the creation target end to end", () => {
+  const CREATE = ["intent-create", "--scope", "classic", "--arguments", "x", "--label", "in-alt"];
+
+  /** Every on-disk fact a refused creation must leave alone. */
+  function snapshot(proj: string, space: string) {
+    const intents = join(proj, "aidlc", "spaces", space, "intents");
+    const records = readdirSync(intents)
+      .filter((name) => existsSync(join(intents, name, "aidlc-state.md")))
+      .sort();
+    return {
+      records,
+      registry: readFileSync(join(intents, "intents.json"), "utf-8"),
+      cursor: readFileSync(join(intents, "active-intent"), "utf-8"),
+      states: records.map((name) => readFileSync(join(intents, name, "aidlc-state.md"), "utf-8")),
+    };
+  }
+
+  test("a relaxed request into a memory-strict space is refused and creates nothing anywhere", () => {
+    const selected = selectedProject("classic");
+    declareAltMemoryStrict(selected.proj);
+    const defaultBefore = snapshot(selected.proj, "default");
+    const altBefore = snapshot(selected.proj, "alt");
+    const defaultRows = readAuditShardEvents(selected.proj, selected.defaultIntent, "default");
+    const altRows = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
+
+    const refused = run(
+      UTILITY,
+      [...CREATE, "--change-control", "relaxed", "--space", "alt"],
+      selected.proj,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(
+      `Change Control is set to strict in ${altMemoryFile(selected.proj)} (section: Change Control)`,
+    );
+    expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
+    expect(snapshot(selected.proj, "alt")).toEqual(altBefore);
+    expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(defaultRows);
+    // The refusal is recorded under the selected space, in its active intent.
+    const altAfter = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
+    expect(altAfter).toHaveLength(altRows.length + 1);
+    expect(altAfter[altAfter.length - 1].event).toBe("ERROR_LOGGED");
+  });
+
+  test("a creation into another space lands there, reads its memory, and leaves the active space alone", () => {
+    const selected = selectedProject("classic");
+    declareAltMemoryStrict(selected.proj);
+    const defaultBefore = snapshot(selected.proj, "default");
+    const defaultRows = readAuditShardEvents(selected.proj, selected.defaultIntent, "default");
+    const altIntents = join(selected.proj, "aidlc", "spaces", "alt", "intents");
+
+    const created = run(UTILITY, [...CREATE, "--space", "alt"], selected.proj);
+
+    expect(created.status, created.stderr).toBe(0);
+    const createdDir = readFileSync(join(altIntents, "active-intent"), "utf-8").trim();
+    expect(createdDir).not.toBe(selected.targetIntent);
+    expect(created.stdout).toContain(`Intent created: ${createdDir} (space: alt)`);
+    const state = readFileSync(join(altIntents, createdDir, "aidlc-state.md"), "utf-8");
+    expect(getField(state, CHANGE_CONTROL_FIELD)).toBe("strict (from project.md)");
+    expect(getField(state, "Current Stage")).not.toBeNull();
+    const rows = readAuditShardEvents(selected.proj, createdDir, "alt");
+    expect(rows.map((row) => row.event)).toContain("WORKFLOW_STARTED");
+    expect(rows.map((row) => row.event)).toContain("WORKSPACE_INITIALISED");
+    expect(existsSync(join(altIntents, createdDir, "verification"))).toBe(true);
+    // The active space is untouched: cursor, registry, records, rows.
+    expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
+    expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(defaultRows);
+    expect(readFileSync(join(selected.proj, "aidlc", "active-space"), "utf-8").trim()).toBe("default");
+
+    const status = run(UTILITY, ["status", "--space", "alt", "--intent", createdDir], selected.proj);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain("Change Control: strict (from project.md)\n");
+  });
+
+  test("without a strict memory the created intent carries the scope default and status reports it", () => {
+    const selected = selectedProject("classic");
+    const altIntents = join(selected.proj, "aidlc", "spaces", "alt", "intents");
+
+    const created = run(UTILITY, [...CREATE, "--space", "alt"], selected.proj);
+
+    expect(created.status, created.stderr).toBe(0);
+    const createdDir = readFileSync(join(altIntents, "active-intent"), "utf-8").trim();
+    expect(createdDir).not.toBe(selected.targetIntent);
+    expect(existsSync(join(altIntents, createdDir, "aidlc-state.md"))).toBe(true);
+    const status = run(UTILITY, ["status", "--space", "alt", "--intent", createdDir], selected.proj);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain("Change Control: relaxed (from scope classic)\n");
+  });
+
+  test("--intent and an unknown --space are refused before anything is created", () => {
+    const selected = selectedProject("classic");
+    const defaultBefore = snapshot(selected.proj, "default");
+    const altBefore = snapshot(selected.proj, "alt");
+
+    const withIntent = run(UTILITY, [...CREATE, "--intent", selected.targetIntent], selected.proj);
+    expect(withIntent.status).toBe(1);
+    expect(withIntent.stderr).toContain(
+      "intent-create does not accept --intent: it creates a new intent and names it itself. Use --space <name> to choose the space it is created in.",
+    );
+
+    const unknownSpace = run(UTILITY, [...CREATE, "--space", "nowhere"], selected.proj);
+    expect(unknownSpace.status).toBe(1);
+    expect(unknownSpace.stderr).toContain('Unknown space \\"nowhere\\".');
+    expect(unknownSpace.stderr).toContain("intent-create only creates in an existing space");
+    expect(existsSync(join(selected.proj, "aidlc", "spaces", "nowhere"))).toBe(false);
+
+    expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
+    expect(snapshot(selected.proj, "alt")).toEqual(altBefore);
+  });
+
+  test("an explicit other space is refused while the flat layout still awaits migration", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const createdSpace = run(UTILITY, ["space-create", "alt"], proj);
+    expect(createdSpace.status, createdSpace.stderr).toBe(0);
+    mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+    writeFileSync(
+      join(proj, "aidlc-docs", "aidlc-state.md"),
+      "- **Current Stage**: requirements-analysis\n- **Workflow**: Build Auth Service\n",
+    );
+    const altIntents = join(proj, "aidlc", "spaces", "alt", "intents");
+    const defaultIntents = join(proj, "aidlc", "spaces", "default", "intents");
+    const listing = (dir: string) => (existsSync(dir) ? readdirSync(dir).sort() : null);
+    const altBefore = listing(altIntents);
+    const defaultBefore = listing(defaultIntents);
+
+    const refused = run(UTILITY, [...CREATE, "--space", "alt"], proj);
+
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("still has the flat aidlc-docs/ layout");
+    expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(true);
+    expect(listing(altIntents)).toEqual(altBefore);
+    expect(listing(defaultIntents)).toEqual(defaultBefore);
+  });
+});
