@@ -206,7 +206,7 @@ function humanReport(
     codex: "Codex CLI",
     copilot: "GitHub Copilot",
     cursor: "Cursor",
-    kiro: "Kiro CLI",
+    kiro: "Kiro",
     "kiro-ide": "Kiro IDE",
     opencode: "opencode",
   };

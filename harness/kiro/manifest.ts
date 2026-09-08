@@ -1,9 +1,10 @@
-// harness/kiro/manifest.ts — the Kiro CLI distribution row.
+// harness/kiro/manifest.ts — the Kiro distribution row.
 //
-// Projects the harness-neutral core/ tree into dist/kiro/.kiro/, plus Kiro's
-// authored shell surfaces (orchestrator skill, agent JSON configs, the stdin
-// adapter hook, settings/cli.json, AGENTS.md). Mirrors the proven
-// package-kiro.ts spike, generalized onto the unified packager.
+// One row for the unified agent harness: the same `.kiro/` shell serves Kiro IDE
+// 1.x and Kiro CLI, because both run the same agent runtime. Projects the
+// harness-neutral core/ tree into dist/kiro/.kiro/, plus Kiro's authored shell
+// surfaces (orchestrator skill, agent configs, the stdin adapter hook,
+// settings/cli.json, AGENTS.md).
 //
 // Kiro specifics vs Claude:
 //   - token → .kiro
@@ -22,8 +23,9 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "kiro",
-  productName: "Kiro CLI",
-  configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
+  productName: "Kiro",
+  configNextStep:
+    "open this project in Kiro IDE, or run `kiro-cli` in it, then run `/aidlc --doctor`",
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
