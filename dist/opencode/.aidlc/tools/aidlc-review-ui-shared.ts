@@ -4,8 +4,12 @@
 // the utility surfaces (--status/--doctor) that report on it.
 //
 // Dependency-free (node built-ins only) so hooks, the engine, and the daemon can
-// all import it without cycles. Everything here is gated on AIDLC_REVIEW_UI=1;
-// with the flag unset nothing below is ever called on a hot path.
+// all import it without cycles. The daemon/round machinery is gated on
+// AIDLC_REVIEW_UI=1 and is never called on a hot path with the flag unset. Two
+// parts are not gated, because the file contract is the same on and off:
+// the questions-file parser (`parseQuestionsMarkdown`; aidlc-log reads the
+// recorded answers for the terminal summary confirmation) and the browser-round
+// continuation texts shared with the Stop hook.
 //
 // Layout (see docs/reference/19-review-ui-and-html-artifacts.md):
 //   <REVIEW_HOME>/<project-id>/server.json         daemon discovery (home dir, never in the repo)
