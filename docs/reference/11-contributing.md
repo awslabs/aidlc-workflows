@@ -77,7 +77,7 @@ generated native projections, not copied from those sidecars.
 verification record for each binary. The generated flat directory is the
 contract consumed by the installer and `release packaging tooling`.
 
-The tag-triggered release workflow is deliberately candidate-preserving:
+The release workflow is deliberately candidate-preserving:
 verification and installer lint run first; target-native jobs produce binaries
 and evidence; `package-release.ts` runs once to create `release-candidate`; the
 staging job checksums and uploads it without signing; and Unix/Windows lifecycle
@@ -86,9 +86,12 @@ the exported bundle, validates the complete inventory, and uploads one
 `attested-release` artifact. `release` rechecks the tag and checksums, creates
 the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
-candidate. The same workflow also schedules preview builds from `main`, gates
-them through callable CI, stamps `AIDLC_BUILD_VERSION`, and publishes an
-annotated-tag prerelease that is never "latest". The full trust design is
+candidate. Stable releases start from pushed version tags. The same workflow
+also schedules or manually dispatches preview builds from `main`, gates them
+through callable CI, stamps `AIDLC_BUILD_VERSION`, and publishes an
+annotated-tag prerelease that is never "latest". Stable and preview publication
+use the `release` and `preview` environments respectively and queue
+independently. The full trust design is
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Testing

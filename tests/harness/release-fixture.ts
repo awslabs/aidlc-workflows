@@ -29,7 +29,11 @@ import {
   projectionFiles,
   walkFiles,
 } from "../../core/tools/aidlc-distribution.ts";
-import { requireVersion } from "../../core/tools/aidlc-channel.ts";
+import {
+  parseVersion,
+  PREVIEW_CHANNEL,
+  requireVersion,
+} from "../../core/tools/aidlc-channel.ts";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import {
   digest,
@@ -286,7 +290,9 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     schemaVersion: 1,
     version,
     date: "2026-07-17",
-    sourceRef: `refs/tags/v${version}`,
+    sourceRef: parseVersion(version).channel === PREVIEW_CHANNEL
+      ? "refs/heads/main"
+      : `refs/tags/v${version}`,
     sourceDigest: "0".repeat(40),
     distributions: distributionRows,
     assets,

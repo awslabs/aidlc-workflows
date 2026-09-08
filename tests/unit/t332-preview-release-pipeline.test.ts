@@ -5,7 +5,7 @@
 // unchanged main, allocates the day's build counter from every existing preview
 // tag, and renders notes from the CHANGELOG sections (or commit subjects) added
 // since the previous preview's source commit. The workflow contract pins the
-// schedule, the channel input, the CI gate ordering, and the stamped build env.
+// schedule/manual trigger, CI gate ordering, and stamped build environment.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -511,20 +511,16 @@ describe("t332 preview publication pipeline", () => {
     expect(Object.keys(ci.on)).toContain("workflow_call");
     const parsed = Bun.YAML.parse(workflow) as {
       on: {
+        push: { tags: string[] };
         schedule?: Array<{ cron: string }>;
-        workflow_dispatch: {
-          inputs: Record<string, {
-            description?: string;
-            required?: boolean;
-            type?: string;
-            default?: string;
-            options?: string[];
-          }>;
-        };
+        workflow_dispatch: unknown;
       };
+      concurrency?: { group?: string; "cancel-in-progress"?: boolean };
       jobs: Record<string, {
         needs?: string | string[];
         if?: string;
+        environment?: string;
+        permissions?: Record<string, string>;
         uses?: string;
         env?: Record<string, string>;
         outputs?: Record<string, string>;
@@ -534,13 +530,13 @@ describe("t332 preview publication pipeline", () => {
     const cron = parsed.on.schedule?.[0]?.cron ?? "";
     expect(cron).toMatch(/^\d{1,2} \d{1,2} \* \* \*$/);
     expect(cron.split(" ")[0]).not.toBe("0");
-    expect(parsed.on.workflow_dispatch.inputs.tag.required).toBe(false);
-    expect(parsed.on.workflow_dispatch.inputs.channel).toEqual({
-      description: "Release channel to publish",
-      type: "choice",
-      default: STABLE_CHANNEL,
-      options: [STABLE_CHANNEL, PREVIEW_CHANNEL],
-    });
+    expect(parsed.on.workflow_dispatch).toBeDefined();
+    expect(parsed.on.push.tags).toContain("v*.*.*");
+    expect(parsed.on.push.tags).toContain("!v*-preview.*");
+    expect(parsed.concurrency?.group).toBe(
+      `release-\${{ github.event_name == 'push' && 'stable' || 'preview' }}`,
+    );
+    expect(parsed.concurrency?.["cancel-in-progress"]).toBe(false);
 
     const jobs = parsed.jobs;
     for (const [name, job] of Object.entries(jobs)) {
@@ -561,25 +557,29 @@ describe("t332 preview publication pipeline", () => {
     for (const name of Object.keys(jobs)) visit(name);
 
     expect(jobs.gate.uses).toBe("./.github/workflows/ci.yml");
-    expect(jobs.gate.needs).toBe("authorize");
-    expect(jobs.gate.if).toContain(`needs.authorize.outputs.channel == '${PREVIEW_CHANNEL}'`);
-    expect(jobs.gate.if).toContain("needs.authorize.outputs.skip != 'true'");
-    expect(jobs["gate-result"].needs).toEqual(["authorize", "gate"]);
+    expect(jobs.gate.needs).toBe("validate");
+    expect(jobs.gate.if).toContain(`needs.validate.outputs.channel == '${PREVIEW_CHANNEL}'`);
+    expect(jobs.gate.if).toContain("needs.validate.outputs.skip != 'true'");
+    expect(jobs["gate-result"].needs).toEqual(["validate", "gate"]);
     expect(jobs["gate-result"].if).toContain("needs.gate.result == 'success'");
-    expect(jobs["gate-result"].if).toContain("needs.authorize.outputs.skip != 'true'");
-    expect(jobs.verify.needs).toEqual(["authorize", "gate-result"]);
-    expect(jobs.publish.needs).toEqual(["authorize", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
-    expect(jobs.promote.needs).toEqual(["authorize", "publish"]);
+    expect(jobs["gate-result"].if).toContain("needs.validate.outputs.skip != 'true'");
+    expect(jobs.verify.needs).toEqual(["validate", "gate-result"]);
+    expect(jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
+    expect(jobs.release.needs).toEqual(["validate", "publish"]);
+    expect(jobs.release.environment).toBe(
+      `\${{ needs.validate.outputs.channel == 'preview' && 'preview' || 'release' }}`,
+    );
+    expect(jobs.release.permissions).toEqual({ contents: "write" });
 
     for (const key of ["channel", "tag", "sha", "skip", "preview_version", "preview_plan"]) {
-      expect(jobs.authorize.outputs?.[key], key).toBeDefined();
+      expect(jobs.validate.outputs?.[key], key).toBeDefined();
     }
-    const plan = jobs.authorize.steps?.find((step) => step.name === "Plan preview publication");
-    expect(plan?.if).toBe(`steps.authorize.outputs.channel == '${PREVIEW_CHANNEL}'`);
+    const plan = jobs.validate.steps?.find((step) => step.name === "Plan preview publication");
+    expect(plan?.if).toBe(`steps.validate.outputs.channel == '${PREVIEW_CHANNEL}'`);
     expect(plan?.run).toContain("bun scripts/plan-preview-release.ts");
     expect(plan?.run).toContain('--source-digest "$AUTHORIZED_SHA"');
 
-    const stamp = `\${{ needs.authorize.outputs.preview_version }}`;
+    const stamp = `\${{ needs.validate.outputs.preview_version }}`;
     expect(jobs.build.env?.AIDLC_BUILD_VERSION).toBe(stamp);
     expect(jobs["stage-release"].env?.AIDLC_BUILD_VERSION).toBe(stamp);
     const smoke = jobs["native-smoke"].steps ?? [];
@@ -587,13 +587,14 @@ describe("t332 preview publication pipeline", () => {
     expect(smoke.find((step) => step.run?.includes("t238-build-binaries"))?.env?.AIDLC_BUILD_VERSION).toBe(stamp);
     expect(jobs.verify.env).toBeUndefined();
 
-    const publishStep = jobs.promote.steps?.find((step) =>
-      step.name === "Publish and re-verify exact verified release bytes"
-    );
-    expect(publishStep?.env?.RELEASE_CHANNEL).toBe(`\${{ needs.authorize.outputs.channel }}`);
-    expect(publishStep?.env?.PREVIEW_PLAN).toBe(`\${{ needs.authorize.outputs.preview_plan }}`);
-    expect(publishStep?.run).toContain('--channel "$RELEASE_CHANNEL"');
-    expect(publishStep?.run).toContain('--preview-plan "$preview_plan"');
-    expect(workflow).not.toContain("\n  push:");
+    const preview = jobs.release.steps?.find((step) => step.name === "Create preview GitHub Release");
+    expect(preview?.if).toBe(`needs.validate.outputs.channel == '${PREVIEW_CHANNEL}'`);
+    expect(preview?.run).toContain("bun scripts/publish-release.ts");
+    expect(preview?.run).toContain("--channel preview");
+    expect(preview?.run).toContain('--preview-plan "$plan"');
+    expect(preview?.run).toContain("--expected-assets 13");
+    const stable = jobs.release.steps?.find((step) => step.name === "Create stable GitHub Release");
+    expect(stable?.if).toBe(`needs.validate.outputs.channel == '${STABLE_CHANNEL}'`);
+    expect(stable?.run).toContain("--generate-notes");
   });
 });

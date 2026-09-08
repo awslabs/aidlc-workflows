@@ -39,6 +39,7 @@ if (
   signerWorkflow !== expectedWorkflow ||
   (
     sourceRef !== undefined &&
+    sourceRef !== "refs/heads/main" &&
     !sourceRef.startsWith("refs/tags/v")
   ) ||
   (sourceDigest !== undefined && !/^[a-f0-9]{40}$/.test(sourceDigest))

@@ -51,17 +51,23 @@ started manually. Its planner skips an unchanged source commit, allocates
 from the changes since the previous preview. Callable CI gates the authorized
 commit before the normal release build chain. `AIDLC_BUILD_VERSION` stamps the
 preview id into projections, binaries, `version.json`, and the versioned runtime
-archive while the source tree keeps its stable `x.y.z` version. Publication
-creates an annotated tag that records the source repository and commit, then
-creates a prerelease with `--latest=false`; stable `latest/download` discovery
-therefore remains unchanged.
+archive while the source tree keeps its stable `x.y.z` version. The preview
+publisher verifies a staging draft, creates an annotated tag that records the
+source repository and commit, then publishes the draft as a prerelease with
+`make_latest: false`; stable `latest/download` discovery therefore remains
+unchanged. The final publication job selects the protected `release`
+environment for stable tags and the unattended `preview` environment for
+preview runs. The preview environment must keep the same `main` deployment
+policy but no required reviewers; merge approval plus callable CI are its human
+and deterministic gates. Workflow concurrency queues stable and preview runs
+separately rather than cancelling an in-flight build-counter allocation.
 
 When a compatible GitHub CLI is available, installers verify `checksums.txt`
 against that bundle and bind verification to:
 
 - `awslabs/aidlc-workflows`;
 - `.github/workflows/release.yml`;
-- the release tag;
+- the version tag for stable releases or `refs/heads/main` for previews;
 - the exact source commit from `version.json`.
 
 Missing or older GitHub CLI versions do not block installation. In that mode,

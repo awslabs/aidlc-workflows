@@ -4,9 +4,20 @@ on:
   push:
     tags:
       - "v*.*.*"
+      - "!v*-preview.*"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
+
+# Stable tags and preview publications have independent serialization. Preview
+# runs queue instead of cancelling because each run allocates its build number
+# from the tags left by earlier runs.
+concurrency:
+  group: release-${{ github.event_name == 'push' && 'stable' || 'preview' }}
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -14,8 +25,12 @@ jobs:
     permissions:
       contents: read
     outputs:
-      tag: ${{ steps.validate.outputs.tag }}
+      channel: ${{ steps.validate.outputs.channel }}
+      tag: ${{ steps.plan.outputs.tag || steps.validate.outputs.tag }}
       sha: ${{ steps.validate.outputs.sha }}
+      skip: ${{ steps.plan.outputs.skip == 'true' }}
+      preview_version: ${{ steps.plan.outputs.preview_version }}
+      preview_plan: ${{ steps.plan.outputs.preview_plan }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -28,22 +43,75 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          test "$GITHUB_EVENT_NAME" = "push"
-          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
-          git fetch --force origin \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" main
-          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
-          main_sha="$(git rev-parse origin/main^{commit})"
-          test "$GITHUB_SHA" = "$tag_sha"
-          test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
-          git merge-base --is-ancestor "$tag_sha" "$main_sha"
-          version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
-          test "$RELEASE_TAG" = "v$version"
-          printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            channel=stable
+            [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+            git fetch --force origin \
+              "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" main
+            tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+            source_sha="$tag_sha"
+            main_sha="$(git rev-parse origin/main^{commit})"
+            test "$GITHUB_SHA" = "$source_sha"
+            test "$(git rev-parse HEAD^{commit})" = "$source_sha"
+            git merge-base --is-ancestor "$source_sha" "$main_sha"
+            version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
+            test "$RELEASE_TAG" = "v$version"
+          else
+            channel=preview
+            case "$GITHUB_EVENT_NAME" in
+              schedule | workflow_dispatch) ;;
+              *) exit 1 ;;
+            esac
+            test "$GITHUB_REF" = "refs/heads/main"
+            git fetch --no-tags origin main
+            source_sha="$(git rev-parse origin/main^{commit})"
+            test "$GITHUB_SHA" = "$source_sha"
+            test "$(git rev-parse HEAD^{commit})" = "$source_sha"
+            RELEASE_TAG=
+          fi
+          printf 'channel=%s\ntag=%s\nsha=%s\n' \
+            "$channel" "$RELEASE_TAG" "$source_sha" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: steps.validate.outputs.channel == 'preview'
+        with:
+          bun-version: 1.3.14
+      - name: Plan preview publication
+        id: plan
+        if: steps.validate.outputs.channel == 'preview'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHORIZED_SHA: ${{ steps.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/aidlc-preview-plan.json"
+          bun scripts/plan-preview-release.ts \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-digest "$AUTHORIZED_SHA" \
+            --output "$plan"
+          {
+            printf 'preview_plan='
+            jq -c . "$plan"
+          } >> "$GITHUB_OUTPUT"
+
+  gate:
+    needs: validate
+    if: needs.validate.outputs.channel == 'preview' && needs.validate.outputs.skip != 'true'
+    uses: ./.github/workflows/ci.yml
+
+  gate-result:
+    needs: [validate, gate]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.validate.outputs.skip != 'true' && (needs.validate.outputs.channel != 'preview' || needs.gate.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "release gate completed for $RELEASE_CHANNEL"
+        env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
 
   verify:
-    needs: validate
+    needs: [validate, gate-result]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -149,7 +217,11 @@ jobs:
       # t238 builds the native binary from dist-release/; regenerate first so
       # the smoke proves CI-built bytes on every OS in the matrix.
       - run: bun scripts/package.ts
+        env:
+          AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
       - run: bun test tests/unit/t238-build-binaries.test.ts
+        env:
+          AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
       - if: runner.os == 'Windows'
         run: bun test tests/unit/t244-install-management.test.ts -t "t244 Windows and completion release surfaces"
       - name: PSScriptAnalyzer installer
@@ -190,6 +262,8 @@ jobs:
             target: bun-windows-x64
             directory: windows-x64
     runs-on: ${{ matrix.runner }}
+    env:
+      AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -241,6 +315,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -389,7 +465,7 @@ jobs:
           & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
-          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
+          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8}\.[1-9][0-9]*)?\\aidlc\.exe$') {
             throw "invalid active executable pointer: $pointer"
           }
           $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
@@ -448,7 +524,7 @@ jobs:
           gh_bin="$RUNNER_TEMP/aidlc-gh"
           gh_marker="$RUNNER_TEMP/aidlc-gh-verified"
           manifest_version="$(
-            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9A-Za-z.-]*\)".*/\1/p' \
               "$release/version.json" | head -n 1
           )"
           test -n "$manifest_version"
@@ -456,7 +532,11 @@ jobs:
             sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' \
               "$release/version.json" | head -n 1
           )"
-          test "$manifest_source_ref" = "refs/tags/v$manifest_version"
+          case "$manifest_version" in
+            *-preview.*) expected_source_ref=refs/heads/main ;;
+            *) expected_source_ref="refs/tags/v$manifest_version" ;;
+          esac
+          test "$manifest_source_ref" = "$expected_source_ref"
           if command -v sha256sum >/dev/null 2>&1; then
             checksums_sha="$(sha256sum "$release/checksums.txt" | awk '{print $1}')"
           else
@@ -553,11 +633,18 @@ jobs:
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          git fetch --force origin \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
+          set -euo pipefail
+          if [ "$RELEASE_CHANNEL" = preview ]; then
+            git fetch --no-tags origin main
+            test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          else
+            git fetch --force origin \
+              "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
+          fi
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -598,7 +685,7 @@ jobs:
   release:
     needs: [validate, publish]
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ needs.validate.outputs.channel == 'preview' && 'preview' || 'release' }}
     permissions:
       contents: write
     steps:
@@ -610,18 +697,28 @@ jobs:
         with:
           name: attested-release
           path: build/release
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
+          if [ "$RELEASE_CHANNEL" = preview ]; then
+            git fetch --no-tags origin main
+            test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          else
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
+          fi
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
-      - name: Create GitHub Release
+      - name: Create stable GitHub Release
+        if: needs.validate.outputs.channel == 'stable'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
@@ -631,6 +728,29 @@ jobs:
             --verify-tag \
             --title "AI-DLC ${RELEASE_TAG#v}" \
             --generate-notes
+      - name: Create preview GitHub Release
+        if: needs.validate.outputs.channel == 'preview'
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/aidlc-preview-plan.json"
+          printf '%s\n' "$PREVIEW_PLAN" >"$plan"
+          test "$RELEASE_TAG" = "$(jq -r .tag "$plan")"
+          test "$AUTHORIZED_SHA" = "$(jq -r .sourceDigest "$plan")"
+          bun scripts/publish-release.ts \
+            --directory build/release \
+            --tag "$RELEASE_TAG" \
+            --channel preview \
+            --preview-plan "$plan" \
+            --staging-tag "aidlc-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --target "$AUTHORIZED_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --changelog "$PWD/CHANGELOG.md" \
+            --expected-assets 13
       - name: Verify uploaded asset inventory
         env:
           GH_TOKEN: ${{ github.token }}

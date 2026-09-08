@@ -390,7 +390,11 @@ printf '%s\n' "$candidate_version" |
   fail 4 failed "version.json has no valid version."
 source_ref=$(sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 source_digest=$(sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
-[ "$source_ref" = "refs/tags/v$candidate_version" ] ||
+case "$candidate_version" in
+  *-preview.*) expected_source_ref=refs/heads/main ;;
+  *) expected_source_ref="refs/tags/v$candidate_version" ;;
+esac
+[ "$source_ref" = "$expected_source_ref" ] ||
   fail 4 failed "version.json has an invalid release source ref"
 printf '%s\n' "$source_digest" | grep -Eq '^[a-f0-9]{40}$' ||
   fail 4 failed "version.json has an invalid release source digest"

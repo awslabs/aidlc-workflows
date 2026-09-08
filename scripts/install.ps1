@@ -318,10 +318,12 @@ try {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'checksum mismatch for version.json'
   }
-  if (
-    $manifest.sourceRef -ne "refs/tags/v$($manifest.version)" -or
-    $manifest.sourceDigest -notmatch '^[a-f0-9]{40}$'
-  ) {
+  $expectedSourceRef = if ($manifest.version -match '-preview\.') {
+    'refs/heads/main'
+  } else {
+    "refs/tags/v$($manifest.version)"
+  }
+  if ($manifest.sourceRef -ne $expectedSourceRef -or $manifest.sourceDigest -notmatch '^[a-f0-9]{40}$') {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'version.json has an invalid release source identity'
   }
