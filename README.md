@@ -8,8 +8,7 @@ and GitHub Copilot.
 ![version](https://img.shields.io/badge/version-2.8.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
-AI-DLC Workflows 2.0 is GA on `main`. Pin a known-good release for production
-use and review generated output before acting on it.
+The Quick Start below installs the latest stable AI-DLC release.
 
 ## Quick Start
 
