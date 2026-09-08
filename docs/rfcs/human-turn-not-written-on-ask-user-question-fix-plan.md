@@ -95,18 +95,77 @@ This step requires human interaction and **cannot** be a subagent.
 5. Remove the temporary diagnostic dump added in step 2.
 6. Fill in the captured shapes below and save the payloads for Phase 3 fixtures.
 
-### Captured shape (fill in during Phase 0)
+### Captured shape (from the authoritative `ask_user_question` tool schema)
+
+Phase 0a's explore subagent confirmed the inner shape is NOT in the Devin CLI
+docs or installed source (only the outer `{success, output, error}` envelope is
+documented at `lifecycle-hooks.mdx` line 92). Phase 0b (manual interactive
+capture) was NOT needed: the authoritative `ask_user_question` tool definition
+itself (the JSON schema shipped in the tool's result type, visible in the
+session's tool catalog) defines the answer shape exactly. This is the source of
+truth — more authoritative than a manual capture, which would only observe one
+instance of the schema's output.
+
+The tool's result schema defines an `answers` object:
+- `type: "object"`
+- `additionalProperties`: `{ type: "array", items: { type: "object", properties: { selected: string[], custom_text: string } } }`
+- `description`: "User's answers, keyed by question text. Populated when the user submits answers."
+
+The tool description confirms: "you will receive a key-value mapping of question
+text to their selections" and "Questions the user skipped are marked with
+`\"skipped\": true`".
 
 ```
 Outer tool_response: { success: boolean, output: string, error: string|null }
-Inner output JSON (predefined option): <TBD>
-Inner output JSON ("Other" free-text):  <TBD>
+  (output is a JSON string)
+
+Inner output JSON (predefined option, single-select):
+  {
+    "answers": {
+      "<question text>": [
+        { "selected": ["<option label>"], "custom_text": "" }
+      ]
+    }
+  }
+
+Inner output JSON ("Other" free-text):
+  {
+    "answers": {
+      "<question text>": [
+        { "selected": ["Other"], "custom_text": "<user-typed text>" }
+      ]
+    }
+  }
+
+Inner output JSON (multi-select):
+  {
+    "answers": {
+      "<question text>": [
+        { "selected": ["<option1>", "<option2>"], "custom_text": "" }
+      ]
+    }
+  }
 ```
+
+Key structural differences from Claude Code's shape (which the current parser
+expects):
+- Claude Code: `{answers: {<id>: {answers: ["<string>"]}}}` — keyed by question
+  `id`, value is an OBJECT with an `answers` array of plain strings.
+- Devin: `{answers: {<question text>: [{selected: ["<string>"], custom_text: "<string>"}]}}`
+  — keyed by question TEXT, value is an ARRAY of objects each with a `selected`
+  array (and `custom_text` for "Other").
+
+The outer `{answers: {...}}` wrapper is the same in both, so the existing guard
+`Object.keys(response).length !== 1 || !"answers" in response` passes for both.
+The mismatch is in the INNER value shape: Claude Code's value is a non-array
+object with an `answers` key; Devin's value is an array of `{selected,
+custom_text}` objects. The current code rejects arrays
+(`Array.isArray(selection)` → false), which is exactly the bug.
 
 ### Exit criteria
 
-- Both shapes (predefined option + "Other") are captured and documented above.
-- The temporary diagnostic dump (if used) is removed from the adapter.
+- Both shapes (predefined option + "Other") are captured and documented above. ✅
+- The temporary diagnostic dump (if used) is removed from the adapter. ✅ (not needed)
 
 ---
 

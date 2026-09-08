@@ -51,6 +51,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { writePlanApprovalChallenge } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEVIN_TREE = join(REPO_ROOT, "dist", "devin", ".devin");
@@ -401,6 +402,98 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       expect(r.code).toBe(0);
       const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
       expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13b: record-human-turn with Devin native shape (selected option) records a HUMAN_TURN audit event", () => {
+    // Devin's ask_user_question returns {answers: {<question text>: [{selected: [...], custom_text: ...}]}}
+    // — keyed by question TEXT, value is an ARRAY of {selected, custom_text} objects.
+    // The pre-fix adapter rejected arrays (Array.isArray(selection) → false), so no
+    // HUMAN_TURN was recorded. The dual-path fix recognizes this shape.
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_devinNativeShape as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13c: record-human-turn with Devin Other free-text shape records a HUMAN_TURN audit event", () => {
+    // The "Other" free-text path: Devin's ask_user_question returns
+    // {answers: {<question text>: [{selected: ["Other"], custom_text: "<text>"}]}}
+    // — the actual answer rides in `custom_text` while `selected` is ["Other"].
+    // The dual-path fix recognizes this array shape and extracts the selection,
+    // minting a HUMAN_TURN where the pre-fix adapter skipped (no selection
+    // recognized on an array value).
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_devinOtherShape as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13d: record-human-turn with Devin native shape writes a Plan Approval response when a challenge is seeded", () => {
+    // The end-to-end path that was actually blocked: a human answers an
+    // ask_user_question with a Plan Approval choice, the adapter forwards it to
+    // the core record-human-turn hook, which calls recordPlanApprovalHumanResponse
+    // to write the response file. Pre-fix, the adapter skipped (no selection
+    // recognized) so no response was written.
+    const dir = scratchProject(true);
+    try {
+      const session = "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9";
+      writePlanApprovalChallenge(dir, {
+        version: 1,
+        session,
+        challengeId: "test-challenge-1",
+        targetId: "test-target",
+        intentId: "test-intent",
+        directiveEpoch: "test-epoch",
+        runFloor: "test-run",
+        fingerprint: "a".repeat(64),
+        questionsFile: "construction/code-generation/code-generation-questions.md",
+        promptSha256: "b".repeat(64),
+        sourceFloor: "c".repeat(64),
+        markerRevision: 0,
+        options: ["yes", "no"],
+        requireExactOptionLabels: false,
+        hashedOptionLabels: false,
+      });
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_devinNativeShape as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+      // The Plan Approval response file must be written. The runtime dir lives
+      // under <projectDir>/aidlc/.aidlc-sessions/plan-approval/ and the response
+      // file is named response-<session-segment>.json.
+      const runtimeDir = join(dir, "aidlc", ".aidlc-sessions", "plan-approval");
+      const responseFiles = readdirSync(runtimeDir).filter(
+        (n) => n.startsWith("response-") && n.endsWith(".json"),
+      );
+      expect(responseFiles.length).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

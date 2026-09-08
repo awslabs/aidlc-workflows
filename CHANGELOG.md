@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.4] - 2026-09-08
+
+Fixes two framework bugs that combined to block every path to recording a Plan Approval receipt on Devin 3000.6.14. The Devin/codex adapters now recognize Devin's native `ask_user_question` answer shape (keyed by question text, value is an array of `{selected, custom_text}` objects) alongside the existing Claude Code shape, so a human's `ask_user_question` answer mints a `HUMAN_TURN` audit event and writes the Plan Approval response file. The Stop hook now allows the stop before its engine probe when a pending Plan Approval challenge exists, so the probe can no longer delete the challenge before the pending-question carve-out protects it. **Upgrade:** re-copy `dist/devin/` (and `dist/codex/` if you use codex) into your project, then fully restart Devin CLI.
+
+* Devin + codex adapters: `hasExplicitHumanSelection` and `explicitHumanSelectionText` now use a dual-path parser — the Claude Code shape (`{answers: {<id>: {answers: [...]}}}`) path is unchanged, and a new Devin path recognizes `{answers: {<question text>: [{selected: [...], custom_text: ...}]}}`. Pre-fix, the adapter rejected arrays (`Array.isArray(selection)` → false), so no `HUMAN_TURN` was recorded on a Devin `ask_user_question` answer, blocking Plan Approval receipt recording.
+* Stop hook (`aidlc-continue-workflow.ts`): added a pre-probe carve-out for pending Plan Approval. When a live challenge exists for the current session, the stop is allowed before the engine's `next` probe runs, preventing `resetPlanApprovalRuntime` from deleting the challenge before `isPendingQuestionStop` can protect it. Fail-open (any read error → allow the stop, never trap).
+* Tests: t332 +3 (Devin native shape, Other free-text, end-to-end Plan Approval response file), t121 +1 (challenge survives the Stop hook), t149 +4 (codex `hasExplicitHumanSelection` recognizes Devin shape, no regression on Claude Code shape, rejects cancelled).
+
 ## [2.7.3] - 2026-09-01
 
 Post-merge fixes for the devin release-engineering PR (#1): closes an unasserted build gate, removes a tautological test assertion, and refreshes a stale test header. **Upgrade:** no action required beyond re-copying `dist/devin/` if you use the compiled single-binary release; the runtime-paths and build-binaries changes from #1 are unchanged.

@@ -144,6 +144,7 @@ import {
   matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
+  readPlanApprovalChallenge,
   readSessionIntentHandoff,
   readSessionIntentUuid,
   recordHookDrop,
@@ -167,6 +168,18 @@ import {
 import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
 
 const HOOK_NAME = "continue-workflow";
+
+// Pending-Plan-Approval challenge probe. Read-only and fail-open: any error
+// returns false, never throws. Used by the pre-probe carve-out below so the
+// engine's `next` probe cannot delete the challenge before isPendingQuestionStop
+// can protect it.
+function hasPendingPlanApprovalChallenge(projectDir: string, session: string): boolean {
+  try {
+    return readPlanApprovalChallenge(projectDir, session) !== null;
+  } catch {
+    return false;
+  }
+}
 
 // The block-cap ceiling: the maximum number of consecutive no-progress blocks
 // before the hook releases the session. Exposed as an env var so a fork can
@@ -1370,6 +1383,23 @@ if (!copilotSession) {
       HOOK_NAME,
       "active resume choice is waiting on the human; allowing the stop before the shared next probe",
     );
+    return allowStop();
+  }
+  // Pending-Plan-Approval carve-out: the conductor is parked on the human's
+  // Plan Approval answer. The probe's `next` call can transition the marker
+  // to load-steering and call resetPlanApprovalRuntime, deleting the
+  // challenge before isPendingQuestionStop (checked below, after the probe)
+  // can protect it. Allow the stop before the probe when a live challenge
+  // exists for this session.
+  try {
+    if (hasPendingPlanApprovalChallenge(projectDir, sessionId)) {
+      recordHookDrop(projectDir, HOOK_NAME,
+        "pending Plan Approval challenge for this session; allowing the stop before the shared next probe");
+      return allowStop();
+    }
+  } catch (error) {
+    recordHookDrop(projectDir, HOOK_NAME,
+      `plan-approval challenge read failed: ${errorMessage(error)}; allowing the stop before the shared next probe`);
     return allowStop();
   }
 }

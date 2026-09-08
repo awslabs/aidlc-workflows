@@ -113,6 +113,17 @@ function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
 // caller already passed a string (test fixtures, live captures), pass it
 // through. The codex adapter `export`s hasExplicitHumanSelection, so the
 // public signature is unchanged — only the parsing pre-step is added.
+//
+// Two inner answer shapes are recognized (the outer {answers: {...}} wrapper
+// is shared):
+//   1. Claude Code: {answers: {<question id>: {answers: ["<string>"]}}}
+//      — keyed by question id; value is a non-array object with an `answers`
+//      array of plain strings.
+//   2. Devin: {answers: {<question text>: [{selected: ["<label>"], custom_text: ""}]}}
+//      — keyed by question TEXT (not id); value is an ARRAY of objects each
+//      with a `selected` (string[]) and `custom_text` (string) field. For
+//      "Other" free-text: {selected: ["Other"], custom_text: "<text>"}. For
+//      multi-select: {selected: ["<opt1>", "<opt2>"], custom_text: ""}.
 function normalizeToolResponse(toolResponse: unknown): string | null {
   if (typeof toolResponse === "string") return toolResponse;
   if (
@@ -150,6 +161,30 @@ function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
   return offered;
 }
 
+function offeredOptionLabelsByText(toolInput: unknown): Map<string, Set<string>> {
+  const offered = new Map<string, Set<string>>();
+  if (toolInput === null || typeof toolInput !== "object") return offered;
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions)) return offered;
+  for (const question of questions) {
+    if (question === null || typeof question !== "object") continue;
+    const record = question as Record<string, unknown>;
+    if (typeof record.question !== "string" || !Array.isArray(record.options)) continue;
+    const labels = new Set<string>();
+    for (const option of record.options) {
+      if (typeof option === "string") labels.add(option.trim());
+      else if (option !== null && typeof option === "object") {
+        const candidate = option as Record<string, unknown>;
+        for (const key of ["label", "value", "text"] as const) {
+          if (typeof candidate[key] === "string") labels.add(candidate[key].trim());
+        }
+      }
+    }
+    offered.set(record.question, labels);
+  }
+  return offered;
+}
+
 export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): boolean {
   const json = normalizeToolResponse(toolResponse);
   if (json === null) return false;
@@ -167,14 +202,39 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   const selections = Object.entries(answers as Record<string, unknown>);
   if (selections.length === 0) return false;
   const offered = offeredOptionLabels(toolInput);
-  return selections.every(([questionId, selection]) => {
-    if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
-    const record = selection as Record<string, unknown>;
-    if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
-    return record.answers.length > 0 && record.answers.every((answer) => {
-      if (typeof answer !== "string" || answer.trim().length === 0) return false;
-      return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
-    });
+  const offeredByText = offeredOptionLabelsByText(toolInput);
+  return selections.every(([questionKey, selection]) => {
+    // Claude Code shape: non-array object with an `answers` array of strings.
+    if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
+      const record = selection as Record<string, unknown>;
+      if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
+      return record.answers.length > 0 && record.answers.every((answer) => {
+        if (typeof answer !== "string" || answer.trim().length === 0) return false;
+        return !isNonAnswer(answer) || offered.get(questionKey)?.has(answer.trim()) === true;
+      });
+    }
+    // Devin shape: array of {selected: string[], custom_text: string} objects.
+    if (Array.isArray(selection)) {
+      if (selection.length === 0) return false;
+      return selection.every((entry) => {
+        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+        const record = entry as Record<string, unknown>;
+        if (!Array.isArray(record.selected)) return false;
+        const texts: string[] = [];
+        for (const label of record.selected) {
+          if (typeof label === "string") texts.push(label);
+        }
+        if (typeof record.custom_text === "string" && record.custom_text.trim().length > 0) {
+          texts.push(record.custom_text);
+        }
+        if (texts.length === 0) return false;
+        return texts.every((text) => {
+          if (text.trim().length === 0) return false;
+          return !isNonAnswer(text) || offeredByText.get(questionKey)?.has(text.trim()) === true;
+        });
+      });
+    }
+    return false;
   });
 }
 
@@ -183,11 +243,32 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
   if (json === null) return "";
   try {
     const parsed = JSON.parse(json) as {
-      answers?: Record<string, { answers?: unknown[] }>;
+      answers?: Record<string, { answers?: unknown[] } | unknown[]>;
     };
     for (const selection of Object.values(parsed.answers ?? {})) {
-      for (const answer of selection.answers ?? []) {
-        if (typeof answer === "string" && answer.trim()) return answer.trim();
+      // Claude Code shape: object with an `answers` array of strings.
+      if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
+        const record = selection as Record<string, unknown>;
+        if (Array.isArray(record.answers)) {
+          for (const answer of record.answers) {
+            if (typeof answer === "string" && answer.trim()) return answer.trim();
+          }
+        }
+      }
+      // Devin shape: array of {selected: string[], custom_text: string} objects.
+      if (Array.isArray(selection)) {
+        for (const entry of selection) {
+          if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+          const record = entry as Record<string, unknown>;
+          if (Array.isArray(record.selected)) {
+            for (const label of record.selected) {
+              if (typeof label === "string" && label.trim()) return label.trim();
+            }
+          }
+          if (typeof record.custom_text === "string" && record.custom_text.trim()) {
+            return record.custom_text.trim();
+          }
+        }
       }
     }
   } catch {
