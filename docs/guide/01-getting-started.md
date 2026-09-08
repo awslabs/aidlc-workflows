@@ -1,633 +1,259 @@
 # Getting Started
 
-This chapter walks you through installing this implementation, verifying your environment, and preparing for your first workflow.
+This guide takes you from installation to a verified first workflow. The native
+installer includes every supported harness runtime and does not require Bun or
+Node.js.
 
-> **Note**: This chapter's walkthrough shows **Claude Code**. AI-DLC also runs
-> on Kiro CLI, Kiro IDE, Codex CLI, and opencode: the methodology is identical
-> on every harness, but prerequisites, configuration, and some surfaces (the
-> welcome banner, the statusline) are not. Step 1 of
-> [Installation](#installation) below installs the native runtime for every harness;
-> everything else that differs lives in your harness's chapter under
-> [Running on other harnesses](harnesses/README.md).
+## Quick Start
 
----
+### 1. Install AI-DLC
 
-## Prerequisites
-
-The recommended native AI-DLC runtime does not require Bun, Node.js, or Git.
-Your chosen harness still has its own prerequisites (for example, Codex project
-hook discovery requires a Git repository):
-
-| Prerequisite | Purpose | Install |
-|-------------|---------|---------|
-| **Claude Code** | This implementation runs as a Claude Code command. The orchestrator, agents, and hooks all execute within Claude Code. | Native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh \| bash`; Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`. Or `brew install --cask claude-code`. ([docs](https://code.claude.com/docs/en/quickstart)) |
-| **bun** | Required only to build or run the source/development `dist/` projection. The native installer and versioned release runtimes do not use it. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-
-> **Source-generated `dist/` installs only**: `bun` must be on your `PATH` for non-interactive
-> shells. Claude Code runs your shell non-interactively, so it sources
-> `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc`. Native installs use
-> the `aidlc` executable instead.
-
-Verify prerequisites:
+macOS, Linux, or WSL:
 
 ```bash
-command -v claude >/dev/null && echo "✓ Claude Code installed" || echo "✗ Install Claude Code first"
-# Source/development build only:
-command -v bun    >/dev/null && echo "✓ bun installed"          || echo "✗ Install bun before generating dist/"
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh | sh
 ```
 
-## AWS Bedrock Setup
-
-The Claude Code distribution ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
-
-### Why Claude Code ships with Bedrock by default
-
-This rationale is specific to the Claude Code distribution. Provider setup is
-harness-specific: [Codex also defaults to Bedrock](harnesses/codex-cli.md#prerequisites),
-while [opencode takes its session model from global configuration but pins its
-tiered personas to a Bedrock model](harnesses/opencode.md#prerequisites).
-
-The Claude Code distribution needs a predictable runtime baseline across the
-orchestrator and its tier-pinned subagents. Bedrock lets the distribution pin
-exact global inference-profile IDs. Claude Code separately interprets model
-context selectors such as `[1m]` and strips them before sending the model ID to
-Bedrock. Together, those pins prevent a workflow from silently selecting
-different model aliases or context windows on different machines. Bedrock also
-uses the standard AWS SDK credential chain and IAM controls, which lets teams
-manage access without committing provider keys to a project. The repository's
-live Claude test environment uses the same provider and model/context baseline.
-
-This is a distribution default, not an AI-DLC methodology requirement. AI-DLC
-does not call the Bedrock API directly. To use the direct Anthropic API or
-another Claude Code-supported provider:
-
-1. In the installed `.claude/settings.json`, remove or replace
-   `env.CLAUDE_CODE_USE_BEDROCK`, `env.AWS_REGION`,
-   `env.ANTHROPIC_DEFAULT_FABLE_MODEL`,
-   `env.ANTHROPIC_DEFAULT_OPUS_MODEL`,
-   `env.ANTHROPIC_DEFAULT_SONNET_MODEL`,
-   `env.ANTHROPIC_DEFAULT_HAIKU_MODEL`, and the top-level `model`.
-2. Check `.claude/settings.local.json` and remove or replace any corresponding
-   overrides there. Local settings take precedence over the shared
-   `.claude/settings.json`.
-3. Run `claude` and select the target provider at the login prompt. If Claude
-   Code is already authenticated, run `/login` first. Complete the provider's
-   authentication flow as described in the
-   [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
-
-The AI-DLC stage protocol is provider-independent, but the repository ships and
-tests the Bedrock model/context baseline documented below. Alternate models
-still need enough context for the orchestrator and delegated agents.
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `CLAUDE_CODE_USE_BEDROCK` | `1` | Routes Claude Code through Bedrock |
-| `AWS_REGION` | `us-east-1` | Bedrock region — **required**; Claude Code does not read it from `~/.aws`. Override per-region (see below). |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | `global.anthropic.claude-fable-5[1m]` | Fable alias for users who opt into `fable`/`fable[1m]` |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-8[1m]` | Bedrock mapping used when a session or explicit policy selects the `opus` alias |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6[1m]` | Bedrock mapping used by the balanced reviewer baseline or an explicit `sonnet` selection |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Background/fast tasks (no `[1m]`: Haiku 4.5 is a 200K model with no 1M variant) |
-
-These provider alias mappings use global Bedrock inference profile IDs (the `global.` prefix). The `[1m]` suffix on the Fable, Opus, and Sonnet mappings selects the 1M-context variant when that alias is chosen; Claude Code strips the suffix before the model ID reaches Bedrock. The shipped Claude settings do not select a session model or effort. You still need to do the AWS-account-side setup once.
-
-### One-time AWS account setup (manual path)
-
-1. **Enable Anthropic model access.** In the [Amazon Bedrock console](https://console.aws.amazon.com/bedrock/), open the **Model catalog**, select each Anthropic model you'll use (Fable, Opus, Sonnet, Haiku), and submit the use-case form. Access is granted immediately. This is required once per AWS account before any model can be invoked. (AWS Organizations can submit once from the management account; approval extends to child accounts.)
-
-2. **Attach the IAM permissions** your role/user needs to invoke models and resolve inference profiles:
-
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Sid": "AllowModelAndInferenceProfileAccess",
-         "Effect": "Allow",
-         "Action": [
-           "bedrock:InvokeModel",
-           "bedrock:InvokeModelWithResponseStream",
-           "bedrock:ListInferenceProfiles",
-           "bedrock:GetInferenceProfile"
-         ],
-         "Resource": [
-           "arn:aws:bedrock:*:*:inference-profile/*",
-           "arn:aws:bedrock:*:*:application-inference-profile/*",
-           "arn:aws:bedrock:*:*:foundation-model/*"
-         ]
-       }
-     ]
-   }
-   ```
-
-3. **Provide AWS credentials.** Claude Code uses the default AWS SDK credential chain. Any one of:
-
-   ```bash
-   aws configure                         # static access key / secret
-   # — or — an SSO profile:
-   aws sso login --profile <your-profile>
-   export AWS_PROFILE=<your-profile>
-   # — or — credentials already exported in your environment (AWS_ACCESS_KEY_ID, etc.)
-   ```
-
-   Keep secrets out of the shared `settings.json`. Put `AWS_PROFILE` (or other env you don't want to leak) in `.claude/settings.local.json` (gitignored) instead.
-
-4. **Set your region** if it isn't `us-east-1`. The shipped default is `us-east-1`; override it without editing shared config:
-
-   ```bash
-   cp .claude/settings.local.json.example .claude/settings.local.json
-   # then add  "AWS_REGION": "<your-region>"  to the env block
-   ```
-
-   `settings.local.json` takes precedence over `settings.json`. Confirm the model is available in your region with `aws bedrock list-inference-profiles --region <your-region>`.
-
-> **Easier path:** instead of the manual steps above, run `claude`, choose **3rd-party platform → Amazon Bedrock** at the login prompt, and the wizard detects your credentials, region, and accessible models and writes them to your user settings. Re-run `/setup-bedrock` any time to change them. You still complete step 1 (model access) once in the console.
-
-For the authoritative, always-current setup — IAM detail, SSO refresh, inference profiles, troubleshooting — see the AWS guide: **[Claude Code on Amazon Bedrock: Quick Setup Guide](https://community.aws/content/2tXkZKrZzlrlu0KfH8gST5Dkppq/claude-code-on-amazon-bedrock-quick-setup-guide)** and the [Amazon Bedrock documentation](https://docs.aws.amazon.com/bedrock/).
-
-## MCP Servers (optional)
-
-This implementation declares its MCP servers in `.mcp.json` at the project root (beside `.claude/`). Claude Code provisions them to the session, and every AI-DLC agent inherits all of them — so any agent can reach any declared server with no per-agent grant. The shipped `.mcp.json` declares five MCP servers:
-
-| Server | Provides | Transport | Credentials |
-|--------|----------|-----------|-------------|
-| `context7` | Library/SDK documentation lookups | HTTP | `CONTEXT7_API_KEY` from your environment |
-| `aws-mcp` | AWS API access | `uvx` (`mcp-proxy-for-aws@latest`, `AWS_REGION=us-east-1`) | Standard AWS credential chain |
-| `aws-pricing` | AWS pricing queries | `uvx` (`awslabs.aws-pricing-mcp-server@latest`) | AWS credential chain |
-| `aws-iac` | Infrastructure-as-code tooling | `uvx` (`awslabs.aws-iac-mcp-server@latest`) | AWS credential chain |
-| `aws-serverless` | Serverless tooling | `uvx` (`awslabs.aws-serverless-mcp-server@latest`) | AWS credential chain |
-
-### Prerequisites
-
-The four AWS servers launch through `uvx`. Install `uv`/`uvx` once:
-
-```bash
-curl -fsSL https://astral.sh/uv/install.sh | sh
-```
-
-`context7` is an HTTP server and needs no local install. To use it, export an API key:
-
-```bash
-export CONTEXT7_API_KEY=<your-key>
-```
-
-Put `CONTEXT7_API_KEY` (and any other secret env) in `.claude/settings.local.json` (gitignored) rather than the shared `settings.json`. `.mcp.json` itself carries only the env-var placeholder — no secrets are committed.
-
-### What becomes available
-
-The four AWS servers authenticate with the same default AWS SDK credential chain Claude Code already uses for Bedrock (see [AWS Bedrock Setup](#aws-bedrock-setup)). Once `uvx` is installed and AWS credentials resolve, those servers come up automatically; `context7` comes up once `CONTEXT7_API_KEY` is set. Because the servers are inherited at the session level, every agent reaches every declared server — there is no per-agent grant to perform.
-
-> **Restricting an agent (advanced):** inheritance is additive — declaring a server makes it available to all agents, and you cannot grant servers per-agent. To *prevent* a specific agent from using a server, narrow that agent's `tools:` allowlist to the fully-qualified `mcp__<server>__<tool>` ids it may call (a bare `mcp__<server>` token is not honoured). See [Agents](06-agents.md) for how agent tool access works.
-
-### Not using these?
-
-Missing credentials are not blocking. A server you have no credentials for — no AWS chain, no `CONTEXT7_API_KEY` — is simply unavailable; the workflow runs without it and never stalls waiting on it. To drop a server entirely, remove its entry from `.mcp.json`.
-
----
-
-## Installation
-
-The recommended path installs the native `aidlc` command, then runs
-`aidlc config` to create the selected harness runtime in your project. The rest
-of this chapter continues on **Claude Code**. On another harness, finish the
-install in its chapter instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
-[Running on Kiro IDE](harnesses/kiro-ide.md),
-[Running on Codex CLI](harnesses/codex-cli.md),
-[AI-DLC on Cursor](harnesses/cursor.md),
-[AI-DLC on opencode](harnesses/opencode.md), or
-[AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
-and host-specific steps that differ.
-
-### Step 1: Install the native runtime
-
-> **Availability.** The native assets ship with the first native release, which
-> follows the release-prep change that finalizes this line. Until a release
-> carries `install.sh`, use the source checkout path described at the end of
-> this chapter (`bun scripts/package.ts`, then copy the generated
-> `dist/<harness>/` tree).
-
-On macOS, Linux, or WSL:
-
-```bash
-tmp="$(mktemp -d)"
-curl -fsSL \
-  https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  -o "$tmp/install.sh"
-sh "$tmp/install.sh"
-rm -rf "$tmp"
-```
-
-The installer verifies the checksum manifest, native executable, and
-all-harness runtime archive before installation. When a compatible GitHub CLI
-is available, it additionally verifies the signed release attestation. The
-installed AI-DLC runtime has no Bun or Node.js dependency; Codex project hook
-discovery still requires the target project to be a Git repository.
-
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
-$download = Join-Path $env:TEMP "aidlc-install-$PID"
-New-Item -ItemType Directory -Force $download | Out-Null
-$installer = Join-Path $download install.ps1
-Invoke-WebRequest `
-  -Uri https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 `
-  -OutFile $installer
-& (Join-Path $download install.ps1)
-Remove-Item -Recurse -Force $download
+irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer places a stable `aidlc.cmd` under
-`%LOCALAPPDATA%\aidlc\bin`, always verifies checksums, and verifies provenance
-when a compatible GitHub CLI is available.
+The installer adds the native `aidlc` command and every harness runtime. If a
+new shell cannot find `aidlc`, apply the PATH instruction printed by the
+installer.
 
-For an air-gapped package, use
-`install.sh --from <release-directory> --offline` or
-`install.ps1 -From <release-directory> -Offline`. Pass
-`--profile "$HOME/.profile"` to the Unix installer only when it should add its
-marked PATH block; profiles are not edited by default.
+If you prefer to manage the project files manually, install the matching
+native `aidlc` command, download `aidlc-runtime-X.Y.Z.tar.gz` from the
+[release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
+`runtime/<harness>/` into the project.
 
-### Step 2: Initialize the project
+### 2. Configure a project
 
-Run config from the project root:
+From the project root:
 
 ```bash
-cd your-project
-aidlc config
+cd /path/to/your-project
+aidlc config --harness claude
 aidlc doctor
 ```
 
-`aidlc config` is offline. It writes the harness tree and workspace shell, safely
-merges the distribution's declared root integrations, and records ownership
-hashes plus the project runtime version. On Claude Code it asks whether to add
-the optional shipped MCP servers; use `aidlc config --mcp none` or
-`aidlc config --mcp defaults` to make that choice explicit. Use
-`aidlc config --dry-run` to preview every create, update, merge, preserve, remove,
-or conflict action.
-
-Continue with the next step for the selected harness:
-
-| Harness | After `aidlc config` | Native trust behavior |
-|---------|--------------------|-----------------------|
-| Claude Code | Open Claude Code in the project, then run `/aidlc --doctor`. | The projected settings allow `Bash(aidlc engine *)`; hooks and the statusline call the installed command. |
-| Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor`. | The workspace selects the `aidlc` agent by default and permits its `aidlc engine *` engine calls. |
-| Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor`. | Config merges `aidlc engine *` into `kiroAgent.trustedCommands` without replacing other `.vscode/settings.json` keys. |
-| Codex CLI | In a Git repository, run `codex`, approve the hook trust dialog, then `$aidlc --doctor`. | Codex requires one trust action: approve interactively or merge the generated `.codex/trust-seed.toml` entries into `$CODEX_HOME/config.toml`. |
-| Cursor | Open the project in Cursor or run `agent`, then `/aidlc --doctor`. | Config installs Cursor's hooks, skills, agents, rules, and managed root integrations transactionally. |
-| opencode | Run `opencode`, then `/aidlc --doctor`. | The projected `opencode.json` allows direct `aidlc engine *` calls; other shell commands still prompt. |
-| GitHub Copilot | Open the project in Copilot CLI or VS Code agent mode, trust the folder, then `/aidlc --doctor`. | Config merges the `aidlc`-prefixed `.github/` surfaces and project-root instruction blocks. |
-
-### Refresh and version skew
-
-`aidlc update` changes the machine runtime only; it does not rewrite projects.
-`aidlc doctor` compares each project's version stamp with the selected engine
-and reports skew. Refresh a project between workflows:
-
-```bash
-aidlc config --dry-run
-aidlc config
-```
-
-Refresh uses the recorded ownership baseline to update framework-owned files,
-merge managed root blocks/maps/arrays, preserve user-owned content, and report
-locally modified framework files as conflicts. It refuses to refresh while any
-workflow is active because stage and graph definitions may have changed.
-Complete the workflow before rerunning config. `aidlc update` and
-`aidlc use` remain safe during a workflow because they do not touch
-project files.
-
-### Versioned manual-copy alternative
-
-Manual-copy users download the runtime archive from a specific release rather
-than copying a repository tree:
-
-```bash
-tag=vX.Y.Z
-tmp="$(mktemp -d)"
-runtime_asset="aidlc-runtime-${tag#v}.tar.gz"
-source_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
-release_workflow="${AIDLC_RELEASE_WORKFLOW:-$source_repo/.github/workflows/release.yml}"
-gh release download "$tag" --repo "$source_repo" --dir "$tmp" \
-  --pattern "$runtime_asset" \
-  --pattern checksums.txt \
-  --pattern aidlc-release.intoto.jsonl
-gh attestation verify "$tmp/checksums.txt" \
-  --bundle "$tmp/aidlc-release.intoto.jsonl" \
-  --repo "$source_repo" \
-  --signer-workflow "$release_workflow" \
-  --source-ref "refs/tags/$tag"
-(cd "$tmp" && grep "  $runtime_asset\$" checksums.txt | sha256sum -c -)
-tar -xzf "$tmp/$runtime_asset" -C "$tmp"
-RUNTIME_ROOT="$tmp/runtime"
-```
-
-The archive contains `runtime/<harness>/` for every harness. It is the
-version-matched native projection and invokes the installed `aidlc` command.
-Cursor's optional manual-copy `install.ts` helper additionally needs Bun while
-it performs the project merge.
-
-<details markdown="1">
-<summary><strong>Claude Code</strong></summary>
-
-```bash
-cp -r "$RUNTIME_ROOT/claude/.claude/" your-project/.claude/
-cp -r "$RUNTIME_ROOT/claude/aidlc/"   your-project/aidlc/
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp "$RUNTIME_ROOT/claude/.gitignore" your-project/.gitignore
-fi
-aidlc doctor --project-dir your-project
-```
-
-The guarded block copies the complete starter `.gitignore` only when the project
-does not already have one. Otherwise, preserve every project-owned rule and
-merge only the section from `# AI-DLC` through the end of the shipped file; do
-not copy its generic starter rules. Without the AI-DLC section, your first
-commit picks up the per-user cursors (`aidlc/active-space`,
-`aidlc/spaces/*/intents/active-intent`) and machine-local runtime
-(`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor caches,
-`spaces/*/knowledge/.sources.local.json`), which the `## Git Integration`
-section of the installed `.claude/CLAUDE.md` states are already excluded.
-
-Start (or fully restart) Claude Code from the project root, approve the project hooks when prompted or through `/hooks`, then fully restart Claude Code again so the approval takes effect; `/clear` is not enough. On managed fleets, if `/hooks` says hooks are restricted by policy, follow [Claude managed policy blocks project hooks](15-troubleshooting.md#claude-managed-policy-blocks-project-hooks).
-
-</details>
-
-<details markdown="1">
-<summary><strong>Kiro CLI</strong></summary>
-
-```bash
-mkdir -p your-project/.kiro your-project/aidlc
-cp -R "$RUNTIME_ROOT/kiro/.kiro/." your-project/.kiro/
-cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/
-cp "$RUNTIME_ROOT/kiro/AGENTS.md" your-project/AGENTS.md  # merge if one exists
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp "$RUNTIME_ROOT/kiro/.gitignore" your-project/.gitignore
-fi
-```
-
-The guarded block copies the complete starter `.gitignore` only when the project
-does not already have one. Otherwise, preserve every project-owned rule and
-merge only the section from `# AI-DLC` through the end of the shipped file; do
-not copy its generic starter rules.
-
-</details>
-
-<details markdown="1">
-<summary><strong>Kiro IDE</strong></summary>
-
-```bash
-mkdir -p your-project/.kiro your-project/aidlc
-cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
-cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/
-cp "$RUNTIME_ROOT/kiro-ide/AGENTS.md" your-project/AGENTS.md  # merge if one exists
-```
-
-</details>
-
-<details markdown="1">
-<summary><strong>Codex CLI</strong></summary>
-
-```bash
-cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
-cp -r "$RUNTIME_ROOT/codex/.agents/" your-project/.agents/
-cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/
-cp "$RUNTIME_ROOT/codex/AGENTS.md"   your-project/AGENTS.md  # merge if one exists
-```
-
-Apply the copy channel's `.gitignore` and hook trust steps from
-[AI-DLC on Codex CLI](harnesses/codex-cli.md).
-
-</details>
-
-<details markdown="1">
-<summary><strong>Cursor</strong></summary>
-
-```bash
-bun "$RUNTIME_ROOT/cursor/install.ts" your-project
-```
-
-Then continue in [AI-DLC on Cursor](harnesses/cursor.md) for IDE and CLI usage, hook behavior, permissions, and installer refresh rules.
-
-</details>
-
-<details markdown="1">
-<summary><strong>opencode</strong></summary>
-
-```bash
-cp -r "$RUNTIME_ROOT/opencode/.aidlc/"    your-project/.aidlc/
-cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
-cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/
-cp "$RUNTIME_ROOT/opencode/opencode.json" your-project/opencode.json  # merge if one exists
-cp "$RUNTIME_ROOT/opencode/AGENTS.md"     your-project/AGENTS.md       # merge if one exists
-```
-
-Keep the load-bearing `skills`, `instructions`, and permission blocks when
-merging `opencode.json`.
-
-</details>
-
-<details markdown="1">
-<summary><strong>GitHub Copilot</strong></summary>
-
-```bash
-mkdir -p your-project/.aidlc your-project/aidlc your-project/.github
-cp -R "$RUNTIME_ROOT/copilot/.aidlc/."  your-project/.aidlc/
-cp -R "$RUNTIME_ROOT/copilot/aidlc/."   your-project/aidlc/
-cp -R "$RUNTIME_ROOT/copilot/.github/." your-project/.github/
-cp "$RUNTIME_ROOT/copilot/AGENTS.md"    your-project/AGENTS.md  # merge if one exists
-```
-
-</details>
-
-> **Upgrading an install that uses plugins:** reinstalling or upgrading the
-> engine over an existing project restores the shipped stage graph and core
-> stage sources, which removes composed plugin graph entries and contribution
-> merges. After every engine reinstall or upgrade, run `/aidlc plugin sync`.
-> Claude, Codex, Cursor, and Kiro IDE can also self-heal through their plugin
-> compose hook on the next session start; Kiro CLI requires the explicit sync.
-
-Framework developers may instead clone the repository, run
-`bun install --frozen-lockfile` followed by `bun scripts/package.ts`, and use
-the ignored local `dist/<harness>/` projections. Those source/development
-projections invoke TypeScript through Bun; `dist/` and `dist-release/` are never
-committed.
-
----
-
-## The Workspace Shell
-
-For a native install, `aidlc config` creates the workspace shell and its refresh
-baseline before the first harness session. It does not create a workflow intent
-and never uses the network.
-
-For a versioned manual copy or source/development projection, there is no
-scaffold step. The distribution you copied already ships the workspace shell —
-the `.claude/` engine plus a pre-built `aidlc/spaces/default/` holding the
-memory layer (`aidlc/spaces/default/memory/`, where team-affirmed practices and
-learnings live). A versioned release runtime uses the matching installed
-`aidlc` command. A source-generated `dist/` projection uses Bun and may run its
-projected config command to record guided choices.
-
-The first time you run `/aidlc` (or describe what to build), the engine
-**auto-creates** the first intent into the active space. Each intent gets its own
-record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, which holds:
-
-- `aidlc-state.md` — the per-intent workflow state
-- `audit/` — the audit trail, written as per-clone shards (`<host>-<clone>.md`)
-- `<phase>/<stage>/...` — the stage artifacts (e.g. `inception/requirements-analysis/requirements.md`)
-
-Team knowledge lives one level up, at the space level —
-`aidlc/spaces/<space>/knowledge/` (a sibling of `intents/`) — so it accumulates
-across every intent in the space. The engine creates it empty; you add free-form
-files under an optional `aidlc-shared/` and per-agent subdirectories.
-
-To add [team knowledge](08-knowledge.md) or team practices before your first run,
-edit the shipped `aidlc/spaces/default/memory/` files; the space-level
-`aidlc/knowledge/` directory is created (empty) once your first `/aidlc` runs.
-
-For the full picture of the workspace layout — how it holds many intents at once,
-what spaces are for, and the commands to move between them — see
-[Spaces and Intents](03-spaces-and-intents.md).
-
----
-
-## Verify the Setup
-
-Run the health check to confirm everything is in place:
-
-```
-/aidlc --doctor
-```
-
-`--doctor` exits 0 for a clean or warnings-only report and 1 when any check
-fails; the full report writes to stdout in both cases.
-
-### What `--doctor` checks
-
-| Check | What It Validates |
-|-------|-------------------|
-| Prerequisites | Self-contained binary, or `bun` installed and on `$PATH` for copy installs |
-| Installed runtime | Active machine version and complete all-harness runtime for binary installs |
-| Project stamp | Project distribution/version compared with the selected engine |
-| Hook presence | All 17 framework hook sources exist in `.claude/hooks/`: the statusline source plus the other 17 wired through the `settings.json` `hooks` block. A wired-but-missing hook fails loudly; sourcing the expected roster from settings means adding a hook there auto-checks it. |
-| Hooks enabled (Claude Code) | No inspected settings file globally disables hooks. Fails loudly when `"disableAllHooks": true` is resolved from enterprise managed settings (the platform file plus alphabetical `managed-settings.d/` fragments), `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json`. Follows Claude Code's layer precedence, so a higher-precedence `false` suppresses a lower `true` |
-| Project structure | `.claude/settings.json` exists with expected configuration |
-| Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
-| State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
-| Hook heartbeats | `.aidlc-hooks-health/` contains timestamps from hook executions; zero heartbeats fail once workflow progresses, and heartbeats more than five minutes older than the latest stage/gate event fail as stopped |
-| Claude managed hook policy | On Claude Code, effective managed `allowManagedHooksOnly: true` is reported because it blocks every project hook in `.claude/settings.json`; it uses the same platform paths, fragment ordering, and `AIDLC_MANAGED_SETTINGS_PATH` override as the global-disable check |
-| Graph integrity | No cycles in `stage-graph.json`; every slug has a matching stage file |
-| Scope validation | All 11 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
-| Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
-| Duplicate producers | Reports consumed artifacts with multiple producers and the stage slugs involved (advisory - never fails) |
-| Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
-| Plugin checks | Optional `tools/<plugin>-doctor.ts` checks from enabled plugins; error findings fail doctor, advisory findings remain visible without changing the exit code |
-| Pending-compose marker | Reports a present `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age. Fresh (under 24h, the normal state at an open compose gate) passes as advisory; stale (a crashed compose gate stranded it) fails. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
-| Background-subagent ledger | Reports the fresh and stale entry counts in `aidlc/.aidlc-subagent-inflight`. Each accepted background dispatch adds one session-scoped entry and each completion removes one matching entry. Fresh entries (under 2h) pass as advisory; stale or malformed entries fail. Silent when absent. Remediation: delete it if no background subagent is running |
-
-### Example copy-install output
-
-```
-AI-DLC doctor
-
-Machine
-  warn  Runtime hook PATH: bun is interactive-only at /home/user/.bun/bin/bun
-        fix: Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.
-  warn  Update: update check unavailable while offline
-        fix: run `bun .claude/tools/aidlc.ts update --check`
-  ok    4 checks passed
-
-Project (.claude, Claude Code)
-  warn  Instruction file: block or file missing (.claude/CLAUDE.md)
-        fix: run `bun .claude/tools/aidlc.ts config`
-  ok    43 checks passed
-
-Framework integrity
-  ok    all 12 checks passed
-
-0 problems, 3 warnings.
-Warnings are advisory - if everything works, ignore them.
-Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.
-```
-
-### Fixing failures
-
-| Failure | Fix |
-|---------|-----|
-| `bun` not installed | Source-generated `dist/` only: install via `curl -fsSL https://bun.sh/install \| bash`. On Windows, use `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"`. Ensure it is on PATH for non-interactive shells. |
-| Hook not present | Native: run `aidlc config` between workflows. Manual copy: re-copy the complete harness directory from the same versioned runtime archive. |
-| Hooks registered but never executed | Doctor names how many stages have progressed. Run `/hooks` to check approval and policy state; approve pending hooks and fully restart the CLI. If `/hooks` says hooks are restricted by policy, only the Claude Code administrator can lift managed `allowManagedHooksOnly`; use the two attended-session bypass variables below only as an interim. |
-| `allowManagedHooksOnly=true` | Ask the Claude Code administrator to lift the setting in managed `managed-settings.json`; project settings cannot override it. For attended recovery only, launch the CLI with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`. |
-| `settings.json` missing | Native: run `aidlc config`. Manual copy: restore `runtime/claude/.claude/settings.json` from the same release archive. |
-| Workspace shell missing | Native: run `aidlc config`. Manual copy: restore `runtime/claude/aidlc/` from the same release archive. |
-| State file issues | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and run `/aidlc` to start fresh |
-| Graph/scope/schema/keyword failures | The diagnostic reports the specific artifact, slug, or scope name at fault. These indicate authoring drift in `.claude/aidlc-common/stages/` or `.claude/scopes/`; regenerate the compiled graph + scope grid with `{{INVOKE}} engine graph compile` or inspect the named stage/scope directly. |
-
----
-
-## Start Your First Workflow
-
-Once `--doctor` passes, you are ready to run:
-
-```
+Replace `claude` with the harness you use:
+
+| Harness | Config value | Open | Invoke |
+| --- | --- | --- | --- |
+| Claude Code | `claude` | `claude` | `/aidlc` |
+| Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
+| Kiro IDE | `kiro-ide` | Open the project | `/aidlc` |
+| Codex CLI | `codex` | `codex` | `$aidlc` |
+| Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
+| opencode | `opencode` | `opencode` | `/aidlc` |
+| GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `copilot` | Copilot CLI or VS Code | `/aidlc` |
+
+A bare `aidlc config` starts the interactive setup when a terminal is
+available. It detects installed harnesses, provider state, runtime needs, and
+trust actions before writing anything.
+
+### 3. Start the first workflow
+
+Open the configured harness in the project and describe the work:
+
+```text
 /aidlc Build a REST API for inventory management
 ```
 
-Or specify a scope directly:
+Codex CLI uses:
 
+```text
+$aidlc Build a REST API for inventory management
 ```
-/aidlc classic
+
+AI-DLC selects a workflow profile from the request. You can also choose one:
+
+```text
 /aidlc express
-/aidlc feature
-/aidlc bugfix Fix the login timeout issue
+/aidlc feature Add customer notifications
+/aidlc bugfix Fix the login timeout
 ```
 
-See [Workflow Profiles](workflow-profiles.md) to choose the right lifecycle, then
-[Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough
-of what happens next.
+See [Workflow Profiles](workflow-profiles.md) for the available workflows and
+[Your First Workflow](02-your-first-workflow.md) for an annotated walkthrough.
 
----
+## Harness Prerequisites
 
-## Quick Reference
+Install and authenticate the host harness before opening it. The native AI-DLC
+runtime itself does not require Git, Bun, or Node.js, but host requirements
+still apply.
 
-In your shell:
+| Harness | Important first-run requirement | Guide |
+| --- | --- | --- |
+| Claude Code | Configure a supported provider; the shipped default is Amazon Bedrock | [Claude setup below](#aws-bedrock-setup) |
+| Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
+| Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
+| Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
+| opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
+| GitHub Copilot | Trust the project folder; use GitHub sign-in or BYOK | [GitHub Copilot](harnesses/copilot.md) |
+
+## AWS Bedrock Setup
+
+The Claude Code distribution ships configured for Amazon Bedrock. Codex also
+ships with a Bedrock provider default; other harnesses use their own provider
+configuration.
+
+### Why Bedrock is the default
+
+AI-DLC needs a predictable runtime baseline across the conductor and its
+tier-pinned subagents. Bedrock lets the distribution pin exact global inference
+profiles and context variants, avoiding silent model-alias differences between
+machines. It also uses the standard AWS SDK credential chain and IAM controls,
+so teams do not need to commit provider keys to a project.
+
+This is a distribution default, not a methodology requirement. AI-DLC does not
+call the Bedrock API directly and remains provider-independent.
+
+### Configure Bedrock
+
+Before the first Claude Code run:
+
+1. Enable access to the configured Anthropic models in the Amazon Bedrock model
+   catalog.
+2. Provide AWS credentials through the normal SDK credential chain, for example
+   `aws configure` or `aws sso login --profile <profile>`.
+3. Use a region where those models are available. The shipped default is
+   `us-east-1`.
+4. Start `claude` and choose Amazon Bedrock at the provider prompt. You can run
+   `/setup-bedrock` later to change the account or region.
+
+The shipped Claude settings map these aliases:
+
+| Setting | Default |
+| --- | --- |
+| `CLAUDE_CODE_USE_BEDROCK` | `1` |
+| `AWS_REGION` | `us-east-1` |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | `global.anthropic.claude-fable-5[1m]` |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-8[1m]` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6[1m]` |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
+
+Keep credentials and personal overrides out of the shared
+`.claude/settings.json`. Put them in `.claude/settings.local.json` or the
+standard AWS credential files.
+
+To use another Claude Code-supported provider, remove or replace the Bedrock
+environment mappings in `.claude/settings.json` and any higher-precedence
+`.claude/settings.local.json`, then complete that provider's Claude Code
+authentication flow. See the
+[Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
+
+For IAM detail, model access, SSO, and regional troubleshooting, see
+[Claude Code on Amazon Bedrock](https://community.aws/content/2tXkZKrZzlrlu0KfH8gST5Dkppq/claude-code-on-amazon-bedrock-quick-setup-guide)
+and the [Amazon Bedrock documentation](https://docs.aws.amazon.com/bedrock/).
+
+## MCP Servers (optional)
+
+Claude projects can install the shipped MCP defaults during config:
 
 ```bash
-# Verify the harness and native command
-command -v claude >/dev/null && echo "✓ Claude Code" || echo "✗ Claude Code"
-command -v aidlc  >/dev/null && echo "✓ aidlc"       || echo "✗ Install AI-DLC"
+aidlc config --harness claude --mcp defaults
+```
 
-# Configure, verify, and launch Claude Code
-cd your-project
-aidlc config --harness claude
+Use `--mcp none` to omit them. The default set is:
+
+| Server | Provides | Credentials |
+| --- | --- | --- |
+| `context7` | Library and SDK documentation | `CONTEXT7_API_KEY` |
+| `aws-mcp` | AWS API access | AWS credential chain |
+| `aws-pricing` | AWS pricing queries | AWS credential chain |
+| `aws-iac` | Infrastructure-as-code tools | AWS credential chain |
+| `aws-serverless` | Serverless development tools | AWS credential chain |
+
+The four AWS servers require `uvx` and use the standard AWS credential chain.
+
+Every agent in the Claude session inherits available MCP servers. Missing
+credentials make a server unavailable but do not block a workflow. Never put
+secrets in the committed `.mcp.json`.
+
+## Configuration and Trust
+
+`aidlc config` is local-only and transactional. It writes the selected harness
+runtime, creates the `aidlc/` workspace, merges managed project integrations,
+and records an ownership baseline for later refreshes.
+
+Preview any change:
+
+```bash
+aidlc config --dry-run
+```
+
+After config, complete any action named in its output:
+
+| Harness | Typical action |
+| --- | --- |
+| Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
+| Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
+| Kiro IDE | Open the configured project |
+| Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
+| Cursor | Open the configured project or run `agent` |
+| opencode | Start `opencode` in the project |
+| GitHub Copilot | Trust the project folder |
+
+Run `aidlc doctor` after completing the action. It reports runtime, project,
+provider, hook, trust, and workflow-state problems with a remediation command.
+
+## Updating
+
+`aidlc update` updates the machine runtime. It does not rewrite configured
+projects. Refresh each project between workflows:
+
+```bash
+aidlc update
+cd /path/to/your-project
 aidlc doctor
-claude
+aidlc config
 ```
 
-Inside the Claude Code session:
+Config preserves project-owned content and refuses to refresh while a workflow
+is active. Projects using plugins should run `/aidlc plugin sync` after an
+engine refresh.
 
+For version selection, project pins, offline installation, mirrors, custom CAs,
+release authentication, automation, and uninstall, see
+[Install and Lifecycle](18-install-and-lifecycle.md).
+
+## What Config Creates
+
+A configured project contains the harness integration plus an `aidlc/`
+workspace. The first workflow creates an intent record under:
+
+```text
+aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 ```
-# Verify (exits 1 on any check failure; read stdout for the full report)
-/aidlc --doctor
 
-# Start
-/aidlc Build a task management API with user authentication
+That record contains workflow state, audit shards, questions, decisions, and
+stage artifacts. Team knowledge and learned rules live at the space level so
+later intents can reuse them.
+
+See [Spaces and Intents](03-spaces-and-intents.md) for the layout and
+[State and Audit](10-state-and-audit.md) for the recorded evidence.
+
+## Troubleshooting
+
+Start with:
+
+```bash
+aidlc doctor
 ```
 
----
-
-## Tool Permissions
-
-The included `.claude/settings.json` pre-approves Claude Code tools (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so workflows run without per-call permission prompts. Review this file before use and adjust to your security requirements.
-
-See [Customization](13-customization.md) for details on modifying tool permissions.
-
----
+Then use [Troubleshooting](15-troubleshooting.md) for hooks, provider access,
+approval gates, stale state, and diagnostics. Harness-specific setup problems
+belong in the matching [harness guide](harnesses/README.md).
 
 ## Next Steps
 
-- [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough of a complete run
-- [Workflow Profiles](workflow-profiles.md) — compare Classic, Express, and every other workflow choice
-- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — choosing the right scope for your task
-- [Troubleshooting](15-troubleshooting.md) — common issues and fixes
-- [Glossary](glossary.md) — terminology reference
+- [Workflow Profiles](workflow-profiles.md) - choose the right workflow
+- [Your First Workflow](02-your-first-workflow.md) - follow a complete run
+- [Spaces and Intents](03-spaces-and-intents.md) - understand project state
+- [Interaction Modes](07-interaction-modes.md) - work with questions and gates
+- [Install and Lifecycle](18-install-and-lifecycle.md) - manage the native runtime
