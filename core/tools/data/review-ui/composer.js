@@ -1,9 +1,10 @@
 // The intent composer - DESIGN PROTOTYPE.
 //
-// The box above the Inbox where a new intent starts: which workspace, what to
-// build, how deep to go (a scope, or let the composer decide), and how much
-// effort to spend (a preset from the config policy lane, or a custom dial per
-// agent group). Every control here is live so the design can be tried; Start
+// The box above the Inbox where a new intent starts: which workspace (a team's
+// world under aidlc/spaces/), what to build, which workflow (a scope, or let
+// the composer decide), and how much effort to spend (a preset from the config
+// policy lane - the preset decides model and effort per agent group - or a
+// custom dial). Every control here is live so the design can be tried; Start
 // does not create anything yet - it names what it would do. The write path
 // (daemon route -> record + state, then the terminal session picks it up) is
 // the implementation step that follows the design.
@@ -40,19 +41,10 @@ const GROUPS = [
   { id: "writing", label: "Writing up", who: "delivery, pipeline & deploy, operations" },
 ];
 const EFFORTS = ["low", "medium", "high", "xhigh"];
-// The host session's model - what the harness itself runs on, and what the
-// deciding group inherits. Placeholder names; the real list is the host's.
-const SESSION_MODELS = [
-  { id: "opus", label: "Opus 4", note: "Deepest reasoning; slowest" },
-  { id: "sonnet", label: "Sonnet 4.5", note: "The everyday balance" },
-  { id: "haiku", label: "Haiku 4.5", note: "Fastest; for small runs" },
-];
-
 const draft = {
   space: null,
   text: "",
   scope: null, // null = let the composer decide
-  model: "opus",
   preset: "balanced",
   // Group dials are effort-only, as the config policy lane defines them; model
   // ids belong to per-agent exceptions in settings, not to a run's start.
@@ -60,29 +52,21 @@ const draft = {
 };
 let openMenu = null;
 
-function projectName() {
-  const dir = store.state?.project_dir || "";
-  return dir.split("/").filter(Boolean).pop() || "this project";
-}
-
 export function renderComposer() {
   const space = draft.space || store.workflow?.space || "default";
   const scope = SCOPES.find((entry) => entry.name === draft.scope);
   const preset = PRESETS.find((entry) => entry.id === draft.preset);
-  const model = SESSION_MODELS.find((entry) => entry.id === draft.model) || SESSION_MODELS[0];
   const effortLabel = preset ? preset.label : "Custom";
   return `<section class="composer" data-prototype="design">
     <div class="composer-top">
-      <button type="button" class="composer-chip" data-menu="project" aria-haspopup="menu" title="${escapeHtml(store.state?.project_dir || "")}">${icon("documentText", { size: 13 })}<span>Project</span><b>${escapeHtml(projectName())}</b>${icon("chevronDown", { size: 12 })}</button>
-      <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="AI-DLC space: its own memory and intent list, under aidlc/spaces/">${icon("flowchart", { size: 13 })}<span>Space</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
+      <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="Workspace: one team's world of intents, knowledge, and practices (aidlc/spaces/<name>)">${icon("flowchart", { size: 13 })}<span>Workspace</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
       <span class="composer-proto">Design preview</span>
     </div>
     <textarea class="composer-text" rows="2" placeholder="What do you want to build?" aria-label="Intent">${escapeHtml(draft.text)}</textarea>
     <div class="composer-bottom">
-      <button type="button" class="composer-chip" data-menu="scope" aria-haspopup="menu">${icon("textBulletListTree", { size: 13 })}<span>Scope</span><b>${scope ? `${escapeHtml(scope.name)} · ${escapeHtml(scope.depth)}` : "Let the composer decide"}</b>${icon("chevronDown", { size: 12 })}</button>
+      <button type="button" class="composer-chip" data-menu="scope" aria-haspopup="menu">${icon("textBulletListTree", { size: 13 })}<span>Workflow</span><b>${scope ? `${escapeHtml(scope.name)} · ${escapeHtml(scope.depth)}` : "Let the composer decide"}</b>${icon("chevronDown", { size: 12 })}</button>
       <span class="composer-hint">⌘↵ to start</span>
-      <button type="button" class="composer-chip" data-menu="model" aria-haspopup="menu" title="Model for the session that will run this intent. It applies when the daemon starts the harness for it; a session already running keeps its own model.">${escapeHtml(model.label)}${icon("chevronDown", { size: 12 })}</button>
-      <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
+      <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu" title="How much effort the run spends - the preset sets the models and effort for every agent group">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
     </div>
   </section>`;
@@ -113,10 +97,9 @@ export function bindComposer(root, rerender) {
 }
 
 function start() {
-  const scope = draft.scope ? `scope ${draft.scope}` : "the composer choosing the scope";
+  const workflow = draft.scope ? `the ${draft.scope} workflow` : "the composer choosing the workflow";
   const effort = PRESETS.find((entry) => entry.id === draft.preset)?.label.toLowerCase() || "custom";
-  const model = SESSION_MODELS.find((entry) => entry.id === draft.model)?.label || "the session model";
-  setNotice(`Design preview — Start would create the intent in ${projectName()} / space “${draft.space || store.workflow?.space || "default"}” with ${scope}, ${effort} effort on ${model}, then your terminal session picks it up.`, "info");
+  setNotice(`Design preview — Start would create the intent in workspace “${draft.space || store.workflow?.space || "default"}” with ${workflow} at ${effort} effort, then your terminal session picks it up.`, "info");
 }
 
 function openMenuFor(anchor, kind, rerender) {
@@ -125,7 +108,7 @@ function openMenuFor(anchor, kind, rerender) {
   menu.className = `composer-menu composer-menu-${kind}`;
   menu.dataset.for = kind;
   menu.setAttribute("role", "menu");
-  menu.innerHTML = kind === "project" ? projectMenu() : kind === "space" ? spaceMenu() : kind === "scope" ? scopeMenu() : kind === "model" ? modelMenu() : effortMenu();
+  menu.innerHTML = kind === "space" ? spaceMenu() : kind === "scope" ? scopeMenu() : effortMenu();
   document.body.append(menu);
   const at = anchor.getBoundingClientRect();
   const size = menu.getBoundingClientRect();
@@ -148,39 +131,19 @@ export function closeMenu() {
   openMenu = null;
 }
 
-// One daemon serves one project today. The menu shows where this design goes:
-// every project with a review daemon in the review home lists here, and
-// choosing one switches the tab to that daemon; "Open another project…" would
-// start one. In the prototype only the current project is real.
-function projectMenu() {
-  const dir = store.state?.project_dir || "";
-  return `<div class="composer-menu-title">Project</div>
-    <button type="button" role="menuitemradio" aria-checked="true" data-pick-project="${escapeHtml(dir)}"><span class="check">${icon("checkmark", { size: 12 })}</span><b>${escapeHtml(projectName())}</b><small>${escapeHtml(dir)}</small></button>
-    <div class="composer-menu-group">Recent</div>
-    <p class="composer-menu-note">Other projects with a running review daemon will list here; choosing one switches this tab to that project.</p>
-    <div class="composer-menu-sep"></div>
-    <button type="button" role="menuitem" data-open-project><span class="check">+</span><b>Open another project…</b><small>start a review daemon for a folder on this machine</small></button>`;
-}
-
-function modelMenu() {
-  return `<div class="composer-menu-title">Session model</div>
-    ${SESSION_MODELS.map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.model === entry.id}" data-pick-model="${entry.id}"><span class="check">${draft.model === entry.id ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(entry.label)}</b><small>${escapeHtml(entry.note)}</small></button>`).join("")}
-    <p class="composer-menu-note">Used when the daemon starts a session for this intent; deciding agents inherit it. A session already running keeps its own model. Per-agent exceptions live in <b>aidlc config models</b>, not here.</p>`;
-}
-
 function spaceMenu() {
   const spaces = store.workflow?.spaces?.length ? store.workflow.spaces : [store.workflow?.space || "default"];
   const current = draft.space || store.workflow?.space || "default";
-  return `<div class="composer-menu-title">Space</div>
+  return `<div class="composer-menu-title">Workspace</div>
     ${spaces.map((space) => `<button type="button" role="menuitemradio" aria-checked="${space === current}" data-pick-space="${escapeHtml(space)}"><span class="check">${space === current ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(space)}</b><small>aidlc/spaces/${escapeHtml(space)}</small></button>`).join("")}
     <div class="composer-menu-sep"></div>
-    <button type="button" role="menuitem" data-new-space><span class="check">+</span><b>New space…</b><small>a separate memory and intent list in this project</small></button>`;
+    <button type="button" role="menuitem" data-new-space><span class="check">+</span><b>New workspace…</b><small>a separate team world: its own intents, knowledge, and practices</small></button>`;
 }
 
 function scopeMenu() {
   const byDepth = ["Minimal", "Standard", "Comprehensive"];
-  return `<div class="composer-menu-title">Scope</div>
-    <button type="button" role="menuitemradio" aria-checked="${draft.scope === null}" data-pick-scope=""><span class="check">${draft.scope === null ? icon("checkmark", { size: 12 }) : ""}</span><b>Let the composer decide <em>Recommended</em></b><small>Reads the intent, proposes a scope, asks you once</small></button>
+  return `<div class="composer-menu-title">Workflow</div>
+    <button type="button" role="menuitemradio" aria-checked="${draft.scope === null}" data-pick-scope=""><span class="check">${draft.scope === null ? icon("checkmark", { size: 12 }) : ""}</span><b>Let the composer decide <em>Recommended</em></b><small>Reads the intent, proposes a workflow, asks you once</small></button>
     ${byDepth.map((depth) => `<div class="composer-menu-group">${depth}</div>${SCOPES.filter((entry) => entry.depth === depth).map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.scope === entry.name}" data-pick-scope="${escapeHtml(entry.name)}"><span class="check">${draft.scope === entry.name ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(entry.name)}</b><small>${escapeHtml(entry.description)}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ""}</small></button>`).join("")}`).join("")}`;
 }
 
@@ -191,7 +154,7 @@ function effortMenu() {
     <div class="composer-presets">
       ${PRESETS.map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.preset === entry.id}" data-pick-preset="${entry.id}"><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}
     </div>
-    <div class="composer-menu-group">Per group${preset ? ` · from ${preset.label}` : " · custom"}</div>
+    <div class="composer-menu-group">What ${preset ? preset.label : "Custom"} means</div>
     <table class="composer-dial"><thead><tr><th></th><th>Effort</th></tr></thead><tbody>
       ${GROUPS.map((group) => `<tr data-group="${group.id}"><th><b>${group.label}</b><small>${escapeHtml(group.who)}</small></th>
         ${group.fixed
@@ -199,16 +162,13 @@ function effortMenu() {
           : `<td><select data-dial-effort="${group.id}" aria-label="${group.label} effort">${EFFORTS.map((effort) => `<option ${effortFor(group) === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></td>`}
       </tr>`).join("")}
     </tbody></table>
-    <p class="composer-menu-note">Presets and dials set <b>effort only</b>; every agent runs on the session model unless a per-agent exception says otherwise in settings. Changing a dial makes this run <b>Custom</b>.</p>`;
+    <p class="composer-menu-note">The preset decides the model and effort for each agent group. Changing a dial makes this run <b>Custom</b>; deciding agents always keep the session's ceiling.</p>`;
 }
 
 function bindMenu(menu, kind, rerender) {
-  menu.querySelector("[data-pick-project]")?.addEventListener("click", () => closeMenu());
-  menu.querySelector("[data-open-project]")?.addEventListener("click", () => { closeMenu(); setNotice("Design preview — this would start a review daemon for another folder and switch the tab to it.", "info"); });
   for (const button of menu.querySelectorAll("[data-pick-space]")) button.addEventListener("click", () => { draft.space = button.dataset.pickSpace; closeMenu(); rerender(); });
-  menu.querySelector("[data-new-space]")?.addEventListener("click", () => { closeMenu(); setNotice("Design preview — a new workspace would be created here.", "info"); });
+  menu.querySelector("[data-new-space]")?.addEventListener("click", () => { closeMenu(); setNotice("Design preview — a new workspace (aidlc/spaces/<name>) would be created here.", "info"); });
   for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; closeMenu(); rerender(); });
-  for (const button of menu.querySelectorAll("[data-pick-model]")) button.addEventListener("click", () => { draft.model = button.dataset.pickModel; closeMenu(); rerender(); });
   for (const button of menu.querySelectorAll("[data-pick-preset]")) button.addEventListener("click", () => { draft.preset = button.dataset.pickPreset; const entry = PRESETS.find((item) => item.id === draft.preset); draft.custom = { ...entry.efforts }; refreshMenu(menu, kind, rerender); rerender(); });
   for (const select of menu.querySelectorAll("[data-dial-effort]")) select.addEventListener("change", () => {
     draft.custom[select.dataset.dialEffort] = select.value;
@@ -219,6 +179,6 @@ function bindMenu(menu, kind, rerender) {
 }
 
 function refreshMenu(menu, kind, rerender) {
-  menu.innerHTML = kind === "effort" ? effortMenu() : kind === "scope" ? scopeMenu() : kind === "model" ? modelMenu() : kind === "project" ? projectMenu() : spaceMenu();
+  menu.innerHTML = kind === "effort" ? effortMenu() : kind === "scope" ? scopeMenu() : spaceMenu();
   bindMenu(menu, kind, rerender);
 }

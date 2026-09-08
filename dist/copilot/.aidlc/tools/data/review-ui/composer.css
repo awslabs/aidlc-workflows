@@ -13,7 +13,7 @@
 .composer-chip b { color: var(--ink); font-weight: 600; }
 .composer-chip svg:last-child { color: var(--muted); }
 .composer-hint { margin-left: auto; margin-right: 4px; color: #a3adbb; font-size: 11px; }
-.composer-bottom .composer-chip[data-menu="model"] b, .composer-bottom .composer-chip[data-menu="effort"] b { display: none; }
+.composer-bottom .composer-chip[data-menu="effort"] b { display: none; }
 .composer-start { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(45, 127, 249, 0.35); transition: transform 120ms ease, opacity 120ms ease; }
 .composer-start svg { transform: rotate(90deg); }
 .composer-start:hover { transform: translateY(-1px); }
@@ -32,7 +32,6 @@
 .composer-menu b em { margin-left: 6px; padding: 1px 6px; border-radius: 99px; background: var(--soft); color: var(--accent); font-style: normal; font-size: 10.5px; font-weight: 600; }
 .composer-menu small { display: block; grid-column: 2; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 .composer-menu-effort { min-width: 380px; }
-.composer-menu-model { min-width: 260px; }
 .composer-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 2px 4px 4px; }
 .composer-presets [role="menuitemradio"] { display: block; padding: 9px 10px; border: 1px solid var(--line2); border-radius: 10px; text-align: left; }
 .composer-presets [role="menuitemradio"][aria-checked="true"] { border-color: var(--accent); background: var(--soft); }
