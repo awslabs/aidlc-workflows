@@ -1,7 +1,7 @@
 // covers: tool:aidlc-init, tool:aidlc-lifecycle, file:core/tools/aidlc-archive.ts
 // covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -103,6 +103,10 @@ const NEXT_VERSION = (() => {
 })();
 const temporary: string[] = [];
 const originalPath = process.env.PATH;
+
+// The default also governs afterAll removal of 128 staged roots, several of them
+// dist-sized, which exceeds bun's 5s hook default.
+setDefaultTimeout(120_000);
 
 beforeAll(() => {
   process.env.PATH = `${join(REPO_ROOT, "tests", "fixtures", "bin")}${delimiter}${
