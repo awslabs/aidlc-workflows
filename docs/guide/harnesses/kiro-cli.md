@@ -118,6 +118,13 @@ inside a disposable sandbox where blanket shell access is acceptable.
 
 ## What's different on Kiro
 
+**Start in the browser.** With the review UI on (`AIDLC_REVIEW_UI=1`) and
+`kiro-cli` on this machine, the composer's **Start** creates the intent and runs
+this harness's agent for it over the Agent Client Protocol — `kiro-cli acp --agent aidlc` — prompting
+`/aidlc` exactly as you would. Follow it in the **Agent** panel; Kiro asks in prose, so a question ends the agent's turn: answer it in the panel's **Reply** box; tool
+permissions the harness does not settle itself wait there too. See
+[Review in the Browser](../18-review-in-the-browser.md#start-an-intent-from-the-browser).
+
 | Area | Claude Code | Kiro CLI |
 |------|-------------|----------|
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |

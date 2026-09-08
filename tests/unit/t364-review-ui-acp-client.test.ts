@@ -8,13 +8,13 @@
 // and a process that dies rejects the in-flight request.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AcpClient,
   AcpError,
-  resolveClaudeAcpLaunch,
+  resolveAcpLaunch,
   type AcpElicitationRequest,
   type AcpLaunch,
   type AcpPermissionRequest,
@@ -24,7 +24,7 @@ import {
 const FIXTURE = join(import.meta.dir, "..", "fixtures", "fake-acp-agent.ts");
 
 function launch(env: Record<string, string> = {}): AcpLaunch {
-  return { backend: "claude", command: [process.execPath, FIXTURE], env };
+  return { backend: "claude", command: [process.execPath, FIXTURE], env, startPrompt: "/aidlc" };
 }
 
 interface Harness {
@@ -129,6 +129,34 @@ describe("t364 review UI ACP client", () => {
     declined.client.close();
   }, 20_000);
 
+  test("Cursor's blocking asks arrive as form questions and map back to Cursor's outcomes", async () => {
+    const cwd = scratch();
+    const seen: AcpElicitationRequest[] = [];
+    const h = harness(cwd, {
+      env: { FAKE_ACP_SCRIPT: "cursor" },
+      question: async (request) => {
+        seen.push(request);
+        if (request.message === "Need input") {
+          return { action: "accept", content: { question_0: "Postgres", question_1: ["Add", "Done"] } };
+        }
+        return { action: "accept", content: { question_0: "Reject", question_0_custom: "Too many files" } };
+      },
+    });
+    await h.client.start();
+    const { sessionId } = await h.client.newSession();
+    expect(await h.client.prompt(sessionId, "go")).toBe("end_turn");
+    // The two questions rendered as one form; the multi-select as an array field.
+    const properties = seen[0].requestedSchema.properties as Record<string, { type: string; title: string }>;
+    expect(Object.values(properties).map((field) => [field.type, field.title])).toEqual([["string", "Which database?"], ["array", "Which features?"]]);
+    // Labels went back as Cursor's option ids, per question.
+    expect(h.text()).toContain('ask={"outcome":"answered","answers":[{"questionId":"q-db","selectedOptionIds":["pg"]},{"questionId":"q-feat","selectedOptionIds":["a","d"]}]}');
+    // The plan card carried the plan text and the rejection carried its reason.
+    expect(seen[1].message).toContain("Approve Todo CLI plan?");
+    expect(seen[1].message).toContain("1. Storage");
+    expect(h.text()).toContain('plan={"outcome":"rejected","reason":"Too many files"}');
+    h.client.close();
+  }, 20_000);
+
   test("cancel ends a hanging turn as cancelled", async () => {
     const cwd = scratch();
     const h = harness(cwd, { env: { FAKE_ACP_SCRIPT: "hang" } });
@@ -168,10 +196,33 @@ describe("t364 review UI ACP client", () => {
     expect(h.client.exited).toBe(true);
   }, 20_000);
 
-  test("launch resolution needs a claude executable and honours the command override", () => {
-    expect(resolveClaudeAcpLaunch({ PATH: "/nonexistent" })).toBeNull();
-    const resolved = resolveClaudeAcpLaunch({ CLAUDE_CODE_EXECUTABLE: "/usr/bin/true", AIDLC_ACP_CLAUDE_COMMAND: "bun fake.ts --flag" });
-    expect(resolved?.command).toEqual(["bun", "fake.ts", "--flag"]);
-    expect(resolved?.env.CLAUDE_CODE_EXECUTABLE).toBe("/usr/bin/true");
+  test("launch resolution: one profile per harness, each needing its CLI, each overridable", () => {
+    // Nothing on PATH: no harness can run.
+    const bare = { PATH: "/nonexistent", HOME: "/nonexistent" };
+    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {
+      expect(resolveAcpLaunch(harness, bare), harness).toBeNull();
+    }
+    expect(resolveAcpLaunch("unknown-harness", process.env)).toBeNull();
+    expect(resolveAcpLaunch(null, process.env)).toBeNull();
+
+    // A bin dir with stub executables stands in for each CLI.
+    const bin = scratch();
+    for (const name of ["claude", "kiro-cli", "codex", "cursor-agent", "opencode", "copilot", "bunx"]) {
+      writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+    const env = { PATH: bin, HOME: "/nonexistent" };
+    expect(resolveAcpLaunch("claude", env)).toMatchObject({ backend: "claude", command: [join(bin, "bunx"), expect.stringContaining("claude-agent-acp@")], env: { CLAUDE_CODE_EXECUTABLE: join(bin, "claude") }, startPrompt: "/aidlc" });
+    expect(resolveAcpLaunch("kiro", env)).toMatchObject({ backend: "kiro", command: [join(bin, "kiro-cli"), "acp", "--agent", "aidlc"], startPrompt: "/aidlc" });
+    expect(resolveAcpLaunch("kiro-ide", env)?.backend).toBe("kiro");
+    expect(resolveAcpLaunch("codex", env)).toMatchObject({ backend: "codex", command: [join(bin, "bunx"), expect.stringContaining("codex-acp@")], startPrompt: "$aidlc" });
+    expect(resolveAcpLaunch("cursor", env)).toMatchObject({ backend: "cursor", command: [join(bin, "cursor-agent"), "acp"] });
+    expect(resolveAcpLaunch("opencode", env)).toMatchObject({ backend: "opencode", command: [join(bin, "opencode"), "acp"] });
+    expect(resolveAcpLaunch("copilot", env)).toMatchObject({ backend: "copilot", command: [join(bin, "copilot"), "--acp"] });
+
+    // The override replaces the command line and skips the requirement.
+    const overridden = resolveAcpLaunch("kiro", { ...bare, AIDLC_ACP_KIRO_COMMAND: "bun fake.ts --flag" });
+    expect(overridden?.command).toEqual(["bun", "fake.ts", "--flag"]);
+    const claude = resolveAcpLaunch("claude", { ...bare, CLAUDE_CODE_EXECUTABLE: "/usr/bin/true", AIDLC_ACP_CLAUDE_COMMAND: "bun fake.ts" });
+    expect(claude?.env.CLAUDE_CODE_EXECUTABLE).toBe("/usr/bin/true");
   });
 });

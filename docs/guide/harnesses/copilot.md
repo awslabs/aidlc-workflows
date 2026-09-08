@@ -82,6 +82,13 @@ cd aidlc-workflows
 
 ## What's different on this harness
 
+**Start in the browser.** With the review UI on (`AIDLC_REVIEW_UI=1`) and
+`copilot` on this machine, the composer's **Start** creates the intent and runs
+this harness's agent for it over the Agent Client Protocol — `copilot --acp` (ACP support is in public preview) — prompting
+`/aidlc` exactly as you would. Follow it in the **Agent** panel; Copilot asks in prose, so a question ends the agent's turn: answer it in the panel's **Reply** box; tool
+permissions the harness does not settle itself wait there too. See
+[Review in the Browser](../18-review-in-the-browser.md#start-an-intent-from-the-browser).
+
 - **One install, two surfaces.** Skills, personas, instructions, and hooks
   behave identically on the CLI and in VS Code agent mode; the divergences
   below are called out explicitly.

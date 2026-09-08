@@ -102,17 +102,26 @@ function render() {
 
 function renderNoRun(view) {
   if (!store.workflow?.intent) return '<p class="side-panel-empty"><b>No intent selected.</b>Choose an intent to see its agent.</p>';
+  const resume = view?.start_prompt || "/aidlc";
   if (view && view.available === false) {
-    return '<p class="side-panel-empty"><b>No agent runner on this machine.</b>The daemon needs the <code>claude</code> CLI to run an agent here. Drive this intent from a terminal with <code>/aidlc</code>.</p>';
+    return `<p class="side-panel-empty"><b>No agent runner on this machine.</b>The daemon needs ${view.requirement ? escapeHtml(view.requirement) : "the harness's CLI"} to run an agent here. Drive this intent from a terminal with <code>${escapeHtml(resume)}</code>.</p>`;
   }
-  return `<p class="side-panel-empty"><b>No agent run for this intent.</b>Start one here, or continue in a terminal with <code>/aidlc</code>.</p>
+  return `<p class="side-panel-empty"><b>No agent run for this intent.</b>Start one here, or continue in a terminal with <code>${escapeHtml(resume)}</code>.</p>
     <div class="agent-actions"><button type="button" class="btn primary" data-run-start>${icon("arrowLeft", { size: 14 })} Run the agent</button></div>`;
 }
 
 function renderFooter(run) {
   const live = run.state === "starting" || run.state === "running" || run.state === "waiting";
   if (live) return `<footer class="agent-foot"><span>${run.state === "waiting" ? "Answer above to let the agent continue." : "The agent is working; everything it needs from you appears here."}</span><button type="button" class="btn" data-run-cancel>Stop</button></footer>`;
-  if (run.state === "idle") return `<footer class="agent-foot"><span>The agent stopped. Continue sends <code>/aidlc</code> to the same session.</span><button type="button" class="btn primary" data-run-continue>Continue</button></footer>`;
+  if (run.state === "idle") {
+    // An agent that asks in prose ends its turn: the reply goes back as the
+    // next prompt. Continue sends the harness's own resume prompt instead.
+    const resume = store.run?.start_prompt || "/aidlc";
+    return `<footer class="agent-foot reply">
+      <form class="agent-reply"><input type="text" name="reply" placeholder="Reply to the agent…" aria-label="Reply to the agent" autocomplete="off"><button type="submit" class="btn primary">Send</button></form>
+      <div class="agent-foot-row"><span>The agent stopped. Continue sends <code>${escapeHtml(resume)}</code> to the same session.</span><button type="button" class="btn" data-run-continue>Continue</button></div>
+    </footer>`;
+  }
   return `<footer class="agent-foot"><span>${run.state === "failed" ? "Start a new run to continue from the record." : "This run is over."}</span><button type="button" class="btn primary" data-run-start>Run again</button></footer>`;
 }
 
@@ -229,6 +238,14 @@ function bind() {
   });
   slot.querySelector("[data-run-continue]")?.addEventListener("click", async () => {
     await act("/api/run/prompt", { intent }, "Could not continue the agent");
+  });
+  slot.querySelector(".agent-reply")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = event.currentTarget.querySelector("input[name=reply]");
+    const text = input.value.trim();
+    if (!text) return;
+    input.disabled = true;
+    await act("/api/run/prompt", { intent, text }, "Could not send the reply");
   });
   slot.querySelector("[data-run-start]")?.addEventListener("click", async () => {
     await act("/api/run/prompt", { intent, start: true }, "Could not start the agent");

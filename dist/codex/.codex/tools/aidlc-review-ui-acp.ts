@@ -17,12 +17,17 @@
 // and the turn never ends (the review of Kiro Crew's client found exactly this
 // hang). Notifications (`session/update`) stream to the caller's listener.
 //
-// Backend quirks are confined to `acpBackendProfile`: the Claude adapter
-// (`@agentclientprotocol/claude-agent-acp`, built on the Agent SDK) takes the
-// integer protocol version and `optionId`-shaped permission options. Phase 1
-// ships Claude only; a second backend adds a profile, not a branch elsewhere.
+// Backend differences are confined to the profile table (`ACP_BACKENDS`): how
+// each harness's agent is launched, what its first prompt is, and which
+// extension requests (beyond the two standard ones) it asks the human with.
+// Every harness the framework ships to speaks ACP - Kiro CLI, Cursor, opencode,
+// and Copilot natively, Claude and Codex through their published adapters - so
+// adding one is a profile row, not a branch elsewhere.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const ACP_PROTOCOL_VERSION = 1;
 // Handshake steps must answer within this window; the Claude adapter's first
@@ -33,14 +38,138 @@ export const ACP_HANDSHAKE_TIMEOUT_MS = 180_000;
 // Pinned so an install does not silently move to a newer adapter with a
 // different wire behaviour; bump deliberately with a test run.
 export const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp@0.75.1";
+export const CODEX_ACP_PACKAGE = "@agentclientprotocol/codex-acp@1.10.0";
 export const ENV_ACP_CLAUDE_COMMAND = "AIDLC_ACP_CLAUDE_COMMAND";
 
-export type AcpBackend = "claude";
+export type AcpBackend = "claude" | "kiro" | "codex" | "cursor" | "opencode" | "copilot";
 
 export interface AcpLaunch {
   backend: AcpBackend;
   command: string[];
   env: Record<string, string>;
+  /** The prompt a human would type to start or resume the workflow in this harness. */
+  startPrompt: string;
+}
+
+export interface AcpBackendProfile {
+  backend: AcpBackend;
+  /** `harness.json` names this profile serves. */
+  harnesses: readonly string[];
+  /** `AIDLC_ACP_<BACKEND>_COMMAND`: a whitespace-split command line that replaces resolution. */
+  envCommand: string;
+  startPrompt: string;
+  /** Null when the harness is not usable on this machine; the reason is shown to the human. */
+  resolve(env: NodeJS.ProcessEnv, which: (name: string) => string | null): { command: string[]; env: Record<string, string> } | null;
+  /** What is missing when `resolve` returns null. */
+  requirement: string;
+}
+
+function bunx(which: (name: string) => string | null): string {
+  return which("bunx") ?? "bunx";
+}
+
+export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
+  {
+    backend: "claude",
+    harnesses: ["claude"],
+    envCommand: ENV_ACP_CLAUDE_COMMAND,
+    startPrompt: "/aidlc",
+    requirement: "the `claude` CLI",
+    // Zed's adapter over the Agent SDK. The SDK needs the local `claude`
+    // executable and does not search PATH for it, so it travels in the env.
+    resolve(env, which) {
+      const claude = env.CLAUDE_CODE_EXECUTABLE || which("claude");
+      if (!claude) return null;
+      const onPath = which("claude-agent-acp");
+      return { command: onPath ? [onPath] : [bunx(which), CLAUDE_ACP_PACKAGE], env: { CLAUDE_CODE_EXECUTABLE: claude } };
+    },
+  },
+  {
+    backend: "kiro",
+    harnesses: ["kiro", "kiro-ide"],
+    envCommand: "AIDLC_ACP_KIRO_COMMAND",
+    startPrompt: "/aidlc",
+    requirement: "the `kiro-cli` CLI",
+    // Native. The shipped `aidlc` agent carries the framework's hooks, so the
+    // session must run as that agent.
+    resolve(_env, which) {
+      const kiro = which("kiro-cli");
+      return kiro ? { command: [kiro, "acp", "--agent", "aidlc"], env: {} } : null;
+    },
+  },
+  {
+    backend: "codex",
+    harnesses: ["codex"],
+    envCommand: "AIDLC_ACP_CODEX_COMMAND",
+    startPrompt: "$aidlc",
+    requirement: "the `codex` CLI (or a `~/.codex` login)",
+    // The ACP project's adapter bundles its own Codex; auth comes from the
+    // user's `~/.codex`, so a login is the real requirement.
+    resolve(env, which) {
+      const home = env.CODEX_HOME || join(env.HOME || homedir(), ".codex");
+      if (!which("codex") && !existsSync(home)) return null;
+      const onPath = which("codex-acp");
+      return { command: onPath ? [onPath] : [bunx(which), CODEX_ACP_PACKAGE], env: {} };
+    },
+  },
+  {
+    backend: "cursor",
+    harnesses: ["cursor"],
+    envCommand: "AIDLC_ACP_CURSOR_COMMAND",
+    startPrompt: "/aidlc",
+    requirement: "the Cursor CLI (`agent` or `cursor-agent`)",
+    resolve(_env, which) {
+      const agent = which("cursor-agent") ?? which("agent");
+      return agent ? { command: [agent, "acp"], env: {} } : null;
+    },
+  },
+  {
+    backend: "opencode",
+    harnesses: ["opencode"],
+    envCommand: "AIDLC_ACP_OPENCODE_COMMAND",
+    startPrompt: "/aidlc",
+    requirement: "the `opencode` CLI",
+    resolve(_env, which) {
+      const opencode = which("opencode");
+      return opencode ? { command: [opencode, "acp"], env: {} } : null;
+    },
+  },
+  {
+    backend: "copilot",
+    harnesses: ["copilot"],
+    envCommand: "AIDLC_ACP_COPILOT_COMMAND",
+    startPrompt: "/aidlc",
+    requirement: "the `copilot` CLI",
+    resolve(_env, which) {
+      const copilot = which("copilot");
+      return copilot ? { command: [copilot, "--acp"], env: {} } : null;
+    },
+  },
+];
+
+export function acpBackendForHarness(harness: string | null): AcpBackendProfile | null {
+  if (!harness) return null;
+  return ACP_BACKENDS.find((profile) => profile.harnesses.includes(harness)) ?? null;
+}
+
+/**
+ * How to launch the installed harness's agent on this machine, or null when it
+ * cannot run here. `AIDLC_ACP_<BACKEND>_COMMAND` replaces the whole command
+ * line (whitespace-split) and skips the requirement check, so a vendored
+ * adapter or a test double can stand in.
+ */
+export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv = process.env): AcpLaunch | null {
+  const profile = acpBackendForHarness(harness);
+  if (!profile) return null;
+  const which = (name: string): string | null => Bun.which(name, env.PATH !== undefined ? { PATH: env.PATH } : undefined);
+  const override = (env[profile.envCommand] ?? "").trim();
+  if (override) {
+    const extra: Record<string, string> = {};
+    if (profile.backend === "claude" && env.CLAUDE_CODE_EXECUTABLE) extra.CLAUDE_CODE_EXECUTABLE = env.CLAUDE_CODE_EXECUTABLE;
+    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt };
+  }
+  const resolved = profile.resolve(env, which);
+  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt } : null;
 }
 
 export interface AcpPermissionOption {
@@ -116,33 +245,6 @@ export class AcpError extends Error {
   ) {
     super(message);
   }
-}
-
-/**
- * Resolve how to launch the Claude ACP agent on this machine, or null when it
- * cannot run here (no `claude` binary). Resolution: `AIDLC_ACP_CLAUDE_COMMAND`
- * (a whitespace-split command line) > `claude-agent-acp` on PATH > `bunx` with
- * the pinned package. The adapter delegates the model turn to the Agent SDK,
- * which needs the local `claude` executable and does not search PATH for it,
- * so `CLAUDE_CODE_EXECUTABLE` is set unless the caller already did.
- */
-export function resolveClaudeAcpLaunch(env: NodeJS.ProcessEnv = process.env): AcpLaunch | null {
-  const which = (name: string): string | null => Bun.which(name, env.PATH !== undefined ? { PATH: env.PATH } : undefined);
-  const claude = env.CLAUDE_CODE_EXECUTABLE || which("claude");
-  if (!claude) return null;
-  const override = (env[ENV_ACP_CLAUDE_COMMAND] ?? "").trim();
-  let command: string[];
-  if (override) {
-    command = override.split(/\s+/);
-  } else {
-    const onPath = which("claude-agent-acp");
-    command = onPath ? [onPath] : [which("bunx") ?? "bunx", CLAUDE_ACP_PACKAGE];
-  }
-  return {
-    backend: "claude",
-    command,
-    env: { CLAUDE_CODE_EXECUTABLE: claude },
-  };
 }
 
 interface Pending {
@@ -376,6 +478,25 @@ export class AcpClient {
         this.send({ jsonrpc: "2.0", id, result: response });
         return;
       }
+      // Cursor asks the human through two blocking extension methods. Both are
+      // presented as the same form question the standard elicitation uses, and
+      // the answer is mapped back to Cursor's own response shape.
+      if (method === "cursor/ask_question") {
+        const ask = cursorAskToElicitation(params);
+        if (!ask) {
+          this.send({ jsonrpc: "2.0", id, error: { code: -32602, message: "no questions" } });
+          return;
+        }
+        const response = await this.bridges.onElicitation(ask.request);
+        this.send({ jsonrpc: "2.0", id, result: { outcome: ask.toOutcome(response) } });
+        return;
+      }
+      if (method === "cursor/create_plan") {
+        const plan = cursorPlanToElicitation(params);
+        const response = await this.bridges.onElicitation(plan.request);
+        this.send({ jsonrpc: "2.0", id, result: { outcome: plan.toOutcome(response) } });
+        return;
+      }
       this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
     } catch (error) {
       this.send({
@@ -426,5 +547,97 @@ function normalizeElicitationRequest(params: unknown): AcpElicitationRequest | n
       properties: typeof schema.properties === "object" && schema.properties !== null ? (schema.properties as Record<string, unknown>) : {},
     },
     toolCallId: typeof raw.toolCallId === "string" ? raw.toolCallId : undefined,
+  };
+}
+
+// ---- Cursor extension asks -------------------------------------------------------
+//
+// https://cursor.com/docs/cli/acp: `cursor/ask_question` carries one or more
+// multiple-choice questions (option ids + labels, optional multi-select);
+// `cursor/create_plan` carries a plan to accept or reject. Both block the agent
+// until answered.
+
+interface CursorQuestion {
+  id: string;
+  prompt: string;
+  options: Array<{ id: string; label: string }>;
+  allowMultiple?: boolean;
+}
+
+export function cursorAskToElicitation(params: unknown): {
+  request: AcpElicitationRequest;
+  toOutcome: (response: AcpElicitationResponse) => Record<string, unknown>;
+} | null {
+  const raw = (params ?? {}) as Record<string, unknown>;
+  const questions = (Array.isArray(raw.questions) ? raw.questions : [])
+    .filter((entry): entry is CursorQuestion => {
+      const candidate = entry as Partial<CursorQuestion>;
+      return typeof candidate?.id === "string" && typeof candidate.prompt === "string" && Array.isArray(candidate.options);
+    })
+    .map((question) => ({ ...question, options: question.options.filter((option) => typeof option?.id === "string" && typeof option.label === "string") }));
+  if (questions.length === 0) return null;
+  const properties: Record<string, unknown> = {};
+  questions.forEach((question, index) => {
+    const options = question.options.map((option) => ({ const: option.label, title: option.label }));
+    properties[`question_${index}`] = question.allowMultiple
+      ? { type: "array", title: question.prompt, items: { anyOf: options } }
+      : { type: "string", title: question.prompt, oneOf: options };
+  });
+  const single = questions.length === 1;
+  return {
+    request: {
+      sessionId: "",
+      mode: "form",
+      message: typeof raw.title === "string" && raw.title ? raw.title : single ? questions[0].prompt : "Please answer the following questions.",
+      requestedSchema: { type: "object", properties },
+      toolCallId: typeof raw.toolCallId === "string" ? raw.toolCallId : undefined,
+    },
+    toOutcome(response) {
+      if (response.action === "cancel") return { outcome: "cancelled" };
+      if (response.action === "decline") return { outcome: "skipped" };
+      const answers = questions.map((question, index) => {
+        const value = response.content[`question_${index}`];
+        const labels = Array.isArray(value) ? value.map(String) : typeof value === "string" ? [value] : [];
+        return {
+          questionId: question.id,
+          selectedOptionIds: labels.map((label) => question.options.find((option) => option.label === label)?.id).filter((id): id is string => typeof id === "string"),
+        };
+      });
+      return { outcome: "answered", answers };
+    },
+  };
+}
+
+export function cursorPlanToElicitation(params: unknown): {
+  request: AcpElicitationRequest;
+  toOutcome: (response: AcpElicitationResponse) => Record<string, unknown>;
+} {
+  const raw = (params ?? {}) as Record<string, unknown>;
+  const name = typeof raw.name === "string" && raw.name ? raw.name : "the plan";
+  const overview = typeof raw.overview === "string" ? raw.overview : "";
+  const plan = typeof raw.plan === "string" ? raw.plan : "";
+  const message = [`Approve ${name}?`, overview, plan].filter(Boolean).join("\n\n");
+  return {
+    request: {
+      sessionId: "",
+      mode: "form",
+      message,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          question_0: { type: "string", title: "Plan", oneOf: [{ const: "Accept", title: "Accept" }, { const: "Reject", title: "Reject" }] },
+          question_0_custom: { type: "string", title: "Other", description: "Why, if rejecting (optional)." },
+        },
+      },
+      toolCallId: typeof raw.toolCallId === "string" ? raw.toolCallId : undefined,
+    },
+    toOutcome(response) {
+      if (response.action === "cancel") return { outcome: "cancelled" };
+      if (response.action === "decline") return { outcome: "rejected", reason: "Skipped by the human" };
+      const choice = String(response.content.question_0 ?? "");
+      const reason = typeof response.content.question_0_custom === "string" ? response.content.question_0_custom.trim() : "";
+      if (choice === "Accept") return { outcome: "accepted" };
+      return { outcome: "rejected", ...(reason ? { reason } : {}) };
+    },
   };
 }

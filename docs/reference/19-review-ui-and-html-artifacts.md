@@ -122,16 +122,29 @@ per line (`turn`, `text`, `tool`, `permission`, `question`, `note`, `error`),
 the last 400 of which `/api/run` serves.
 
 The runner drives the agent over the **Agent Client Protocol** (JSON-RPC 2.0,
-newline-delimited, on the agent's stdio; `aidlc-review-ui-acp.ts`). For Claude
-the agent is `@agentclientprotocol/claude-agent-acp` (Zed's adapter over the
-Agent SDK), resolved as `AIDLC_ACP_CLAUDE_COMMAND` > `claude-agent-acp` on PATH >
-`bunx <pinned package>`; it needs the local `claude` executable
-(`CLAUDE_CODE_EXECUTABLE`, found on PATH when unset), and the runner is off when
-none exists or `AIDLC_REVIEW_RUNNER=0`. The daemon advertises form elicitation
-and answers exactly two inbound requests — `session/request_permission` and
-`elicitation/create` (how the adapter forwards the built-in AskUserQuestion) —
-refusing every other server→client request with `-32601` so the agent never
-blocks on an unanswered one. Session start sets `AIDLC_REVIEW_RUN=<space>/<record>`
+newline-delimited, on the agent's stdio; `aidlc-review-ui-acp.ts`). The
+installed harness (`harness.json` `name`) selects a profile in `ACP_BACKENDS`:
+
+| Backend (harnesses) | Command | Requirement | First prompt | Human asks arrive as |
+|---|---|---|---|---|
+| `claude` (claude) | `claude-agent-acp` on PATH, else `bunx @agentclientprotocol/claude-agent-acp@0.75.1`; `CLAUDE_CODE_EXECUTABLE` in the env | `claude` | `/aidlc` | `elicitation/create` (form; the adapter's AskUserQuestion) |
+| `kiro` (kiro, kiro-ide) | `kiro-cli acp --agent aidlc` | `kiro-cli` | `/aidlc` | prose; the turn ends |
+| `codex` (codex) | `codex-acp` on PATH, else `bunx @agentclientprotocol/codex-acp@1.10.0` | `codex` or `~/.codex` | `$aidlc` | prose; the turn ends |
+| `cursor` (cursor) | `cursor-agent acp` / `agent acp` | the Cursor CLI | `/aidlc` | `cursor/ask_question`, `cursor/create_plan` |
+| `opencode` (opencode) | `opencode acp` | `opencode` | `/aidlc` | prose; the turn ends |
+| `copilot` (copilot) | `copilot --acp` | `copilot` | `/aidlc` | prose; the turn ends |
+
+`AIDLC_ACP_<BACKEND>_COMMAND` replaces the command line (whitespace-split) and
+skips the requirement; the runner is off when the requirement is missing or
+`AIDLC_REVIEW_RUNNER=0`. All six answer `initialize` with protocol version 1 and
+advertise `loadSession` (verified live here for Claude, Kiro CLI 2.13, Codex
+1.10, opencode 1.18). The daemon advertises form elicitation and answers exactly
+these inbound requests — `session/request_permission`, `elicitation/create`,
+and Cursor's two blocking extension methods (mapped onto the same form-question
+shape, answers mapped back to option ids / accepted-rejected) — refusing every
+other server→client request with `-32601` so the agent never blocks on an
+unanswered one. Permission options are read in both spellings
+(`optionId`/`name` per the spec, `id`/`label` as kiro-cli sends). Session start sets `AIDLC_REVIEW_RUN=<space>/<record>`
 in the agent's environment; the SessionStart hook binds that session to the
 named record (`reviewRunTarget`), so `next` in it resolves to the intent
 regardless of the cursor. The first prompt is `/aidlc`. When a turn ends and a
@@ -139,8 +152,13 @@ browser round lands afterwards (answers saved, gate decided), the daemon sends
 the same continuation the Stop hook would have injected
 (`browserAnswersContinuation` / `browserDecisionContinuation` in
 `aidlc-review-ui-shared.ts`); while the hook is holding the turn it sends
-nothing. One live run per project; a live run keeps the daemon from idling out;
-on restart, a run whose session is alive is re-attached with `session/load`.
+nothing. When a turn ends on a *prepared* question round (a harness whose Stop
+seam cannot hold the turn), the daemon opens the round (`openQuestionsRound`) -
+it is now the process that waits for the browser - so the form shows instead of
+the preparing spinner. `POST /api/run/prompt` with `text` is the reply path for
+an agent that asked in prose. One live run per project; a live run keeps the
+daemon from idling out; on restart, a run whose session is alive is re-attached
+with `session/load`.
 
 ### Pending intent requests
 
@@ -438,8 +456,8 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `POST /api/answers` | Cookie/header | Active intent only. Validate submission/digest, write `answers-NNN.json`, return `{file}`; stale digest is 409 `{error:"questions file changed; reload"}` |
 | `GET /api/intents/propose?text=` | Cookie/header | `{scope, source: "keyword"\|"default"}` — what the composer would choose: the engine's keyword inference (`inferScopeFromText`), else the selection-aware default scope |
 | `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, effort?: {preset}\|{reviewing,writing}, label?}`. With a runner and a `scope`: runs `intent-create --space --scope --arguments --label [--effort]` (the record, state, and audit the conductor would create), starts an agent run bound to it, returns 201 `{intent, space, run_id, mode:"running"}`; 409 while another run is live; `mode:"created"` with `error` when the record exists but the agent did not start. Otherwise records a pending request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock, 201 `{id, space, created_at, mode:"requested"}`. Unknown workflow/effort 400, unknown workspace 404 |
-| `GET /api/run?intent=` | Cookie/header | `{run, pending, events, available}` — the intent's agent run (`run.json`), the inputs waiting on the human, the last 400 log events; `run: null` when it never ran |
-| `POST /api/run/prompt` | Cookie/header | `{intent, text?}` — send a prompt (default `/aidlc`) to an idle run; with no live run, start one (201). 409 while a turn is live |
+| `GET /api/run?intent=` | Cookie/header | `{run, pending, events, available, start_prompt, requirement}` — the intent's agent run (`run.json`), the inputs waiting on the human, the last 400 log events, the harness's resume prompt, and what the machine lacks when `available` is false; `run: null` when it never ran |
+| `POST /api/run/prompt` | Cookie/header | `{intent, text?}` — send a prompt (default: the harness's resume prompt) to an idle run — Continue, or a Reply to an agent that asked in prose; with no live run, start one (201). 409 while a turn is live |
 | `POST /api/run/permission` | Cookie/header | `{intent, id, option_id}` — answer a pending permission with one of its advertised options |
 | `POST /api/run/question` | Cookie/header | `{intent, id, action: "accept"\|"decline"\|"cancel", content?}` — answer a pending form question; `content` keys are the schema's properties |
 | `POST /api/run/cancel` | Cookie/header | `{intent}` — `session/cancel` the live turn (pending inputs resolve cancelled); an idle run is closed |
@@ -921,7 +939,7 @@ Boolean variables use the exact string `"1"` unless a row says otherwise.
 | `AIDLC_REVIEW_HOME` | `~/.aidlc/review-ui` | Override private daemon discovery/log/nonce root; primarily useful for tests and isolated installations |
 | `AIDLC_HTML_ARTIFACTS` | unset | `1` seeds new intents with `HTML Artifacts: on`; the state field, not the environment, controls the intent thereafter |
 | `AIDLC_REVIEW_RUNNER` | enabled | `0` turns the daemon's agent runner off; Start then records a request for the terminal |
-| `AIDLC_ACP_CLAUDE_COMMAND` | unset | Command line that launches the Claude ACP agent (whitespace-split); default `claude-agent-acp` on PATH, else `bunx @agentclientprotocol/claude-agent-acp@0.75.1` |
+| `AIDLC_ACP_<BACKEND>_COMMAND` | unset | Command line that launches that backend's ACP agent (whitespace-split), replacing resolution and the requirement check: `AIDLC_ACP_CLAUDE_COMMAND`, `AIDLC_ACP_KIRO_COMMAND`, `AIDLC_ACP_CODEX_COMMAND`, `AIDLC_ACP_CURSOR_COMMAND`, `AIDLC_ACP_OPENCODE_COMMAND`, `AIDLC_ACP_COPILOT_COMMAND` |
 | `AIDLC_REVIEW_TURN_MINUTES` | `240` | Ceiling on one agent turn; a turn still running after it is cancelled |
 | `AIDLC_REVIEW_RUN` | set by the daemon | `<space>/<record>` on an agent session the daemon launched; the SessionStart hook binds the session to that record |
 

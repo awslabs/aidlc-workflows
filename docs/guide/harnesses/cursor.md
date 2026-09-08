@@ -75,6 +75,13 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 
 ## What's different on this harness
 
+**Start in the browser.** With the review UI on (`AIDLC_REVIEW_UI=1`) and
+`agent` on this machine, the composer's **Start** creates the intent and runs
+this harness's agent for it over the Agent Client Protocol — `agent acp` — prompting
+`/aidlc` exactly as you would. Follow it in the **Agent** panel; Cursor's own question and plan requests (`cursor/ask_question`, `cursor/create_plan`) arrive as cards; tool
+permissions the harness does not settle itself wait there too. See
+[Review in the Browser](../18-review-in-the-browser.md#start-an-intent-from-the-browser).
+
 - **Questions render as numbered prose options** (no structured-question
   widget); the questions FILE with `[Answer]:` tags remains the source of
   truth.

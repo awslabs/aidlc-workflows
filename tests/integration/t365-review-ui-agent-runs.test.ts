@@ -211,6 +211,51 @@ describe("t365 review UI agent runs", () => {
     expect(texts(after)).toContain("Working on: carry on");
   }, 60_000);
 
+  test("every harness runs its own agent: the profile picks the command and the first prompt", async () => {
+    await stopDaemon();
+    // A fresh project per harness (a live run in the shared one would make Start a 409).
+    for (const [harness, dir, override, prompt] of [
+      ["kiro", ".kiro", "AIDLC_ACP_KIRO_COMMAND", "/aidlc"],
+      ["codex", ".codex", "AIDLC_ACP_CODEX_COMMAND", "$aidlc"],
+      ["opencode", ".aidlc", "AIDLC_ACP_OPENCODE_COMMAND", "/aidlc"],
+    ] as const) {
+      const other = join(temp, `project-${harness}`);
+      mkdirSync(join(other, "aidlc", "spaces", "default", "memory"), { recursive: true });
+      mkdirSync(join(other, dir, "tools", "data"), { recursive: true });
+      writeFileSync(join(other, "aidlc", "active-space"), "default\n");
+      writeFileSync(join(other, dir, "tools", "data", "harness.json"), JSON.stringify({ name: harness, harnessDir: dir, rulesSubdir: "rules" }));
+      const saved = { project, infoPath };
+      project = other;
+      infoPath = serverInfoPath(other, env);
+      try {
+        await startDaemon({
+          AIDLC_HARNESS_DIR: dir,
+          AIDLC_STAGE_GRAPH: join(ROOT, "dist", harness, dir, "tools", "data", "stage-graph.json"),
+          // Only this harness's command is provided; the claude one must not be used.
+          AIDLC_ACP_CLAUDE_COMMAND: "",
+          CLAUDE_CODE_EXECUTABLE: "",
+          PATH: "/nonexistent",
+          [override]: `${process.execPath} ${FIXTURE}`,
+          FAKE_ACP_SCRIPT: "quiet",
+        });
+        const workflow = (await api("GET", "/api/workflow")).body as { runner: boolean };
+        expect(workflow.runner, harness).toBe(true);
+        const start = await api("POST", "/api/intents", { text: `Todo CLI on ${harness}`, space: "default", scope: "express" });
+        expect(start.status, JSON.stringify(start.body)).toBe(201);
+        expect(start.body.mode).toBe("running");
+        const view = await until(String(start.body.intent), (candidate) => candidate.run?.state === "idle");
+        expect(view.run.backend).toBe(harness);
+        expect(view.start_prompt).toBe(prompt);
+        expect(texts(view)).toContain(`Working on: ${prompt} (run=default/${start.body.intent})`);
+      } finally {
+        await stopDaemon();
+        project = saved.project;
+        infoPath = saved.infoPath;
+      }
+    }
+    await startDaemon();
+  }, 90_000);
+
   test("without a runner Start records a request instead", async () => {
     await stopDaemon();
     await startDaemon({ AIDLC_REVIEW_RUNNER: "0" });

@@ -112,6 +112,13 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 
 ## Harness differences vs Claude Code
 
+**Start in the browser.** With the review UI on (`AIDLC_REVIEW_UI=1`) and
+`codex` on this machine, the composer's **Start** creates the intent and runs
+this harness's agent for it over the Agent Client Protocol — `codex-acp` (the ACP project's adapter; it bundles Codex and uses your `~/.codex` login) — prompting
+`$aidlc` exactly as you would. Follow it in the **Agent** panel; Codex asks in prose, so a question ends the agent's turn: answer it in the panel's **Reply** box; tool
+permissions the harness does not settle itself wait there too. See
+[Review in the Browser](../18-review-in-the-browser.md#start-an-intent-from-the-browser).
+
 - **Gates** render via the `request_user_input` tool when the shipped config
   flags enable it, with a numbered-prose fallback otherwise (answer with a
   number or free text). Gate semantics live in the engine either way.

@@ -201,6 +201,13 @@ ways to enable it, either works:
 
 ## What's different on Kiro IDE
 
+**Start in the browser.** With the review UI on (`AIDLC_REVIEW_UI=1`) and
+`kiro-cli` on this machine, the composer's **Start** creates the intent and runs
+this harness's agent for it over the Agent Client Protocol — `kiro-cli acp --agent aidlc` (the IDE itself has no ACP entry; the CLI drives the same `.kiro/` install) — prompting
+`/aidlc` exactly as you would. Follow it in the **Agent** panel; Kiro asks in prose, so a question ends the agent's turn: answer it in the panel's **Reply** box; tool
+permissions the harness does not settle itself wait there too. See
+[Review in the Browser](../18-review-in-the-browser.md#start-an-intent-from-the-browser).
+
 | Area | Claude Code | Kiro IDE |
 |------|-------------|----------|
 | Hook registration | `settings.json` `hooks` block | `.kiro/hooks/aidlc-*.json` v2 hook files (IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` legacy files (pre-1.0); both shipped, no double-firing |

@@ -91,6 +91,8 @@ export interface RunView {
   pending: PendingInput[];
   events: RunEvent[];
   available: boolean;
+  /** The harness's own start/resume prompt (`/aidlc`, `$aidlc`); what Continue sends. */
+  start_prompt: string | null;
 }
 
 interface LiveRun {
@@ -112,6 +114,8 @@ export interface RunManagerOptions {
   launch: AcpLaunch | null;
   /** Called after every change the browser should see; debounced by the caller. */
   publish: (intent: string) => void;
+  /** Called when a turn ends and the session is alive: the human's move, if any, is next. */
+  onIdle?: (intent: string, space: string) => void;
   log?: (line: string) => void;
 }
 
@@ -163,6 +167,11 @@ export class RunManager {
     return (this.finished.get(intent) ?? this.readFromDisk(intent))?.record.state ?? null;
   }
 
+  /** The prompt a human would type to start or resume in this harness. */
+  get startPrompt(): string | null {
+    return this.options.launch?.startPrompt ?? null;
+  }
+
   view(intent: string): RunView | null {
     const live = this.runs.get(intent);
     if (live) {
@@ -171,16 +180,18 @@ export class RunManager {
         pending: [...live.pending.values()].map((entry) => entry.input),
         events: live.events,
         available: this.available,
+        start_prompt: this.startPrompt,
       };
     }
     const done = this.finished.get(intent) ?? this.readFromDisk(intent);
     if (!done) return null;
-    return { run: done.record, pending: [], events: done.events, available: this.available };
+    return { run: done.record, pending: [], events: done.events, available: this.available, start_prompt: this.startPrompt };
   }
 
   /** Spawn the agent for `intent`, bind the session, and send the first prompt. */
-  async start(space: string, intent: string, prompt = "/aidlc"): Promise<RunRecord> {
+  async start(space: string, intent: string, prompt?: string): Promise<RunRecord> {
     if (!this.options.launch) throw new AcpError("no agent runner is available on this machine");
+    const first = prompt ?? this.options.launch.startPrompt;
     const busy = this.live();
     if (busy) throw new RunBusyError(busy);
     const now = isoTimestamp();
@@ -213,7 +224,7 @@ export class RunManager {
       this.fail(live, error);
       throw error;
     }
-    this.beginTurn(live, prompt);
+    this.beginTurn(live, first);
     return record;
   }
 
@@ -308,6 +319,7 @@ export class RunManager {
           this.flushText(live);
           this.setState(live, "idle");
           this.note(live, "Session restored after the daemon restarted. Continue when ready.");
+          this.options.onIdle?.(record.intent, record.space);
         } catch (error) {
           this.fail(live, error, "the agent session could not be restored; start a new run from the intent");
         }
@@ -382,7 +394,10 @@ export class RunManager {
         this.flushText(live);
         live.record.last_stop_reason = stopReason;
         this.push(live, { kind: "turn", phase: "stop", stop_reason: stopReason });
-        if (!live.client.exited) this.setState(live, "idle");
+        if (!live.client.exited) {
+          this.setState(live, "idle");
+          this.options.onIdle?.(live.record.intent, live.record.space);
+        }
       })
       .catch((error: unknown) => {
         this.flushText(live);

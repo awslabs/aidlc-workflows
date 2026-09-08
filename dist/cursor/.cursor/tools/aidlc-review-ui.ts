@@ -39,6 +39,7 @@ import {
   stateFilePath,
   appendPendingIntentRequest,
   harnessDir,
+  installedHarnessName,
   INTENT_EFFORT_LEVELS,
   INTENT_EFFORT_PRESETS,
   type IntentEffort,
@@ -47,7 +48,7 @@ import {
   validScopes,
 } from "./aidlc-lib.ts";
 import { inferScopeFromText } from "./aidlc-utility.ts";
-import { AcpError, resolveClaudeAcpLaunch } from "./aidlc-review-ui-acp.ts";
+import { AcpError, acpBackendForHarness, resolveAcpLaunch } from "./aidlc-review-ui-acp.ts";
 import { RunBusyError, RunManager } from "./aidlc-review-ui-runs.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -102,7 +103,7 @@ import {
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
 import { handleDecision } from "./aidlc-review-ui-decision.ts";
-import { browserAnswersContinuation, browserDecisionContinuation, ENV_REVIEW_RUNNER } from "./aidlc-review-ui-shared.ts";
+import { browserAnswersContinuation, browserDecisionContinuation, ENV_REVIEW_RUNNER, openQuestionsRound } from "./aidlc-review-ui-shared.ts";
 import { openCheckpointPrompt, questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
@@ -1383,11 +1384,12 @@ function requireIntentParam(value: unknown): string {
   return value;
 }
 
-function runViewResponse(runs: RunManager, url: URL, fallbackIntent: string | null): Response {
+function runViewResponse(runs: RunManager, url: URL, fallbackIntent: string | null, requirement: string | null): Response {
   const intent = url.searchParams.get("intent")?.trim() || fallbackIntent;
-  if (!intent) return json({ run: null, pending: [], events: [], available: runs.available });
+  const empty = { run: null, pending: [], events: [], available: runs.available, start_prompt: runs.startPrompt, requirement };
+  if (!intent) return json(empty);
   const view = runs.view(requireIntentParam(intent));
-  return json(view ?? { run: null, pending: [], events: [], available: runs.available });
+  return json(view ? { ...view, requirement } : empty);
 }
 
 async function runActionResponse(runs: RunManager, action: string, request: Request): Promise<Response> {
@@ -1397,7 +1399,7 @@ async function runActionResponse(runs: RunManager, action: string, request: Requ
   try {
     switch (action) {
       case "prompt": {
-        const text = typeof body.text === "string" && body.text.trim() ? body.text.trim() : "/aidlc";
+        const text = typeof body.text === "string" && body.text.trim() ? body.text.trim() : runs.startPrompt ?? "/aidlc";
         // No live run for this intent: start one (Run the agent / Run again).
         if (!runs.isLive(intent)) {
           const space = runs.spaceOf(intent);
@@ -1609,15 +1611,36 @@ async function serve(projectDir: string): Promise<void> {
   // it exists below (the write itself also trips the watcher - this is the
   // belt to that brace, so a tab updates even when the watch is coalescing).
   let publishState: () => void = () => {};
-  // The agent runner (Start in the browser). Claude only in this phase: the
-  // adapter needs the local `claude`; AIDLC_REVIEW_RUNNER=0 turns it off.
-  const runnerLaunch = process.env[ENV_REVIEW_RUNNER] === "0" || harnessDir() !== ".claude" ? null : resolveClaudeAcpLaunch();
+  // The agent runner (Start in the browser): the installed harness's own agent
+  // over ACP, when its CLI is on this machine. AIDLC_REVIEW_RUNNER=0 turns it off.
+  const harnessName = installedHarnessName(projectDir);
+  const runnerLaunch = process.env[ENV_REVIEW_RUNNER] === "0" ? null : resolveAcpLaunch(harnessName);
+  const runnerRequirement = acpBackendForHarness(harnessName)?.requirement ?? null;
+  if (!runnerLaunch && process.env[ENV_REVIEW_RUNNER] !== "0") {
+    process.stderr.write(`Review UI: no agent runner (${runnerRequirement ? `needs ${runnerRequirement}` : `unknown harness ${harnessName ?? "?"}`}); Start records requests for the terminal.\n`);
+  }
   let publishRun: (intent: string) => void = () => {};
   const runs = new RunManager({
     projectDir,
     launch: runnerLaunch,
     publish: (intent) => publishRun(intent),
     log: (line) => process.stderr.write(`${line}\n`),
+    // A turn that ends on a prepared question round: the daemon is the process
+    // that waits for the browser now (it re-prompts on Save), so it opens the
+    // round - the same move the Stop hook's hold or `answers-wait` makes in a
+    // terminal session - and the form appears instead of a spinner.
+    onIdle: (intent, space) => {
+      try {
+        const context = stateContext(projectDir, { intent, space });
+        const current = context.current;
+        if (current?.state !== "prepared" || !current.questions_sha256 || !current.stage) return;
+        const target = currentQuestionsTarget(projectDir, context);
+        if (!target || target.ready) return;
+        if (openQuestionsRound(context.record, current.stage, current.questions_sha256)) publishState();
+      } catch {
+        // A malformed record is not a reason to drop the run.
+      }
+    },
   });
   const continueRun = (text: string): void => {
     const intent = stateContext(projectDir).intent;
@@ -1679,6 +1702,7 @@ async function serve(projectDir: string): Promise<void> {
             });
             for (const entry of payload.intents) entry.run = runs.stateOf(entry.slug);
             payload.runner = runs.available;
+            payload.runner_requirement = runs.available ? null : runnerRequirement;
             return json(payload);
           }
           if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir, url));
@@ -1700,7 +1724,7 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "POST" && url.pathname === "/api/intents") return await intentRequestResponse(projectDir, request, publishState, runs);
           if (request.method === "DELETE" && url.pathname === "/api/intents") return withdrawIntentRequestResponse(projectDir, url, publishState);
           if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
-          if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir).intent);
+          if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir).intent, runnerRequirement);
           const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
           if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);
           if (request.method === "POST" && url.pathname === "/api/decision") {

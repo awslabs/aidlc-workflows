@@ -7,6 +7,7 @@
 // process restart can be exercised. Environment knobs:
 //   FAKE_ACP_SCRIPT=quiet     one text chunk, then end_turn (no questions)
 //   FAKE_ACP_SCRIPT=hang      the turn never ends until session/cancel
+//   FAKE_ACP_SCRIPT=cursor    asks through Cursor's cursor/ask_question and cursor/create_plan
 //   FAKE_ACP_EXIT_AFTER_INIT  exit(3) on session/new instead of answering (process death mid-request)
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -58,6 +59,21 @@ async function prompt(id: number | string, params: Record<string, unknown>): Pro
   update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: ` (run=${process.env.AIDLC_REVIEW_RUN ?? "unset"})` } });
   if (script === "quiet") {
     finish("end_turn");
+    return;
+  }
+  if (script === "cursor") {
+    const ask = await request("cursor/ask_question", {
+      toolCallId: "call-c1",
+      title: "Need input",
+      questions: [
+        { id: "q-db", prompt: "Which database?", options: [{ id: "sqlite", label: "SQLite" }, { id: "pg", label: "Postgres" }], allowMultiple: false },
+        { id: "q-feat", prompt: "Which features?", options: [{ id: "a", label: "Add" }, { id: "l", label: "List" }, { id: "d", label: "Done" }], allowMultiple: true },
+      ],
+    });
+    update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `ask=${JSON.stringify((ask.result as { outcome?: unknown })?.outcome)}` } });
+    const plan = await request("cursor/create_plan", { toolCallId: "call-c2", name: "Todo CLI plan", overview: "Three files.", plan: "1. Storage\n2. Ops\n3. CLI", todos: [] });
+    update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `plan=${JSON.stringify((plan.result as { outcome?: unknown })?.outcome)}` } });
+    finish(cancelled ? "cancelled" : "end_turn");
     return;
   }
   if (script === "hang") {

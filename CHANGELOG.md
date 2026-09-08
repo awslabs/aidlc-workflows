@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.4] - 2026-09-08
+
+Start in the browser runs the intent on every harness. The review daemon drives the installed harness's own agent over the Agent Client Protocol — Kiro CLI, Cursor, opencode, and Copilot natively, Claude and Codex through their published adapters — so the browser is the driver on all seven distributions. Upgrade by copying the new `dist/<harness>/` tree.
+
+* **Every harness runs from Start.** The daemon picks the agent from the installed `harness.json`: `kiro-cli acp --agent aidlc` (Kiro CLI / Kiro IDE), `codex-acp` (Codex; prompts `$aidlc`), `agent acp` (Cursor), `opencode acp`, `copilot --acp`, `claude-agent-acp` (Claude). Each needs its CLI on the machine; the composer says what is missing otherwise, and `AIDLC_ACP_<HARNESS>_COMMAND` replaces the launch command line (a vendored adapter, extra flags).
+* **Reply box.** A harness that asks in prose (Kiro, Codex, opencode, Copilot) ends its turn; the Agent panel's **Reply** sends your answer as the next prompt. Cursor's `cursor/ask_question` and `cursor/create_plan` arrive as question cards. **Continue** sends the harness's own resume prompt.
+* **Browser rounds on harnesses without a turn hold.** When the agent leaves a question round *prepared* and stops, the daemon opens the round (the form appears) and, after Save or a decision, re-prompts the agent with the continuation — verified live on Kiro CLI 2.13 through questions, the gate, and into Code Generation.
+* Tests: t364 pins every profile's command, requirement, and prompt plus the Cursor bridges; t365 starts runs in kiro, codex, and opencode projects.
+
 ## [2.8.3] - 2026-09-08
 
 Start in the browser now runs the work. On Claude Code the review daemon creates the intent and drives an agent session for it over the Agent Client Protocol; questions, permissions, and the agent's log live in a new Agent panel. Upgrade by copying the new `dist/<harness>/` tree; the first Start fetches `@agentclientprotocol/claude-agent-acp` with `bunx` (set `AIDLC_ACP_CLAUDE_COMMAND` on hosts without registry access).

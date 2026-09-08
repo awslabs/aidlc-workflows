@@ -81,7 +81,7 @@ export function renderComposer() {
   </section>
   <p class="composer-foot">${runnerAvailable()
     ? "Start creates the intent and runs the agent here; follow it in the Agent panel. Your terminal stays a full equivalent."
-    : "Start records the request here; the next <code>/aidlc</code> in your terminal creates and runs the intent."}</p>`;
+    : `Start records the request here; the next <code>/aidlc</code> in your terminal creates and runs the intent.${store.workflow?.runner_requirement ? ` To run it from here, install ${escapeHtml(store.workflow.runner_requirement)} and restart the daemon.` : ""}`}</p>`;
 }
 
 export function bindComposer(root, rerender) {

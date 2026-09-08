@@ -135,8 +135,10 @@ export interface WorkflowIntent {
 }
 
 export interface WorkflowPayload {
-  /** True when this daemon can run an agent for Start (Claude, this phase). */
+  /** True when this daemon can run the installed harness's agent for Start. */
   runner?: boolean;
+  /** When `runner` is false: what this machine lacks (e.g. "the `kiro-cli` CLI"), or null. */
+  runner_requirement?: string | null;
   space: string;
   spaces: string[];
   intent: string | null;
