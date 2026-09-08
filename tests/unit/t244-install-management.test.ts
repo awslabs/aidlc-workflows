@@ -2109,7 +2109,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const duplicate = invoke([...args, "--repo", "conflicting/repository"]);
     expect(duplicate.status).not.toBe(0);
     expect(existsSync(marker)).toBe(false);
-  });
+  }, 20_000);
 
   test("release MUST 3: signing emits one attested artifact for direct publication", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");

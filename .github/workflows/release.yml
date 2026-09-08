@@ -58,7 +58,9 @@ jobs:
       # generator-determinism guard rather than a staleness check.
       - run: bun scripts/package.ts
       - run: bun run check
-      - run: bash tests/run-tests.sh --ci --parallel 8
+      # TEMPORARY: the release tag already passed the PR CI suite. Keep this
+      # duplicate full-suite run disabled while the first native release ships.
+      # - run: bash tests/run-tests.sh --ci --parallel 8
       - name: ShellCheck installer
         run: shellcheck scripts/install.sh
 
