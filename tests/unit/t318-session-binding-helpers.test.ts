@@ -4,7 +4,7 @@
 // resolver. All writes stay under a fresh project fixture.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditFilePath,
@@ -229,6 +229,89 @@ describe("t318 session binding helpers", () => {
       "utf-8",
     );
     expect(resolveSessionIdFromAncestry(proj)).not.toBe("near-session");
+  });
+
+  test("GC keeps a live entry it cannot verify and still reaps dead ones without ps", () => {
+    const pidDir = sessionPidMapDir(proj);
+    mkdirSync(pidDir, { recursive: true });
+    const liveEntry = join(pidDir, String(process.ppid));
+    const deadEntry = join(pidDir, "999900123");
+    writeFileSync(
+      liveEntry,
+      `${JSON.stringify({
+        sessionId: "kept-session",
+        startTime: "some-recorded-start",
+      })}\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      deadEntry,
+      `${JSON.stringify({
+        sessionId: "dead-session",
+        startTime: "whatever",
+      })}\n`,
+      "utf-8",
+    );
+
+    const priorPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+    const priorPsDenied = process.env.AIDLC_TEST_PS_DENIED;
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    process.env.AIDLC_TEST_PS_DENIED = "1";
+    try {
+      writeSessionPidAncestry(proj, "new-session");
+      expect(existsSync(liveEntry)).toBe(true);
+      expect(
+        JSON.parse(readFileSync(liveEntry, "utf-8")).sessionId,
+      ).toBe("kept-session");
+      expect(existsSync(deadEntry)).toBe(false);
+    } finally {
+      if (priorPlatform === undefined) {
+        delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+      } else {
+        process.env.AIDLC_TEST_SESSION_PLATFORM = priorPlatform;
+      }
+      if (priorPsDenied === undefined) {
+        delete process.env.AIDLC_TEST_PS_DENIED;
+      } else {
+        process.env.AIDLC_TEST_PS_DENIED = priorPsDenied;
+      }
+    }
+  });
+
+  test("a new session's nearest ancestor is written even when many stale entries are queued for GC", () => {
+    const pidDir = sessionPidMapDir(proj);
+    mkdirSync(pidDir, { recursive: true });
+    for (let index = 0; index < 40; index++) {
+      writeFileSync(
+        join(pidDir, String(999_900_000 + index)),
+        `${JSON.stringify({
+          sessionId: "stale-session",
+          startTime: null,
+        })}\n`,
+        "utf-8",
+      );
+    }
+
+    // Before the fix, GC ran first and probed every entry with `ps`, so forty
+    // stale entries exhausted the 50 ms budget before the walk mapped its
+    // nearest ancestor. The walk now writes first and GC reaps dead pids
+    // without spawning, so the mapping must survive any stale-entry count.
+    const priorPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    try {
+      writeSessionPidAncestry(proj, "fresh-session");
+      const nearest = join(pidDir, String(process.ppid));
+      expect(existsSync(nearest)).toBe(true);
+      expect(
+        JSON.parse(readFileSync(nearest, "utf-8")).sessionId,
+      ).toBe("fresh-session");
+    } finally {
+      if (priorPlatform === undefined) {
+        delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+      } else {
+        process.env.AIDLC_TEST_SESSION_PLATFORM = priorPlatform;
+      }
+    }
   });
 
   test("the PID map is optional and missing entries preserve cursor fallback", () => {
