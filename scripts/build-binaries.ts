@@ -1748,18 +1748,13 @@ function routedProjectDirGate(artifact: string): GateResult {
 function dispatcherParityGate(artifact: string): GateResult {
   const codexProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-codex-"));
   const kiroProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-kiro-"));
-  const kiroIdeProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-kiro-ide-"));
   try {
     mkdirSync(join(codexProject, ".git"));
     mkdirSync(join(kiroProject, ".git"));
-    mkdirSync(join(kiroIdeProject, ".git"));
     cpSync(join(REPO_ROOT, "dist-release", "codex", ".codex"), join(codexProject, ".codex"), {
       recursive: true,
     });
     cpSync(join(REPO_ROOT, "dist-release", "kiro", ".kiro"), join(kiroProject, ".kiro"), {
-      recursive: true,
-    });
-    cpSync(join(REPO_ROOT, "dist-release", "kiro-ide", ".kiro"), join(kiroIdeProject, ".kiro"), {
       recursive: true,
     });
     const baseEnv = {
@@ -1811,13 +1806,13 @@ function dispatcherParityGate(artifact: string): GateResult {
         }),
       },
       {
-        name: "adapter-kiro-ide",
-        projectDir: kiroIdeProject,
-        args: ["engine", "adapter", "kiro-ide", "mint"],
+        name: "adapter-kiro",
+        projectDir: kiroProject,
+        args: ["engine", "adapter", "kiro", "mint"],
         env: {
           USER_PROMPT: "{}",
           VSCODE_PID: "23801",
-          VSCODE_IPC_HOOK: join(kiroIdeProject, "vscode-ipc.sock"),
+          VSCODE_IPC_HOOK: join(kiroProject, "vscode-ipc.sock"),
         },
       },
       {
@@ -1875,7 +1870,7 @@ function dispatcherParityGate(artifact: string): GateResult {
   } finally {
     rmSync(codexProject, { recursive: true, force: true });
     rmSync(kiroProject, { recursive: true, force: true });
-    rmSync(kiroIdeProject, { recursive: true, force: true });
+    rmSync(kiroProject, { recursive: true, force: true });
   }
 }
 
@@ -2268,14 +2263,16 @@ function buildTarget(target: TargetConfig): TargetResult {
     ));
     result.gates.push(harnessRuntimeGate(actual.artifact, "codex", ".codex"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "cursor", ".cursor"));
+    // One gate for the one Kiro row. The kiro-ide row used to have its own line
+    // here; the bulk rename turned it into a second identical `kiro` gate, which
+    // passes twice and verifies nothing extra.
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro", ".kiro"));
-    result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.{json,md} present (conductor wiring)",
+      "agents/aidlc.md present (conductor wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,

@@ -208,7 +208,7 @@ export type HarnessManifest = {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
     /** Host-specific plugin hook projection shape. */
-    kind: "store" | "kiro" | "kiro-ide" | "cursor";
+    kind: "store" | "kiro" | "cursor";
     /**
      * Additional project-root surfaces emitted outside harnessDir that compose
      * must copy into a disposable plugin-test candidate.

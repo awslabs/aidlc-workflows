@@ -3053,26 +3053,25 @@ export async function collectDoctorReport(
   }
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
-  // permissions live there). Kiro CLI: agents/aidlc.json plus
-  // settings/cli.json; Kiro IDE: agents/aidlc.md. Codex CLI: config.toml +
-  // hooks.json (the hook wiring) + rules/default.rules (permissions).
+  // permissions live there). Kiro: agents/aidlc.md plus settings/cli.json.
+  // Codex CLI: config.toml + hooks.json (the hook wiring) + rules/default.rules
+  // (permissions).
   if (harness === ".kiro") {
-    const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
-    const markdownAgentPath = join(projectDir, harness, "agents", "aidlc.md");
-    const hasJsonAgent = existsSync(jsonAgentPath);
     results.push({
-      pass: hasJsonAgent || existsSync(markdownAgentPath),
-      label: "agents/aidlc.{json,md} present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc.md")} (Kiro IDE)`,
+      pass: existsSync(join(projectDir, harness, "agents", "aidlc.md")),
+      label: "agents/aidlc.md present (conductor wiring)",
+      fix: projectedFileRepair("kiro", ".kiro/agents/aidlc.md"),
     });
-    if (hasJsonAgent) {
-      const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
-      results.push({
-        pass: existsSync(cliSettingsPath),
-        label: "settings/cli.json present (workspace default-agent activation)",
-        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
-      });
-    }
+    // Unconditional. This check used to run only when an agent-v1 aidlc.json was
+    // present, so once the row became Markdown-only it stopped running at all -
+    // and cli.json is the file that pins the agent engine and activates the
+    // workspace default agent, which is exactly the absence a doctor run should
+    // catch.
+    results.push({
+      pass: existsSync(join(projectDir, harness, "settings", "cli.json")),
+      label: "settings/cli.json present (engine pin + default-agent activation)",
+      fix: projectedFileRepair("kiro", ".kiro/settings/cli.json"),
+    });
   } else if (harness === ".codex") {
     for (const [file, what] of [
       ["config.toml", "model/provider/sandbox config"],

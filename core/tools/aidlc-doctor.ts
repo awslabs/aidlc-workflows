@@ -207,7 +207,6 @@ function humanReport(
     copilot: "GitHub Copilot",
     cursor: "Cursor",
     kiro: "Kiro",
-    "kiro-ide": "Kiro IDE",
     opencode: "opencode",
   };
   const frameworkPattern =

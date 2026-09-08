@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // scripts/package.ts — THE build entry for the one-core-N-harnesses layout.
 //
-//   bun scripts/package.ts            regenerate dist/{claude,kiro,kiro-ide,codex}
+//   bun scripts/package.ts            regenerate dist/{claude,kiro,codex}
 //   bun scripts/package.ts --check     determinism guard (exit 1 on mismatch)
 //   bun scripts/package.ts <name>      regenerate just one harness
 //   bun scripts/package.ts <name> --check

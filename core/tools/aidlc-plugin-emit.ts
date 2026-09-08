@@ -40,7 +40,7 @@ import {
 } from "./aidlc-command.ts";
 import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
 
-export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
+export type PluginTargetKind = "store" | "kiro" | "cursor";
 
 export interface PluginTarget {
   harnessName: string;
@@ -161,7 +161,6 @@ export function readPluginTargets(path: string): PluginTargetTable {
       value.installRoots.some((item) => typeof item !== "string") ||
       (value.kind !== "store" &&
         value.kind !== "kiro" &&
-        value.kind !== "kiro-ide" &&
         value.kind !== "cursor")
     ) {
       throw new Error(
@@ -313,7 +312,7 @@ function copyHookTemplates(
     if (
       file === "aidlc-plugin-compose.ts" &&
       target.kind !== "cursor" &&
-      target.kind !== "kiro-ide"
+      target.kind !== "kiro"
     ) {
       continue;
     }
@@ -333,7 +332,7 @@ function composeCommand(target: PluginTarget): string {
   if (target.kind === "cursor") {
     return `bun ./hooks/aidlc-plugin-compose.ts ${target.harnessLeaf}`;
   }
-  if (target.kind === "kiro-ide") {
+  if (target.kind === "kiro") {
     return (
       `bun ./hooks/aidlc-plugin-compose.ts ${target.harnessLeaf} ` +
       target.harnessName
@@ -368,10 +367,21 @@ function writeHookWiring(
   target: PluginTarget,
 ): void {
   const command = composeCommand(target);
-  if (target.kind === "kiro") return;
-  if (target.kind === "kiro-ide") {
+  // The row registers hooks through standalone manifests, so a plugin's compose
+  // hook ships as one too. Before the row merge this kind emitted nothing: the
+  // agent-v1 configs it shipped read hooks from the agent file, and a plugin had
+  // no agent to write into.
+  //
+  // BOTH lifecycle triggers, for the same reason the row's own
+  // aidlc-session-start.json carries both: docs/features/hooks.md gives Session
+  // Start as IDE-only and Agent Spawn as CLI-only, and one row now serves both
+  // surfaces. With SessionStart alone a plugin would never compose on Kiro CLI,
+  // and nothing would say so - the plugin's stages would simply be absent.
+  if (target.kind === "kiro") {
     const hooksDir = join(outDir, target.harnessLeaf, "hooks");
     mkdirSync(hooksDir, { recursive: true });
+    const description =
+      `Composes the ${pluginName} AIDLC plugin when a session starts.`;
     writeFileSync(
       join(hooksDir, `aidlc-${pluginName}-compose.json`),
       `${JSON.stringify(
@@ -381,7 +391,13 @@ function writeHookWiring(
             {
               name: `aidlc-${pluginName}-compose`,
               trigger: "SessionStart",
-              description: `Composes the ${pluginName} AIDLC plugin at session start.`,
+              description,
+              action: { type: "command", command },
+            },
+            {
+              name: `aidlc-${pluginName}-compose-spawn`,
+              trigger: "AgentSpawn",
+              description,
               action: { type: "command", command },
             },
           ],

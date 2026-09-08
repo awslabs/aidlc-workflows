@@ -213,8 +213,7 @@ function directComposeEnv(
   if (
     options.harness === "claude" ||
     options.harness === "codex" ||
-    options.harness === "kiro" ||
-    options.harness === "kiro-ide"
+    options.harness === "kiro"
   ) {
     env.CLAUDE_PLUGIN_ROOT = options.pluginBuilt;
     env.CLAUDE_PROJECT_DIR = options.projectDir;

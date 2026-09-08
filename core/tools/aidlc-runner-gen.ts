@@ -599,8 +599,12 @@ export function renderRunner(scope: string, description: string): string {
   const freshSessionFlow = (() => {
     if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
     if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
-    if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
-    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat";
+    // One branch for the one Kiro row, naming both surfaces. The bulk rename had
+    // left the old kiro-ide branch here as a second `kiro` test, which the first
+    // one shadowed - so the CLI-only wording won and the IDE half was dead.
+    if (harnessName === "kiro") {
+      return "start a new Kiro CLI session or open a new Kiro IDE chat";
+    }
     if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
     if (harnessName === "cursor") {
       return "start a new Cursor chat (IDE) or restart agent (CLI)";
