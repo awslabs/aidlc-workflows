@@ -2,6 +2,13 @@
 name: aidlc
 description: AI-DLC conductor agent — run /aidlc to start or resume a workflow
 tools: ["read", "write", "shell", "subagent"]
+# Custom agents do not pick up steering on their own - "When using custom agents,
+# steering files are not automatically included. You must explicitly add them to
+# the agent's `resources` configuration" (Kiro docs, Steering with custom agents).
+# Without this the always-on layer, including the active-memory pointer this row
+# ships, never reaches the conductor.
+resources:
+  - "file://{{HARNESS_DIR}}/steering/**/*.md"
 permissions:
   rules:
     - capability: shell
