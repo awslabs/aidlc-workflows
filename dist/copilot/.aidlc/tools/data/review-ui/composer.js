@@ -60,7 +60,6 @@ export function renderComposer() {
   return `<section class="composer" data-prototype="design">
     <div class="composer-top">
       <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="Workspace: one team's world of intents, knowledge, and practices (aidlc/spaces/<name>)">${icon("flowchart", { size: 13 })}<span>Workspace</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
-      <span class="composer-proto">Design preview</span>
     </div>
     <textarea class="composer-text" rows="2" placeholder="What do you want to build?" aria-label="Intent">${escapeHtml(draft.text)}</textarea>
     <div class="composer-bottom">
@@ -69,7 +68,8 @@ export function renderComposer() {
       <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu" title="How much effort the run spends - the preset sets the models and effort for every agent group">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
     </div>
-  </section>`;
+  </section>
+  <p class="composer-foot"><span class="composer-proto">Design preview</span> Start does not create an intent yet - it says what it would do.</p>`;
 }
 
 export function bindComposer(root, rerender) {

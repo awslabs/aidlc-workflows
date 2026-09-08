@@ -1,6 +1,6 @@
 // App rail, per-view header, inbox, and command palette.
 import { api } from "./api.js";
-import { decisionInFlight, store } from "./store.js";
+import { decisionInFlight, relativeTime, store } from "./store.js";
 import { icon } from "./icons.js";
 import { bindComposer, closeMenu as closeComposerMenu, renderComposer } from "./composer.js";
 
@@ -35,11 +35,12 @@ function basename(path) {
   return String(path || "").split("/").filter(Boolean).pop() || "Untitled";
 }
 
+const SMALL_WORDS = new Set(["and", "or", "of", "the", "to", "in", "for"]);
 function titleCase(value) {
   return String(value || "")
     .split(/[-_]/)
     .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .map((part, index) => (index > 0 && SMALL_WORDS.has(part.toLowerCase()) ? part.toLowerCase() : part[0]?.toUpperCase() + part.slice(1)))
     .join(" ");
 }
 
@@ -409,20 +410,30 @@ function renderInbox() {
     inbox.innerHTML = '<div class="shell-placeholder"><b>Inbox unavailable</b><span>The workflow endpoint is not available yet. Your terminal record is unaffected.</span></div>';
     return;
   }
+  const needs = needsYouCount();
+  const total = (store.workflow.intents || []).length;
+  const row = (intent) => {
+    const where = [intent.phase ? titleCase(intent.phase) : null, intent.current_stage ? titleCase(intent.current_stage) : null].filter(Boolean).join(" · ");
+    const meta = [intent.scope ? `${intent.scope}${intent.depth ? ` · ${intent.depth.toLowerCase()}` : ""}` : null, relativeTime(intent.updated_at)].filter(Boolean).join(" · ");
+    return `<button type="button" class="inbox-row ${intent.status || "idle"}" data-intent="${escapeHtml(intent.slug)}">
+      <span class="intent-dot ${intent.status || "idle"}"></span>
+      <span class="inbox-main"><b>${escapeHtml(intent.label || intent.slug)}</b><small>${escapeHtml(where || "Record")}${meta ? `<em> · ${escapeHtml(meta)}</em>` : ""}</small></span>
+      <span class="inbox-status ${intent.needs ? "needs" : ""}">${escapeHtml(intentStatus(intent))}</span>
+      <span class="inbox-go">${icon("chevronDown", { size: 14 })}</span>
+    </button>`;
+  };
   inbox.innerHTML = `<div class="inbox-page">
     ${renderComposer()}
-    <div class="inbox-heading"><div><p>Workspace · ${escapeHtml(store.workflow.space || "default")}</p><h1>Inbox</h1><span>Human moments across every intent in this workspace.</span></div><b>${needsYouCount()} ${needsYouCount() === 1 ? "needs" : "need"} you</b></div>
-    ${groups
-      .map(
-        ([label, intents]) => `<section class="inbox-group"><h2>${label}<span>${intents.length}</span></h2>
-          ${intents.length ? intents.map((intent) => `<button type="button" class="inbox-row" data-intent="${escapeHtml(intent.slug)}">
-            <span class="intent-dot ${intent.status || "idle"}"></span>
-            <span><b>${escapeHtml(intent.slug)}</b><small>${escapeHtml(titleCase(intent.current_stage) || intent.phase || "Record")}</small></span>
-            <span class="inbox-status">${escapeHtml(intentStatus(intent))}</span>
-          </button>`).join("") : '<p class="inbox-none">None</p>'}
-        </section>`,
-      )
-      .join("")}
+    <section class="inbox-list">
+      <header class="inbox-heading">
+        <h1>Inbox</h1>
+        <span class="inbox-tagline">${total ? `${total} ${total === 1 ? "intent" : "intents"} in this workspace` : "Human moments across every intent in this workspace"}</span>
+        <b class="${needs ? "needs" : ""}">${needs ? `${needs} ${needs === 1 ? "needs" : "need"} you` : "Nothing waiting"}</b>
+      </header>
+      ${total === 0
+        ? `<div class="inbox-empty">${icon("mailInbox", { size: 22 })}<b>No intents yet</b><span>Describe what you want to build above. Everything that needs a decision from you will land here.</span></div>`
+        : groups.filter(([, intents]) => intents.length).map(([label, intents]) => `<section class="inbox-group ${label === "Needs you" ? "needs" : ""}"><h2>${label}<span>${intents.length}</span></h2>${intents.map(row).join("")}</section>`).join("")}
+    </section>
   </div>`;
   bindComposer(inbox, renderInbox);
 }

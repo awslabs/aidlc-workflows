@@ -165,39 +165,52 @@ svg.fi path { fill: currentColor; }
 .header-tools .link { margin-left: 2px; }
 .header-tools .btn { margin-left: 2px; }
 
-.inbox { min-height: 0; overflow: auto; }
-.inbox-page { width: min(880px, 100%); margin: 0 auto; padding: 34px 44px 72px; }
-.inbox-heading { display: flex; align-items: flex-end; gap: 18px; padding-bottom: 22px; border-bottom: 1px solid var(--line2); }
-.inbox-heading div { min-width: 0; }
-.inbox-heading p { margin: 0 0 3px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.inbox-heading h1 { margin: 0; font-size: 28px; letter-spacing: -.02em; }
-.inbox-heading div > span { color: var(--muted); font-size: 13px; }
-.inbox-heading > b { margin-left: auto; padding: 3px 10px; border-radius: 99px; color: var(--accent); background: var(--soft); font-size: 11px; white-space: nowrap; }
-.inbox-group { padding-top: 26px; }
-.inbox-group h2 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
-.inbox-group h2 span { padding: 0 6px; border-radius: 99px; background: var(--panel); font-size: 10px; }
+/* The Inbox page: the composer first - what to build - then the inbox of
+   intents beneath it, quietest groups last. One column, one rhythm. */
+.inbox { min-height: 0; overflow: auto; background: linear-gradient(180deg, #fbfcfe 0, #fff 260px); }
+.inbox-page { width: min(760px, 100%); margin: 0 auto; padding: 56px 32px 96px; }
+.inbox-list { margin-top: 44px; }
+.inbox-heading { display: flex; align-items: baseline; gap: 12px; padding: 0 2px 14px; border-bottom: 1px solid var(--line2); }
+.inbox-heading h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+.inbox-tagline { color: var(--muted); font-size: 12.5px; }
+.inbox-heading > b { margin-left: auto; padding: 3px 10px; border-radius: 99px; color: var(--muted); background: var(--panel); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.inbox-heading > b.needs { color: var(--accent); background: var(--soft); }
+.inbox-group { padding-top: 22px; }
+.inbox-group h2 { display: flex; align-items: center; gap: 7px; margin: 0 0 6px; padding: 0 2px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.inbox-group.needs h2 { color: var(--accent); }
+.inbox-group h2 span { padding: 0 6px; border-radius: 99px; background: var(--panel); font-size: 10px; color: var(--muted); }
 .inbox-row {
   width: 100%;
-  min-height: 58px;
   display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto 16px;
   align-items: center;
-  gap: 12px;
-  padding: 8px 11px;
-  border-top: 1px solid var(--line);
+  gap: 14px;
+  padding: 12px 12px;
+  border-radius: 10px;
   text-align: left;
+  transition: background 120ms ease;
 }
-.inbox-row:last-of-type { border-bottom: 1px solid var(--line); }
+.inbox-row + .inbox-row { margin-top: 2px; }
 .inbox-row:hover { background: var(--panel); }
+.inbox-row:hover .inbox-go { color: var(--ink); transform: translateX(2px); }
 .intent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .intent-dot.needs-you { background: var(--accent); box-shadow: 0 0 0 4px var(--soft); }
 .intent-dot.in-progress { background: var(--green); }
-.intent-dot.done { width: 7px; height: 7px; background: var(--green); }
-.inbox-row span:nth-child(2) { min-width: 0; }
-.inbox-row b,
-.inbox-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-row b { font-size: 13px; font-weight: 650; }
-.inbox-row small { color: var(--muted); font-size: 11.5px; }
+.intent-dot.done { background: var(--line2); }
+.inbox-main { min-width: 0; }
+.inbox-row b, .inbox-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-row b { font-size: 13.5px; font-weight: 600; }
+.inbox-row small { margin-top: 2px; color: var(--muted); font-size: 11.5px; }
+.inbox-row small em { font-style: normal; color: #a3adbb; }
+.inbox-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.inbox-status.needs { padding: 2px 9px; border-radius: 99px; color: var(--accent); background: var(--soft); font-weight: 600; font-size: 11.5px; }
+.inbox-row.done b { color: var(--muted); font-weight: 500; }
+.inbox-go { color: var(--line2); transition: color 120ms ease, transform 120ms ease; }
+.inbox-go svg { transform: rotate(-90deg); }
+.inbox-empty { display: grid; justify-items: center; gap: 6px; padding: 44px 20px; color: var(--muted); text-align: center; }
+.inbox-empty svg { color: var(--line2); }
+.inbox-empty b { color: var(--ink); font-size: 13.5px; }
+.inbox-empty span { max-width: 380px; font-size: 12.5px; line-height: 1.5; }
 .inbox-status { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .inbox-row:has(.needs-you) .inbox-status { color: var(--accent); font-weight: 650; }
 .inbox-none { margin: 0; padding: 14px 12px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
