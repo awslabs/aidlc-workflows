@@ -29,11 +29,55 @@ A live Devin e2e run (`docs/rfcs/handoff-run-real-devin-session-notes.md`, §"BU
 
 ---
 
+## Execution model: subagent dispatch
+
+The two bug fixes touch **disjoint files** and are **independent** — dispatch them as parallel background subagents. The test phase fans out similarly once the fixes land. Phase 0 (capture) and Phase 4 (repackage) are sequential gates.
+
+```
+Phase 0 (manual, human-in-the-loop — cannot subagent)
+   │
+   ├── 0a: subagent_explore — search Devin CLI docs/source for documented shape
+   └── 0b: manual — interactive capture (only if 0a doesn't find the shape)
+   │
+   ▼
+Phase 1 + Phase 2 (parallel background subagents)
+   ├── Subagent A (subagent_general): Phase 1 — fix devin + codex adapters
+   └── Subagent B (subagent_general): Phase 2 — fix Stop hook + helper
+   │
+   ▼ (wait for both)
+Phase 3 (parallel background subagents)
+   ├── Subagent C (subagent_general): t332 tests (devin adapter)
+   ├── Subagent D (subagent_general): t121 test (Stop hook)
+   └── Subagent E (subagent_general): t149 test (codex adapter)
+   │
+   ▼ (wait for all)
+Phase 4 (sequential — repackage)
+```
+
+**Why subagents are safe here:** Phase 1 edits `harness/devin/hooks/` + `harness/codex/hooks/`. Phase 2 edits `core/hooks/` + `core/tools/`. No file overlap. Phase 3 test subagents each edit a separate test file + the shared fixtures file (fixtures are created inline before dispatching, so no write conflict).
+
+---
+
 ## Phase 0 — Capture the real Devin `ask_user_question` answered-output shape
 
 **Goal:** Obtain the real inner JSON shape before writing any parser. Do NOT skip this phase — writing the parser against a guessed shape risks a second failed fix.
 
-### Steps
+### Step 0a — Dispatch `subagent_explore` to search for a documented shape
+
+Dispatch a read-only `subagent_explore` subagent with this task:
+
+> Search the Devin CLI docs and source for the actual JSON shape of `ask_user_question` answered-output payloads. Check:
+> 1. `/home/wiley/.local/share/devin/cli/_versions/3000.6.14/share/devin/docs/` — all `.mdx` files, especially `extensibility/hooks/lifecycle-hooks.mdx`, `subagents.mdx`, and `changelog/stable.mdx`.
+> 2. Any TypeScript/JavaScript source files in the Devin CLI installation that define the `ask_user_question` tool result schema or the PostToolUse `tool_response` shape.
+> 3. The `ask_user_question` tool description text (which says "a key-value mapping of question text to their selections") — find the exact schema/type definition.
+> 4. Any test fixtures or example payloads in the Devin CLI source.
+> Report: the exact inner JSON shape (key names, value types, nesting structure) for both predefined-option answers and "Other" free-text answers. If the shape is not discoverable from docs/source, report that clearly.
+
+If 0a finds the shape, skip 0b and proceed to Phase 1.
+
+### Step 0b — Manual interactive capture (only if 0a doesn't find the shape)
+
+This step requires human interaction and **cannot** be a subagent.
 
 1. Start an **interactive** Devin session (not headless `-p`, which cancels `ask_user_question` before a human answers).
 2. Temporarily add a diagnostic dump to `harness/devin/hooks/aidlc-devin-adapter.ts` in the `record-human-turn` case (around line 388), before the `hasExplicitHumanSelection` check:
@@ -62,11 +106,13 @@ Inner output JSON ("Other" free-text):  <TBD>
 ### Exit criteria
 
 - Both shapes (predefined option + "Other") are captured and documented above.
-- The temporary diagnostic dump is removed from the adapter.
+- The temporary diagnostic dump (if used) is removed from the adapter.
 
 ---
 
 ## Phase 1 — Fix Bug 2: recognize Devin's response shape in the adapter
+
+**Dispatch:** `subagent_general` (background subagent A). This is independent of Phase 2 — dispatch both in parallel.
 
 **Goal:** Make `hasExplicitHumanSelection` and `explicitHumanSelectionText` recognize Devin's real shape alongside the existing Claude Code shape.
 
@@ -110,11 +156,14 @@ Use a dual-path approach, not a single normalizer. The Claude Code shape is keye
 
 ## Phase 2 — Fix Bug 1: protect pending Plan Approval before the Stop hook probe
 
+**Dispatch:** `subagent_general` (background subagent B). This is independent of Phase 1 — dispatch both in parallel.
+
 **Goal:** Prevent the Stop hook probe from deleting a pending Plan Approval challenge before the carve-out can protect it.
 
 ### File to edit
 
 - `core/hooks/aidlc-continue-workflow.ts`
+- `core/tools/aidlc-lib.ts` (if helper goes here)
 
 ### Step 2.1 — Add a pre-probe carve-out for pending Plan Approval
 
@@ -167,44 +216,56 @@ The notes file (line 1263) suggests moving `isPendingQuestionStop` before `runEn
 
 ## Phase 3 — Tests
 
+**Prerequisite:** Phase 1 and Phase 2 subagents have completed. First create the fixtures inline (from Phase 0 capture), then dispatch the three test subagents in parallel.
+
 **Goal:** Add regression tests that assert the **effect** (HUMAN_TURN minted, Plan Approval response file written), not just exit 0.
 
-### Files to edit
-
-- `tests/fixtures/devin-hook-payloads/payloads.json`
-- `tests/unit/t332-devin-adapter.test.ts`
-- `tests/unit/t149-codex-hook-adapter.test.ts`
-- `tests/integration/t121-stop-hook-enforce.test.ts`
-
-### Step 3.1 — Add fixtures from Phase 0 capture
+### Step 3.0 — Create fixtures inline (before dispatching test subagents)
 
 Add to `tests/fixtures/devin-hook-payloads/payloads.json`:
 - `postToolUse_askUserQuestion_devinNativeShape` — predefined-option answer, using the real captured `tool_response` and `tool_input` shapes.
 - `postToolUse_askUserQuestion_devinOtherShape` — "Other" free-text answer, using the real captured shapes.
 
-### Step 3.2 — Add t332 test cases
+This step is inline (not a subagent) because the fixtures file is shared by multiple test subagents — writing it before dispatch avoids write conflicts.
 
-In `tests/unit/t332-devin-adapter.test.ts`, for each new fixture, assert:
-- A `HUMAN_TURN` audit event is minted (count increases by 1).
-- When a Plan Approval challenge is seeded, `recordPlanApprovalHumanResponse` writes a response file.
+### Step 3.1 — Dispatch `subagent_general` C: t332 devin adapter tests
 
-The existing test `13a` only asserts exit 0 + HUMAN_TURN count. The new tests must also verify the Plan Approval response file appears, since that is the path that was actually blocked.
+**Subagent task:**
 
-### Step 3.3 — Add a t332 regression test for the Claude Code shape
+> In `tests/unit/t332-devin-adapter.test.ts`, add test cases for the new fixtures `postToolUse_askUserQuestion_devinNativeShape` and `postToolUse_askUserQuestion_devinOtherShape` from `tests/fixtures/devin-hook-payloads/payloads.json`. For each fixture, assert:
+> 1. A `HUMAN_TURN` audit event is minted (count increases by 1).
+> 2. When a Plan Approval challenge is seeded, `recordPlanApprovalHumanResponse` writes a response file.
+>
+> Also add a regression test for the Claude Code shape `{answers: {id: {answers: [...]}}}` to ensure it still works after the dual-path change.
+>
+> The existing test `13a` only asserts exit 0 + HUMAN_TURN count. The new tests must also verify the Plan Approval response file appears, since that is the path that was actually blocked.
+>
+> Run `bun test tests/unit/t332-devin-adapter.test.ts` to verify all tests pass.
 
-Ensure the existing `{answers: {id: {answers: [...]}}}` shape still works after the dual-path change (no regression for the string-fixture / Claude Code path).
+### Step 3.2 — Dispatch `subagent_general` D: t121 Stop hook test
 
-### Step 3.4 — Add a t121 Stop hook test
+**Subagent task:**
 
-In `tests/integration/t121-stop-hook-enforce.test.ts`:
-- Seed a pending Plan Approval challenge for a session.
-- Set the state to code-generation with a blank `[Answer]:` tag.
-- Assert the Stop hook allows the stop (exit 0) **without** deleting the challenge file.
-- Verify the challenge file still exists after the hook runs.
+> In `tests/integration/t121-stop-hook-enforce.test.ts`, add a test for the Plan Approval pre-probe carve-out:
+> 1. Seed a pending Plan Approval challenge for a session (use `writePlanApprovalChallenge` from `core/tools/aidlc-lib.ts`).
+> 2. Set the state to code-generation with a blank `[Answer]:` tag.
+> 3. Run the Stop hook.
+> 4. Assert the Stop hook allows the stop (exit 0).
+> 5. Assert the challenge file still exists after the hook runs (the probe did not delete it).
+>
+> Look at existing tests in the file (e.g., the `(f) gated per-unit Construction finds the active unit's blank question` test around line 1525) for the seeding pattern.
+>
+> Run `bun test tests/integration/t121-stop-hook-enforce.test.ts` to verify all tests pass.
 
-### Step 3.5 — Add a t149 codex adapter test
+### Step 3.3 — Dispatch `subagent_general` E: t149 codex adapter test
 
-Mirror the t332 real-shape test in `tests/unit/t149-codex-hook-adapter.test.ts`, if the codex adapter's `hasExplicitHumanSelection` was changed in Phase 1.
+**Subagent task:**
+
+> In `tests/unit/t149-codex-hook-adapter.test.ts`, add a test case mirroring the t332 real-shape test, using the codex adapter's `hasExplicitHumanSelection` (which is `export`ed). Use the same fixture shapes as the devin adapter tests. Assert:
+> 1. The codex adapter recognizes Devin's real response shape (returns `true` from `hasExplicitHumanSelection`).
+> 2. `explicitHumanSelectionText` returns the selected text.
+>
+> Run `bun test tests/unit/t149-codex-hook-adapter.test.ts` to verify all tests pass.
 
 ### Exit criteria
 
@@ -214,6 +275,8 @@ Mirror the t332 real-shape test in `tests/unit/t149-codex-hook-adapter.test.ts`,
 ---
 
 ## Phase 4 — Repackage
+
+**Prerequisite:** All Phase 3 subagents have completed. This step is sequential (not a subagent) because `package.ts` regenerates all dist trees and must run after all source edits are final.
 
 Run:
 ```bash
@@ -229,16 +292,16 @@ bun scripts/package.ts --check   # confirm no dist drift (CI guard)
 
 ## Files to edit (summary)
 
-| File | Change |
-|------|--------|
-| `harness/devin/hooks/aidlc-devin-adapter.ts` | Generalize `hasExplicitHumanSelection` + `explicitHumanSelectionText` to recognize Devin's real shape; update comment |
-| `harness/codex/hooks/aidlc-codex-adapter.ts` | Same fix (parallel bug) |
-| `core/hooks/aidlc-continue-workflow.ts` | Add pre-probe Plan Approval carve-out before `runEngineNextDirective` (line 1381); add `hasPendingPlanApprovalChallenge` helper |
-| `core/tools/aidlc-lib.ts` | (If needed) Add `hasPendingPlanApprovalChallenge` helper; optionally guard `resetPlanApprovalRuntime` under `STOP_HOOK_PROBE_ENV` |
-| `tests/fixtures/devin-hook-payloads/payloads.json` | Add real-shape fixtures from Phase 0 capture |
-| `tests/unit/t332-devin-adapter.test.ts` | Add real-shape + Plan Approval response tests; add Claude Code shape regression test |
-| `tests/unit/t149-codex-hook-adapter.test.ts` | Add parallel codex real-shape test |
-| `tests/integration/t121-stop-hook-enforce.test.ts` | Add Plan Approval pre-probe carve-out test |
+| File | Phase | Subagent |
+|------|-------|----------|
+| `harness/devin/hooks/aidlc-devin-adapter.ts` | 1 | A (subagent_general) |
+| `harness/codex/hooks/aidlc-codex-adapter.ts` | 1 | A (subagent_general) |
+| `core/hooks/aidlc-continue-workflow.ts` | 2 | B (subagent_general) |
+| `core/tools/aidlc-lib.ts` | 2 | B (subagent_general) |
+| `tests/fixtures/devin-hook-payloads/payloads.json` | 3.0 | inline (shared file) |
+| `tests/unit/t332-devin-adapter.test.ts` | 3.1 | C (subagent_general) |
+| `tests/integration/t121-stop-hook-enforce.test.ts` | 3.2 | D (subagent_general) |
+| `tests/unit/t149-codex-hook-adapter.test.ts` | 3.3 | E (subagent_general) |
 
 ---
 
@@ -246,6 +309,7 @@ bun scripts/package.ts --check   # confirm no dist drift (CI guard)
 
 - **Phase 1 (adapter) — low.** The dual-path approach leaves the Claude Code shape path unchanged. The Devin path is additive. The only risk is if the captured shape (Phase 0) is wrong — which is why Phase 0 is a prerequisite.
 - **Phase 2 (Stop hook) — low.** The pre-probe carve-out is fail-open (any error → allow the stop, never trap). It only adds an early return for a specific condition (pending Plan Approval challenge); all other Stop hook paths are unchanged.
+- **Subagent parallelism — low.** Phase 1 and Phase 2 edit disjoint files (no write conflicts). Phase 3 test subagents each edit a separate test file; the shared fixtures file is written inline before dispatch.
 - **Combined — medium.** Both fixes must land together. Landing only Bug 2's fix leaves the free-text workaround broken by Bug 1; landing only Bug 1's fix leaves the native UI broken by Bug 2. The fixes should be in the same PR.
 - **No guard disabling.** Neither fix disables any guard, weakens any invalidation rule, or fabricates receipts. Both are correctness fixes.
 
