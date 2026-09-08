@@ -4,8 +4,6 @@
 .composer { margin: 0 0 26px; padding: 10px 12px 10px; border: 1px solid var(--line2); border-radius: 14px; background: #fff; box-shadow: 0 1px 2px rgba(26, 32, 44, 0.04), 0 10px 30px rgba(26, 32, 44, 0.06); }
 .composer:focus-within { border-color: #b9cdf5; box-shadow: 0 1px 2px rgba(26, 32, 44, 0.04), 0 0 0 3px var(--soft), 0 10px 30px rgba(26, 32, 44, 0.06); }
 .composer-top { display: flex; align-items: center; gap: 8px; padding: 0 2px 8px; border-bottom: 1px solid var(--line); }
-.composer-project { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px 0 4px; color: var(--muted); font-size: 12px; }
-.composer-project b { color: var(--ink); font-weight: 600; }
 .composer-proto { margin-left: auto; padding: 2px 8px; border-radius: 99px; background: var(--amber-soft); color: var(--amber-deep); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
 .composer-text { display: block; width: 100%; margin: 6px 0 4px; padding: 8px 6px; border: 0; outline: 0; resize: none; field-sizing: content; min-height: 3.4em; max-height: 14em; background: transparent; color: var(--ink); font: inherit; font-size: 15px; line-height: 1.5; }
 .composer-text::placeholder { color: #a3adbb; }

@@ -73,7 +73,7 @@ export function renderComposer() {
   const effortLabel = preset ? preset.label : "Custom";
   return `<section class="composer" data-prototype="design">
     <div class="composer-top">
-      <span class="composer-project" title="${escapeHtml(store.state?.project_dir || "")}">${icon("documentText", { size: 13 })}<span>Project</span><b>${escapeHtml(projectName())}</b></span>
+      <button type="button" class="composer-chip" data-menu="project" aria-haspopup="menu" title="${escapeHtml(store.state?.project_dir || "")}">${icon("documentText", { size: 13 })}<span>Project</span><b>${escapeHtml(projectName())}</b>${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-chip" data-menu="space" aria-haspopup="menu" title="AI-DLC space: its own memory and intent list, under aidlc/spaces/">${icon("flowchart", { size: 13 })}<span>Space</span><b>${escapeHtml(space)}</b>${icon("chevronDown", { size: 12 })}</button>
       <span class="composer-proto">Design preview</span>
     </div>
@@ -81,7 +81,7 @@ export function renderComposer() {
     <div class="composer-bottom">
       <button type="button" class="composer-chip" data-menu="scope" aria-haspopup="menu">${icon("textBulletListTree", { size: 13 })}<span>Scope</span><b>${scope ? `${escapeHtml(scope.name)} · ${escapeHtml(scope.depth)}` : "Let the composer decide"}</b>${icon("chevronDown", { size: 12 })}</button>
       <span class="composer-hint">⌘↵ to start</span>
-      <button type="button" class="composer-chip" data-menu="model" aria-haspopup="menu" title="The session's model - what the harness runs on, and what deciding agents inherit">${escapeHtml(model.label)}${icon("chevronDown", { size: 12 })}</button>
+      <button type="button" class="composer-chip" data-menu="model" aria-haspopup="menu" title="Model for the session that will run this intent. It applies when the daemon starts the harness for it; a session already running keeps its own model.">${escapeHtml(model.label)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
     </div>
@@ -125,7 +125,7 @@ function openMenuFor(anchor, kind, rerender) {
   menu.className = `composer-menu composer-menu-${kind}`;
   menu.dataset.for = kind;
   menu.setAttribute("role", "menu");
-  menu.innerHTML = kind === "space" ? spaceMenu() : kind === "scope" ? scopeMenu() : kind === "model" ? modelMenu() : effortMenu();
+  menu.innerHTML = kind === "project" ? projectMenu() : kind === "space" ? spaceMenu() : kind === "scope" ? scopeMenu() : kind === "model" ? modelMenu() : effortMenu();
   document.body.append(menu);
   const at = anchor.getBoundingClientRect();
   const size = menu.getBoundingClientRect();
@@ -148,10 +148,24 @@ export function closeMenu() {
   openMenu = null;
 }
 
+// One daemon serves one project today. The menu shows where this design goes:
+// every project with a review daemon in the review home lists here, and
+// choosing one switches the tab to that daemon; "Open another project…" would
+// start one. In the prototype only the current project is real.
+function projectMenu() {
+  const dir = store.state?.project_dir || "";
+  return `<div class="composer-menu-title">Project</div>
+    <button type="button" role="menuitemradio" aria-checked="true" data-pick-project="${escapeHtml(dir)}"><span class="check">${icon("checkmark", { size: 12 })}</span><b>${escapeHtml(projectName())}</b><small>${escapeHtml(dir)}</small></button>
+    <div class="composer-menu-group">Recent</div>
+    <p class="composer-menu-note">Other projects with a running review daemon will list here; choosing one switches this tab to that project.</p>
+    <div class="composer-menu-sep"></div>
+    <button type="button" role="menuitem" data-open-project><span class="check">+</span><b>Open another project…</b><small>start a review daemon for a folder on this machine</small></button>`;
+}
+
 function modelMenu() {
   return `<div class="composer-menu-title">Session model</div>
     ${SESSION_MODELS.map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.model === entry.id}" data-pick-model="${entry.id}"><span class="check">${draft.model === entry.id ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(entry.label)}</b><small>${escapeHtml(entry.note)}</small></button>`).join("")}
-    <p class="composer-menu-note">The harness runs on this model; deciding agents inherit it. Per-agent model exceptions live in <b>aidlc config models</b>, not here.</p>`;
+    <p class="composer-menu-note">Used when the daemon starts a session for this intent; deciding agents inherit it. A session already running keeps its own model. Per-agent exceptions live in <b>aidlc config models</b>, not here.</p>`;
 }
 
 function spaceMenu() {
@@ -189,6 +203,8 @@ function effortMenu() {
 }
 
 function bindMenu(menu, kind, rerender) {
+  menu.querySelector("[data-pick-project]")?.addEventListener("click", () => closeMenu());
+  menu.querySelector("[data-open-project]")?.addEventListener("click", () => { closeMenu(); setNotice("Design preview — this would start a review daemon for another folder and switch the tab to it.", "info"); });
   for (const button of menu.querySelectorAll("[data-pick-space]")) button.addEventListener("click", () => { draft.space = button.dataset.pickSpace; closeMenu(); rerender(); });
   menu.querySelector("[data-new-space]")?.addEventListener("click", () => { closeMenu(); setNotice("Design preview — a new workspace would be created here.", "info"); });
   for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; closeMenu(); rerender(); });
@@ -203,6 +219,6 @@ function bindMenu(menu, kind, rerender) {
 }
 
 function refreshMenu(menu, kind, rerender) {
-  menu.innerHTML = kind === "effort" ? effortMenu() : kind === "scope" ? scopeMenu() : kind === "model" ? modelMenu() : spaceMenu();
+  menu.innerHTML = kind === "effort" ? effortMenu() : kind === "scope" ? scopeMenu() : kind === "model" ? modelMenu() : kind === "project" ? projectMenu() : spaceMenu();
   bindMenu(menu, kind, rerender);
 }
