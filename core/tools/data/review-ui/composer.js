@@ -216,16 +216,16 @@ function effortMenu() {
   const policyRows = policy
     ? `${policy.groups.map((group) => `<tr><th><b>${escapeHtml(group.label)}</b><small>${escapeHtml(group.agents.join(", "))}</small></th><td>${group.mixed ? `<b>${escapeHtml(group.effort)}</b>` : level(group.effort)}</td></tr>`).join("")}
       ${policy.exceptions.map((entry) => `<tr class="composer-exception"><th><b>${escapeHtml(entry.agent)}</b><small>exception · ${escapeHtml(entry.group)}</small></th><td>${level(entry.effort || "inherit")}${entry.model ? `<small>${escapeHtml(entry.model)}</small>` : ""}</td></tr>`).join("")}`
-    : `<tr><td colspan="2"><small>No installed harness this daemon can read the policy for.</small></td></tr>`;
+    : `<tr><td colspan="2"><small>No policy to show for this install.</small></td></tr>`;
   return `<div class="composer-menu-title">Effort</div>
     ${sessionDial
-      ? `<div class="composer-session-effort"><span>What the agent session thinks at - the conductor and every agent that inherits. The same dial as <code>/effort</code> in a terminal.</span>
+      ? `<div class="composer-session-effort"><span>The session's effort, as <code>/effort</code> sets it.</span>
       <select data-session-effort aria-label="Effort" title="${fallback ? escapeHtml(`Default from ${fallback.source}`) : "No settings file names an effort; the model's own default applies"}">${["default", ...SESSION_EFFORTS].map((entry) => `<option value="${entry}" ${(draft.sessionEffort || "default") === entry ? "selected" : ""}>${entry === "default" ? escapeHtml(defaultLabel) : entry}</option>`).join("")}</select></div>`
       : ""}
-    <div class="composer-menu-group">Agents in this project${policy?.preset ? ` · preset <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? " · shipped defaults" : ""}</div>
+    <div class="composer-menu-group">Agents${policy?.preset ? ` · <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? " · shipped defaults" : ""}</div>
     <table class="composer-policy"><tbody>${policyRows}</tbody></table>
     ${policy?.honesty ? `<p class="composer-menu-note">${escapeHtml(policy.honesty)}</p>` : ""}
-    <p class="composer-menu-note">Agent effort is project policy, committed with the project and shared by every intent. Change it in a terminal: <code>${escapeHtml(command)}</code> (presets, group dials, per-agent exceptions).</p>`;
+    <p class="composer-menu-note">Project policy · set with <code title="${escapeHtml(command)}">aidlc config models</code></p>`;
 }
 
 function bindMenu(menu, kind, rerender) {
