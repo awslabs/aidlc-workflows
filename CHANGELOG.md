@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.0] - 2026-09-08
+
+AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.
+
+* `aidlc version` now reports `2.8.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* Solo Code Generation includes the 2.7.1 Plan Approval deadlock fix, so the Stop hook no longer invalidates approval authority at turn boundaries.
+* Native installers and release archives include the 2.7.2 tag-bound provenance and verification flow; release assets use the `aidlc-runtime-X.Y.Z.tar.gz` naming contract.
+* Breaking changes for CI/scripts: none beyond selecting the new `2.8.0` version and asset name.
+
 ## [2.7.2] - 2026-09-07
 
 Bind native releases to the version tag that triggered them and include that version in the runtime archive name. **Upgrade:** use `install.sh --version 2.7.2`, `install.ps1 -Version 2.7.2`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.7.2.tar.gz`.
