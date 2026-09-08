@@ -102,6 +102,10 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
     { src: "hooks/aidlc-continue-workflow.json", dst: "hooks/aidlc-continue-workflow.json" },
     { src: "hooks/aidlc-sync-workflow-state.json", dst: "hooks/aidlc-sync-workflow-state.json" },
+    // Blocking guards. PreToolUse is the only trigger that can refuse these
+    // tool calls; the PostToolUse audit hook sees the same tools and cannot.
+    { src: "hooks/aidlc-review-freeze.json", dst: "hooks/aidlc-review-freeze.json" },
+    { src: "hooks/aidlc-state-transition-guard.json", dst: "hooks/aidlc-state-transition-guard.json" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "settings/mcp.json", dst: "settings/mcp.json" },
     // Authored as dot-gitignore so it does not act as a live ignore inside

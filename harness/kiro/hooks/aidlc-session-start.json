@@ -5,7 +5,19 @@
       "name": "aidlc-session-start",
       "trigger": "SessionStart",
       "description": "Starts an AIDLC session: notes the session opened and gives the assistant the current workflow context.",
-      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro session-start" }
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro session-start"
+      }
+    },
+    {
+      "name": "aidlc-session-start-cli",
+      "trigger": "AgentSpawn",
+      "description": "Same start as the SessionStart entry, for the CLI. Session Start fires on the IDE only and Agent Spawn on the CLI only, so one shell serving both surfaces registers both; the handler keys its work by session id, so a surface that fired the other name is a no-op.",
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro session-start"
+      }
     }
   ]
 }
