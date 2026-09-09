@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.6] - 2026-09-09
+
+Fixes a plan-approval guard false-positive where `2>&1` shell redirects blocked read-only inspection commands during code-generation. The shell command parser splits `2>&1` into a bare numeric invocation (`1`), which was not recognized as read-only — making the shell opaque and trapping commands like `ls ... 2>&1; echo ...; cat ...` that have no write targets. The guard now treats bare numeric invocation names as file-descriptor parsing artifacts (read-only), so `2>&1` no longer makes the shell opaque. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration; existing workflow records resume normally.
+
+* `shellInvocationNeedsApproval` in `aidlc-plan-approval-guard.ts`: bare numeric names (`/^\d+$/`) return false (read-only) before the read-only command set check, recognizing `2>&1` file-descriptor artifacts.
+
 ## [2.8.5] - 2026-09-09
 
 Fixes a plan-approval guard false-positive that blocked the orchestrator from running framework-tool commands with shell artifacts (like `; echo` or `2>&1`) during code-generation plan creation. The guard's second early-exit path (trusted record-dir writes) required a non-opaque shell, but shell artifacts like `; echo` made the shell opaque because `echo` is not in the read-only command set. The `isFrameworkBash` exemption — already applied at the first early-exit — is now also applied at the second, so `aidlc-testing-posture.ts render > file 2>&1; echo` is allowed when all write targets are inside the code-generation record dir. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.5` / `install.ps1 -Version 2.8.5`. No migration; existing workflow records resume normally.

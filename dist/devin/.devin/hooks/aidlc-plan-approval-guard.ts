@@ -604,6 +604,11 @@ function shellInvocationNeedsApproval(
   hasConcreteTargets: boolean,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
+  // `2>&1` and similar file-descriptor redirects are parsed by
+  // shellCommandInvocations as a bare numeric invocation (e.g. `1`).
+  // These are parsing artifacts, not real commands — treat them as
+  // read-only so they don't make the shell opaque.
+  if (/^\d+$/.test(name)) return false;
   if (name === "sort") {
     return invocation.args.some(
       (arg) => arg === "-o" || arg === "--output" || arg.startsWith("--output="),
