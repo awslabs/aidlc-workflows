@@ -287,6 +287,19 @@ function seedProject(scope: "bugfix" | "feature"): string {
   return proj;
 }
 
+/** Every document code-generation `produces`, and nothing else. `writeReviewedArtifact`
+ *  also writes the authoritative unit DAG, which the Bolt-backed case must do
+ *  without — the whole point there is that an active Bolt substitutes for the DAG.
+ *  The four names come from the compiled graph's `produces` for this stage. */
+function writeCodeGenerationOutputs(proj: string, unit: string): void {
+  const dir = join(seededRecordDir(proj), "construction", unit, "code-generation");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "code-generation-plan.md"), "plan\n", "utf-8");
+  writeFileSync(join(dir, "unit-test-instructions.md"), "tests\n", "utf-8");
+  writeFileSync(join(dir, "code-summary.md"), "summary\n", "utf-8");
+  writeFileSync(join(dir, "traceability.json"), "{}\n", "utf-8");
+}
+
 function writeSourceManifest(proj: string, unit: string): void {
   const dir = join(
     seededRecordDir(proj),
@@ -2501,6 +2514,10 @@ describe("t271 review iteration ceiling", () => {
       "Bolt slug": boltSlugForUnit("2fa"),
     }, boltBacked);
     writeSourceManifest(boltBacked, "2fa");
+    // Without this the review refuses for a DIFFERENT reason than the one under
+    // test — "a required output document is missing" — so the case proved nothing
+    // about Bolt-backed `--unit` and failed deterministically in isolation.
+    writeCodeGenerationOutputs(boltBacked, "2fa");
     const boltReview = runReview(boltBacked, [...base, "--unit", "2fa"]);
     expect(boltReview.status, boltReview.stderr).toBe(0);
 
