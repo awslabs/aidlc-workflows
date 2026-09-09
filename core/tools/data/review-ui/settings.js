@@ -133,7 +133,7 @@ function modelsPage() {
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${teamPreset(policy) === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}${!policy?.team?.preset && entry.id === SHIPPED_PRESET ? ` <span class="settings-tag">default</span>` : ""}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <p class="settings-note">Choose how your team balances quality, speed, and cost. Applies to everyone and is saved with the project.</p>
+      <p class="settings-note">How this project balances quality, speed, and cost. Saved with the project, so everyone working on it gets the same.</p>
     </div>
 
     <div class="settings-block settings-advanced">
@@ -155,7 +155,7 @@ function advancedSection(workflow) {
     const team = group.effort;
     const mine = policy.recorded?.local?.groups?.[group.id] || "";
     const from = policy.recorded?.project?.groups?.[group.id] ? "custom" : presetLabel || "Default";
-    const teamLabel = `Team: ${from} · ${team === INHERIT ? "default" : team}`;
+    const teamLabel = `Project: ${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
       ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden">${icon("errorCircle", { size: 15 })}</span>` : ""}
@@ -168,7 +168,7 @@ function advancedSection(workflow) {
   const overridden = teamGroups.some((group) => policy?.recorded?.local?.groups?.[group.id]);
   return `<div class="settings-block">
       ${policy ? teamGroups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
-      ${teamPins.length ? `<div class="settings-row"><span class="l">Set individually<small>Agents the team gave their own level</small></span>
+      ${teamPins.length ? `<div class="settings-row"><span class="l">Set individually<small>Agents given their own level in this project</small></span>
         <span class="c">${teamPins.map((entry) => `<span class="settings-pin">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")}</span></div>` : ""}
       ${overridden ? `<p class="settings-legend"><span class="settings-overridden">${icon("errorCircle", { size: 13 })}</span> Overridden</p>` : ""}
     </div>
@@ -310,7 +310,7 @@ async function change(scope, body) {
     await api.post("/api/models-policy", { scope, ...body });
     setNotice(scope === "local"
       ? "Saved on this computer. Your next runs use it."
-      : "Team preset updated. Commit the settings changes to share it.", "info");
+      : "Preset saved. Commit the settings changes to share it.", "info");
     store.emit("wants-refresh");
   } catch (error) {
     setNotice(`Could not change the policy: ${error.message}`, "error");
