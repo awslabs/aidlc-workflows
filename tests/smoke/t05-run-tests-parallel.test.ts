@@ -226,6 +226,32 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
   }, PER_TEST_TIMEOUT);
 
+  test("rejects shard counts that create empty shards", () => {
+    const files = readdirSync(join(TESTS_ROOT, "unit"))
+      .filter((file) => file.endsWith(".test.ts"))
+      .sort();
+    const affinityFiles = new Set(UNIT_SHARD_CONFIG.affinityGroups.flat());
+    const assignableGroups =
+      files.length - affinityFiles.size + UNIT_SHARD_CONFIG.affinityGroups.length;
+    const invalidCount = assignableGroups + 1;
+
+    expect(() =>
+      assignWeightedShards(files, invalidCount, UNIT_SHARD_CONFIG)
+    ).toThrow(
+      `--shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+    );
+
+    const r = run(
+      ["--unit", "--shard", `${invalidCount}/${invalidCount}`],
+      { AIDLC_TEST_PACKAGE_READY: "1" },
+    );
+    expect(r.status).toBe(2);
+    expect(r.out).toContain(
+      `ERROR: --shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+    );
+    expect(r.out).not.toContain("RESULT: PASS");
+  }, PER_TEST_TIMEOUT);
+
   test("four weighted unit shards cover every file once and preserve binary affinity", () => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))

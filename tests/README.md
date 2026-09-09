@@ -112,6 +112,10 @@ bash tests/run-tests.sh --debug   # streams output and writes SDK/TUI NDJSON tra
 bun test tests/smoke/t01-file-structure.test.ts
 ```
 
+The runner rejects shard counts that exceed the number of assignable test
+groups. Sharded unit runs also require the native binary producer to make the
+compiled Copilot adapter cases executable.
+
 Live SDK and TUI drivers default to project-only Claude setting sources. That
 keeps the copied test `.claude/` tree authoritative while excluding developer
 user-level hooks/settings; focused calibration can opt the TUI back into CLI

@@ -93,6 +93,12 @@ export function assignWeightedShards(
     });
   }
 
+  if (total > groups.length) {
+    throw new Error(
+      `--shard count ${total} exceeds ${groups.length} assignable unit-test groups`,
+    );
+  }
+
   groups.sort(
     (a, b) => b.weight - a.weight || a.files[0].localeCompare(b.files[0]),
   );

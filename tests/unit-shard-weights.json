@@ -6,7 +6,7 @@
     "t238-build-binaries.test.ts": 93.1,
     "t243-install-mechanism.test.ts": 48.3,
     "t244-install-management.test.ts": 49.5,
-    "t249-copilot-adapter.test.ts": 64,
+    "t249-copilot-adapter.test.ts": 110,
     "t255-workspace-sync.test.ts": 15.7,
     "t272-unit-major-code-gen.test.ts": 15.9,
     "t276-cursor-adapter.test.ts": 39.4,

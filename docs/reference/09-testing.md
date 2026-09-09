@@ -433,7 +433,9 @@ All 8 parallel calls observed `cache_read=73789` — Bedrock prompt caching stay
 duration-balanced shards. Assignment is deterministic and uses
 `tests/unit-shard-weights.json` for the slowest files. Unlisted files receive a
 one-second default weight, so new tests join the least-loaded shard without
-changing the command.
+changing the command. The runner exits 2 when `M` exceeds the number of
+assignable groups, so no valid shard command can report success after running
+zero files.
 
 Each shard remains serial. Run separate shards in separate checkouts or CI jobs.
 Do not run them concurrently against one repository tree because packaging
@@ -441,6 +443,8 @@ tests regenerate `dist/` and can race tests that read generated files.
 
 The affinity list keeps cross-file prerequisites explicit. The native binary
 builder test currently runs before the Copilot compiled-adapter coverage in the
-same shard. The smoke runner contract verifies that all four CI shards are
-non-empty, disjoint, cover the complete unit inventory, and preserve this
-ordering.
+same shard. Sharded unit execution requires that compiled coverage to resolve
+the producer's native build result, so a missing artifact fails instead of
+silently skipping the compiled cases. The smoke runner contract verifies that
+all four CI shards are non-empty, disjoint, cover the complete unit inventory,
+and preserve this ordering.

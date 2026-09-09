@@ -35,6 +35,7 @@ const BUN = process.execPath;
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
+const REQUIRE_COMPILED_COVERAGE_ENV = "AIDLC_REQUIRE_COMPILED_COVERAGE";
 
 // Platform null device, used for the system config after the protected
 // safe.directory entries have been copied into the suite's isolated config.
@@ -868,8 +869,15 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
   if (level === "unit" && args.shard) {
     const config = JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig;
     const names = files.map((file) => basename(file));
-    const selected = new Set(selectShard(names, args.shard, config));
-    return files.filter((file) => selected.has(basename(file)));
+    try {
+      const selected = new Set(selectShard(names, args.shard, config));
+      return files.filter((file) => selected.has(basename(file)));
+    } catch (error) {
+      process.stderr.write(
+        `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(2);
+    }
   }
   return files;
 }
@@ -928,6 +936,7 @@ async function runTier(level: Level, label: string): Promise<void> {
   if (effectiveParallel > 1) modifiers.push(`parallel=${effectiveParallel}`);
   if (level === "unit" && args.shard) {
     modifiers.push(`shard=${args.shard.index}/${args.shard.total}`);
+    process.env[REQUIRE_COMPILED_COVERAGE_ENV] = "1";
   }
   process.stdout.write("\n");
   process.stdout.write(
