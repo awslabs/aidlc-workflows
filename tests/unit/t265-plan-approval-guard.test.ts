@@ -419,6 +419,7 @@ function scratchProject(): string {
     join(dir, ".claude", "hooks", "aidlc-record-human-turn.ts"),
   );
   for (const t of [
+    "aidlc.ts",
     "aidlc-lib.ts",
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
@@ -913,6 +914,77 @@ describe("t265b hook lifecycle", () => {
       }
       expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  for (const published of [false, true]) {
+    test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        if (published) {
+          seedActiveDirective(proj, "code-generation");
+          seedUnit(proj, null, { plan: true, answer: null });
+        }
+        const entry = ".claude/tools/aidlc.ts";
+        for (const command of [
+          `bun ${entry} engine orchestrate next 2>&1`,
+          `bun run ${entry} engine orchestrate next "Explain the plan"`,
+          `bun ${entry} engine orchestrate continue stage-rules-token`,
+          `bun "${join(proj, entry)}" engine orchestrate next`,
+          `bun ${entry} engine testing-posture resolve`,
+          `bun ${entry} engine testing-posture render`,
+          `bun ${entry} engine testing-posture fingerprint --stage-level`,
+          `bun ${entry} engine testing-posture verify --stage-level`,
+          `bun ${entry} engine log decision --stage code-generation --checkpoint plan-approval`,
+          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
+        ]) {
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
+          `bun ${entry} engine state advance`,
+          `bun ${entry} engine testing-posture begin --stage-level`,
+          `bun ${entry} engine log decision --stage code-generation --checkpoint summary-confirmation`,
+          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation`,
+          `bun ${entry} system lifecycle uninstall --yes`,
+          `bun ${entry} engine orchestrate next > src/inline.ts`,
+          `bun ${entry} engine orchestrate next; printf code > src/inline.ts`,
+          `bun --preload evil.ts ${entry} engine orchestrate next`,
+          `bun ${entry} engine orchestrate next --require=evil.ts`,
+          `./bun ${entry} engine orchestrate next`,
+          `PATH=. bun ${entry} engine orchestrate next`,
+          `env PATH=. bun ${entry} engine orchestrate next`,
+          `printf next | xargs bun ${entry} engine orchestrate`,
+          "bun fake.ts .claude/tools/aidlc.ts engine orchestrate next",
+          "bun other/aidlc.ts engine orchestrate next",
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        }
+        expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+        expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    }, 30000);
+  }
+
+  test("planning through the Bun entry point requires a real installed file", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      const entry = join(proj, ".claude", "tools", "aidlc.ts");
+      const command = "bun .claude/tools/aidlc.ts engine orchestrate next";
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      rmSync(entry);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      const other = join(proj, "other.ts");
+      writeFileSync(other, "// not the installed entry point\n");
+      symlinkSync(other, entry);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
