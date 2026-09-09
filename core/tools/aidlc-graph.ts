@@ -101,15 +101,23 @@ import { type StageFrontmatter, validateStageFrontmatter } from "./aidlc-stage-s
 
 // --- Types ---
 
+/** Past-tense fact about an input artifact that triggers recheck of a
+ *  downstream consumer. Values name the change class in author terms:
+ *  `edited` (bytes changed), `files-added-or-removed` (file set changed),
+ *  `changed` (any change — the explicit default; equivalent to omitting
+ *  the field). Unknown values fail loudly at graph compile. See RFC
+ *  docs/rfcs/typed-dependency-edges.md. */
+export type RecheckIf = "edited" | "files-added-or-removed" | "changed";
+export const RECHECK_IF_VALUES = ["edited", "files-added-or-removed", "changed"] as const;
+
 export interface Consume {
   artifact: string;
   required: boolean;
   conditional_on?: "brownfield" | "greenfield";
-  // POC (feat/typed-dependency-edges): declare what the consumer actually
-  // depends on. "content" = propagate only when producer output bytes change.
-  // "structure" = propagate only when file set / paths / kinds change.
-  // Absent = pessimistic (any change propagates), preserving pre-PoC behavior.
-  sensitivity?: "structure" | "content";
+  /** Change class that triggers recheck of this stage when the named
+   *  input artifact drifts. Omitted = `changed` (pessimistic, the pre-RFC
+   *  default). See RecheckIf. */
+  recheck_if?: RecheckIf;
 }
 
 // Per-rule resolution row baked into each stage's rules_in_context.
@@ -2081,6 +2089,9 @@ function buildGraphStage(
     };
     if (c.conditional_on !== undefined) {
       out.conditional_on = c.conditional_on;
+    }
+    if (c.recheck_if !== undefined) {
+      out.recheck_if = c.recheck_if;
     }
     return out;
   });
