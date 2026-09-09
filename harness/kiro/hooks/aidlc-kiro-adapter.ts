@@ -1754,20 +1754,41 @@ if (target === "deliver-stage-rules") {
 // skips its own buffered read for this target for the same reason, and this target
 // is deliberately absent from INPUT_TARGETS.
 //
-// Belt and braces on top of the channel: USER_PROMPT is how 0.12 delivered the
-// hook payload, so a non-empty one confirms the legacy channel. A host that
-// carries none is not the host this notice is for, and it exits 0 rather than
-// interrupting a session it cannot diagnose.
+// Belt and braces on top of the channel: USER_PROMPT is how 0.12 delivers a
+// hook's payload, so a non-empty one confirms the legacy channel. A host that
+// carries none is not the host this notice is for, and it exits 0 silently
+// rather than interrupting a session it cannot diagnose. On this trigger the
+// variable holds the TOOL INPUT as JSON, not the user's prompt (measured on
+// 0.12.333) - only its presence is read here, never its shape.
+//
+// Exit 0 and stdout, which reads backwards until you see what 0.12 does with
+// either. Measured in the host's own hook runner: a non-zero exit is turned into
+// `HookFailedCommandError` ("Hook '<name>' command execution failed") and is
+// never a refusal, so exiting 2 here got the notice classified as a BROKEN HOOK
+// - whereupon a 0.x session's own agent diagnosed it as misfiring and wrote
+// `"enabled": false` into this manifest. What that host does honour is the text:
+// its preToolUse contract tells the model that when a hook's output denies
+// access it "is FORBIDDEN from retrying the tool invocation" and "MUST NOT
+// proceed with the tool call under any circumstances". So the denial has to be
+// the first thing the output says, and the output has to arrive on the success
+// path. stdout because the runner takes `stdout || stderr` and stdout wins.
+//
+// This refuses per TOOL CALL rather than per prompt, which is the right seam:
+// nothing in AI-DLC advances without a tool, and the refusal lands exactly where
+// work would have begun. It is enforcement by instruction rather than a hard
+// block - 0.12 offers no exit-code refusal at all - and that limit is stated in
+// docs/guide/harnesses/kiro.md rather than papered over.
 if (target === "legacy-ide-notice") {
   if ((process.env.USER_PROMPT ?? "").trim().length === 0) return 0;
-  process.stderr.write(
-    "AI-DLC no longer supports this version of Kiro IDE.\n\n" +
+  process.stdout.write(
+    "ACCESS DENIED. Permission is not granted for this tool call.\n\n" +
+      "AI-DLC no longer supports this version of Kiro IDE.\n\n" +
       "Update Kiro IDE, or run this project with Kiro CLI instead - one AI-DLC " +
       "install serves both. The workflow record under aidlc/ is unaffected and " +
       "resumes where it stopped once you are on a supported version.\n\n" +
       "See docs/guide/harnesses/kiro.md for the supported versions.\n",
   );
-  return 2; // Kiro reject contract: exit 2 + stderr stops the turn.
+  return 0; // Not a refusal code: 0.12 has none. The denial is the text above.
 }
 
 if (target === "state-transition-guard") {

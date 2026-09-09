@@ -1076,15 +1076,28 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       // session it cannot diagnose.
       const modern = runAdapter(dir, "legacy-ide-notice", "");
       expect(modern.code).toBe(0);
+      expect(modern.stdout).toBe("");
       expect(modern.stderr).toBe("");
 
-      // A 0.x host delivers the payload in USER_PROMPT. Exit 2 stops the turn.
+      // A 0.x host delivers the payload in USER_PROMPT - on this trigger the tool
+      // input, verbatim from a 0.12.333 firing. Exit 0 and stdout, because that
+      // host turns a non-zero exit into "command execution failed" and never into
+      // a refusal, while its preToolUse contract forbids the model from
+      // proceeding when the OUTPUT denies access.
       const legacy = runAdapter(dir, "legacy-ide-notice", "", [], {
-        USER_PROMPT: JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        USER_PROMPT: JSON.stringify({
+          path: "/w/AGENTS.md",
+          start_line: null,
+          end_line: 10,
+          explanation: "User asked to read the first 10 lines of AGENTS.md.",
+        }),
       });
-      expect(legacy.code).toBe(2);
-      expect(legacy.stderr).toContain("no longer supports this version of Kiro IDE");
-      expect(legacy.stderr).toContain("Kiro CLI");
+      expect(legacy.code).toBe(0);
+      expect(legacy.stderr).toBe("");
+      // The denial has to lead, or the host's contract does not engage.
+      expect(legacy.stdout.startsWith("ACCESS DENIED.")).toBe(true);
+      expect(legacy.stdout).toContain("no longer supports this version of Kiro IDE");
+      expect(legacy.stdout).toContain("Kiro CLI");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

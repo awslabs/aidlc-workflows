@@ -3,7 +3,7 @@
   "enabled": true,
   "name": "aidlc-legacy-ide-notice",
   "description": "Tells Kiro IDE 0.x users to upgrade; AI-DLC requires a current Kiro IDE.",
-  "when": { "type": "promptSubmit" },
+  "when": { "type": "preToolUse", "toolTypes": ["*"] },
   "then": {
     "type": "runCommand",
     "command": "{{INVOKE}} engine adapter kiro legacy-ide-notice"

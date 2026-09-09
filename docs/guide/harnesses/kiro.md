@@ -20,6 +20,9 @@ differs.
 
 > [!NOTE]
 > Kiro IDE 0.x is not supported. Update to a current Kiro IDE, or use Kiro CLI.
+> On 0.x a single legacy hook denies each tool call and says so; that host has no
+> way for a hook to refuse outright, so the denial is an instruction its agent is
+> told to honour rather than a block the IDE enforces.
 
 ## Prerequisites
 

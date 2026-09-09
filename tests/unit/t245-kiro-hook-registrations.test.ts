@@ -177,9 +177,15 @@ describe("t245 Kiro hook registrations (manifest schema contract)", () => {
     }
     const notice = JSON.parse(
       readFileSync(join(DIST_HOOKS, "aidlc-legacy-ide-notice.kiro.hook"), "utf-8"),
-    ) as { when?: { type?: string }; then?: { command?: string } };
-    // promptSubmit is the only event 0.12 delivers, so the notice must ride it.
-    expect(notice.when?.type).toBe("promptSubmit");
+    ) as { when?: { type?: string; toolTypes?: string[] }; then?: { command?: string } };
+    // 0.12 delivers ten trigger types, and preToolUse is the only one whose
+    // contract tells the model it may not proceed when the hook's output denies
+    // access (measured on 0.12.333: the read was abandoned and the notice
+    // relayed). promptSubmit can refuse nothing there, so the notice rides this
+    // one - and preToolUse requires toolTypes, where anything but "*" leaves the
+    // tools it omits unguarded.
+    expect(notice.when?.type).toBe("preToolUse");
+    expect(notice.when?.toolTypes).toEqual(["*"]);
     expect(notice.then?.command).toContain("engine adapter kiro legacy-ide-notice");
   });
 
