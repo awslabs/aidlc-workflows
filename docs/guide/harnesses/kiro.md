@@ -30,7 +30,11 @@ differs.
 ## Prerequisites
 
 - **Kiro IDE**, signed in, with **Claude Opus 4.8** selected as the chat model —
-  or **Kiro CLI ≥ 2.6** (`kiro-cli --version`), logged in (`kiro-cli login`)
+  or **Kiro CLI ≥ 2.21.1** (`kiro-cli --version`), logged in (`kiro-cli login`).
+  This row targets the unified agent harness, and `.kiro/settings/cli.json` pins
+  the engine so a plain `kiro-cli` reaches it. 2.21.1 is where that pin was
+  measured; the engine itself has been reachable behind `kiro-cli --v3` since
+  2.8.0, so an older 2.x can opt in with the flag, on a path we have not tested.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes are
   self-contained.

@@ -88,7 +88,7 @@ still apply.
 | Harness | Important first-run requirement | Guide |
 | --- | --- | --- |
 | Claude Code | Configure a supported provider; the shipped default is Amazon Bedrock | [Claude setup below](#aws-bedrock-setup) |
-| Kiro (IDE, or CLI >= 2.6) | Sign in, then open the project or run `kiro-cli` | [Kiro](harnesses/kiro.md) |
+| Kiro (IDE, or CLI >= 2.21.1) | Sign in, then open the project or run `kiro-cli` | [Kiro](harnesses/kiro.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
 | Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
 | opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |

@@ -70,7 +70,7 @@ guide in the table below. The complete walkthrough is in
 | Harness | Configure | Open | Invoke | Guide |
 | --- | --- | --- | --- | --- |
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
-| Kiro IDE / Kiro CLI >= 2.6 | `aidlc config --harness kiro` | Open the project, or `kiro-cli` | `/aidlc` | [Kiro](docs/guide/harnesses/kiro.md) |
+| Kiro IDE / Kiro CLI >= 2.21.1 | `aidlc config --harness kiro` | Open the project, or `kiro-cli` | `/aidlc` | [Kiro](docs/guide/harnesses/kiro.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
