@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.8.2-blue)
+![version](https://img.shields.io/badge/version-2.8.1-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
