@@ -133,11 +133,11 @@ function modelsPage() {
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${teamPreset(policy) === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}${!policy?.team?.preset && entry.id === SHIPPED_PRESET ? ` <span class="settings-tag">default</span>` : ""}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <p class="settings-note">How this project balances quality, speed, and cost. Saved with the project, so everyone working on it gets the same.</p>
+      <p class="settings-note">How AI-DLC balances quality, speed, and cost. Saved in the repo for everyone.</p>
     </div>
 
     <div class="settings-block settings-advanced">
-      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span><small>Change a group's effort just for you</small></button>
+      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span></button>
       ${advancedOpen ? advancedSection(workflow) : ""}
     </div>`;
 }
@@ -155,7 +155,7 @@ function advancedSection(workflow) {
     const team = group.effort;
     const mine = policy.recorded?.local?.groups?.[group.id] || "";
     const from = policy.recorded?.project?.groups?.[group.id] ? "custom" : presetLabel || "Default";
-    const teamLabel = `Project: ${from} · ${team === INHERIT ? "default" : team}`;
+    const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
       ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden">${icon("errorCircle", { size: 15 })}</span>` : ""}
@@ -168,7 +168,7 @@ function advancedSection(workflow) {
   const overridden = teamGroups.some((group) => policy?.recorded?.local?.groups?.[group.id]);
   return `<div class="settings-block">
       ${policy ? teamGroups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
-      ${teamPins.length ? `<div class="settings-row"><span class="l">Set individually<small>Agents given their own level in this project</small></span>
+      ${teamPins.length ? `<div class="settings-row"><span class="l">Set individually<small>Agents given their own level</small></span>
         <span class="c">${teamPins.map((entry) => `<span class="settings-pin">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")}</span></div>` : ""}
       ${overridden ? `<p class="settings-legend"><span class="settings-overridden">${icon("errorCircle", { size: 13 })}</span> Overridden</p>` : ""}
     </div>

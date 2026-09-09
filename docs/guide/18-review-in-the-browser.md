@@ -323,13 +323,12 @@ picker shows, asked of the agent once and cached — with your Claude default
 project (`aidlc.settings.json`); one card is always lit, the shipped default
 (*Balanced*, tagged *default*) when nothing is recorded, so there is nothing to
 reset: to go back, pick the default card. The line beneath says what the choice
-is: how this project balances quality, speed, and cost, saved with the project
-so everyone working on it gets the same.
+is: how AI-DLC balances quality, speed, and cost, saved in the repo for
+everyone.
 
 **Advanced**, a fold at the bottom (open by itself while you have a change of
-your own), is *change a group's effort just for you*. Each group's first option
-is what the team's preset gives it — *Project: Balanced · medium*, *Project:
-Thorough · default* — and the levels beneath are yours: pick one and it applies on this
+your own), is where you change a group's effort just for you. Each group's first option
+is what the team's preset gives it — *Balanced · medium*, *Thorough · default* — and the levels beneath are yours: pick one and it applies on this
 machine only (`aidlc.settings.local.json`, not committed; a mark sits beside the
 row and a legend beneath the groups reads *Overridden*; teammates keep
 the team's value); pick the first option again to go back. Agents the team's
