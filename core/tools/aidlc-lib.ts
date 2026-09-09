@@ -26701,13 +26701,13 @@ let _errorEmitInProgress = false;
 // `command` — the failing subcommand + args (typically process.argv.slice(2).join(" "))
 // `msg`     — human-readable error shown to the caller and recorded in audit
 //
-// Uses appendAuditEntry (the canonical audit emitter) so the drift test's
-// forward/reverse check sees ERROR_LOGGED as a standard emission call site.
+// Uses the canonical unlocked audit emitter inside withAuditLock so the drift
+// test's forward/reverse check sees ERROR_LOGGED as a standard emission call
+// site without coupling the lock bucket to the selected destination.
 // Type-only import for the lazy-loaded aidlc-audit.ts dependency. Same
 // pattern as aidlc-graph.ts above — the runtime cycle is broken by
 // require() below; type erases at compile time.
 import type {
-  appendAuditEntry as AppendAuditEntry,
   appendAuditEntryUnlocked as AppendAuditEntryUnlocked,
 } from "./aidlc-audit.ts";
 
@@ -26749,6 +26749,24 @@ export function redactProjectDirPrefix(
   return redacted;
 }
 
+function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
+  const barrier = process.env.AIDLC_TEST_ERROR_EMIT_SELECTION_BARRIER?.trim();
+  if (!barrier) return;
+  writeFileSync(
+    `${barrier}.selected`,
+    `${selection.space}/${selection.intent ?? ""}\n`,
+    "utf-8",
+  );
+  const waitCell = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(`${barrier}.release`)) {
+    if (Date.now() >= deadline) {
+      throw new Error("timed out waiting at the ERROR_LOGGED selection barrier");
+    }
+    Atomics.wait(waitCell, 0, 0, 10);
+  }
+}
+
 // Failures are swallowed: we're already exiting, the caller gets the JSON
 // error on stderr regardless.
 //
@@ -26774,38 +26792,47 @@ export function emitError(
     _errorEmitInProgress = true;
     try {
       const selection = resolveWorkflowSelection(projectDir, { intent, space });
-      if (existsSync(stateFilePathForSelection(projectDir, selection))) {
+      if (
+        selection.intent !== null &&
+        existsSync(stateFilePathForSelection(projectDir, selection))
+      ) {
+        waitAtErrorEmitSelectionBarrier(selection);
         // Lazy import to break the lib.ts <-> aidlc-audit.ts cycle at load time.
         // aidlc-audit.ts imports from lib.ts, and importing it at top of lib.ts
         // would create a circular dependency. Dynamic import is synchronous via
         // require under Bun and keeps the dependency one-way at module-init time.
         const audit = require("./aidlc-audit.ts") as {
-          appendAuditEntry: typeof AppendAuditEntry;
           appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
         };
-        // Lock bucket: intent-omitted keys the workspace sentinel (the lock
-        // invariant every sentinel-locked caller relies on, so it is NOT
-        // replaced by the resolved intent); an explicit intent keys the
-        // per-intent bucket in the SELECTED space, which is the shard the
-        // append writes. If we're inside a withAuditLock-held critical section
-        // (e.g. aidlc-state.ts fork/merge mid-transaction) the lock is already
-        // held by us on that same bucket, so use the unlocked variant directly
-        // and the ERROR_LOGGED row lands without the 5s acquire timeout. The
-        // exit-handler safety net releases the lock dir on process.exit.
-        const lockSpace = intent === undefined ? space : selection.space;
-        if (holdsAuditLock(projectDir, intent, lockSpace)) {
-          audit.appendAuditEntryUnlocked("ERROR_LOGGED", {
-            Tool: tool,
-            Command: auditCommand,
-            Error: auditMessage,
-          }, projectDir, intent, lockSpace);
-        } else {
-          audit.appendAuditEntry("ERROR_LOGGED", {
-            Tool: tool,
-            Command: auditCommand,
-            Error: auditMessage,
-          }, projectDir, intent, lockSpace);
-        }
+        // Preserve the caller's lock class: an omitted intent uses the workspace
+        // sentinel, while an explicit intent uses its per-intent bucket. Pin the
+        // destination to the resolved selection so a concurrent cursor move
+        // cannot redirect the row between validation and append. Recheck the
+        // state under that lock so a removed record is not recreated as a
+        // phantom audit directory.
+        const lockIntent = intent === undefined ? undefined : selection.intent;
+        const lockSpace = selection.space;
+        withAuditLock(
+          projectDir,
+          () => {
+            if (!existsSync(stateFilePathForSelection(projectDir, selection))) {
+              return;
+            }
+            audit.appendAuditEntryUnlocked(
+              "ERROR_LOGGED",
+              {
+                Tool: tool,
+                Command: auditCommand,
+                Error: auditMessage,
+              },
+              projectDir,
+              selection.intent ?? undefined,
+              selection.space,
+            );
+          },
+          lockIntent,
+          lockSpace,
+        );
       }
     } catch {
       // Audit write failed — we're already in an error path, swallow.

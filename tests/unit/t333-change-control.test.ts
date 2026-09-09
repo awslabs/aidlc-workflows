@@ -835,6 +835,72 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     expect(existsSync(join(emptyIntents, "audit"))).toBe(false);
     expect(existsSync(emptyIntents) ? readdirSync(emptyIntents).sort() : null).toEqual(beforeEmpty);
   });
+
+  test("a space-only refusal stays pinned when the active-intent cursor moves after selection", async () => {
+    const selected = selectedProject("classic");
+    const altIntents = join(selected.proj, "aidlc", "spaces", "alt", "intents");
+    const second = run(
+      UTILITY,
+      [
+        "intent-create",
+        "--scope",
+        "classic",
+        "--arguments",
+        "second selected intent",
+        "--label",
+        "second-alt",
+        "--space",
+        "alt",
+      ],
+      selected.proj,
+    );
+    expect(second.status, second.stderr).toBe(0);
+    const secondIntent = readFileSync(join(altIntents, "active-intent"), "utf-8").trim();
+    expect(secondIntent).not.toBe(selected.targetIntent);
+    writeFileSync(join(altIntents, "active-intent"), `${selected.targetIntent}\n`);
+
+    const beforeTarget = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
+    const beforeSecond = readAuditShardEvents(selected.proj, secondIntent, "alt");
+    const barrier = join(selected.proj, "aidlc", ".t333-error-emit-selection");
+    const child = Bun.spawn({
+      cmd: [
+        BUN,
+        UTILITY,
+        "change-control",
+        "loose",
+        "--space",
+        "alt",
+        "--project-dir",
+        selected.proj,
+      ],
+      env: {
+        ...process.env,
+        AIDLC_TEST_ERROR_EMIT_SELECTION_BARRIER: barrier,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
+
+    await waitForPath(`${barrier}.selected`);
+    expect(readFileSync(`${barrier}.selected`, "utf-8")).toBe(
+      `alt/${selected.targetIntent}\n`,
+    );
+    writeFileSync(join(altIntents, "active-intent"), `${secondIntent}\n`);
+    writeFileSync(`${barrier}.release`, "release\n");
+
+    const [status, out, err] = await Promise.all([child.exited, stdout, stderr]);
+    expect(status).toBe(1);
+    expect(out).toBe("");
+    expect(err).toContain(
+      'change-control requires exactly one of: strict, relaxed (received \\"loose\\").',
+    );
+    const targetAfter = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
+    expect(targetAfter).toHaveLength(beforeTarget.length + 1);
+    expect(targetAfter[targetAfter.length - 1]?.event).toBe("ERROR_LOGGED");
+    expect(readAuditShardEvents(selected.proj, secondIntent, "alt")).toEqual(beforeSecond);
+  }, 30_000);
 });
 
 describe("t333 (8) intent-create --space is the creation target end to end", () => {

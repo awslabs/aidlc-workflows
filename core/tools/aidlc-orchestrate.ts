@@ -260,6 +260,11 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import {
+  type GuardPreflightAction,
+  type GuardPreflightResult,
+  guardPreflight as stateGuardPreflight,
+} from "./aidlc-state.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import {
   readRuleBundle,
@@ -7527,48 +7532,24 @@ function guardRecoveryAskFromToolOutput(
 }
 
 type GuardPreflightOptions = {
-  action:
-    | "present-approval-gate"
-    | "revise"
-    | "complete"
-    | "review-request";
+  action: GuardPreflightAction;
   unit?: string;
   entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
 };
 
-type GuardPreflightOutcome =
-  | { executable: true }
-  | {
-      executable: false;
-      refusal: GuardRefusal;
-      attempt: GuardAttemptState;
-      resources: string[];
-    };
-
 // The same admission call the state tool makes before it changes state, run
-// here on the same snapshot. Loaded in-process: the admission functions are
-// ordinary functions with no module flag, and a structural refusal inside them
-// is a thrown error that reads as "cannot decide here", so the router fails open
-// to the real command rather than guessing.
+// here on the same snapshot. The state module imports this module's pure team
+// projection helper, so this static cycle must remain top-level side-effect
+// free. Both exports are called only after module initialization. A structural
+// refusal inside the state preflight reads as "cannot decide here", so that
+// function fails open to the real command rather than guessing.
 function guardPreflightResult(
   projectDir: string,
   stateContent: string,
   stage: StageEntry,
   options: GuardPreflightOptions,
-): GuardPreflightOutcome {
-  try {
-    const state = require("./aidlc-state.ts") as {
-      guardPreflight: (
-        projectDir: string,
-        stateContent: string,
-        stage: StageEntry,
-        options: GuardPreflightOptions,
-      ) => GuardPreflightOutcome;
-    };
-    return state.guardPreflight(projectDir, stateContent, stage, options);
-  } catch {
-    return { executable: true };
-  }
+): GuardPreflightResult {
+  return stateGuardPreflight(projectDir, stateContent, stage, options);
 }
 
 // A remedy that IS the action being preflighted is not a way out of the
@@ -7612,7 +7593,7 @@ function routedRefusalDirective(
 // tool decides. Otherwise the same ask the tool would print.
 function directiveForPreflightRefusal(
   projectDir: string,
-  outcome: Extract<GuardPreflightOutcome, { executable: false }>,
+  outcome: Extract<GuardPreflightResult, { executable: false }>,
   action: GuardPreflightOptions["action"],
 ): GuardRecoveryAskDirective | null {
   const ask = routedRefusalDirective(projectDir, outcome);
