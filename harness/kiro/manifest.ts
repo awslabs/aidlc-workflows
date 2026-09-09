@@ -57,6 +57,11 @@ const manifest: HarnessManifest = {
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
           // The pre-v2-sync shipped variant (2.6.123 merge changed the bytes).
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
+          // The variant shipped while this row's onboarding text still called
+          // itself the Kiro CLI harness and described an agent-v1 conductor. An
+          // upgrade must recognize it as ours and replace it, not treat it as
+          // user-owned content.
+          "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
         ],
       },
     },

@@ -296,18 +296,25 @@ describe("documentation parity derives current behavior from authored implementa
       .split("\n")
       .filter((line) => line.startsWith("| **"))
       .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
-    const ideCell = (label: string): string => {
+    // Column 2 is Kiro. It was 3 while the map carried a Kiro CLI column and a
+    // Kiro IDE column; one row means one column.
+    const kiroCell = (label: string): string => {
       const row = rows.find((candidate) => candidate[0].startsWith(`**${label}**`));
       if (!row) throw new Error(`missing primitive-map row: ${label}`);
-      return row[3];
+      return row[2];
     };
 
-    expect(ideCell("Agent personas")).toContain("`tools:`/`permissions.rules`");
-    expect(ideCell("Agent personas")).not.toContain("agent configs");
-    expect(ideCell("Standing rules")).toContain("always-included steering");
-    expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
-    expect(ideCell("Permissions / config")).toContain("`permissions.rules`");
-    expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
+    expect(kiroCell("Agent personas")).toContain("agents/aidlc.md");
+    expect(kiroCell("Agent personas")).toContain("persona `.md`");
+    // The agent-v1 roster must not reappear in the documented shape.
+    expect(kiroCell("Agent personas")).not.toContain(".json");
+    expect(kiroCell("Standing rules")).toContain("always-included steering");
+    expect(kiroCell("Standing rules")).toContain("`resources`");
+    expect(kiroCell("Standing rules")).not.toContain("`rules_in_context`");
+    expect(kiroCell("Permissions / config")).toContain("`permissions.rules`");
+    // cli.json belongs in this cell now: it is where the engine pin and the
+    // workspace default agent live, and one row serves both surfaces.
+    expect(kiroCell("Permissions / config")).toContain("settings/cli.json");
 
     const steering = read(
       "harness",

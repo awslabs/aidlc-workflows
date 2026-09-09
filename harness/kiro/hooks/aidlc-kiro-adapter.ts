@@ -1427,15 +1427,32 @@ if (target === "reviewer-scope") {
   // including the conductor's own. The latch replaces both: a name when exactly
   // one delegate is inflight, and nothing at all otherwise.
   //
-  // Unlike state-transition-guard this one COMPARES the identity
-  // (`agent_type === dispatch.reviewer`), so an ambiguous set cannot be joined
-  // into one string. Two inflight personas mean the acting one is unknown, and
-  // there this guard fails open, as the core hook does for every other
-  // uncertainty, rather than enforcing reviewer scope on a call that may belong
-  // to a different persona.
+  // The two persona-scoped guards behave DIFFERENTLY under ambiguity, and the
+  // reason is what each one needs rather than a policy preference:
+  //
+  //   state-transition-guard needs only PRESENCE - "is a delegate acting" - so
+  //   two inflight personas still answer its question, and it enforces.
+  //   reviewer-scope needs IDENTITY: it compares against `dispatch.reviewer`.
+  //   Two inflight personas mean the acting one is genuinely unknown, and
+  //   enforcing anyway would refuse a call that may belong to the other one -
+  //   a false refusal that stalls the workflow.
+  //
+  // So this guard declines rather than guesses. It is NOT "erring toward
+  // refusing", and an earlier version of this comment claimed that while the code
+  // did the opposite. What it must not do is decline SILENTLY, so the ambiguity is
+  // recorded where --doctor can surface it.
   const latched = inflightDelegates(
     ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
   );
+  if (latched.length > 1) {
+    recordHookDrop(
+      projectDir,
+      "kiro-adapter",
+      `reviewer-scope: ${latched.length} delegates inflight (${
+        latched.join(", ")
+      }) — the acting persona cannot be determined, so read-scope was not enforced`,
+    );
+  }
   const registeredAgent = latched.length === 1 ? latched[0] : "";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
@@ -1529,10 +1546,12 @@ if (target === "state-transition-guard") {
   // The core hook enforces only when it knows a DELEGATE is acting (an empty
   // agent_type returns 0), because the main session is allowed to run these
   // verbs. The pre-merge row got that identity from the persona argv of a
-  // per-agent registration; the latch supplies it now. Every inflight name is
-  // forwarded rather than one being chosen: the enforcement here does not depend
-  // on WHICH delegate is acting, only on the fact that one is, so a set of two
-  // is still a correct answer and never a guess.
+  // per-agent registration; the latch supplies it now.
+  //
+  // Every inflight name is forwarded rather than one being chosen, and that is
+  // sound HERE precisely because this guard needs presence rather than identity -
+  // see the longer note at reviewer-scope, which needs the opposite and therefore
+  // declines under the same ambiguity.
   const delegates = inflightDelegates(ide.sessionId?.trim() || rememberedKiroIdeSessionId());
   const result = runCoreHook("state-transition-guard", {
     hook_event_name: "PreToolUse",

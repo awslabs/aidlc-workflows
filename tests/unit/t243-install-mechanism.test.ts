@@ -3794,6 +3794,10 @@ describe("t243 projection channel", () => {
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
+          // The current render. The packager appends it, so this list moves every
+          // time the onboarding text changes - which is the point: an install
+          // carrying any earlier variant must still be recognized as ours.
+          "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
         ],
       },
     };
