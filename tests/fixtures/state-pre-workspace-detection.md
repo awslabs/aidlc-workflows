@@ -16,6 +16,7 @@
 - **Stages to Skip**: none
 - **Depth**: Standard
 - **Test Strategy**: Standard
+- **Change Control**: strict (from scope feature)
 
 ## Workspace State
 - **Project Root**: /tmp/aidlc-test

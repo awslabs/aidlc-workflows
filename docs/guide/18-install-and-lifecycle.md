@@ -674,7 +674,9 @@ Human lifecycle output states each completed fact. Update reports the
 old-to-new version check, verified download, atomic switch, retained prior
 version, any pruned unprotected releases, and the project-refresh courtesy.
 A no-op says `You're on the latest version of aidlc (<version>).`; `--dry-run`
-says `Would update aidlc from <old> to <new>.`. `aidlc use` distinguishes
+says `Would update aidlc from <old> to <new>.`, or
+`You're on the latest version of aidlc (<version>); nothing to update.` when
+nothing would change. `aidlc use` distinguishes
 `Now using` from `Already using`, and uninstall states exactly which machine
 state was removed or kept. JSON and quiet messages retain their stable machine
 contracts.

@@ -2,10 +2,12 @@
 //
 // MR9 live scope-routing journey. The deterministic scope transpose and runner
 // tests already prove the enterprise scope data compiles; this test drives a
-// real `/aidlc --init --scope enterprise` turn through the SDK and asserts the
-// routing as data: init stdout, state fields, and audit events. It stops at the
-// init Bash tool_result, before any human gate or stage body, so it proves live
-// conductor-to-tool routing without spending a full workflow.
+// real `/aidlc --scope enterprise` turn through the SDK and asserts the
+// routing as data: creation stdout, state fields, and audit events. It stops at
+// the creation Bash tool_result, before any human gate or stage body, so it
+// proves live conductor-to-tool routing without spending a full workflow. (The
+// legacy `--init` flag is retired: passed through, it became the intent's
+// description and invited the conductor to ask what it meant.)
 //
 // Enterprise is the representative comprehensive v0.6.0 scope here: it was
 // still UNCOVERED in the registry on the MR8 base, while the lower-depth scope
@@ -75,7 +77,7 @@ describe("t141 enterprise scope routing (sdk live, MR9)", () => {
         stripEnvScope: true,
       });
       try {
-        const r = await driveAidlc(`/aidlc --init --scope ${SCOPE}`, {
+        const r = await driveAidlc(`/aidlc --scope ${SCOPE}`, {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
           stopAfterToolResult: {

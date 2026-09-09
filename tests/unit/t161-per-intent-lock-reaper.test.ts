@@ -20,7 +20,7 @@
 //   releaseAuditLock / withAuditLock — composite-keyed depth + exit handlers.
 //   WORKSPACE_LOCK_SENTINEL / DEFAULT_LOCK_STALE_MS (AIDLC_LOCK_STALE_MS env).
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -40,6 +40,7 @@ import {
   writeActiveDirectiveMarker,
   WORKSPACE_LOCK_SENTINEL,
   withAuditLock,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 
 const PD = "/tmp/aidlc-t161-project";
@@ -984,7 +985,7 @@ describe("t161 active-directive owner lock and doctor findings", () => {
     writeActiveDirectiveMarker(projectDir, {
       kind: "run-stage",
       stage: "requirements-analysis",
-      state_sha256: createHash("sha256").update(state).digest("hex"),
+      state_sha256: stateDigest(state),
     });
   }
 

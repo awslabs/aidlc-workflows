@@ -771,7 +771,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },
@@ -841,7 +841,7 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "get", "list"],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
@@ -849,6 +849,7 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
+      "set change-control": "change-control",
       get: "config-get",
       list: "config-list",
     },
@@ -857,7 +858,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -1134,10 +1135,11 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  copilot: ".aidlc",
   cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
@@ -1149,6 +1151,7 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 
 function adapterFile(harness: AdapterHarness): string {
   if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
   return "aidlc-kiro-adapter.ts";
 }
@@ -1534,6 +1537,13 @@ function handleConfig(route: Route, argv: string[]): Action {
     if (missing) return missing;
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
   }
+  if (key === "change-control") {
+    // The per-intent Change Control flip is its own utility verb (it rewrites
+    // the state line and logs CHANGE_CONTROL_SET), not a config-change field.
+    const missing = requireValue("config", "set change-control", value);
+    if (missing) return missing;
+    return { type: "delegate", tool: TOOLS.utility, args: ["change-control", value, ...argv.slice(4)] };
+  }
   return nounError("config", key ? `set ${key}` : "set");
 }
 
@@ -1593,6 +1603,23 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     const name = argv[1];
     if (!name) return nounError("hook", undefined);
     if (!isSafeName(name)) return nounError("hook", name);
+    // 2.8.0 projected the Cursor and Copilot adapters onto this one-argument
+    // route (`aidlc engine hook cursor-adapter <target>`), and that wiring is
+    // project-owned, so `aidlc update` alone cannot rewrite it. Resolve those
+    // two shipped spellings to the adapter action they meant.
+    if (name === "cursor-adapter" || name === "copilot-adapter") {
+      const harness: AdapterHarness = name === "cursor-adapter" ? "cursor" : "copilot";
+      const target = argv[2];
+      if (!target) return nounError("adapter", undefined);
+      if (!isSafeName(target)) return nounError("adapter", target);
+      return {
+        type: "adapter",
+        harness,
+        target,
+        extraArgs: argv.slice(3),
+        path: resolveHookPath(adapterFile(harness), harness),
+      };
+    }
     return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
   }
   if (route.routeOnly === "statusline") {
@@ -1820,7 +1847,25 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
   return publicCommandError(argv[0]);
 }
 
-export function resolveAction(argv: string[]): Action {
+// The 2.8.0 Copilot adapter spawned its core hooks as `aidlc hook <name>` (no
+// `engine` namespace). That adapter lives in every native Copilot project
+// configured by 2.8.0, is project-owned, and is preferred by resolveHookPath()
+// over the packaged one, so `aidlc update` alone cannot replace it. Accept the
+// spelling ONLY in the context that adapter's children run in: runAdapter()
+// pins AIDLC_HARNESS_NAME=copilot and, under the compiled binary, exports
+// AIDLC_COMPILED_EXECUTABLE, and the adapter forwards both. Any other caller
+// keeps getting `unknown command 'hook'`; `aidlc config` installs the adapter
+// that uses the canonical `engine hook` route.
+function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
+  return argv[0] === "hook" &&
+      process.env.AIDLC_HARNESS_NAME === "copilot" &&
+      (process.env.AIDLC_COMPILED_EXECUTABLE ?? "") !== ""
+    ? ["engine", ...argv]
+    : argv;
+}
+
+export function resolveAction(rawArgv: string[]): Action {
+  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
   let projectDir: string | undefined;
@@ -2129,9 +2174,17 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     text(2, `aidlc engine adapter ${action.harness} ${action.target}: not available in this install\n`);
     return 1;
   }
+  // Dispatcher startup may already have pinned AIDLC_HARNESS_DIR/NAME from
+  // the cwd's metadata (compiled mode does so before routing). The adapter's
+  // harness is authoritative here: pin both so the core hooks it spawns
+  // resolve the matching packaged runtime even when the hook cwd carries no
+  // harness metadata (.aidlc is shared by copilot and opencode; the
+  // metadata-free fallback names opencode).
   const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  process.env.AIDLC_HARNESS_NAME = action.harness;
   if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
@@ -2172,6 +2225,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
+    else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
     else process.env.AIDLC_COMPILED_EXECUTABLE = previousExecutable;
   }
@@ -2800,7 +2855,10 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
   }
 }
 
-export async function main(argv: string[]): Promise<void> {
+export async function main(rawArgv: string[]): Promise<void> {
+  // Canonicalized before route policy so stdin buffering, pinning, and
+  // dispatch see `engine hook`.
+  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   process.exitCode = 0;
   bufferedStdin = null;
   configureColor(argv);

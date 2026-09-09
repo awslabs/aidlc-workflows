@@ -2,8 +2,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
@@ -271,13 +271,13 @@ function addReviewFinding(
       "",
     ].join("\n"),
   );
-  return relativeArtifact;
+  return join(
+    relative(proj, dirname(artifact)),
+    artifactFilename(findStageBySlug(stage)!.review_artifact!),
+  ).replaceAll("\\", "/");
 }
 
-// Completion validates a canonical `## Review` appendix appended to the
-// stage's review_artifact after REVIEW_REQUESTED, and refuses bytes that
-// predate the request; every simulated pass strips any stale appendix before
-// requesting and appends a fresh, distinct section afterwards.
+// Every simulated pass writes the review to the request's named record slot.
 let reviewPass = 0;
 
 function logReviewReady(
@@ -286,6 +286,24 @@ function logReviewReady(
   unit: string,
   reviewer: string,
 ): void {
+  let reviewedBody: string | null = null;
+  for (const artifact of PRODUCES[stage]) {
+    const content = readFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        unit,
+        stage,
+        artifactFilename(artifact),
+      ),
+      "utf-8",
+    );
+    const reviewStart = content.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      reviewedBody = content.slice(reviewStart + "## Review".length).trimStart();
+      break;
+    }
+  }
   const reviewArtifact = join(
     seededRecordDir(proj),
     "construction",
@@ -319,13 +337,18 @@ function logReviewReady(
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review failed: ${request.stdout}${request.stderr}`);
   }
-  appendFileSync(
-    reviewArtifact,
-    "\n## Review\n\n" +
+  const { reviewFile } = JSON.parse(request.stdout ?? "{}") as {
+    reviewFile: string;
+  };
+  const draft = join(proj, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(
+    draft,
+    reviewedBody?.replace("**Verdict:** NOT-READY", "**Verdict:** READY") ??
       "**Verdict:** READY\n" +
-      `**Reviewer:** ${reviewer}\n` +
-      "**Iteration:** 1\n\n" +
-      `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
+        `**Reviewer:** ${reviewer}\n` +
+        "**Iteration:** 1\n\n" +
+        `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
   );
   const completed = spawnSync(BUN, [...base, "--verdict", "READY"], {
     encoding: "utf-8",
@@ -928,6 +951,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       "alpha",
       "--result",
       "rejected",
+      "--reason",
+      "Change alpha only",
       "--user-input",
       "Change alpha only",
     ]);
@@ -1048,20 +1073,19 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         "awaiting-approval",
       ]).kind,
     ).toBe("print");
-    expect(
-      runReport(rejected, [
-        "--stage",
-        "functional-design",
-        "--unit",
-        "alpha",
-        "--result",
-        "rejected",
-        "--reason",
-        "Revise the Unit design",
-        "--reject-finding",
-        `${artifact}#R-01=This concern must be addressed`,
-      ]).kind,
-    ).toBe("print");
+    const rejectedReport = runReport(rejected, [
+      "--stage",
+      "functional-design",
+      "--unit",
+      "alpha",
+      "--result",
+      "rejected",
+      "--reason",
+      "Revise the Unit design",
+      "--reject-finding",
+      `${artifact}#R-01=This concern must be addressed`,
+    ]);
+    expect(rejectedReport.kind).toBe("print");
     expect([
       ...readReviewFindingDispositions(
         rejected,

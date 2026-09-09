@@ -211,6 +211,8 @@ describe("t238 build-binaries release builder", () => {
       "statusline",
       "adapter-codex-validate-state",
       "adapter-cursor-validate-state",
+      "adapter-copilot-validate-state",
+      "adapter-copilot-2.8.0-project-validate-state",
       "routed-project-dir",
       "bun-compiled-parity",
       "final-layout-config-dry-run",

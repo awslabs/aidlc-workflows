@@ -54,6 +54,7 @@ import { fileURLToPath } from "node:url";
 import {
   markSubagentInflight,
   subagentInflightMarkerPath,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -94,7 +95,7 @@ function seedUnapprovedCodeGeneration(projectDir: string): void {
   writeActiveDirectiveMarker(projectDir, {
     kind: "run-stage",
     stage: "code-generation",
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
 }
 
@@ -728,6 +729,33 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe("");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "11a: compiled executable delegation runs core hooks through the engine route",
+    () => {
+      const dir = scratchProject(true);
+      const executable = join(dir, "aidlc-native-stub");
+      writeFileSync(
+        executable,
+        `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
+        { mode: 0o755 },
+      );
+
+      const r = runAdapter(
+        dir,
+        "validate-state",
+        { hook_event_name: "PreCompact", cwd: dir, session_id: "t249-native" },
+        { AIDLC_COMPILED_EXECUTABLE: executable },
+      );
+
+      expect(r.code).toBe(0);
+      expect(
+        existsSync(
+          join(seededRecordDir(dir), ".aidlc-hooks-health", "validate-state.last"),
+        ),
+      ).toBe(true);
+    },
+  );
 
   test("13: reviewer-scope forwarding blocks a sibling read via the ledger identity", () => {
     const dir = scratchProject(true);
@@ -2002,7 +2030,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       if (shape === "corrupt") writeFileSync(path, "{bad-json\n");
       if (shape === "legacy") {
         const state = readFileSync(seededStateFile(recovery), "utf-8");
-        writeFileSync(path, JSON.stringify({ version: 1, stage: "requirements-analysis", state_sha256: createHash("sha256").update(state).digest("hex") }));
+        writeFileSync(path, JSON.stringify({ version: 1, stage: "requirements-analysis", state_sha256: stateDigest(state) }));
       }
       const stopped = runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` });
       const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
@@ -2030,7 +2058,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         writeFileSync(path, `${JSON.stringify({
           version: 1,
           stage: "requirements-analysis",
-          state_sha256: createHash("sha256").update(state).digest("hex"),
+          state_sha256: stateDigest(state),
         })}\n`);
       }
       const human = runAdapter(dir, "record-human-turn", {

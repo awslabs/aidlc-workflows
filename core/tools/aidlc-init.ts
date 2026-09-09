@@ -22,6 +22,7 @@ import {
   emitResult,
   failure,
   globalOptions,
+  readTerminalLine,
   success,
   usage,
   valueAfter,
@@ -1817,7 +1818,7 @@ function configPrompt(label: string): string | null {
     process.stdout.write(`${label} `);
     return scriptedPromptAnswers.shift() ?? null;
   }
-  return prompt(label);
+  return readTerminalLine(label);
 }
 
 type SetupMapRow = {

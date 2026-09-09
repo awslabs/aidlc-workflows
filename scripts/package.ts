@@ -1094,6 +1094,15 @@ function rewriteNativeInvocations(
     "worktree",
     "workspace-sync",
   ].join("|");
+  // The authored subprocess adapters, each backed by an `aidlc engine adapter
+  // <harness>` dispatcher route. Only these project onto that route; any other
+  // hook file keeps the generic one-argument `engine hook <name>` rewrite.
+  const adapterHookNames: Record<string, true> = {
+    "kiro-adapter": true,
+    "codex-adapter": true,
+    "cursor-adapter": true,
+    "copilot-adapter": true,
+  };
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;
   const toolPattern = new RegExp(
@@ -1116,9 +1125,12 @@ function rewriteNativeInvocations(
       String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
       "gi",
     );
-    value = value.replace(escapedJsonHook, (_match, hook: string) =>
-      hook === "statusline" ? trustedCommand("statusline") : trustedCommand(`hook ${hook}`)
-    );
+    value = value.replace(escapedJsonHook, (_match, hook: string) => {
+      if (adapterHookNames[hook]) return trustedCommand(`adapter ${m.name}`);
+      return hook === "statusline"
+        ? trustedCommand("statusline")
+        : trustedCommand(`hook ${hook}`);
+    });
     // Direct utility verbs whose dispatcher route lives under the `workspace`
     // noun: rewrite verb-aware BEFORE the generic tool rewrite would emit the
     // retired `engine utility` alias.
@@ -1131,6 +1143,17 @@ function rewriteNativeInvocations(
       (_match, verb: string) =>
         `${trustedCommand("workspace")} ${verb === "codekb-path" ? "codekb" : verb}`,
     );
+    // The per-intent Change Control flip lives under the `config` noun in the
+    // native dispatcher (`config set change-control <value>`), so its direct
+    // utility invocation is rewritten verb-aware for the same reason.
+    const changeControlUtilityPattern = new RegExp(
+      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+change-control\b`,
+      "gi",
+    );
+    value = value.replace(
+      changeControlUtilityPattern,
+      () => trustedCommand("config set change-control"),
+    );
     value = value.replace(toolPattern, (_match, delegate: string | undefined) =>
       delegate ? trustedCommand(delegate) : TRUSTED_COMMAND_PREFIX
     );
@@ -1139,9 +1162,7 @@ function rewriteNativeInvocations(
       (_match, delegate: string) => trustedCommand(delegate),
     );
     value = value.replace(hookPattern, (_match, hook: string) => {
-      if (hook === "kiro-adapter" || hook === "codex-adapter") {
-        return trustedCommand(`adapter ${m.name}`);
-      }
+      if (adapterHookNames[hook]) return trustedCommand(`adapter ${m.name}`);
       if (hook === "statusline") return trustedCommand("statusline");
       return trustedCommand(`hook ${hook}`);
     });

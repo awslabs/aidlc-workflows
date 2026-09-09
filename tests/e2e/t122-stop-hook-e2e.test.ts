@@ -132,6 +132,7 @@ import { join } from "node:path";
 import {
   docsRoot,
   hooksHealthDir,
+  stateDigest,
   STOP_HOOK_PROBE_ENV,
   stopHookDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -290,13 +291,10 @@ function progressSig(proj: string): string {
   const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
-  const stableState = s.replace(
-    /^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm,
-    "",
-  );
-  const stateSha256 = createHash("sha256")
-    .update(stableState, "utf-8")
-    .digest("hex");
+  // The hook hashes the same cache-omitting projection the engine binds a
+  // directive to, so this replica calls the shipped helper rather than stripping
+  // one field by hand and drifting from it.
+  const stateSha256 = stateDigest(s);
   const directive = runEngineNextDirective(proj);
   const directiveFingerprint = createHash("sha256")
     .update(

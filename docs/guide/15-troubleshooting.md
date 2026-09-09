@@ -208,6 +208,58 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### Plan Approval asked twice for the same plan
+
+**Symptom**: Code Generation presents the Plan Approval question again for a plan
+you already approved.
+
+Plan Approval binds to the plan, unit test instructions, and Testing Contract
+content, to the target, and to the current stage attempt. It is NOT reopened by
+re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hook
+probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
+either, and recording a review never touches the plan.
+
+If you are asked again, one of these moved:
+
+- the plan content (anything beyond a ticked task marker, or a terminal
+  `## Review` section left by a review recorded before review records existed)
+- the unit-test instructions content, any byte of it: the instructions are handed
+  to the developer in full, so they bind byte-exactly, and a section appended to
+  them after approval reopens it
+- the Testing Posture, scope, test strategy, or project type
+- the active Unit or stage target
+- the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
+  workflow restart
+- the workspace source, if it changed after the plan was fingerprinted
+
+The refusal message names which one. On a workspace-source change the remedy is
+always the same: re-run the fingerprint command, record both tags it prints, and
+present the plan again. A fingerprint recorded by an older version of the tool
+reads as "was written under an earlier format" and needs the same re-run.
+
+### Plan Approval cannot be recorded and the remedies do not help
+
+**Symptom**: you chose "Approve Plan" but the receipt command keeps refusing,
+for example because the workspace source cannot be bound ("unbindable") or the
+response was orphaned by a re-run decision.
+
+Every refusal lists its remedies in order. Try the repair remedies first: repair
+the source boundary the message names (shrink or exclude the offending path,
+declare real source under an excluded directory in `.aidlc-source-paths.json`,
+remove a broken symlink), re-run the fingerprint command, and let the plan be
+presented again. `/aidlc --doctor` has a "Workspace source boundary binds" check
+that names the failing path.
+
+The last remedy is the break-glass exit, and only you can open it. Type exactly
+`Override Plan Approval: <your reason>` as a chat message (a picked option does
+not count). The conductor then runs the same receipt command with
+`--override "<your reason>"`; the engine checks that the typed phrase exists for
+this session with the same reason, records `PLAN_APPROVAL_OVERRIDDEN` together with
+the checks it overrode, and writes a receipt bound to the plan content and stage
+attempt only. The typed phrase is single-use. The conductor never proposes or
+initiates this; if you did not type the phrase, the command refuses with "Plan
+Approval override is human-only".
+
 ---
 
 ## Context Compaction

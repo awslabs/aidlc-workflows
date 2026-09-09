@@ -1005,6 +1005,52 @@ describe("t244 management lifecycle", () => {
     expect(existsSync(join(machine, "versions", REMOVABLE_VERSION))).toBe(false);
   }, process.platform === "win32" ? 600_000 : 240_000);
 
+  // install.sh runs the first install under `umask 077`; a later `aidlc update`
+  // runs under the user's shell umask (typically 022), so the re-extracted
+  // candidate carries different modes than the installed tree. Same-release
+  // identity must not depend on that difference.
+  test.skipIf(process.platform === "win32")(
+    "same-version update succeeds when the install and update umasks differ",
+    () => {
+      const release = fixture(AIDLC_VERSION, { binary: "executable" });
+      const machine = temp("aidlc-t244-umask-machine-");
+      const project = temp("aidlc-t244-umask-project-");
+      mkdirSync(join(project, ".git"));
+      const env = envFor(machine);
+      const runtimeFile = join(
+        machine, "versions", AIDLC_VERSION, "runtime", "claude", ".claude", "settings.json",
+      );
+      const originalUmask = process.umask(0o077);
+      try {
+        const installed = run(LIFECYCLE, [
+          "update", "--version", AIDLC_VERSION, "--from", release,
+        ], project, env);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+        expect(statSync(runtimeFile).mode & 0o777).toBe(0o600);
+        process.umask(0o022);
+        const dryRun = run(LIFECYCLE, [
+          "update", "--version", AIDLC_VERSION, "--from", release, "--dry-run",
+        ], project, env);
+        expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(0);
+        expect(dryRun.stdout).toContain(
+          `You're on the latest version of aidlc (${AIDLC_VERSION}); nothing to update.`,
+        );
+        const noop = run(LIFECYCLE, [
+          "update", "--version", AIDLC_VERSION, "--from", release,
+        ], project, env);
+        expect(noop.status, noop.stdout + noop.stderr).toBe(0);
+        expect(noop.stdout).toContain(
+          `You're on the latest version of aidlc (${AIDLC_VERSION}).`,
+        );
+      } finally {
+        process.umask(originalUmask);
+      }
+      // The installed tree is untouched by a same-version no-op.
+      expect(statSync(runtimeFile).mode & 0o777).toBe(0o600);
+    },
+    120_000,
+  );
+
   test("uninstall removes command and versions while preserving machine state and projects", async () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
     const machine = temp("aidlc-t241-uninstall-");

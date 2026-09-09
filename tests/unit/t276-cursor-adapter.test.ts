@@ -30,7 +30,6 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -51,6 +50,7 @@ import {
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
   createTestProject,
@@ -347,7 +347,7 @@ describe("t276 cursor adapter payload conversion", () => {
     writeActiveDirectiveMarker(proj, {
       kind: "run-stage",
       stage: "code-generation",
-      state_sha256: createHash("sha256").update(state).digest("hex"),
+      state_sha256: stateDigest(state),
     });
     for (const input of [
       payload("preToolUseShell", proj, {
@@ -415,6 +415,37 @@ describe("t276 cursor adapter payload conversion", () => {
     seedStateFile(proj, "state-construction.md");
     const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
     expectAllowJson(r);
+  });
+
+  test("4b: dispatcher adapter and legacy hook routes both emit failClosed allow JSON", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const stdin = payload("preToolUseShell", proj, {
+      tool_input: { command: "true" },
+    });
+    for (const route of [
+      ["engine", "hook", "cursor-adapter", "guards"],
+      ["engine", "adapter", "cursor", "guards"],
+    ]) {
+      const r = spawnSync(
+        "bun",
+        [join(REPO_ROOT, "core", "tools", "aidlc.ts"), ...route],
+        {
+          cwd: proj,
+          input: stdin,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_DISPATCH_TOOLS_DIR: join(REPO_ROOT, "core", "tools"),
+            AIDLC_PROJECT_DIR: proj,
+            AIDLC_HARNESS_DIR: ".cursor",
+          },
+        },
+      );
+      expect(r.status, `${route.join(" ")}: ${r.stderr}`).toBe(0);
+      expect(r.stderr, route.join(" ")).toBe("");
+      expect(r.stdout, route.join(" ")).toBe('{"permission":"allow"}\n');
+    }
   });
 
   test("5: Task attribution binds unknown conversations only; registered mains are never conflated", () => {

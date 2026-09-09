@@ -71,7 +71,6 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -89,6 +88,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -184,7 +184,7 @@ function seedActiveDirective(proj: string, stage: string, unit?: string): void {
         version: 1,
         stage,
         ...(unit ? { unit } : {}),
-        state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+        state_sha256: stateDigest(state),
       },
       null,
       2,

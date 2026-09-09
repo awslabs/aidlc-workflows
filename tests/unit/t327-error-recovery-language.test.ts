@@ -138,7 +138,13 @@ describe("t327 rewritten refusal strings stay in project language", () => {
       "function reviewRecoveryAlreadyRequestedMessage(",
     );
     expect(spent).toContain("(guidance ?? \"\")");
-    expect(log).toContain("reviewRecoveryGuidance(pd, state, flags.stage)");
+    expect(log).toContain("const teamGate = teamUnitGateStatus(");
+    expect(log).toContain(
+      "flags.unit,\n                    teamGate,",
+    );
+    expect(log).toContain(
+      "flags.stage,\n                    teamGate,",
+    );
     expect(log).not.toContain("stop and present the approval gate");
 
     const state = read("core/tools/aidlc-state.ts");

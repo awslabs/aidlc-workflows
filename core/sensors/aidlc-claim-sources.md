@@ -45,8 +45,8 @@ For each deliverable, the sensor verifies:
 - retained assumptions exactly match entries under an
   `## Assumption Confirmation` answered exactly `A. Accept assumptions`
 
-The sensor excludes scaffolding, fenced code, HTML comments, and reviewer-added
-`## Review` content. It validates citation shape and resolution only; the
+The sensor excludes scaffolding, fenced code, HTML comments, and any legacy
+reviewer-added `## Review` content still embedded in an artifact. It validates citation shape and resolution only; the
 stage's adversarial reviewer judges whether the cited source actually supports
 the claim.
 

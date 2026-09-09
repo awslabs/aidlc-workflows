@@ -5,12 +5,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -2648,7 +2649,9 @@ describe("t243 release lifecycle", () => {
       const file = walkFiles(runtime).find((path) =>
         !path.endsWith("aidlc-stamp.json")
       ) as string;
-      writeFileSync(join(runtime, file), `${readFileSync(join(runtime, file), "utf-8")}\ntampered\n`);
+      const filePath = join(runtime, file);
+      const originalContent = readFileSync(filePath);
+      writeFileSync(filePath, Buffer.concat([originalContent, Buffer.from("\ntampered\n")]));
 
       const inspection = inspectInstalledVersion(AIDLC_VERSION);
       expect(inspection.complete).toBe(false);
@@ -2660,6 +2663,23 @@ describe("t243 release lifecycle", () => {
         message: `this project requires ${AIDLC_VERSION}, which is not installed completely`,
         remediation: `aidlc config --pin ${AIDLC_VERSION}`,
       }));
+
+      writeFileSync(filePath, originalContent);
+      expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+
+      // Mode drift is also a baseline violation. Same-release identity during
+      // `aidlc update` compares content only, so this is where modes are enforced.
+      if (process.platform !== "win32") {
+        const before = statSync(filePath).mode & 0o777;
+        chmodSync(filePath, before === 0o600 ? 0o644 : 0o600);
+        const modeDrift = inspectInstalledVersion(AIDLC_VERSION);
+        expect(modeDrift.complete).toBe(false);
+        expect(modeDrift.reason).toBe(
+          `runtime file ${file.replaceAll("\\", "/")} does not match the installed baseline`,
+        );
+        chmodSync(filePath, before);
+        expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+      }
     } finally {
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
@@ -3933,13 +3953,15 @@ describe("t243 projection channel", () => {
       join(CURSOR_RELEASE, ".cursor", "hooks.json"),
       "utf-8",
     );
-    expect(cursorHooks).toContain(trustedCommand("hook cursor-adapter"));
+    expect(cursorHooks).toContain(trustedCommand("adapter cursor"));
+    expect(cursorHooks).not.toContain("engine hook cursor-adapter");
     expect(cursorHooks).not.toContain("bun .cursor/hooks/");
     const copilotHooks = readFileSync(
       join(COPILOT_RELEASE, ".github", "hooks", "aidlc.json"),
       "utf-8",
     );
-    expect(copilotHooks).toContain(trustedCommand("hook copilot-adapter"));
+    expect(copilotHooks).toContain(trustedCommand("adapter copilot"));
+    expect(copilotHooks).not.toContain("engine hook copilot-adapter");
     expect(copilotHooks).not.toContain("bun .aidlc/hooks/");
     const opencode = JSON.parse(
       readFileSync(join(OPENCODE_RELEASE, "opencode.json"), "utf-8"),

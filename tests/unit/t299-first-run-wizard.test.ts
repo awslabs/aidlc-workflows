@@ -1,10 +1,12 @@
-// covers: tool:aidlc-init
+// covers: tool:aidlc-init, function:readTerminalLine
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -16,11 +18,21 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { binRoot } from "../../core/tools/aidlc-install-paths.ts";
-
+import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const RUNTIME = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
+// Complete overrides keep PTY tests independent of shell startup PATH additions.
+const HARNESS_NAMES = [
+  "claude",
+  "codex",
+  "copilot",
+  "cursor",
+  "kiro",
+  "kiro-ide",
+  "opencode",
+] as const;
 
 afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
@@ -68,13 +80,19 @@ function detection(
 ): string {
   return JSON.stringify({
     harnesses: Object.fromEntries(
-      Object.entries(harnesses).map(([name, value]) => [
-        name,
-        {
-          ...value,
-          ...(value.found ? { path: join(bin, name === "kiro" ? "kiro-cli" : name) } : {}),
-        },
-      ]),
+      HARNESS_NAMES.map((name) => {
+        const value = harnesses[name] ?? {
+          found: false,
+          probed: name !== "kiro-ide",
+        };
+        return [
+          name,
+          {
+            ...value,
+            ...(value.found ? { path: join(bin, name === "kiro" ? "kiro-cli" : name) } : {}),
+          },
+        ];
+      }),
     ),
     aws: {
       hasCredentials: true,
@@ -92,6 +110,17 @@ function detection(
       : [],
     bedrockReachable: true,
   });
+}
+
+// Children never see the host's real machine install: a developer with
+// `aidlc` installed would otherwise get every harness listed twice (the
+// explicit AIDLC_RUNTIME_ROOT plus the active machine runtime).
+function isolatedMachineEnv(): NodeJS.ProcessEnv {
+  const machine = temp("aidlc-t299-machine-");
+  return {
+    AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
+    AIDLC_BIN_DIR: join(machine, "bin"),
+  };
 }
 
 function runWizard(
@@ -125,6 +154,7 @@ function runWizard(
       cwd: project,
       env: {
         ...process.env,
+        ...isolatedMachineEnv(),
         PATH: bin,
         AIDLC_RUNTIME_ROOT: RUNTIME,
         AIDLC_TEST_CONFIG_TTY: "1",
@@ -371,4 +401,74 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(recovery as string)).toBe(true);
     temporary.push(recovery as string);
   }, 60_000);
+
+  // Bun's global prompt() returns null for an empty line, which the wizard read
+  // as "cancelled". Every bracketed default in the wizard depends on Enter
+  // yielding "" and only a closed stdin yielding null.
+  test("terminal reader distinguishes Enter (default) from a closed stdin (cancel)", () => {
+    const dir = temp("aidlc-t299-reader-");
+    const read = (content: string): string | null => {
+      const path = join(dir, `${Math.random().toString(36).slice(2)}.txt`);
+      writeFileSync(path, content);
+      const fd = openSync(path, "r");
+      try {
+        return readTerminalLine("Q:", fd);
+      } finally {
+        closeSync(fd);
+      }
+    };
+    expect(read("\n")).toBe("");
+    expect(read("\r\n")).toBe("");
+    expect(read("2\n")).toBe("2");
+    expect(read("partial")).toBe("partial");
+    expect(read("")).toBeNull();
+    // Consecutive answers on one descriptor: nothing past the newline is consumed.
+    const path = join(dir, "queued.txt");
+    writeFileSync(path, "us-east-1\r\n\nminimal\n");
+    const fd = openSync(path, "r");
+    try {
+      expect(readTerminalLine("Q:", fd)).toBe("us-east-1");
+      expect(readTerminalLine("Q:", fd)).toBe("");
+      expect(readTerminalLine("Q:", fd)).toBe("minimal");
+      expect(readTerminalLine("Q:", fd)).toBeNull();
+    } finally {
+      closeSync(fd);
+    }
+  });
+
+  // The scripted-answer seam above never reaches the real terminal path, so this
+  // drives the wizard through a real pty (util-linux `script`) with a bare Enter
+  // at the recommended-defaults gate and expects files to be written.
+  const script = process.platform === "linux" ? Bun.which("script") : null;
+  test.skipIf(!script)("bare Enter on a real terminal accepts the recommended defaults", () => {
+    const project = temp("aidlc-t299-pty-project-");
+    const bin = temp("aidlc-t299-pty-bin-");
+    mkdirSync(join(project, ".git"));
+    executable(join(bin, "claude"), "claude 2.1.220");
+    executable(join(bin, "getconf"), bin);
+    const result = spawnSync(
+      script as string,
+      ["-qfec", `${BUN} ${INIT} config --project-dir ${project}`, "/dev/null"],
+      {
+        cwd: project,
+        env: {
+          ...process.env,
+          ...isolatedMachineEnv(),
+          PATH: bin,
+          NO_COLOR: "1",
+          AIDLC_RUNTIME_ROOT: RUNTIME,
+          AIDLC_TEST_CONFIG_DETECTION_JSON: detection(bin),
+        },
+        input: "\n",
+        encoding: "utf-8",
+        timeout: 60_000,
+      },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status, output).toBe(0);
+    expect(output).toContain("Choice [1]:");
+    expect(output).not.toContain("Nothing written.");
+    expect(output).toContain("Writing project files ... done");
+    expect(existsSync(join(project, ".claude", "settings.json"))).toBe(true);
+  }, 90_000);
 });

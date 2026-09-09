@@ -47,6 +47,11 @@ function temp(prefix: string): string {
   return path;
 }
 
+// Children never see the host's real machine install: a developer with
+// `aidlc` installed would otherwise get every harness listed twice (the
+// explicit AIDLC_RUNTIME_ROOT plus the active machine runtime).
+const ISOLATED_MACHINE = temp("aidlc-t304-machine-");
+
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const name of Object.keys(env)) {
@@ -54,7 +59,12 @@ function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
       delete env[name];
     }
   }
-  return { ...env, ...extra };
+  return {
+    ...env,
+    AIDLC_INSTALL_ROOT: join(ISOLATED_MACHINE, "share", "aidlc"),
+    AIDLC_BIN_DIR: join(ISOLATED_MACHINE, "bin"),
+    ...extra,
+  };
 }
 
 function readmeCopyProject(): string {
