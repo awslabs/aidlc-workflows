@@ -1105,10 +1105,11 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  copilot: ".aidlc",
   cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
@@ -1120,6 +1121,7 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 
 function adapterFile(harness: AdapterHarness): string {
   if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
   return "aidlc-kiro-adapter.ts";
 }
@@ -2105,9 +2107,17 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     text(2, `aidlc engine adapter ${action.harness} ${action.target}: not available in this install\n`);
     return 1;
   }
+  // Dispatcher startup may already have pinned AIDLC_HARNESS_DIR/NAME from
+  // the cwd's metadata (compiled mode does so before routing). The adapter's
+  // harness is authoritative here: pin both so the core hooks it spawns
+  // resolve the matching packaged runtime even when the hook cwd carries no
+  // harness metadata (.aidlc is shared by copilot and opencode; the
+  // metadata-free fallback names opencode).
   const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  process.env.AIDLC_HARNESS_NAME = action.harness;
   if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
@@ -2148,6 +2158,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
+    else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
     else process.env.AIDLC_COMPILED_EXECUTABLE = previousExecutable;
   }

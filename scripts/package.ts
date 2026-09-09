@@ -1116,9 +1116,12 @@ function rewriteNativeInvocations(
       String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
       "gi",
     );
-    value = value.replace(escapedJsonHook, (_match, hook: string) =>
-      hook === "statusline" ? trustedCommand("statusline") : trustedCommand(`hook ${hook}`)
-    );
+    value = value.replace(escapedJsonHook, (_match, hook: string) => {
+      if (hook.endsWith("-adapter")) return trustedCommand(`adapter ${m.name}`);
+      return hook === "statusline"
+        ? trustedCommand("statusline")
+        : trustedCommand(`hook ${hook}`);
+    });
     // Direct utility verbs whose dispatcher route lives under the `workspace`
     // noun: rewrite verb-aware BEFORE the generic tool rewrite would emit the
     // retired `engine utility` alias.
@@ -1150,9 +1153,7 @@ function rewriteNativeInvocations(
       (_match, delegate: string) => trustedCommand(delegate),
     );
     value = value.replace(hookPattern, (_match, hook: string) => {
-      if (hook === "kiro-adapter" || hook === "codex-adapter") {
-        return trustedCommand(`adapter ${m.name}`);
-      }
+      if (hook.endsWith("-adapter")) return trustedCommand(`adapter ${m.name}`);
       if (hook === "statusline") return trustedCommand("statusline");
       return trustedCommand(`hook ${hook}`);
     });

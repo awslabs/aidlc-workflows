@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-09
+
+Restore native GitHub Copilot and Cursor hook dispatch after the 2.8.0 binary migration. **Upgrade:** run `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`, then run `aidlc config` in each Copilot and Cursor project to rewrite the managed hook wiring files (`.github/hooks/aidlc.json`, `.cursor/hooks.json`); add `--force` only if `aidlc config` reports those files as locally modified.
+
+* GitHub Copilot hooks no longer fail on every event with `aidlc: undefined is not an object (evaluating 'input.length')`.
+* Cursor `preToolUse` hooks no longer fail closed with `Hook ... returned no output` and block every tool call.
+* Native hook wiring now dispatches through `aidlc engine adapter copilot <target>` and `aidlc engine adapter cursor <target>`, preserving each adapter's target and stdin payload.
+* The Copilot adapter's delegated audit, sensor, guard, state, and Stop hooks now run through `aidlc engine hook <name>` under the native binary. Closes #1061 and #1058.
+
 ## [2.8.1] - 2026-09-08
 
 Fix two defects found while exercising the 2.8.0 native install on Linux and Windows: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, and `aidlc update` on an already-current install failed its integrity check under a normal shell umask. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`; no project changes are required, and `aidlc config` refreshes projects when convenient.

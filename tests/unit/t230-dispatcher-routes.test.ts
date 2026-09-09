@@ -2425,6 +2425,15 @@ describe("t230 dispatcher hook routing", () => {
       expect(codex.path.endsWith("aidlc-codex-adapter.ts")).toBe(true);
     }
 
+    const copilot = resolveAction(["engine", "adapter", "copilot", "session-start"]);
+    expect(copilot.type).toBe("adapter");
+    if (copilot.type === "adapter") {
+      expect(copilot.harness).toBe("copilot");
+      expect(copilot.target).toBe("session-start");
+      expect(copilot.extraArgs).toEqual([]);
+      expect(copilot.path.endsWith("aidlc-copilot-adapter.ts")).toBe(true);
+    }
+
     const cursor = resolveAction(["engine", "adapter", "cursor", "validate-state"]);
     expect(cursor.type).toBe("adapter");
     if (cursor.type === "adapter") {
@@ -2516,6 +2525,63 @@ describe("t230 dispatcher hook routing", () => {
         existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
     ).toBe(true);
   });
+
+  test("Copilot adapter target dispatches through the installed harness adapter", () => {
+    const projectDir = makeProject();
+    cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(projectDir, ".aidlc"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "PreCompact",
+      cwd: projectDir,
+      session_id: "t230-copilot",
+    });
+    const res = viaDispatcher(
+      ["engine", "adapter", "copilot", "validate-state"],
+      projectDir,
+      {},
+      input,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stderr.toString("utf-8")).toBe("");
+    expect(
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+    ).toBe(true);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "adapter route pins the adapter harness identity for the core hooks it spawns",
+    () => {
+      // Compiled startup pins AIDLC_HARNESS_NAME from the cwd before routing; a
+      // hook cwd without harness metadata pins a foreign name. The adapter's
+      // children must still resolve the adapter's own packaged runtime.
+      const projectDir = makeProject();
+      cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(projectDir, ".aidlc"), {
+        recursive: true,
+      });
+      const seen = join(projectDir, "child-env.log");
+      const executable = join(projectDir, "aidlc-native-stub");
+      writeFileSync(
+        executable,
+        `#!/bin/sh\nprintf '%s %s\\n' "$AIDLC_HARNESS_NAME" "$AIDLC_HARNESS_DIR" >> ${JSON.stringify(seen)}\nexec ${JSON.stringify(BUN)} ${JSON.stringify(DISPATCHER)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const res = viaDispatcher(
+        ["engine", "adapter", "copilot", "validate-state"],
+        projectDir,
+        { AIDLC_HARNESS_NAME: "claude", AIDLC_COMPILED_EXECUTABLE: executable },
+        JSON.stringify({ hook_event_name: "PreCompact", cwd: projectDir, session_id: "t230-pin" }),
+      );
+
+      expect(res.exitCode).toBe(0);
+      expect(existsSync(seen)).toBe(true);
+      const lines = readFileSync(seen, "utf-8").trim().split("\n");
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) expect(line).toBe("copilot .aidlc");
+    },
+  );
 
   test("--project-dir overrides cwd and payload project for hook, statusline, and adapter", () => {
     const cwdProject = makeProject();

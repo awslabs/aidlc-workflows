@@ -3953,13 +3953,15 @@ describe("t243 projection channel", () => {
       join(CURSOR_RELEASE, ".cursor", "hooks.json"),
       "utf-8",
     );
-    expect(cursorHooks).toContain(trustedCommand("hook cursor-adapter"));
+    expect(cursorHooks).toContain(trustedCommand("adapter cursor"));
+    expect(cursorHooks).not.toContain("engine hook cursor-adapter");
     expect(cursorHooks).not.toContain("bun .cursor/hooks/");
     const copilotHooks = readFileSync(
       join(COPILOT_RELEASE, ".github", "hooks", "aidlc.json"),
       "utf-8",
     );
-    expect(copilotHooks).toContain(trustedCommand("hook copilot-adapter"));
+    expect(copilotHooks).toContain(trustedCommand("adapter copilot"));
+    expect(copilotHooks).not.toContain("engine hook copilot-adapter");
     expect(copilotHooks).not.toContain("bun .aidlc/hooks/");
     const opencode = JSON.parse(
       readFileSync(join(OPENCODE_RELEASE, "opencode.json"), "utf-8"),

@@ -730,6 +730,33 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout.trim()).toBe("");
   });
 
+  test.skipIf(process.platform === "win32")(
+    "11a: compiled executable delegation runs core hooks through the engine route",
+    () => {
+      const dir = scratchProject(true);
+      const executable = join(dir, "aidlc-native-stub");
+      writeFileSync(
+        executable,
+        `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
+        { mode: 0o755 },
+      );
+
+      const r = runAdapter(
+        dir,
+        "validate-state",
+        { hook_event_name: "PreCompact", cwd: dir, session_id: "t249-native" },
+        { AIDLC_COMPILED_EXECUTABLE: executable },
+      );
+
+      expect(r.code).toBe(0);
+      expect(
+        existsSync(
+          join(seededRecordDir(dir), ".aidlc-hooks-health", "validate-state.last"),
+        ),
+      ).toBe(true);
+    },
+  );
+
   test("13: reviewer-scope forwarding blocks a sibling read via the ledger identity", () => {
     const dir = scratchProject(true);
     const cliHostSessionId = String(FIXTURES.subagentStart.sessionId);
