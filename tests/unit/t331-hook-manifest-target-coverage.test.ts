@@ -124,13 +124,33 @@ const REQUIRED: Array<{
 const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: string }> = [
   {
     target: "review-freeze",
-    tools: ["fs_write", "create_file", "str_replace", "fs_append", "delete_file", "execute_bash"],
-    why: "every tool that can mutate a frozen artifact",
+    tools: [
+      "fs_write",
+      "create_file",
+      "str_replace",
+      "fs_append",
+      "delete_file",
+      "execute_bash",
+      "execute_pwsh",
+      "shell",
+    ],
+    why: "every tool that can mutate a frozen artifact, terminal spellings included",
   },
   {
     target: "reviewer-scope",
-    tools: ["fs_write", "str_replace", "delete_file", "read_file", "execute_bash"],
-    why: "reads count: reading outside the reviewed artifact is the violation",
+    tools: [
+      "fs_write",
+      "str_replace",
+      "delete_file",
+      "read_file",
+      "execute_bash",
+      // Every terminal spelling the adapter canonicalizes. A matcher that names
+      // one the canonicalizer does not translate is worse than omitting it: the
+      // call reaches the adapter and returns 0, so the gate reads as present.
+      "execute_pwsh",
+      "shell",
+    ],
+    why: "reads count, and every terminal spelling the canonicalizer knows",
   },
   {
     target: "log-subagent",

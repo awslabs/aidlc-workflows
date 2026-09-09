@@ -113,7 +113,14 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -194,18 +201,18 @@ function firstNonBlank(values: unknown[]): string {
 // orchestrated delegation produced no dispatch at all — the guards saw nothing
 // and the audit recorded nothing. (Measured on captured 2.18.1 payloads: keys
 // `task`, `stages`, `repeat`, with `role` naming each stage's persona.)
+// `subagent_response` is the shell Kiro emits so a delegate can hand its report
+// back. It names no path and writes nothing, so it is not a write whose target
+// went missing - which is what the opaque-mutation classifier asks. Left
+// mutation-capable it diverted every delegate report during code-generation into
+// the legacy recovery machinery and answered a pre-dispatch hook with exit 2.
+const DISPATCH_AUXILIARY_TOOLS = new Set(["subagent_response"]);
 const CREW_DISPATCH_TOOLS = new Set(["subagent", "orchestrate_subagent"]);
 const DISPATCH_TOOL_NAMES = new Set([
   "subagent",
   "orchestrate_subagent",
   "invoke_sub_agent",
 ]);
-
-/** One open delegation window: which persona, and when it opened. */
-interface DelegationEntry {
-  agent: string;
-  ts: number;
-}
 
 // A window is closed by an event a crashed or abandoned session never sends, so
 // entries expire. Without this a stuck entry would make state-transition-guard
@@ -1156,7 +1163,10 @@ function canonicalTool(
   }
   if (name === "str_replace" || name === "fs_append") return "Edit";
   if (["read", "fs_read", "read_file", "read_files"].includes(name)) return "Read";
-  if (name === "shell" || name === "execute_bash") return "Bash";
+  // Every terminal spelling, not just the two POSIX ones: a manifest matcher that
+  // names execute_pwsh reached this and fell through to the default, so the guard
+  // returned 0 and the Windows path had no enforcement at all.
+  if (TERMINAL_TOOLS.has(name)) return "Bash";
   return name;
 }
 
@@ -1590,7 +1600,11 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
 }
 
 function mutationCapableTool(name: string): boolean {
-  return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
+  return (
+    name.length > 0 &&
+    !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name) &&
+    !DISPATCH_AUXILIARY_TOOLS.has(name)
+  );
 }
 
 function inputPaths(input: Record<string, unknown>): string[] {
@@ -1636,85 +1650,146 @@ function inputPaths(input: Record<string, unknown>): string[] {
 // three `requirement-detailer` dispatches opened before any closed), and with two
 // DIFFERENT personas inflight a nested call cannot be attributed to either. This
 // reports the whole inflight set and the callers decide; nothing here picks one.
-function delegationLatchPath(sessionId: string): string {
+function delegationLedgerPath(sessionId: string): string {
   const key = createHash("sha256").update(sessionId).digest("hex");
-  return join(sessionsDir(projectDir), "kiro-delegation", key, "inflight.json");
+  return join(sessionsDir(projectDir), "kiro-delegation", key, "windows.ndjson");
 }
 
-function readDelegationLatch(sessionId: string): Record<string, DelegationEntry> {
-  let parsed: unknown;
+// An APPEND-ONLY ledger, not a read-modify-write map. Two reasons, both measured
+// against the map this replaces:
+//
+//   - Two identical concurrent dispatches (same persona, same prompt) hash to the
+//     same key, so a keyed map collapsed them into one entry and the FIRST close
+//     released both - enforcement dropped while a delegate was still running.
+//     A ledger records each open separately and each close cancels exactly one.
+//   - Read-modify-write has no lock here, so two adapter processes opening
+//     windows at once could lose one another's update. An append is a single
+//     small write; nothing is read first, so there is nothing to lose.
+//
+// A close cancels the most recent open with the same dispatch key (LIFO). If a
+// redelivery of one event ever appends a second open - our manifests register the
+// dispatch matcher once, so it does not happen today - the stray entry expires by
+// TTL, and until then the error is "a delegate is believed inflight", which fails
+// toward refusing rather than toward letting a lifecycle verb through.
+type DelegationRecord =
+  | { op: "open"; agent: string; key: string; ts: number }
+  | { op: "close"; key: string; ts: number };
+
+function readDelegationLedger(sessionId: string): DelegationRecord[] {
+  let raw = "";
   try {
-    parsed = JSON.parse(readFileSync(delegationLatchPath(sessionId), "utf-8"));
+    raw = readFileSync(delegationLedgerPath(sessionId), "utf-8");
   } catch {
-    return {};
+    return [];
   }
-  if (!isRecord(parsed)) return {};
-  const now = Date.now();
-  const live: Record<string, DelegationEntry> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    if (!isRecord(value)) continue;
-    const agent = typeof value.agent === "string" ? value.agent.trim() : "";
-    const ts = typeof value.ts === "number" ? value.ts : 0;
-    if (agent.length === 0 || now - ts > DELEGATION_TTL_MS) continue;
-    live[key] = { agent, ts };
+  const out: DelegationRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue; // a torn final line: ignore it rather than discard the ledger
+    }
+    if (!isRecord(parsed)) continue;
+    const key = typeof parsed.key === "string" ? parsed.key : "";
+    const ts = typeof parsed.ts === "number" ? parsed.ts : 0;
+    if (key === "") continue;
+    if (parsed.op === "open") {
+      const agent = typeof parsed.agent === "string" ? parsed.agent.trim() : "";
+      if (agent !== "") out.push({ op: "open", agent, key, ts });
+    } else if (parsed.op === "close") {
+      out.push({ op: "close", key, ts });
+    }
   }
-  return live;
+  return out;
 }
 
-function writeDelegationLatch(
-  sessionId: string,
-  entries: Record<string, DelegationEntry>,
-): void {
+function appendDelegationRecords(sessionId: string, records: DelegationRecord[]): void {
+  if (records.length === 0) return;
   try {
-    const path = delegationLatchPath(sessionId);
+    const path = delegationLedgerPath(sessionId);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(entries)}\n`, "utf-8");
+    appendFileSync(
+      path,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf-8",
+    );
   } catch {
-    // Best-effort attribution. A latch we cannot persist costs the agent_type on
-    // the calls inside this window; it must never fail the tool call itself.
+    // Best-effort attribution. A ledger we cannot append to costs the agent_type
+    // on the calls inside this window; it must never fail the tool call itself.
   }
 }
 
 // One dispatch, one key. Pre and Post carry byte-identical tool_input for the
 // same dispatch (measured), so hashing the pair identifies the window without
-// needing an id the payload does not have.
+// needing an id the payload does not have. It does NOT distinguish two identical
+// dispatches - that is what the ledger's one-open-one-close accounting is for.
 function delegationKey(input: KiroHookInput): string {
   return createHash("sha256")
-    .update(`${input.tool_name ?? ""} ${JSON.stringify(input.tool_input ?? {})}`)
+    .update(`${input.tool_name ?? ""} ${JSON.stringify(input.tool_input ?? {})}`)
     .digest("hex");
 }
 
 function openDelegation(sessionId: string, input: KiroHookInput, agents: string[]): void {
   const named = agents.map((agent) => agent.trim()).filter((agent) => agent.length > 0);
   if (named.length === 0) return;
-  const entries = readDelegationLatch(sessionId);
   const key = delegationKey(input);
-  const now = Date.now();
-  named.forEach((agent, index) => {
-    entries[index === 0 ? key : `${key}:${index}`] = { agent, ts: now };
-  });
-  writeDelegationLatch(sessionId, entries);
+  const ts = Date.now();
+  appendDelegationRecords(
+    sessionId,
+    named.map((agent) => ({ op: "open" as const, agent, key, ts })),
+  );
 }
 
 function closeDelegation(sessionId: string, input: KiroHookInput): void {
-  const entries = readDelegationLatch(sessionId);
-  const key = delegationKey(input);
-  let changed = false;
-  for (const candidate of Object.keys(entries)) {
-    if (candidate === key || candidate.startsWith(`${key}:`)) {
-      delete entries[candidate];
-      changed = true;
+  appendDelegationRecords(sessionId, [
+    { op: "close", key: delegationKey(input), ts: Date.now() },
+  ]);
+  compactDelegationLedger(sessionId);
+}
+
+/** Opens that no close has cancelled and that have not expired. */
+function liveDelegationOpens(sessionId: string): Array<{ agent: string; key: string; ts: number }> {
+  const now = Date.now();
+  const opens: Array<{ agent: string; key: string; ts: number }> = [];
+  for (const record of readDelegationLedger(sessionId)) {
+    if (record.op === "open") {
+      if (now - record.ts > DELEGATION_TTL_MS) continue;
+      opens.push({ agent: record.agent, key: record.key, ts: record.ts });
+      continue;
+    }
+    // Cancel the most recent matching open: a delegate that opened later is the
+    // one still running if the earlier one already reported.
+    for (let i = opens.length - 1; i >= 0; i--) {
+      if (opens[i].key === record.key) {
+        opens.splice(i, 1);
+        break;
+      }
     }
   }
-  if (changed) writeDelegationLatch(sessionId, entries);
+  return opens;
 }
 
 /** Distinct personas whose delegation window is open right now. */
 function inflightDelegates(sessionId: string): string[] {
-  return [
-    ...new Set(Object.values(readDelegationLatch(sessionId)).map((e) => e.agent)),
-  ];
+  return [...new Set(liveDelegationOpens(sessionId).map((open) => open.agent))];
 }
+
+// Truncate only when nothing is inflight. Rewriting a ledger that still has live
+// opens would race an append; with none live the file is provably replaceable by
+// empty, so an unbounded session cannot grow it forever.
+function compactDelegationLedger(sessionId: string): void {
+  try {
+    const path = delegationLedgerPath(sessionId);
+    if (!existsSync(path)) return;
+    if (liveDelegationOpens(sessionId).length > 0) return;
+    writeFileSync(path, "", "utf-8");
+  } catch {
+    // Compaction is housekeeping; failing it changes no decision.
+  }
+}
+
 
 // Recover the delegated agent's identity from the hook payload.
 //
@@ -1856,6 +1931,12 @@ function buildForward(): Forward {
     case "plan-approval-guard": {
       const toolName = ide.toolName ?? "";
       const toolArgs = ide.toolArgs ?? {};
+      // A dispatch auxiliary is inert here and must not be forwarded: the core
+      // guard treats any tool it does not recognize as mutation-capable, so
+      // handing it the delegate's response shell refuses a call that writes
+      // nothing. Excluding it from mutationCapableTool is not enough - that only
+      // keeps it out of the legacy machinery below.
+      if (DISPATCH_AUXILIARY_TOOLS.has(toolName)) return null;
       if (ide.channel === "legacy") {
         try {
           markKiroIdeLegacyPlanApprovalHost(

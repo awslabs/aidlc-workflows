@@ -190,6 +190,31 @@ function runAdapter(
   };
 }
 
+// The delegation window is how a guard learns WHO is acting now that the
+// per-agent registration (and its persona argv) is gone. Opening it is the same
+// event Kiro sends when the conductor delegates: the dispatch tool's PreToolUse.
+// Both calls must resolve the same session identity, which they do - neither
+// payload carries session_id, so both fall back to the remembered one.
+function openDelegationWindow(projectDir: string, agent: string): void {
+  const r = runAdapter(projectDir, "log-subagent", {
+    hook_event_name: "PreToolUse",
+    cwd: projectDir,
+    tool_name: `subagent_${agent}`,
+    tool_input: { prompt: `delegate to ${agent}` },
+  });
+  expect(r.code, `open window for ${agent}`).toBe(0);
+}
+
+function closeDelegationWindow(projectDir: string, agent: string): void {
+  runAdapter(projectDir, "log-subagent", {
+    hook_event_name: "PostToolUse",
+    cwd: projectDir,
+    tool_name: `subagent_${agent}`,
+    tool_input: { prompt: `delegate to ${agent}` },
+    tool_response: `**Agent:** ${agent}\ndone`,
+  });
+}
+
 function runDispatchCore(
   projectDir: string,
   payload: unknown,
@@ -936,51 +961,68 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("5d: every Kiro worker registers an identity-scoped lifecycle guard", () => {
-    const agentDir = join(KIRO_TREE, "agents");
-    const workerFiles = require("node:fs")
-      .readdirSync(agentDir)
-      .filter((name: string) => /^aidlc-.+-agent\.json$/.test(name))
-      .sort() as string[];
-    expect(workerFiles).toHaveLength(14);
-
-    for (const name of workerFiles) {
-      const config = JSON.parse(
-        readFileSync(join(agentDir, name), "utf-8"),
-      ) as {
-        name: string;
-        hooks?: {
-          preToolUse?: Array<{
-            matcher?: string;
-            command?: string;
-            timeout_ms?: number;
-          }>;
-        };
+  test("5d: the delegation window is what scopes the lifecycle guard to a persona", () => {
+    // This used to walk 14 agent-v1 JSONs and assert each one registered
+    // `state-transition-guard <its own name>`. That registration channel is gone
+    // (a v3 hook manifest has no agent scope), and the window replaces it: open
+    // it and the guard enforces against the delegate, close it and the main
+    // session is free to run the same verb. Both halves are asserted here,
+    // because either one alone passes for the wrong reason.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
       };
-      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
-        matcher: "execute_bash",
-        command:
-          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}`,
-        timeout_ms: 15000,
-      });
-      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
-        matcher: "fs_write",
-        command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
-        timeout_ms: 15000,
-      });
-      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
-        matcher: "execute_bash",
-        command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
-        timeout_ms: 15000,
-      });
+
+      // Main session: allowed.
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+
+      openDelegationWindow(dir, "aidlc-design-agent");
+      const delegated = runAdapter(dir, "state-transition-guard", lifecycle);
+      expect(delegated.code).toBe(2);
+      expect(delegated.stderr).toContain("aidlc-design-agent");
+      expect(delegated.stderr).toContain(
+        "only the main workflow session can change stage status or routing",
+      );
+
+      closeDelegationWindow(dir, "aidlc-design-agent");
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d2: one dispatch of the same persona twice needs two closes", () => {
+    // Regression: the window is keyed by the dispatch payload, so two identical
+    // concurrent dispatches used to collapse into one entry and a single close
+    // released both - dropping enforcement while a delegate was still running.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      openDelegationWindow(dir, "aidlc-design-agent");
+      openDelegationWindow(dir, "aidlc-design-agent");
+      closeDelegationWindow(dir, "aidlc-design-agent");
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "one delegate is still inflight",
+      ).toBe(2);
+      closeDelegationWindow(dir, "aidlc-design-agent");
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("5e: a Kiro worker identity cannot invoke orchestrator lifecycle", () => {
     const dir = scratchProject(false);
     try {
+      openDelegationWindow(dir, "aidlc-design-agent");
       const r = runAdapter(
         dir,
         "state-transition-guard",
@@ -992,7 +1034,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
               "bun .kiro/tools/aidlc-orchestrate.ts next --resume",
           },
         },
-        ["aidlc-design-agent"],
       );
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("only the main workflow session can change stage status or routing");
@@ -1016,6 +1057,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         "utf-8",
       );
       const reviewerHeartbeat = join(healthDir, "reviewer-scope.last");
+      // The reviewer's identity used to arrive as the persona argv of a
+      // registration scoped to that agent. It comes from the delegation window
+      // now, so open one for the reviewer before exercising the guard.
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
       for (const tool_name of ADAPTER_TOOL_NAMES.reads) {
         rmSync(reviewerHeartbeat, { force: true });
         const r = runAdapter(
@@ -1029,7 +1074,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
               ? { paths: [null, "construction/sibling-unit/design.md"] }
               : { path: "construction/sibling-unit/design.md" },
           },
-          ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
         expect(r.stderr, tool_name).toContain("This review cannot open");
@@ -1050,7 +1094,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             tool_name,
             tool_input: { path: "construction/sibling-unit/design.md" },
           },
-          ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
         expect(r.stderr, tool_name).toContain("This review cannot open");
@@ -1083,7 +1126,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             operations: [null, { path: "construction/sibling-unit/design.md" }],
           },
         },
-        ["aidlc-architecture-reviewer-agent"],
       );
       expect(operations.code).toBe(2);
       expect(operations.stderr).toContain("This review cannot open");
