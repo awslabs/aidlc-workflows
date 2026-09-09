@@ -142,6 +142,45 @@ interface IdeHookContext {
   malformedFields?: string[];
 }
 
+// Kiro does not always send tool_response as a string. Two live-captured shapes
+// exist alongside the plain string - `{ items: [{ Text }] }` from a crew
+// completion and `{ success, result: [...] }` from a write - and treating either
+// as malformed dropped the whole event: no audit row, and the Stop hook's inflight
+// marker never cleared.
+//
+// An object or array IS a recognized transport shape, so it decodes to whatever
+// text it carries, which may legitimately be none. Malformed is reserved for a
+// value that is no transport at all (a number, a boolean), because that is the
+// case worth surfacing rather than silently reading as empty.
+const TOOL_RESULT_TEXT_KEYS = ["Text", "text", "content", "items", "output", "result"];
+
+function collectToolResultText(value: unknown, out: string[]): void {
+  if (typeof value === "string") {
+    if (value !== "") out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectToolResultText(entry, out);
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of TOOL_RESULT_TEXT_KEYS) {
+      if (key in record) collectToolResultText(record[key], out);
+    }
+  }
+}
+
+function decodeToolResultText(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) || (value !== null && typeof value === "object")) {
+    const parts: string[] = [];
+    collectToolResultText(value, parts);
+    return parts.join("\n");
+  }
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -207,6 +246,9 @@ function firstNonBlank(values: unknown[]): string {
 // mutation-capable it diverted every delegate report during code-generation into
 // the legacy recovery machinery and answered a pre-dispatch hook with exit 2.
 const DISPATCH_AUXILIARY_TOOLS = new Set(["subagent_response"]);
+// Deleting an artifact is a mutation a freeze or a review scope must be able to
+// refuse, but it is not an artifact write, so it never becomes an audit row.
+const DELETE_TOOLS = new Set(["delete_file"]);
 const CREW_DISPATCH_TOOLS = new Set(["subagent", "orchestrate_subagent"]);
 const DISPATCH_TOOL_NAMES = new Set([
   "subagent",
@@ -693,13 +735,10 @@ if (INPUT_TARGETS.has(target)) {
           ) {
             malformedFields.push("toolArgs");
           }
-          if (
-            rawResult !== null &&
-            rawResult !== undefined &&
-            typeof rawResult !== "string"
-          ) {
-            malformedFields.push("toolResult");
-          }
+          const decodedResult = rawResult === null || rawResult === undefined
+            ? ""
+            : decodeToolResultText(rawResult);
+          if (decodedResult === null) malformedFields.push("toolResult");
           if (
             rawSuccess !== null &&
             rawSuccess !== undefined &&
@@ -717,7 +756,7 @@ if (INPUT_TARGETS.has(target)) {
             userPrompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
             toolName: typeof rawName === "string" ? rawName : undefined,
             toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
-            toolResult: typeof rawResult === "string" ? rawResult : "",
+            toolResult: decodedResult ?? "",
             toolSuccess: typeof rawSuccess === "boolean"
               ? rawSuccess
               : undefined,
@@ -1587,8 +1626,23 @@ function isFailedWriteResult(toolResult: string): boolean {
 // Map the IDE tool name to the canonical name the core hooks match on. Write
 // creates a (possibly new) file; str_replace/fs_append always target an
 // existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
-function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write" || name === "create_file") return "Write";
+function canonicalWriteTool(
+  name: string,
+  input: Record<string, unknown> = {},
+): "Write" | "Edit" | "" {
+  // `write` belongs here for the same reason canonicalTool already accepts it:
+  // tests/fixtures/kiro-hook-payloads/payloads.json calls these names the
+  // defensive adapter vocabulary from the v3/IDE census. Omitting it made
+  // audit-and-sensors skip the event, so a write under that spelling produced no
+  // ARTIFACT row and fired no sensor.
+  if (name === "fs_write" || name === "create_file" || name === "write") {
+    // `write`/`fs_write` carry the mode in `command`, exactly as canonicalTool
+    // reads it. Without this an edit under those spellings was audited as a
+    // create, so the audit said Write where the artifact was amended.
+    return ["str_replace", "append"].includes(String(input.command ?? ""))
+      ? "Edit"
+      : "Write";
+  }
   if (
     name === "str_replace" ||
     name === "fs_append" ||
@@ -2275,6 +2329,29 @@ function buildForward(): Forward {
             ? toolName.slice("subagent_".length).trim()
             : ""
         );
+      // The crew shape puts the roles inside `tool_input.stages[]`, so the direct
+      // extraction above never sees the developer. Without this the payload fell
+      // through to the generic branch and the core guard answered "unknown
+      // mutation-capable tool: subagent" instead of the Code Generation refusal.
+      // kiroDispatch already normalizes that shape - including skipping malformed
+      // stages - so route through it rather than re-reading stages here.
+      if (CREW_DISPATCH_TOOLS.has(toolName)) {
+        const crew = kiroDispatch({ tool_name: toolName, tool_input: toolArgs });
+        if (crew !== null && crew.agents.includes("aidlc-developer-agent")) {
+          return {
+            hook: "aidlc-plan-approval-guard.ts",
+            input: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Task",
+              tool_input: {
+                subagent_type: "aidlc-developer-agent",
+                prompt: crew.prompt,
+              },
+              cwd: projectDir,
+            },
+          };
+        }
+      }
       if (toolName === "invoke_sub_agent" && directAgent === "") {
         // The old generic dispatch shape does not always expose the target.
         // Treat it as guarded generation rather than letting an ambiguous
@@ -2353,9 +2430,20 @@ function buildForward(): Forward {
         );
         return null;
       }
-      const canon = canonicalWriteTool(ide.toolName ?? "");
+      const canon = canonicalWriteTool(ide.toolName ?? "", ide.toolArgs ?? {});
       if (canon === "") return null;
-      const rawPath = extractWrittenPath(ide.toolResult ?? "");
+      // A delete is not an artifact write. The write-audit manifest's matcher says
+      // the same by omitting delete_file, and t147 pins that a delete leaves no
+      // audit heartbeat - so state it here too, where the direct and dispatcher
+      // entry points bypass that matcher entirely.
+      if (DELETE_TOOLS.has(ide.toolName ?? "")) return null;
+      // Prefer the tool input. The comment above is written for the IDE's captured
+      // PostToolUse writes, which carry empty inputs - but one row now also serves
+      // the CLI, which POPULATES them, and scraping prose there either found the
+      // wrong path or none. The prose remains the fallback, unchanged, for the
+      // surface that has nothing else.
+      const inputWritePaths = inputPaths(ide.toolArgs ?? {});
+      const rawPath = inputWritePaths[0] ?? extractWrittenPath(ide.toolResult ?? "");
       if (!rawPath) {
         // TWO DISTINCT CASES REACH HERE, and conflating them is what made the
         // drop log useless as a health signal:
@@ -2426,13 +2514,24 @@ function buildForward(): Forward {
       // Kiro IDE reports the path RELATIVE to the workspace root; the core hooks
       // compare against an ABSOLUTE record root, so resolve it here. Absolute
       // paths (defensive) pass through untouched.
-      const filePath = isAbsolute(rawPath) ? rawPath : resolve(projectDir, rawPath);
+      const absolute = (path: string): string =>
+        isAbsolute(path) ? path : resolve(projectDir, path);
+      const filePath = absolute(rawPath);
+      // A batch write names every target in `operations[]`, and forwarding only
+      // the first audited one artifact of two. Carry the whole list when there is
+      // one; the core hook reads `paths` and falls back to `file_path`.
+      const allPaths = inputWritePaths.length > 1
+        ? inputWritePaths.map(absolute)
+        : undefined;
       return {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
         input: {
           hook_event_name: "PostToolUse",
           tool_name: canon,
-          tool_input: { file_path: filePath },
+          tool_input: {
+            file_path: filePath,
+            ...(allPaths ? { paths: allPaths } : {}),
+          },
         },
       };
     }
@@ -2516,14 +2615,27 @@ function buildForward(): Forward {
       // platform-provided identity. Forward the result text so
       // SUBAGENT_COMPLETED also carries an output snippet.
       //
-      // An EMPTY result on an otherwise recognized completion must NOT
-      // fabricate a real SUBAGENT_COMPLETED row. Record a visible drop so
-      // --doctor can surface the degradation.
-      if (result.trim() === "") {
+      // Identity, from the most authoritative source down. The crew and direct
+      // shapes name their persona in the PAYLOAD (`stages[].role`, `name`), which
+      // neither the tool name nor the result prose carries - a pipeline completion
+      // recorded `Agent Type: unknown` without this. kiroDispatch already reads
+      // both, so prefer it and keep the tool-name/prose recovery for the shapes
+      // where that is the only signal.
+      const dispatchedAgent = DISPATCH_TOOL_NAMES.has(toolName)
+        ? kiroDispatch({ tool_name: toolName, tool_input: ide.toolArgs ?? {} })
+          ?.agents.find((agent) => agent !== "" && agent !== "unknown")
+        : undefined;
+      const agentType = dispatchedAgent ?? extractAgentIdentity(result, toolName);
+
+      // An empty result must not fabricate a row WITH NO IDENTITY - that is the
+      // `Agent Type: unknown` fiction this drop exists to prevent. When the
+      // payload did name the delegate there is nothing fabricated: the completion
+      // happened, and only its output snippet is missing.
+      if (result.trim() === "" && agentType === "unknown") {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: empty tool payload — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: empty tool payload and no delegate identity — SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -2532,7 +2644,7 @@ function buildForward(): Forward {
         input: {
           hook_event_name: "SubagentStop",
           session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
-          agent_type: extractAgentIdentity(result, toolName),
+          agent_type: agentType,
           agent_id: "",
           last_assistant_message: result,
         },
@@ -2667,8 +2779,24 @@ if (fwd.hook === "__audit_and_sensors__") {
   }
   // Two core hooks ride the same write event, in audit-then-sensors order
   // (mirrors the Claude settings.json registration). Both advisory: exit 0.
-  runCore("aidlc-write-audit-log.ts", fwd.input);
-  runCore("aidlc-run-sensors.ts", fwd.input);
+  //
+  // A batch write names several targets in one event, and the core audit hook
+  // records ONE artifact per invocation - it reads `file_path` and has no `paths`
+  // handling - so a batch of two produced one row. Invoke per path instead of
+  // forwarding a list the hook cannot see.
+  const batchPaths =
+    (fwd.input.tool_input as { paths?: unknown } | undefined)?.paths;
+  const targets = Array.isArray(batchPaths)
+    ? batchPaths.filter((path): path is string => typeof path === "string" && path !== "")
+    : [filePath];
+  for (const target of targets.length > 0 ? targets : [filePath]) {
+    const perWrite = {
+      ...fwd.input,
+      tool_input: { file_path: target },
+    };
+    runCore("aidlc-write-audit-log.ts", perWrite);
+    runCore("aidlc-run-sensors.ts", perWrite);
+  }
   return 0;
 }
 
