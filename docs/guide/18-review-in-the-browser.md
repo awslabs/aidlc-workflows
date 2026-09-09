@@ -326,17 +326,20 @@ group's effort for everyone.
 **Advanced**, a fold at the bottom of the same page (open by itself while you
 override the team on this machine), is the fine grain, and everything it lists
 is the **team's** view — the committed project layer over the shipped
-defaults, no personal layer. **Groups** lists each group of agents with the
-team's value first — *Team · xhigh (preset thorough)*, *Team · inherits the
-default* — and the levels beneath it: pick one and it is **your** override, on
-this machine only (`aidlc.settings.local.json`, not committed; a *yours* pill
-marks the row and teammates keep the team's value); pick the team option again
-to return to it. **Exceptions** pins one agent to its own effort or model for the
-whole team (*Add…*). Anything personal set from the terminal that has no control
+defaults, no personal layer. **Groups** lists each group of agents (its members
+in the tooltip) with the team's value first — *Team · xhigh*, *Team · default*;
+where it comes from is the tooltip — and the levels beneath it: pick one and it
+is **your** override, on this machine only (`aidlc.settings.local.json`, not
+committed; a *yours* pill marks the row and teammates keep the team's value);
+pick the team option again to return to it. **Exceptions** pins one agent to its own effort — and, from the same model
+list as the Model row, its own model — for the whole team (*Add…*). Anything personal set from the terminal that has no control
 here — a `--local` preset or agent pin, or a `--global` entry for every project
 on this machine — is named in a note beneath, never shown as the team's.
-**Clear my overrides** removes everything recorded for this machine;
-**Reset team policy** removes the project's preset, dials, and exceptions. Every change goes through the same `aidlc config models` command the
+**Clear my overrides** removes your overrides for this project (the local
+layer; a `--global` entry stays, terminal-managed); **Reset team policy**
+removes the project's preset, dials, and exceptions. The page carries no
+explanatory copy - what a control means, and which file it writes, is in its
+tooltip and its options. Every change goes through the same `aidlc config models` command the
 terminal uses, so the transaction, refresh guard, and doctor checks are
 identical, and it applies to runs started afterwards. Returning one group to the
 team is the one exception: the command has no per-dial unset, so the daemon
