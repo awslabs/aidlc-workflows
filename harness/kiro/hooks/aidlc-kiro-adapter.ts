@@ -281,10 +281,24 @@ function runCoreHook(
   });
   return { code: r.exitCode ?? 0, stderr: r.stderr?.toString() ?? "" };
 }
+// Which targets need the hook payload at all. Everything else keeps its
+// zero-latency path, touching neither channel.
+//
+// The three merged in from the pre-merge kiro row read the RAW payload (`kiro`)
+// rather than the normalized view, and they were missing here - so `input` was
+// never read for them, `kiro` stayed `{}`, and each one returned 0 on its first
+// field access. Three guards that looked wired and enforced nothing:
+// reviewer-scope, guard-tool-call, deliver-stage-rules.
 const INPUT_TARGETS = new Set([
   ...PAYLOAD_TARGETS,
   ...SESSION_ID_TARGETS,
   "verb-intercept",
+  "reviewer-scope",
+  "guard-tool-call",
+  "deliver-stage-rules",
+  // Not in PAYLOAD_TARGETS on purpose: a malformed payload here must fall back to
+  // the audit-tail reconciliation, not drop the event.
+  "sync-workflow-state",
 ]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
@@ -1110,7 +1124,7 @@ if (target === "terminal-command-guard") {
 
 // --- mint: record a HUMAN_TURN event on prompt submit ---
 //
-// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
+// Wired by aidlc-record-human-turn.json (UserPromptSubmit). Payload-independent (never
 // reads stdin — a mint must never wait on it), so resolve the project dir
 // from process.cwd() — appendAuditEntry then resolves the
 // active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
@@ -1129,7 +1143,7 @@ if (target === "terminal-command-guard") {
 // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 // --- block: the preToolUse human-presence floor ---
 //
-// Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
+// Wired by aidlc-enforce-approval-gate.json (PreToolUse). Hard-blocks tool calls ONLY while
 // an approval gate is actually OPEN (a stage sits at [?] in the state file) and
 // no HUMAN_TURN has been recorded since the last gate resolution - the exit-2
 // floor behind the core handleApprove check. The gate-open predicate is
@@ -2555,11 +2569,41 @@ function buildForward(): Forward {
     }
 
     case "sync-workflow-state": {
-      // Payload-independent. The IDE gives no task payload (toolArgs is empty),
-      // so instead of extracting a slug from the tool call, the core hook reads
-      // the latest STAGE_STARTED slug from the audit tail and reconciles the
-      // state file's Current Stage. The IDE_AUDIT_SYNC marker tells the core
-      // hook to take that audit-tail path rather than parse a TaskUpdate.
+      // Two paths, because one row serves two surfaces. The IDE gives no task
+      // payload (toolArgs is empty), so the core hook reads the latest
+      // STAGE_STARTED slug from the audit tail - that is what the ide-audit-sync
+      // marker selects. The CLI DOES give the payload: a todo_list create whose
+      // task description ends in "[slug]". Reading the slug straight from it is
+      // exact where the audit tail is a reconstruction, so prefer it and keep the
+      // marker as the fallback.
+      const todoSlug = (() => {
+        const args = ide.toolArgs ?? {};
+        if (String(args.command ?? "") !== "create") return "";
+        const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+        for (let i = tasks.length - 1; i >= 0; i--) {
+          const task = tasks[i];
+          if (!isRecord(task)) continue;
+          const description = typeof task.task_description === "string"
+            ? task.task_description
+            : "";
+          const match = description.match(/\[([a-z][a-z0-9-]*)\]$/);
+          if (match) return match[1];
+        }
+        return "";
+      })();
+      if (todoSlug !== "") {
+        return {
+          hook: "aidlc-sync-workflow-state.ts",
+          input: {
+            hook_event_name: "PostToolUse",
+            tool_name: "TaskUpdate",
+            tool_input: {
+              status: "in_progress",
+              activeForm: `Running [${todoSlug}]`,
+            },
+          },
+        };
+      }
       return {
         hook: "aidlc-sync-workflow-state.ts",
         input: {

@@ -262,13 +262,22 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
         cwd: dir,
       };
+      // The mint belongs to record-human-turn, which this row registers in its own
+      // manifest. verb-intercept used to mint as well - that was the pre-merge CLI
+      // row, where hook wiring lived inside the agent config and there was no
+      // second registration to double-count with. Asserting BOTH halves here is
+      // the point: the mint happens once, and it happens on the other seam.
+      expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
+      expect(readAudit(dir), "verb-intercept must not mint").not.toContain("HUMAN_TURN");
+
       expect(
-        runAdapter(dir, "verb-intercept", payload, [], {
+        runAdapter(dir, "record-human-turn", payload, [], {
           AIDLC_UNATTENDED: "1",
         }).code,
       ).toBe(0);
-      expect(readAudit(dir)).not.toContain("HUMAN_TURN");
-      expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
+      expect(readAudit(dir), "unattended withholds the ledger event")
+        .not.toContain("HUMAN_TURN");
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
