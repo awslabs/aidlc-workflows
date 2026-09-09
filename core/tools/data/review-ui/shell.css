@@ -9,6 +9,7 @@
   padding: 10px 0;
   z-index: 4;
 }
+.rail .rail-settings { margin-top: auto; }
 .rail button {
   position: relative;
   width: 36px;

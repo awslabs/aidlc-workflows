@@ -217,7 +217,8 @@ function renderRail() {
     <button type="button" data-action="workflow" class="${store.sidebar ? "on" : ""}" title="Workflow${store.sidebar ? " · visible" : " · hidden"}" aria-pressed="${store.sidebar}">
       ${ICONS.workflow}
     </button>
-    <button type="button" data-action="search" title="Search or jump · ⌘K">${ICONS.search}</button>`;
+    <button type="button" data-action="search" title="Search or jump · ⌘K">${ICONS.search}</button>
+    <button type="button" class="rail-settings" data-action="settings" title="Settings" aria-label="Settings">${ICONS.settings}</button>`;
 }
 
 function viewTitle(view, stage) {
@@ -397,7 +398,6 @@ function renderHeader() {
       <span class="connection ${store.connected ? "connected" : "disconnected"}" title="${escapeHtml(connectedTitle)}" aria-label="${escapeHtml(connectedTitle)}"><i></i></span>
       ${panelButtons(view)}
       ${headerActions(view, stage)}
-      <button type="button" class="header-icon header-settings" data-header-action="settings" title="Settings" aria-label="Settings">${ICONS.settings}</button>
     </div>`;
 }
 
@@ -565,8 +565,7 @@ async function selectIntent(slug) {
 
 function handleHeaderAction(action) {
   const stage = stageForView();
-  if (action === "settings") store.emit("open-settings", "models");
-  else if (action === "approve" || action === "request-changes") store.emit("decide", action);
+  if (action === "approve" || action === "request-changes") store.emit("decide", action);
   else if (action === "save-answers") store.emit("save-answers");
   else if (action === "open-artifact") artifactView(stage, firstArtifact(stage, false));
   else if (action === "open-questions") questionsView(stage);
@@ -611,6 +610,7 @@ export function init() {
     if (action === "inbox") openInbox();
     else if (action === "workflow") store.set({ sidebar: !store.sidebar });
     else if (action === "search") store.emit("palette", true);
+    else if (action === "settings") store.emit("open-settings", "models");
   });
   header.addEventListener("click", (event) => {
     const panel = event.target.closest("[data-panel]")?.dataset.panel;

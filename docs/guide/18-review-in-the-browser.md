@@ -311,7 +311,7 @@ so what you see there is what the run will use.
 
 ### Settings
 
-The cog at the top right opens Settings. **Models & effort** restates the two
+The cog at the bottom of the left rail opens Settings. **Models & effort** restates the two
 controls, names what *Default* resolves to and where that lives (your own harness
 setting; change it there), and edits the project's model policy: pick a preset,
 set a group's effort, add a per-agent exception, or reset a layer. **Project**
