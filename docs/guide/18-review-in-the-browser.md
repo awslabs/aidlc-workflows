@@ -337,9 +337,9 @@ here — a `--local` preset or agent pin, or a `--global` entry for every projec
 on this machine — is named in a note beneath, never shown as the team's.
 **Clear my overrides** removes your overrides for this project (the local
 layer; a `--global` entry stays, terminal-managed); **Reset team policy**
-removes the project's preset, dials, and exceptions. The page carries no
-explanatory copy - what a control means, and which file it writes, is in its
-tooltip and its options. Every change goes through the same `aidlc config models` command the
+removes the project's preset, dials, and exceptions. Each row carries one short
+caption (*What every agent runs on*, the agents in a group); which file a
+control writes, and where a value comes from, is in its tooltip. Every change goes through the same `aidlc config models` command the
 terminal uses, so the transaction, refresh guard, and doctor checks are
 identical, and it applies to runs started afterwards. Returning one group to the
 team is the one exception: the command has no per-dial unset, so the daemon

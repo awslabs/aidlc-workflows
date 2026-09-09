@@ -21,7 +21,8 @@
 .settings-row .c { color: var(--ink); font-size: 13px; white-space: nowrap; }
 .settings-row select, .settings-exception-form select, .settings-exception-form input { padding: 5px 9px; border: 1px solid var(--line2); border-radius: 8px; background: #fff; font: 13px var(--font); color: var(--ink); }
 .settings-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 4px 0 6px; }
-.settings-presets button { padding: 10px; border: 1px solid var(--line2); border-radius: 9px; text-align: center; background: #fff; }
+.settings-presets button { padding: 9px 10px; border: 1px solid var(--line2); border-radius: 9px; text-align: left; background: #fff; }
+.settings-presets button small { display: block; margin-top: 2px; color: var(--muted); font-size: 11.5px; }
 .settings-presets button[aria-checked="true"] { border-color: var(--accent); background: var(--soft); }
 .settings-presets button b { display: block; font-size: 13px; color: var(--ink); }
 .settings-presets button:disabled { opacity: .5; }
@@ -40,3 +41,4 @@
 .settings-disclosure svg { color: var(--muted); }
 .settings-advanced .settings-block { border-top: 0; padding-top: 4px; }
 .settings-advanced .settings-block + .settings-block { border-top: 1px solid var(--line); padding-top: 10px; }
+.settings-disclosure small { font-weight: 400; color: var(--muted); font-size: 12px; }

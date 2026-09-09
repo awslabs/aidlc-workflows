@@ -55,7 +55,8 @@ export function init() {
 
 export function open(target = "models") {
   page = PAGES.some((entry) => entry.id === target) ? target : "models";
-  advancedOpen = Boolean(store.workflow?.models_policy?.recorded?.local);
+  const recorded = store.workflow?.models_policy?.recorded;
+  advancedOpen = Boolean(recorded?.local || recorded?.global);
   root.hidden = false;
   render();
   root.querySelector(".settings-nav .on")?.focus();
@@ -100,14 +101,13 @@ function modelsPage() {
   const workflow = store.workflow || {};
   const policy = workflow.models_policy;
   const fallback = workflow.runner_default_effort;
-  // What each control means is in its tooltip and its options; the page itself
-  // is the three things most people touch, then the Advanced fold.
+  // One short caption per row; where a value comes from stays in the tooltip.
   const local = fallback?.source === LOCAL_SETTINGS;
   return `<h3>Models &amp; effort</h3>
 
     <div class="settings-block">
       ${modelRow(workflow)}
-      <div class="settings-row"><span class="l">Default effort</span>
+      <div class="settings-row"><span class="l">Default effort<small>What agents inherit when nothing pins them</small></span>
         ${workflow.runner_default_effort_editable
           ? `<select data-default-effort aria-label="Default effort" title="${escapeHtml(fallback ? `Your ${harnessName(workflow)} setting - ${fallback.source}` : `No ${harnessName(workflow)} setting names an effort; the model's own default applies`)}">
               <option value="" ${local ? "" : "selected"}>${escapeHtml(fallback && !local ? `Default (${fallback.level})` : "Default")}</option>
@@ -120,11 +120,12 @@ function modelsPage() {
     <div class="settings-block">
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
-      <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${policy?.team?.preset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"} title="${escapeHtml(entry.summary)} - the team's policy, committed with the project"><b>${entry.label}</b></button>`).join("")}</div>
+      <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${policy?.team?.preset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
+      <p class="settings-note">How hard each group of agents thinks · team policy, committed</p>
     </div>
 
     <div class="settings-block settings-advanced">
-      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span></button>
+      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span><small>Per-group overrides, pinned agents</small></button>
       ${advancedOpen ? advancedSection(workflow) : ""}
     </div>`;
 }
@@ -154,7 +155,7 @@ function advancedSection(workflow) {
     const source = teamSource(policy, group.id, team);
     const teamLabel = team === INHERIT ? "Team · default" : `Team · ${team}`;
     return `<div class="settings-row">
-      <span class="l" title="${escapeHtml(group.agents.join(", "))}">${escapeHtml(group.label)}</span>
+      <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
       ${mine ? `<span class="settings-pin" title="Yours, this machine only (aidlc.settings.local.json); the team runs at ${escapeHtml(team)}">yours</span>` : ""}
       <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" title="${mine ? `Your override, this machine only; the first option returns to the team's ${escapeHtml(team)}` : `The team's value${source ? ` (${escapeHtml(source)})` : ""}; pick a level to override it on this machine only`}">
         <option value="" ${mine ? "" : "selected"}>${escapeHtml(teamLabel)}</option>
@@ -179,7 +180,9 @@ function advancedSection(workflow) {
       ${addingException ? `<form class="settings-exception-form" data-exception-form>
         <select name="agent" aria-label="Agent">${agentsForPicker.map((agent) => `<option>${escapeHtml(agent)}</option>`).join("")}</select>
         <select name="effort" aria-label="Effort">${efforts.map((level) => `<option ${level === "high" ? "selected" : ""}>${level}</option>`).join("")}</select>
-        <select name="model" aria-label="Model"><option value="">Same model</option>${(catalogue?.models || []).map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join("")}</select>
+        ${catalogue?.models?.length
+          ? `<select name="model" aria-label="Model"><option value="">Same model</option>${catalogue.models.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join("")}</select>`
+          : `<input name="model" type="text" placeholder="model id (optional)" aria-label="Model id" spellcheck="false">`}
         <button type="submit" class="btn primary">Pin</button>
       </form>` : ""}
     </div>
@@ -253,7 +256,7 @@ function modelRow(workflow) {
       ${local && !models.some((model) => model.id === current.value) ? `<option value="${escapeHtml(current.value)}" selected>${escapeHtml(current.value)}</option>` : ""}
     </select>`;
   }
-  return `<div class="settings-row"><span class="l">Model</span>${control}</div>`;
+  return `<div class="settings-row"><span class="l">Model<small>What every agent runs on</small></span>${control}</div>`;
 }
 
 function harnessName(workflow) {
