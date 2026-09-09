@@ -571,7 +571,7 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Fail-open everywhere.** No audit ledger (the common non-AIDLC case, decided before any state read), unreadable state or stage graph, an unknown tool, malformed stdin, or any internal error allows the call. The deterministic off-switch `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement entirely.
 
-**Per harness.** Claude Code: `settings.json`, third entry in the shared PreToolUse matcher group. Codex: adapter target `review-freeze`, forwarding Bash and fanning `apply_patch` out per touched file (Delete File / Move to included). Kiro: one standalone `PreToolUse` manifest whose matcher names every write, read and terminal spelling the adapter canonicalizes; the acting persona comes from the delegation window rather than from a per-agent registration. Write/edit events feed `audit-and-sensors` afterward so normal invalidation remains complete. opencode: the plugin's `tool.execute.before` for `bash`/`write`/`edit`/`apply_patch`. 
+**Per harness.** Claude Code: `settings.json`, third entry in the shared PreToolUse matcher group. Codex: adapter target `review-freeze`, forwarding Bash and fanning `apply_patch` out per touched file (Delete File / Move to included). Kiro: one standalone `PreToolUse` manifest whose matcher names every write, read and terminal spelling the adapter canonicalizes; the acting persona comes from the delegation window rather than from a per-agent registration. Write/edit events feed `audit-and-sensors` afterward so normal invalidation remains complete. opencode: the plugin's `tool.execute.before` for `bash`/`write`/`edit`/`apply_patch`.
 
 ---
 

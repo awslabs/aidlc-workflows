@@ -1812,7 +1812,10 @@ if (target === "legacy-ide-notice") {
     "Update Kiro IDE, or run this project with Kiro CLI instead - one AI-DLC " +
     "install serves both. The workflow record under aidlc/ is unaffected and " +
     "resumes where it stopped once you are on a supported version.\n\n" +
-    "See docs/guide/harnesses/kiro.md for the supported versions.\n";
+    // Self-contained on purpose. This message is shown while every tool call is
+    // being refused, and the install ships no docs/ tree, so a "see <path>"
+    // pointer is unreadable twice over.
+    "Supported: a current Kiro IDE, or Kiro CLI 2.21.1 or newer.\n";
   process.stdout.write(notice);
   process.stderr.write(notice);
   return 2; // The refusal this seam honours; the text says why.
