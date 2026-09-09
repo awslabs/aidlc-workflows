@@ -326,8 +326,8 @@ reset: to go back, pick the default card. The line beneath says what the choice
 is: how AI-DLC balances quality, speed, and cost, saved in the repo for
 everyone.
 
-**Advanced**, a fold at the bottom (open by itself while you have a change of
-your own), is where you change a group's effort just for you. Each group's first option
+**Advanced agent settings**, a fold at the bottom (open by itself while you
+have a change of your own), is where you change a group's effort just for you. Each group's first option
 is what the team's preset gives it — *Balanced · medium*, *Thorough · default* — and the levels beneath are yours: pick one and it applies on this
 machine only (`aidlc.settings.local.json`, not committed; a mark sits beside the
 row and a legend beneath the groups reads *Overridden*; teammates keep
@@ -342,10 +342,9 @@ rebuilds your personal layer — reset, then re-record what else it held, each
 step validated with `--dry-run` first — which is why that move exists for your
 own layer only, never the committed one. Each row carries one short plain-English
 caption (*The model all agents use*); which file a control writes, and where a
-value comes from, is in its tooltip. Feedback stays in the dialog: a brief
-*Saved* beside the control that changed (after a preset, *Saved. Commit the
-settings changes to share them.*), or the error in its place until the next
-change.
+value comes from, is in its tooltip. Feedback stays in the dialog's title bar: a
+brief *Saved* with a check (after a preset, *Saved. Commit the settings changes
+to share them.*), or the error, until the next change.
 **About** lists this review UI's version, address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the

@@ -8,9 +8,10 @@
 .settings-nav button.on { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .05); }
 .settings-page { position: relative; padding: 18px 22px 22px; overflow: auto; }
 .settings-page.busy { opacity: .6; pointer-events: none; }
-.settings-page h3 { margin: 0 0 4px; font-size: 15px; }
+.settings-head { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; }
+.settings-head h3 { flex: 1; margin: 0; font-size: 15px; }
 .settings-sub { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
-.settings-close { position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); }
+.settings-close { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); }
 .settings-close:hover { background: var(--panel); color: var(--ink); }
 .settings-block { padding: 10px 0 6px; border-top: 1px solid var(--line); }
 .settings-block:first-of-type { border-top: 0; }
@@ -42,8 +43,8 @@
 .settings-overridden { display: inline-flex; align-items: center; color: var(--accent); }
 .settings-overridden svg { display: block; }
 .settings-legend { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--muted); font-size: 12px; }
-.settings-flash { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
-.settings-flash.saved { color: var(--accent); animation: settings-flash-in .18s ease-out; }
-.settings-flash.error { color: #9f1239; white-space: normal; max-width: 320px; text-align: right; }
-.settings-note .settings-flash.saved { color: var(--accent); }
+.settings-flash { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; white-space: nowrap; animation: settings-flash-in .18s ease-out; }
+.settings-flash svg { flex: none; }
+.settings-flash.saved { color: var(--accent); }
+.settings-flash.error { color: #9f1239; white-space: normal; max-width: 420px; text-align: right; }
 @keyframes settings-flash-in { from { opacity: 0; transform: translateX(4px); } to { opacity: 1; transform: none; } }

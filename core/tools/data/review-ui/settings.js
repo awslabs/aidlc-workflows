@@ -43,21 +43,19 @@ let page = "models";
 // project layer. A group's effort under Advanced is yours: the personal `local`
 // layer, this machine only, over the team's value.
 let busy = false;
-// Feedback stays inside the modal, next to the control that changed: a brief
-// "Saved" that fades, or an error that stays until the next change. The app's
-// notice banner sits behind the modal, where it would go unseen.
-let flash = null; // { key, text, kind: "saved" | "error" } | null
+// Feedback stays inside the modal, in its title bar: a brief "Saved" that
+// fades, or an error that stays until the next change. The app's notice banner
+// sits behind the modal, where it would go unseen.
+let flash = null; // { text, kind: "saved" | "error" } | null
 let flashTimer = null;
-function setFlash(key, text, kind) {
+function setFlash(text, kind) {
   clearTimeout(flashTimer);
-  flash = { key, text, kind };
-  if (kind === "saved") flashTimer = setTimeout(() => { flash = null; render(); }, 2500);
+  flash = { text, kind };
+  if (kind === "saved") flashTimer = setTimeout(() => { flash = null; render(); }, 3000);
 }
-function flashFor(key) {
-  if (!flash || flash.key !== key) return "";
-  return flash.kind === "saved"
-    ? `<span class="settings-flash saved">${icon("checkmark", { size: 12 })}${escapeHtml(flash.text)}</span>`
-    : `<span class="settings-flash error">${escapeHtml(flash.text)}</span>`;
+function flashHtml() {
+  if (!flash) return "";
+  return `<span class="settings-flash ${flash.kind}" role="status">${icon(flash.kind === "saved" ? "checkmarkCircle" : "errorCircle", { size: 14 })}${escapeHtml(flash.text)}</span>`;
 }
 // Advanced - your own effort per group - is the bottom of the Models &
 // effort page, folded until asked for; it opens by itself when you override the
@@ -118,7 +116,11 @@ function render() {
       ${PAGES.map((entry) => `<button type="button" class="${entry.id === page ? "on" : ""}" data-page="${entry.id}">${escapeHtml(entry.label)}</button>`).join("")}
     </nav>
     <section class="settings-page ${busy ? "busy" : ""}">
-      <button type="button" class="settings-close" data-close aria-label="Close settings">${icon("dismiss", { size: 14 })}</button>
+      <div class="settings-head">
+        <h3>${page === "models" ? "Models &amp; Effort" : "About"}</h3>
+        ${flashHtml()}
+        <button type="button" class="settings-close" data-close aria-label="Close settings">${icon("dismiss", { size: 14 })}</button>
+      </div>
       ${page === "models" ? modelsPage() : aboutPage()}
     </section>
   </div>`;
@@ -133,11 +135,9 @@ function modelsPage() {
   const fallback = workflow.runner_default_effort;
   // One short caption per row; where a value comes from stays in the tooltip.
   const local = fallback?.source === LOCAL_SETTINGS;
-  return `<h3>Models &amp; Effort</h3>
-
-    <div class="settings-block">
+  return `<div class="settings-block">
       ${modelRow(workflow)}
-      <div class="settings-row"><span class="l">Default effort<small>How hard agents think, unless set below</small></span>${flashFor("effort")}
+      <div class="settings-row"><span class="l">Default effort<small>How hard agents think, unless set below</small></span>
         ${workflow.runner_default_effort_editable
           ? `<select data-default-effort aria-label="Default effort" title="${escapeHtml(fallback ? `Your ${harnessName(workflow)} setting - ${fallback.source}` : `No ${harnessName(workflow)} setting names an effort; the model's own default applies`)}">
               <option value="" ${local ? "" : "selected"}>${escapeHtml(fallback && !local ? `Default (${fallback.level})` : "Default")}</option>
@@ -151,11 +151,11 @@ function modelsPage() {
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${teamPreset(policy) === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}${!policy?.team?.preset && entry.id === SHIPPED_PRESET ? ` <span class="settings-tag">default</span>` : ""}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      ${flash?.key === "preset" ? `<p class="settings-note">${flashFor("preset")}</p>` : `<p class="settings-note">How AI-DLC balances quality, speed, and cost. Saved in the repo for everyone.</p>`}
+      <p class="settings-note">How AI-DLC balances quality, speed, and cost. Saved in the repo for everyone.</p>
     </div>
 
     <div class="settings-block settings-advanced">
-      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span></button>
+      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced agent settings</span></button>
       ${advancedOpen ? advancedSection(workflow) : ""}
     </div>`;
 }
@@ -176,7 +176,6 @@ function advancedSection(workflow) {
     const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      ${flashFor(`group:${group.id}`)}
       ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden">${icon("errorCircle", { size: 15 })}</span>` : ""}
       <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort">
         <option value="" ${mine ? "" : "selected"}>${escapeHtml(teamLabel)}</option>
@@ -256,7 +255,7 @@ function modelRow(workflow) {
       ${local && !models.some((model) => model.id === current.value) ? `<option value="${escapeHtml(current.value)}" selected>${escapeHtml(current.value)}</option>` : ""}
     </select>`;
   }
-  return `<div class="settings-row"><span class="l">Default model<small>The model all agents use</small></span>${flashFor("model")}${control}</div>`;
+  return `<div class="settings-row"><span class="l">Default model<small>The model all agents use</small></span>${control}</div>`;
 }
 
 function harnessName(workflow) {
@@ -267,8 +266,7 @@ function harnessName(workflow) {
 function aboutPage() {
   const workflow = store.workflow || {};
   const daemon = workflow.daemon || {};
-  return `<h3>About</h3>
-    <p class="settings-sub">This review UI, as it is running now.</p>
+  return `    <p class="settings-sub">This review UI, as it is running now.</p>
     <div class="settings-block">
       <div class="settings-row"><span class="l">Version</span><span class="c">${escapeHtml(daemon.version || "?")}</span></div>
       <div class="settings-row"><span class="l">Address</span><span class="c"><code>${escapeHtml(location.origin)}</code></span></div>
@@ -281,7 +279,7 @@ function aboutPage() {
 function bind() {
   root.querySelector("[data-close]")?.addEventListener("click", close);
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
-  for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change("preset", "project", { action: "preset", preset: button.dataset.preset }));
+  for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change("project", { action: "preset", preset: button.dataset.preset }));
   root.querySelector("[data-models-retry]")?.addEventListener("click", () => loadCatalogue(true));
   root.querySelector("[data-advanced]")?.addEventListener("click", () => { advancedOpen = !advancedOpen; render(); });
   root.querySelector("[data-default-model]")?.addEventListener("change", async (event) => {
@@ -291,10 +289,10 @@ function bind() {
     render();
     try {
       await api.post("/api/default-model", { model: model || null });
-      setFlash("model", "Saved", "saved");
+      setFlash("Saved", "saved");
       store.emit("wants-refresh");
     } catch (error) {
-      setFlash("model", error.message, "error");
+      setFlash(error.message, "error");
     } finally {
       busy = false;
       render();
@@ -306,10 +304,10 @@ function bind() {
     render();
     try {
       await api.post("/api/default-effort", { level: event.target.value || null });
-      setFlash("effort", "Saved", "saved");
+      setFlash("Saved", "saved");
       store.emit("wants-refresh");
     } catch (error) {
-      setFlash("effort", error.message, "error");
+      setFlash(error.message, "error");
     } finally {
       busy = false;
       render();
@@ -317,20 +315,20 @@ function bind() {
   });
   for (const select of root.querySelectorAll("[data-group]")) select.addEventListener("change", () => {
     const group = select.dataset.group;
-    change(`group:${group}`, "local", select.value ? { action: "group", group, effort: select.value } : { action: "clear-group", group });
+    change("local", select.value ? { action: "group", group, effort: select.value } : { action: "clear-group", group });
   });
 }
 
-async function change(key, scope, body) {
+async function change(scope, body) {
   if (busy) return;
   busy = true;
   render();
   try {
     await api.post("/api/models-policy", { scope, ...body });
-    setFlash(key, scope === "project" ? "Saved. Commit the settings changes to share them." : "Saved", "saved");
+    setFlash(scope === "project" ? "Saved. Commit the settings changes to share them." : "Saved", "saved");
     store.emit("wants-refresh");
   } catch (error) {
-    setFlash(key, error.message, "error");
+    setFlash(error.message, "error");
   } finally {
     busy = false;
     render();
