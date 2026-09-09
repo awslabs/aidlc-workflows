@@ -88,7 +88,7 @@ still apply.
 
 | Harness | Important first-run requirement | Guide |
 | --- | --- | --- |
-| Claude Code | Configure a supported provider; the shipped default is Amazon Bedrock | [Claude setup below](#aws-bedrock-setup) |
+| Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
 | Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
 | Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
@@ -98,53 +98,38 @@ still apply.
 
 ## AWS Bedrock Setup
 
-The Claude Code distribution ships configured for Amazon Bedrock. Codex also
-ships with a Bedrock provider default; other harnesses use their own provider
-configuration.
+The Claude Code, Codex, and opencode distributions preserve the provider
+already configured by the user. Amazon Bedrock is an explicit option.
 
-### Why Bedrock is the default
+### Provider-neutral default
 
-AI-DLC needs a predictable runtime baseline across the conductor and its
-tier-pinned subagents. Bedrock lets the distribution pin exact global inference
-profiles and context variants, avoiding silent model-alias differences between
-machines. It also uses the standard AWS SDK credential chain and IAM controls,
-so teams do not need to commit provider keys to a project.
+AI-DLC does not select a model provider in the shipped Claude Code, Codex, or
+opencode project configuration. The harness keeps the provider,
+authentication, model, and context settings already configured by the user.
+Balanced reviewer agents may cap reasoning effort, but they do not pin a
+provider-specific model.
 
-This is a distribution default, not a methodology requirement. AI-DLC does not
-call the Bedrock API directly and remains provider-independent.
+### Configure Bedrock (optional)
 
-### Configure Bedrock
-
-Before the first Claude Code run:
+Run `aidlc config providers` and select `amazon-bedrock`, or configure Claude
+Code directly:
 
 1. Enable access to the configured Anthropic models in the Amazon Bedrock model
    catalog.
 2. Provide AWS credentials through the normal SDK credential chain, for example
    `aws configure` or `aws sso login --profile <profile>`.
-3. Use a region where those models are available. The shipped default is
-   `us-east-1`.
+3. Use a region where those models are available.
 4. Start `claude` and choose Amazon Bedrock at the provider prompt. You can run
    `/setup-bedrock` later to change the account or region.
-
-The shipped Claude settings map these aliases:
-
-| Setting | Default |
-| --- | --- |
-| `CLAUDE_CODE_USE_BEDROCK` | `1` |
-| `AWS_REGION` | `us-east-1` |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | `global.anthropic.claude-fable-5[1m]` |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-8[1m]` |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6[1m]` |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
 
 Keep credentials and personal overrides out of the shared
 `.claude/settings.json`. Put them in `.claude/settings.local.json` or the
 standard AWS credential files.
 
-To use another Claude Code-supported provider, remove or replace the Bedrock
-environment mappings in `.claude/settings.json` and any higher-precedence
-`.claude/settings.local.json`, then complete that provider's Claude Code
-authentication flow. See the
+To use another Claude Code-supported provider, run `aidlc config providers`,
+select `other`, and complete that provider's Claude Code authentication flow.
+The config command removes old AI-DLC-owned Bedrock overrides from the shared
+project settings. See the
 [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
 
 For IAM detail, model access, SSO, and regional troubleshooting, see

@@ -20,11 +20,10 @@ source/development tree is **generated** into ignored local `dist/codex/` from
 - **A Git repository for the target project** — Codex discovers project
   `.codex/hooks.json` only inside one. The native installer and AI-DLC runtime
   themselves do not depend on Git.
-- **A model provider** — the shipped `config.toml` defaults to **Amazon
-  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.6-terra`). Set the AWS
-  profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
-  comment out the provider lines. Note: `web_search` is unavailable on
-  Bedrock; the market-research stage degrades gracefully.
+- **A model provider** — the shipped project `config.toml` does not select one.
+  Codex inherits provider, credentials, model, context window, and reasoning
+  effort from `~/.codex/config.toml`. Agent roles inherit the selected model;
+  balanced reviewers retain only their medium reasoning-effort cap.
 
 ## Install
 
@@ -63,8 +62,8 @@ trust action before those hooks run:
   `$CODEX_HOME/config.toml`. Replace an existing set for that hooks path rather
   than appending duplicate TOML tables.
 
-Merge the generated `.codex/config.toml` settings into your user config as
-needed. Then run `$aidlc --doctor` in Codex.
+Keep provider and model settings in your user config. Then run
+`$aidlc --doctor` in Codex.
 
 ### Versioned manual-copy alternative
 

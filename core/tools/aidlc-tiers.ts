@@ -22,11 +22,9 @@
 //                   `model: inherit` and NO effort line; `balanced` writes
 //                   `model: sonnet` with `effort: medium`.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
-//                   Omitted keys fall back to the shipped .codex/config.toml
-//                   session defaults (live-verified on codex-cli 0.139.0 and
-//                   0.142.5: a role TOML without `model` spawns on the
-//                   config.toml model + effort). `judgment`
-//                   omits both keys.
+//                   Every tier omits `model`, so roles inherit the user's
+//                   selected session/provider model. `judgment` also omits
+//                   effort; `balanced` pins medium effort.
 //   - Kiro CLI/IDE  every tier omits `"model"` — Kiro agents INHERIT the
 //                   session model (a shipped model ID resolves only when that
 //                   model is enabled on the user's install; a session on
@@ -133,10 +131,10 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // of an xhigh-inheriting one with no verdict/finding quality loss. A
     // session pinned to xhigh was silently doubling every review's cost.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     cursor: { model: null },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: "medium" },
     copilot: { model: null },
   },
   templated: {

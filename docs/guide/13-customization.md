@@ -58,7 +58,8 @@ When every workflow in a project should start at the same scope, set `AWS_AIDLC_
 }
 ```
 
-> The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.). Those are listed separately — the example above only shows the scope key for clarity.
+The shipped `env` block contains only the AI-DLC scope default. Provider and
+model settings remain owned by Claude Code and the user.
 
 With this set, bare `/aidlc` invocations use `feature` as the default scope. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
 

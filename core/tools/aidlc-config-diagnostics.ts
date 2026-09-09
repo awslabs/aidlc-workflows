@@ -37,7 +37,7 @@ export type RuntimeRecord = {
   cliPath?: string;
 };
 
-export type ProviderKind = "amazon-bedrock" | "other";
+export type ProviderKind = "current" | "amazon-bedrock" | "other";
 export type ProviderPendingStatus = "pending" | "done";
 export type ProviderPendingAction = {
   id: string;
@@ -186,6 +186,7 @@ const PROJECT_KEYS = new Set(["schemaVersion", "mcp", "completions"]);
 const SAFE_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
 const PENDING_ACTION_IDS = [
   "bedrock-model-access",
+  "codex-provider-configuration",
   "kiro-ide-chat-model",
   "copilot-byok-configuration",
   "cursor-provider-configuration",
@@ -202,6 +203,12 @@ export const PROVIDER_PENDING_ACTIONS: Record<
       "Verify Amazon Bedrock model access in the recorded region and confirm the AWS principal has bedrock:InvokeModel permission.",
     remediation:
       "Open the Amazon Bedrock console for the recorded region, verify the required Anthropic models are available, and confirm IAM allows bedrock:InvokeModel.",
+  },
+  "codex-provider-configuration": {
+    label:
+      "Configure the selected provider in the user-level Codex configuration.",
+    remediation:
+      "Configure the provider, credentials, and model in ~/.codex/config.toml, then acknowledge the manual setup.",
   },
   "kiro-ide-chat-model": {
     label:
@@ -303,8 +310,12 @@ export function normalizeProvidersRecord(value: unknown): ProvidersRecord | null
   }
   const out: ProvidersRecord = { schemaVersion: 1 };
   if (value.provider !== undefined) {
-    if (value.provider !== "amazon-bedrock" && value.provider !== "other") {
-      throw new Error("providers.provider must be amazon-bedrock or other");
+    if (
+      value.provider !== "current" &&
+      value.provider !== "amazon-bedrock" &&
+      value.provider !== "other"
+    ) {
+      throw new Error("providers.provider must be current, amazon-bedrock, or other");
     }
     out.provider = value.provider;
   }
@@ -899,6 +910,7 @@ export function requiredProviderActions(
   if (record.provider === "other") return ["non-bedrock-provider-configuration"];
   if (record.provider !== "amazon-bedrock") return [];
   const actions: ProviderPendingActionId[] = ["bedrock-model-access"];
+  if (harness === "codex") actions.push("codex-provider-configuration");
   if (harness === "kiro-ide") actions.push("kiro-ide-chat-model");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
@@ -915,6 +927,7 @@ export function reconcileProviderActions(
   const required = requiredProviderActions(record, harness);
   const pendingActions = required.map((id) => {
     const acknowledgeGated =
+      id === "codex-provider-configuration" ||
       id === "copilot-byok-configuration" ||
       id === "cursor-provider-configuration" ||
       id === "non-bedrock-provider-configuration";
@@ -959,6 +972,8 @@ function writeClaudeProvider(
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
   const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
+  for (const key of CLAUDE_BEDROCK_MODEL_KEYS) delete env[key];
+  env.CLAUDE_CODE_USE_BEDROCK = "1";
   env.AWS_REGION = record.region;
   if (record.profile) env.AWS_PROFILE = record.profile;
   else delete env.AWS_PROFILE;
@@ -982,26 +997,48 @@ function writeClaudeProvider(
   writeJson(mcpPath, mcp);
 }
 
-function writeCodexProvider(
+const CLAUDE_BEDROCK_MODEL_KEYS = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+] as const;
+
+function clearClaudeProvider(
   projectionRoot: string,
   harnessDir: string,
-  record: ProvidersRecord,
+): void {
+  const settingsPath = join(projectionRoot, harnessDir, "settings.json");
+  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const env = isRecord(settings.env) ? { ...settings.env } : {};
+  const hadBedrockOverride = CLAUDE_BEDROCK_MODEL_KEYS.some((key) =>
+    Object.hasOwn(env, key)
+  );
+  for (const key of CLAUDE_BEDROCK_MODEL_KEYS) delete env[key];
+  if (hadBedrockOverride) {
+    delete env.AWS_REGION;
+    delete env.AWS_PROFILE;
+  }
+  settings.env = env;
+  writeJson(settingsPath, settings);
+}
+
+function clearCodexProvider(
+  projectionRoot: string,
+  harnessDir: string,
 ): void {
   const path = join(projectionRoot, harnessDir, "config.toml");
-  const content = readFileSync(path, "utf-8");
-  const section = /(\[model_providers\.amazon-bedrock\.aws\]\r?\n)([\s\S]*?)(?=\r?\n\[|$)/;
-  const match = section.exec(content);
-  if (!match) throw new Error(`${path}: missing amazon-bedrock aws provider section`);
-  const profile = record.profile ?? "default";
-  const lines = match[2].split(/\r?\n/).map((line) => {
-    if (/^profile\s*=/.test(line)) return `profile = ${JSON.stringify(profile)}`;
-    if (/^region\s*=/.test(line)) return `region = ${JSON.stringify(record.region)}`;
-    return line;
-  });
-  writeFileSync(
-    path,
-    content.replace(section, () => `${match[1]}${lines.join("\n")}`),
+  let content = readFileSync(path, "utf-8");
+  content = content.replace(
+    /^(?:model|model_provider|model_context_window|model_reasoning_effort)\s*=.*(?:\r?\n|$)/gm,
+    "",
   );
+  content = content.replace(
+    /^\[model_providers\.amazon-bedrock(?:\.[^\]]+)?\]\r?\n(?:^(?!\[).*(?:\r?\n|$))*/gm,
+    "",
+  );
+  writeFileSync(path, content.replace(/\n{3,}/g, "\n\n"));
 }
 
 function writeKiroProvider(
@@ -1049,6 +1086,17 @@ function writeOpenCodeProvider(
   writeJson(path, value);
 }
 
+function clearOpenCodeProvider(projectionRoot: string): void {
+  const path = join(projectionRoot, "opencode.json");
+  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  if (!isRecord(value.provider)) return;
+  const providers = { ...value.provider };
+  delete providers["amazon-bedrock"];
+  if (Object.keys(providers).length > 0) value.provider = providers;
+  else delete value.provider;
+  writeJson(path, value);
+}
+
 function writeClaudeFlags(
   projectionRoot: string,
   harnessDir: string,
@@ -1081,11 +1129,16 @@ export function applyConfigDiagnosticRecords(
   records: ConfigDiagnosticRecords,
 ): void {
   const provider = records.providers;
-  if (provider?.provider !== "amazon-bedrock" || !provider.region) return;
+  if (!provider?.provider) return;
+  if (provider.provider === "current" || provider.provider === "other") {
+    if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
+    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir);
+    else if (harness === "opencode") clearOpenCodeProvider(projectionRoot);
+    return;
+  }
+  if (!provider.region) return;
   if (harness === "claude") {
     writeClaudeProvider(projectionRoot, harnessDir, provider);
-  } else if (harness === "codex") {
-    writeCodexProvider(projectionRoot, harnessDir, provider);
   } else if (harness === "kiro") {
     writeKiroProvider(projectionRoot, harnessDir, provider);
   } else if (harness === "opencode") {
@@ -1104,6 +1157,28 @@ export function providerFiles(
     setting: "provider answers and pending actions",
     file: harnessData,
   }];
+  if (record?.provider === "current" || record?.provider === "other") {
+    if (harness === "claude") {
+      files.push({
+        setting: "provider-neutral Claude environment",
+        file: join(harnessDir, "settings.json"),
+      });
+    } else if (harness === "codex") {
+      files.push({
+        setting: "provider-neutral Codex project configuration",
+        file: join(harnessDir, "config.toml"),
+      });
+    } else if (harness === "opencode") {
+      files.push({
+        setting: "provider-neutral opencode project configuration",
+        file: "opencode.json",
+      });
+    }
+    return files.map((entry) => ({
+      ...entry,
+      file: resolve(projectDir, entry.file),
+    }));
+  }
   if (record?.provider !== "amazon-bedrock") return files;
   if (harness === "claude") {
     files.push({
@@ -1116,11 +1191,6 @@ export function providerFiles(
         file: ".mcp.json",
       });
     }
-  } else if (harness === "codex") {
-    files.push({
-      setting: "Bedrock AWS region and profile",
-      file: join(harnessDir, "config.toml"),
-    });
   } else if (harness === "kiro") {
     files.push({
       setting: "AWS MCP region endpoint and metadata",
@@ -1516,7 +1586,6 @@ function providerValueIssues(
   harness: ModelHarness,
   record: ProvidersRecord,
 ): DiagnosticIssue[] {
-  if (record.provider !== "amazon-bedrock" || !record.region) return [];
   const issues: DiagnosticIssue[] = [];
   const mismatch = (id: string, file: string, message: string): void => {
     issues.push({
@@ -1526,12 +1595,64 @@ function providerValueIssues(
     });
   };
   try {
+    if (record.provider === "current" || record.provider === "other") {
+      if (harness === "claude") {
+        const path = join(projectDir, harnessDir, "settings.json");
+        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const env = isRecord(value.env) ? value.env : {};
+        const stale: string[] = CLAUDE_BEDROCK_MODEL_KEYS.filter((key) =>
+          Object.hasOwn(env, key)
+        );
+        if (stale.length > 0) {
+          for (const key of ["AWS_REGION", "AWS_PROFILE"]) {
+            if (Object.hasOwn(env, key)) stale.push(key);
+          }
+        }
+        if (stale.length > 0) {
+          mismatch(
+            "provider-claude-project-override",
+            path,
+            `Claude settings still carry Bedrock override(s): ${stale.join(", ")}`,
+          );
+        }
+      } else if (harness === "codex") {
+        const path = join(projectDir, harnessDir, "config.toml");
+        const text = readFileSync(path, "utf-8");
+        if (
+          /^(?:model|model_provider|model_context_window|model_reasoning_effort)\s*=/m.test(text) ||
+          /^\[model_providers\.amazon-bedrock(?:\.[^\]]+)?\]/m.test(text)
+        ) {
+          mismatch(
+            "provider-codex-project-override",
+            path,
+            "Codex project configuration still overrides the user-level provider or model",
+          );
+        }
+      } else if (harness === "opencode") {
+        const path = join(projectDir, "opencode.json");
+        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const providers = isRecord(value.provider) ? value.provider : {};
+        if (Object.hasOwn(providers, "amazon-bedrock")) {
+          mismatch(
+            "provider-opencode-project-override",
+            path,
+            "opencode project configuration still carries amazon-bedrock provider options",
+          );
+        }
+      }
+      return issues;
+    }
+    if (record.provider !== "amazon-bedrock" || !record.region) return issues;
     if (harness === "claude") {
       const settingsPath = join(projectDir, harnessDir, "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
       const env = isRecord(settings.env) ? settings.env : {};
-      if (env.AWS_REGION !== record.region || (record.profile && env.AWS_PROFILE !== record.profile)) {
-        mismatch("provider-claude-settings", settingsPath, "Claude settings do not reflect the recorded AWS region/profile");
+      if (
+        env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
+        env.AWS_REGION !== record.region ||
+        (record.profile && env.AWS_PROFILE !== record.profile)
+      ) {
+        mismatch("provider-claude-settings", settingsPath, "Claude settings do not enable Bedrock with the recorded AWS region/profile");
       }
       const mcpPath = join(projectDir, ".mcp.json");
       if (existsSync(mcpPath)) {
@@ -1542,15 +1663,6 @@ function providerValueIssues(
         ) {
           mismatch("provider-claude-mcp", mcpPath, "Claude AWS MCP settings do not reflect the recorded region");
         }
-      }
-    } else if (harness === "codex") {
-      const path = join(projectDir, harnessDir, "config.toml");
-      const text = readFileSync(path, "utf-8");
-      if (
-        !text.includes(`region = ${JSON.stringify(record.region)}`) ||
-        !text.includes(`profile = ${JSON.stringify(record.profile ?? "default")}`)
-      ) {
-        mismatch("provider-codex", path, "Codex Bedrock settings do not reflect the recorded region/profile");
       }
     } else if (harness === "kiro") {
       const path = join(projectDir, harnessDir, "settings", "mcp.json");
