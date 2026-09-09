@@ -7,16 +7,19 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 function shellWords(command: string): string[] {
   const words: string[] = [];
   let word = "";
+  let wordStarted = false;
   let quote: "'" | '"' | null = null;
   let escaped = false;
   const push = () => {
-    if (word.length > 0) words.push(word);
+    if (wordStarted) words.push(word);
     word = "";
+    wordStarted = false;
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
     if (escaped) {
       word += ch;
+      wordStarted = true;
       escaped = false;
       continue;
     }
@@ -30,6 +33,7 @@ function shellWords(command: string): string[] {
     }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
+      wordStarted = true;
       continue;
     }
     if (quote !== null) {
@@ -39,9 +43,10 @@ function shellWords(command: string): string[] {
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      wordStarted = true;
       continue;
     }
-    if (ch === "<" || ch === ">" || (word.length === 0 && /\d/.test(ch))) {
+    if (ch === "<" || ch === ">" || (!wordStarted && /\d/.test(ch))) {
       const descriptorRedirect =
         /^\d*[<>]&[ \t]*(?:\d+|-)(?=$|[\s;|&()<>])/.exec(command.slice(i));
       if (descriptorRedirect) {
@@ -57,6 +62,7 @@ function shellWords(command: string): string[] {
       continue;
     }
     word += ch;
+    wordStarted = true;
   }
   push();
   return words;

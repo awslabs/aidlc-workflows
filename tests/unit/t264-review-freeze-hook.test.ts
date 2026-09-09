@@ -265,6 +265,16 @@ test("descriptor redirections preserve command boundaries and real operands", ()
     { name: "printf", args: ["x<"] },
     { name: "0", args: [] },
   ]);
+  expect(shellCommandInvocations(String.raw`printf x \>& 1>&1 cp source target`)).toEqual([
+    { name: "printf", args: ["x", ">"] },
+    { name: "cp", args: ["source", "target"] },
+  ]);
+  expect(shellCommandInvocations("bun run ''2>&1 installed.ts engine orchestrate next")).toEqual([
+    { name: "bun", args: ["run", "2", "installed.ts", "engine", "orchestrate", "next"] },
+  ]);
+  expect(shellCommandInvocations("bun run '' installed.ts")).toEqual([
+    { name: "bun", args: ["run", "", "installed.ts"] },
+  ]);
 });
 
 const NONE: ReadonlySet<string> = new Set();

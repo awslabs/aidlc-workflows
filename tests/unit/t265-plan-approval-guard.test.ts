@@ -927,6 +927,10 @@ describe("t265b hook lifecycle", () => {
         const shadowEntry = join(proj, "other", ".claude", "tools", "aidlc.ts");
         mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
         writeFileSync(shadowEntry, "// This is not the installed entry point.\n");
+        writeFileSync(
+          join(proj, "package.json"),
+          JSON.stringify({ scripts: { "2": "touch src/inline.ts" } }),
+        );
         if (published) {
           seedActiveDirective(proj, "code-generation");
           seedUnit(proj, null, { plan: true, answer: null });
@@ -965,6 +969,9 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine orchestrate next & printf code > src/inline.ts`,
           String.raw`printf x\>&1`,
           String.raw`printf x\<&0`,
+          String.raw`printf x \>& 1>&1 cp source src/inline.ts`,
+          `bun run ''2>&1 ${entry} engine orchestrate next`,
+          `bun run '' ${entry} engine orchestrate next`,
           `bun --preload evil.ts ${entry} engine orchestrate next`,
           `bun ${entry} engine orchestrate next --require=evil.ts`,
           `./bun ${entry} engine orchestrate next`,
