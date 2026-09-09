@@ -26,8 +26,9 @@
 //   --record-ref <ref>       read the record from a ref the verifier controls
 //                            (a protected branch, a records-only ref) instead of
 //                            from the commit under test
-//   --require-trust signed   demand that the relied-upon evidence exists and
-//                            every file of it arrived in a signed commit
+//   --require-trust signed   demand that every input the verdict rests on — each
+//                            relied-upon receipt shard AND the evidence file it
+//                            selects — arrived in a signed commit
 // `trust` in the report always states which anchor was actually in force, so a
 // report can never look stronger than the evidence behind it. The full threat
 // model — assets, adversaries, and the guarantee boundary — is
@@ -53,7 +54,8 @@
 //                 causally unordered — in different shards, or in different
 //                 records claiming the same path (fail closed both ways)
 //   excluded      framework shell/record path (aidlc/, .aidlc/, sensor dirs, and
-//                 the harness shell dirs of a workspace-shell-carrying repo)
+//                 the harness shell dirs the QUERIED TREE carries — read from the
+//                 commit, so the same SHA excludes the same paths everywhere)
 //
 // Report `warnings` name conditions that can distort a report without changing
 // any single path's classification — today repository byte-form conversion, and
@@ -69,8 +71,11 @@ import {
   auditBlockField,
   errorMessage,
   gitCommitSourceListing,
+  HARNESS_SHELL_MANIFEST_REL,
   type IntentRegistryEntry,
   isGitRepoDir,
+  isHarnessDirName,
+  isHarnessShellManifest,
   listIntents,
   listSpaces,
   normalizeManifestSourcePath,
@@ -85,6 +90,7 @@ import {
   type SourceClaimModel,
   sourceClaimCovers,
   sourceListingEntriesEqual,
+  type SourceExclusionContext,
   sourcePathIsExcluded,
   sourcePathKey,
   spacesRoot,
@@ -122,13 +128,21 @@ export const FAILABLE_STATUSES = [
  *                 receipts it is judged against (`trust.selfAttested`)
  *  independent    reproducible, and the queried range does not touch the record:
  *                 the receipts existed before the change under test
- *  signed         independent, and at least one relied-upon evidence file exists
- *                 with every one of them arriving in a commit git reports a good
- *                 signature for
+ *  signed         independent, and every authority-bearing input the verdict
+ *                 rests on — each relied-upon unit's receipt shard AND the
+ *                 evidence file that receipt's fingerprint selects — arrived in a
+ *                 commit git reports a good signature for (at least one such
+ *                 input must exist)
+ *
+ *  `signed` covers the receipt as well as the evidence because the receipt is
+ *  what chooses the evidence: it names the unit, the stage, the timestamp that
+ *  decides which receipt wins, and the fingerprint. A gate that checked only the
+ *  evidence would accept an unsigned receipt pointing at an unrelated signed
+ *  evidence file and still report `signed`.
  *
  *  Note what the ladder deliberately does NOT claim: no level proves a human
  *  reviewed anything. `signed` proves a key held by someone authorised to push
- *  vouched for the commit that carried the receipt; who that key belongs to is
+ *  vouched for the commits that carried those inputs; who that key belongs to is
  *  the verifier's keyring's business, not this tool's. */
 export const TRUST_LEVELS = [
   "informational",
@@ -169,8 +183,19 @@ export interface TrustReport {
    *  change it is judging — the honest reason a self-contained report can never
    *  rise above `reproducible`. */
   selfAttested: boolean;
-  /** `%G?` per relied-upon evidence file, keyed by the commit that last wrote it. */
-  signatures: Array<{ unit: string; commit: string | null; code: string }>;
+  /** `%G?` per authority-bearing input, keyed by the commit that last wrote it.
+   *  Every relied-upon unit contributes BOTH of its inputs: the `receipt` (the
+   *  audit shard whose REVIEW_COMPLETED block decided ownership and named the
+   *  fingerprint) and the `evidence` file that fingerprint selects. `signed`
+   *  requires all of them, because an unsigned receipt can point at signed
+   *  evidence it has no right to. */
+  signatures: Array<{
+    unit: string;
+    role: "receipt" | "evidence";
+    path: string | null;
+    commit: string | null;
+    code: string;
+  }>;
 }
 
 export interface PathReport {
@@ -200,6 +225,13 @@ export interface UnitReport {
    *  commit to name) or when the unit binds no committed evidence. */
   evidenceCommit: string | null;
   evidenceSignature: string | null;
+  /** The audit shard holding the receipt that won this unit, plus the commit that
+   *  last wrote that shard and its `%G?`. Same path forms as `evidence`;
+   *  commit/signature null in working-tree mode. This is the input that decided
+   *  which evidence to trust, so a reader auditing a `signed` verdict needs it. */
+  receipt: string | null;
+  receiptCommit: string | null;
+  receiptSignature: string | null;
   claimsSource: "manifest" | "evidence-only" | "manifest-unverified" | null;
   bypasses: string[];
   problem?: string;
@@ -377,6 +409,14 @@ interface RecordView {
     dirName: string,
     relPath: string,
   ): { commit: string | null; code: string } | null;
+  /** The audit shard an event came from: a reportable label, plus the commit
+   *  that last wrote that file and git's `%G?` for it. Takes the event's own
+   *  `shard` token because its meaning is backing-specific (a repository path in
+   *  commit mode, an absolute file path in the working tree), and returns
+   *  commit/code null wherever no commit can be named. */
+  shardOrigin(
+    shard: string,
+  ): { label: string; commit: string | null; code: string | null };
   /** Human label for the report's `evidence` field and problem strings. */
   label(space: string, dirName: string, relPath: string): string;
 }
@@ -409,6 +449,84 @@ function readBlobs(dir: string, oids: readonly string[]): Map<string, Buffer> {
     at += size + 1; // git writes a trailing newline after the payload
   }
   return out;
+}
+
+// --- Which dot-dirs are harness shells, according to the commit -------------
+//
+// `excluded` has to be a property of the commit, not of the machine reading it.
+// The review-time walk discovers shells by opening the project root, which is
+// right when the thing being described IS the checkout; for a report about a
+// commit it is a bug: delete `.claude` from a working tree and the same SHA
+// would flip its `.claude/**` paths from `excluded` to `unattested`. So we ask
+// the tree instead, applying the same manifest rule (isHarnessShellManifest).
+
+const treeShellCache = new Map<string, ReadonlySet<string>>();
+
+/** Harness shell dirs at the root of `commit`'s tree. */
+function commitHarnessShellDirs(dir: string, commit: string): ReadonlySet<string> {
+  const cacheKey = `${dir}\0${commit}`;
+  const cached = treeShellCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const shells = new Set<string>();
+  // Root level only, non-recursive: a shell dir is a child of the repo root.
+  const roots = git(dir, ["ls-tree", "-z", "--full-tree", commit]);
+  const candidates: string[] = [];
+  if (roots.status === 0) {
+    for (const entry of roots.stdout.split("\0")) {
+      const tab = entry.indexOf("\t");
+      if (tab === -1) continue;
+      const type = entry.slice(0, tab).split(" ")[1];
+      const name = entry.slice(tab + 1);
+      if (type === "tree" && isHarnessDirName(name)) candidates.push(name);
+    }
+  }
+  if (candidates.length > 0) {
+    const manifests = git(dir, [
+      "ls-tree",
+      "-z",
+      "--full-tree",
+      commit,
+      "--",
+      ...candidates.map((name) => `${name}/${HARNESS_SHELL_MANIFEST_REL}`),
+    ]);
+    const oids = new Map<string, string>();
+    if (manifests.status === 0) {
+      for (const entry of manifests.stdout.split("\0")) {
+        const tab = entry.indexOf("\t");
+        if (tab === -1) continue;
+        const [, type, oid] = entry.slice(0, tab).split(" ");
+        if (type !== "blob" || oid === undefined) continue;
+        oids.set(entry.slice(tab + 1), oid);
+      }
+    }
+    const contents = readBlobs(dir, [...oids.values()]);
+    for (const [path, oid] of oids) {
+      const bytes = contents.get(oid);
+      const name = path.slice(0, path.length - HARNESS_SHELL_MANIFEST_REL.length - 1);
+      if (bytes !== undefined && isHarnessShellManifest(bytes)) shells.add(name);
+    }
+  }
+  treeShellCache.set(cacheKey, shells);
+  return shells;
+}
+
+/** Exclusion context for a range: a shell present at either end is excluded at
+ *  both, so installing or removing a harness does not leak framework paths into
+ *  `unattested` from the side of the range that lacks the manifest. A repo that
+ *  does not carry the workspace shell has no shell dirs to find. */
+function rangeExclusionContext(
+  query: RepoQuery,
+  base: string | null,
+  head: string,
+): SourceExclusionContext {
+  const shells = new Set<string>();
+  if (query.carriesShell) {
+    for (const name of commitHarnessShellDirs(query.dir, head)) shells.add(name);
+    if (base !== null) {
+      for (const name of commitHarnessShellDirs(query.dir, base)) shells.add(name);
+    }
+  }
+  return { harnessShellDirs: shells };
 }
 
 /** The record as `sha` carries it. Every path/oid comes from one `ls-tree`, so
@@ -517,6 +635,10 @@ function treeRecordView(
     lastWriter(space, dirName, relPath) {
       return lastWriterSignature(repoQueryDir, sha, recordPath(space, dirName, relPath));
     },
+    shardOrigin(shard) {
+      // `shard` is already this backing's repository path for the file.
+      return { label: shard, ...lastWriterSignature(repoQueryDir, sha, shard) };
+    },
     label(space, dirName, relPath) {
       return recordPath(space, dirName, relPath);
     },
@@ -561,6 +683,13 @@ function worktreeRecordView(projectDir: string): RecordView {
       // never have been committed at all. Refusing to guess is what keeps a
       // worktree-backed report pinned to `informational`.
       return null;
+    },
+    shardOrigin(shard) {
+      return {
+        label: posixRelative(projectDir, shard),
+        commit: null,
+        code: null,
+      };
     },
     label(space, dirName, relPath) {
       const record = recordDir(projectDir, dirName, space);
@@ -646,6 +775,16 @@ interface UnitOwnership {
    *  unit binds no committed evidence — either way the unit cannot reach `signed`. */
   evidenceCommit: string | null;
   evidenceSignature: string | null;
+  /** The audit shard carrying the receipt that won ownership, and who last wrote
+   *  it. The receipt is the ROOT of the authority chain — it names the unit, the
+   *  stage, the timestamp that decides which receipt wins, and the fingerprint
+   *  that selects the evidence file — so a trust level derived from the evidence
+   *  alone would be blind to a forged receipt pointing at somebody else's
+   *  legitimate, signed evidence. Git guarantees nothing about append-only-ness:
+   *  whoever last wrote this file could have written anything in it. */
+  receiptShard: string | null;
+  receiptCommit: string | null;
+  receiptSignature: string | null;
   problem: string | null;
 }
 
@@ -903,6 +1042,8 @@ function buildOwnershipIndex(
           evidenceRel !== null && evidenceSource === "committed"
             ? view.lastWriter(space, info.dirName, evidenceRel)
             : null;
+        // Who vouched for the receipt that chose that evidence in the first place.
+        const receipt = view.shardOrigin(chosen.shard);
 
         ownerships.push({
           unit,
@@ -922,6 +1063,9 @@ function buildOwnershipIndex(
           evidenceSource,
           evidenceCommit: writer?.commit ?? null,
           evidenceSignature: writer?.code ?? null,
+          receiptShard: receipt.label,
+          receiptCommit: receipt.commit,
+          receiptSignature: receipt.code,
           problem,
         });
       }
@@ -994,8 +1138,11 @@ function classifyPath(
   query: RepoQuery,
   ownerships: UnitOwnership[],
   headListing: WorkspaceSourceListing,
+  exclusion: SourceExclusionContext,
 ): PathReport {
-  if (sourcePathIsExcluded(path, query.carriesShell, query.carriesShell ? query.dir : undefined)) {
+  // Exclusion reads the commit's own shell dirs, never the checkout's, so a
+  // path's `excluded` verdict is fixed by the SHA.
+  if (sourcePathIsExcluded(path, query.carriesShell, undefined, exclusion)) {
     return { path, status: "excluded" };
   }
   const key = sourcePathKey(query.keyRepo, path);
@@ -1158,19 +1305,38 @@ function computeTrust(
     view.kind === "worktree" ||
     (recordIncludesChange && recordPathsChangedInRange.length > 0);
 
-  const signatures = reliedUpon.map((owner) => ({
-    unit: `${owner.space}/${owner.intent}/${owner.unit}`,
-    commit: owner.evidenceCommit,
-    code: owner.evidenceSignature ?? "-",
-  }));
+  // Both ends of every relied-upon unit's authority chain. The receipt comes
+  // first because it is the one that chose the evidence: gating on the evidence
+  // alone would accept a forged, unsigned receipt whose fingerprint happens to
+  // name a signed evidence file — exactly the "signed" claim nobody could honour.
+  const signatures = reliedUpon.flatMap((owner) => {
+    const unit = `${owner.space}/${owner.intent}/${owner.unit}`;
+    return [
+      {
+        unit,
+        role: "receipt" as const,
+        path: owner.receiptShard,
+        commit: owner.receiptCommit,
+        code: owner.receiptSignature ?? "-",
+      },
+      {
+        unit,
+        role: "evidence" as const,
+        path: owner.evidencePath,
+        commit: owner.evidenceCommit,
+        code: owner.evidenceSignature ?? "-",
+      },
+    ];
+  });
 
   let level: TrustLevel;
   if (view.kind !== "commit") level = "informational";
   else if (selfAttested) level = "reproducible";
   else if (
-    // At least one relied-upon file, all of them signed. The length check is what
-    // stops a change that attests NOTHING from reporting `signed` on a vacuous
-    // "every" — no evidence is no basis, however good the record source is.
+    // At least one relied-upon input, every one of them signed — receipts and
+    // evidence alike. The length check is what stops a change that attests
+    // NOTHING from reporting `signed` on a vacuous "every": no input is no basis,
+    // however good the record source is.
     signatures.length > 0 &&
     signatures.every((entry) => GOOD_SIGNATURE_CODES.has(entry.code))
   ) {
@@ -1270,7 +1436,10 @@ export function runResolve(
 
   const record = resolveRecordView(projectDir, query, options.recordRef, head);
   const { ownerships } = buildOwnershipIndex(record.view, options.space, options.intent);
-  const pathReports = paths.sort().map((path) => classifyPath(path, query, ownerships, headListing));
+  const exclusion = rangeExclusionContext(query, base, head);
+  const pathReports = paths
+    .sort()
+    .map((path) => classifyPath(path, query, ownerships, headListing, exclusion));
 
   const summary: Record<PathStatus, number> = {
     verified: 0,
@@ -1317,6 +1486,9 @@ export function runResolve(
       evidenceSource: owner.evidenceSource,
       evidenceCommit: owner.evidenceCommit,
       evidenceSignature: owner.evidenceSignature,
+      receipt: owner.receiptShard,
+      receiptCommit: owner.receiptCommit,
+      receiptSignature: owner.receiptSignature,
       claimsSource: owner.claimsSource,
       bypasses: owner.bypasses,
       ...(owner.problem === null ? {} : { problem: owner.problem }),
@@ -1447,8 +1619,9 @@ export function runAnchor(
     const paths = changedPaths(query.dir, parents[0] ?? null, commit);
     if (paths === null) throw new Error(`git diff failed for commit ${commit} in ${query.dir}`);
     const attributed = new Map<string, { space: string; intent: string; units: Set<string>; paths: number }>();
+    const exclusion = rangeExclusionContext(query, parents[0] ?? null, commit);
     for (const path of paths) {
-      if (sourcePathIsExcluded(path, query.carriesShell, query.carriesShell ? query.dir : undefined)) {
+      if (sourcePathIsExcluded(path, query.carriesShell, undefined, exclusion)) {
         continue;
       }
       const resolved = owningUnit(ownerships, sourcePathKey(query.keyRepo, path));
@@ -1543,8 +1716,9 @@ resolve <commit> (or --commit <rev>) resolves that commit's first-parent delta
            reproducible   record read from a git tree, but the change may have
                           authored the receipts judging it (trust.selfAttested)
            independent    reproducible, and the range does not touch the record
-           signed         independent, with at least one relied-upon evidence
-                          file and every one of them arriving in a signed commit
+           signed         independent, and every authority-bearing input (each
+                          relied-upon receipt shard and the evidence file its
+                          fingerprint selects) arrived in a signed commit
          This bounds how much the report can be trusted, not how much of the
          change is attested — pair it with --fail-on for coverage.
 anchor   Append SOURCE_COMMITTED enrichment events for commits that landed

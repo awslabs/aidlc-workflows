@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 957,
+    "total": 960,
     "enumeratedByClass": {
-      "function": 650,
+      "function": 653,
       "audit": 96,
       "scope": 11,
       "stage": 33,
@@ -3011,6 +3011,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:HARNESS_SHELL_MANIFEST_REL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:harnessDataPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3428,6 +3435,20 @@
     {
       "unitClass": "function",
       "unitId": "function:isGitRepoDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isHarnessDirName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isHarnessShellManifest",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

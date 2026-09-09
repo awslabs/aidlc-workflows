@@ -25,6 +25,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +56,43 @@ function git(dir: string, args: string[]): string {
 function commitAll(project: string, message: string): string {
   git(project, ["add", "-A"]);
   git(project, ["commit", "-qm", message]);
+  return git(project, ["rev-parse", "HEAD"]);
+}
+
+/** Configure real commit signing (ssh format, git >= 2.34) and prove it works by
+ *  signing a throwaway commit. Returns false where the host cannot sign, so the
+ *  trust assertions can degrade their expected `%G?` codes instead of failing on
+ *  a missing ssh-keygen. */
+function signedCommitsWork(project: string): boolean {
+  const keyDir = mkdtempSync(join(tmpdir(), "aidlc-t312-key-"));
+  dirs.push(keyDir);
+  const key = join(keyDir, "signer");
+  const keygen = spawnSync(
+    "ssh-keygen",
+    ["-q", "-t", "ed25519", "-N", "", "-C", "signer@test", "-f", key],
+    { encoding: "utf-8" },
+  );
+  if (keygen.status !== 0 || !existsSync(`${key}.pub`)) return false;
+  const allowed = join(keyDir, "allowed-signers");
+  writeFileSync(allowed, `signer@test namespaces="git" ${readFileSync(`${key}.pub`, "utf-8").trim()}\n`);
+  git(project, ["config", "gpg.format", "ssh"]);
+  git(project, ["config", "user.signingkey", `${key}.pub`]);
+  git(project, ["config", "gpg.ssh.allowedSignersFile", allowed]);
+  writeFileSync(join(project, "signing-probe.txt"), "probe\n");
+  git(project, ["add", "-A"]);
+  const probe = spawnSync(
+    "git",
+    ["-C", project, "commit", "-qS", "-m", "probe that this host can sign commits"],
+    { encoding: "utf-8" },
+  );
+  if (probe.status !== 0) return false;
+  return git(project, ["log", "-1", "--format=%G?"]) === "G";
+}
+
+function commit(project: string, message: string, signed: boolean): string {
+  if (!signed) return commitAll(project, message);
+  git(project, ["add", "-A"]);
+  git(project, ["commit", "-qS", "-m", message]);
   return git(project, ["rev-parse", "HEAD"]);
 }
 
@@ -424,21 +462,131 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       selfAttested: false,
     });
 
-    // `signed` needs git to vouch for the commit that carried the evidence.
-    // Unsigned fixture commits report `-`, so the bar is not met.
+    // `signed` needs git to vouch for the commits that carried the receipt AND
+    // the evidence. Unsigned fixture commits report `N`, so the bar is not met.
     const wantSigned = attest(["resolve", selfApproved, "--record-ref", "records", "--require-trust", "signed"], project);
     expect(wantSigned.rc).toBe(3);
     report = JSON.parse(wantSigned.stdout);
     expect(report.trust.level).toBe("independent");
     expect(report.trust.signatures).toEqual([
-      { unit: "default/fixture-intent/alpha", commit: approved, code: "N" }, // N = no signature
+      {
+        unit: "default/fixture-intent/alpha",
+        role: "receipt",
+        path: report.units[0].receipt,
+        commit: approved,
+        code: "N", // N = no signature
+      },
+      {
+        unit: "default/fixture-intent/alpha",
+        role: "evidence",
+        path: report.units[0].evidence,
+        commit: approved,
+        code: "N",
+      },
     ]);
     expect(report.units[0]).toMatchObject({ evidenceCommit: approved, evidenceSignature: "N" });
+    expect(report.units[0].receipt).toMatch(
+      /^aidlc\/spaces\/default\/intents\/fixture-intent\/audit\/.+\.md$/,
+    );
+    expect(report.units[0]).toMatchObject({ receiptCommit: approved, receiptSignature: "N" });
 
     const unresolvable = attest(["resolve", "--record-ref", "no/such/ref"], project);
     expect(unresolvable.rc).toBe(1);
     expect(JSON.parse(unresolvable.stderr).error).toContain("cannot resolve --record-ref");
   }, 60000);
+
+  test("`signed` covers the receipt that selects the evidence, not only the evidence", () => {
+    const { project, record } = runtimeFixture();
+    const signs = signedCommitsWork(project);
+    // %G? for a commit this host actually signed. Where signing is unavailable
+    // the structural assertions below still hold; only the codes degrade.
+    const good = signs ? "G" : "N";
+
+    // Two legitimate signed reviews of the same unit. Evidence files are
+    // content-addressed, so the record ends up holding BOTH — and only the newer
+    // receipt is supposed to be able to select one.
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const firstApproved = commit(project, "reviewed app.ts = 2", signs);
+    writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const secondApproved = commit(project, "reviewed app.ts = 3", signs);
+
+    // Control: a signed record source, judged from outside the change, reaches
+    // `signed` — receipt shard and evidence both arrived in signed commits.
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    const reverted = commit(project, "put app.ts back to the older reviewed state", signs);
+    let report = JSON.parse(attest(["resolve", reverted, "--record-ref", secondApproved], project).stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("drifted"); // newest receipt approved 3, not 2
+    expect(report.trust).toMatchObject({ level: signs ? "signed" : "independent" });
+    expect(report.trust.signatures).toEqual([
+      { unit: "default/fixture-intent/alpha", role: "receipt", path: report.units[0].receipt, commit: secondApproved, code: good },
+      { unit: "default/fixture-intent/alpha", role: "evidence", path: report.units[0].evidence, commit: secondApproved, code: good },
+    ]);
+    const newestEvidenceName = (report.units[0].evidence as string).split("/").pop();
+
+    // The attack: append an UNSIGNED forged receipt to the shard. It names the
+    // same unit with a later timestamp, so it wins ownership, and its fingerprint
+    // points at the FIRST review's evidence — a signed file it has no right to.
+    // The reverted source then matches that older evidence exactly.
+    const evidenceDir = join(record, "construction", "alpha", "code-generation");
+    const evidenceNames = readdirSync(evidenceDir)
+      .filter((name) => /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name))
+      .sort();
+    expect(evidenceNames.length).toBe(2); // both reviews' evidence survives
+    const shard = join(record, "audit", readdirSync(join(record, "audit")).sort()[0]);
+    const forged = (digest: string, timestamp: string) => [
+      "## Review Completed",
+      `**Timestamp**: ${timestamp}`,
+      "**Event**: REVIEW_COMPLETED",
+      "**Stage**: code-generation",
+      "**Unit**: alpha",
+      `**Reviewer**: ${REVIEWER}`,
+      "**Verdict**: READY",
+      `**Unit Source Fingerprint**: sha256:${digest}`,
+      "",
+      "---",
+      "",
+    ].join("\n");
+    // The evidence to hijack is the superseded one: the first review approved
+    // app.ts = 2, which is exactly the state the revert restored.
+    const hijacked = evidenceNames.find((name) => name !== newestEvidenceName);
+    expect(hijacked).toBeDefined();
+    if (hijacked === undefined) return;
+    const digest = createHash("sha256")
+      .update(readFileSync(join(evidenceDir, hijacked)))
+      .digest("hex");
+
+    appendFileSync(shard, forged(digest, "2099-01-01T00:00:00Z"), "utf-8");
+    const forgedCommit = commit(project, "append an unsigned receipt", false);
+
+    // Judged against the forged record, the path verifies — content-addressed
+    // integrity cannot tell an unauthorised approval from an authorised one.
+    // What it MUST NOT do is call that basis `signed`: the receipt that chose
+    // the evidence arrived unsigned, so the gate has to fail closed.
+    const gated = attest([
+      "resolve",
+      reverted,
+      "--record-ref",
+      forgedCommit,
+      "--require-trust",
+      "signed",
+      "--fail-on",
+      "drifted,unattested,unverifiable,indeterminate",
+    ], project);
+    report = JSON.parse(gated.stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("verified");
+    expect(report.trust.level).toBe("independent");
+    expect(report.trust.satisfied).toBe(false);
+    expect(gated.rc).toBe(3);
+    // The forge is visible exactly where a reader would look: the receipt input
+    // names the unsigned commit, while the evidence it hijacked stays signed.
+    expect(report.trust.signatures).toEqual([
+      { unit: "default/fixture-intent/alpha", role: "receipt", path: report.units[0].receipt, commit: forgedCommit, code: "N" },
+      { unit: "default/fixture-intent/alpha", role: "evidence", path: report.units[0].evidence, commit: firstApproved, code: good },
+    ]);
+    expect(report.units[0]).toMatchObject({ receiptCommit: forgedCommit, receiptSignature: "N" });
+  }, 90000);
 
   test("resolve excludes the harness shell of a repo that carries the workspace shell", () => {
     const { project, record } = runtimeFixture();
@@ -450,10 +598,26 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     review(project, record, "alpha", [{ path: "app.ts" }]);
     const head = commitAll(project, "install the harness shell");
 
-    const report = JSON.parse(attest(["resolve", head, "--fail-on", "unattested"], project).stdout);
+    const first = attest(["resolve", head, "--fail-on", "unattested"], project);
+    const report = JSON.parse(first.stdout);
     expect(pathStatus(report, ".claude/settings.json")?.status).toBe("excluded");
     expect(pathStatus(report, ".claude/tools/data/harness.json")?.status).toBe("excluded");
     expect(report.summary.unattested).toBe(0);
+
+    // Which dot-dirs are harness shells is read from the QUERIED TREE, so it is
+    // a property of the commit and not of whoever happens to be resolving it.
+    // Uninstalling the shell from this checkout cannot reclassify the same SHA
+    // (it used to flip these paths to `unattested`).
+    rmSync(join(project, ".claude"), { recursive: true, force: true });
+    expect(attest(["resolve", head, "--fail-on", "unattested"], project).stdout).toBe(first.stdout);
+
+    // And the commit that performs the uninstall stays excluded too: the base
+    // side of the range still carries the manifest, so removing a harness does
+    // not surface a wall of `unattested` framework paths.
+    const removed = commitAll(project, "uninstall the harness shell");
+    const after = JSON.parse(attest(["resolve", removed], project).stdout);
+    expect(pathStatus(after, ".claude/settings.json")?.status).toBe("excluded");
+    expect(after.summary.unattested).toBe(0);
   }, 60000);
 
   test("resolve and anchor refuse a shallow-clone boundary instead of diffing the root tree", () => {

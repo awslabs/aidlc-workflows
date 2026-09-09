@@ -174,7 +174,8 @@ but do not yet have committed release versions.
   so it needs its own change with a migration story for existing receipts.
   Beyond it, richer trust roots remain future work: per-approval signatures and
   an identity policy for who may approve (today's `signed` level checks git's
-  commit-level `%G?` on the evidence writer, not a reviewer identity).
+  commit-level `%G?` on whoever last wrote each authority-bearing file — the
+  receipt's audit shard and the evidence it selects — not a reviewer identity).
 
 ### Governed feedback loops
 

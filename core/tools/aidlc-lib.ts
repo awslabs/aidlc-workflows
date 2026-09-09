@@ -208,8 +208,28 @@ export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cur
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
 // layout (lib copied loose in a test, a non-dotted parent) falls through to the
 // CWD probe instead of returning a bogus harness dir.
-function isHarnessDirName(name: string): boolean {
+export function isHarnessDirName(name: string): boolean {
   return /^\.[a-z0-9][a-z0-9._-]*$/i.test(name);
+}
+
+/** Where a harness shell announces itself, relative to the shell dir. */
+export const HARNESS_SHELL_MANIFEST_REL = "tools/data/harness.json";
+
+/** The manifest test that makes a dot-dir a harness shell rather than an
+ *  ordinary hidden directory someone reviewed. Exported alongside
+ *  HARNESS_SHELL_MANIFEST_REL so a caller that must judge a *git tree* instead
+ *  of the checkout (commit provenance) applies the identical rule: two answers
+ *  to "is this a shell?" would mean two answers to "is this path excluded?". */
+export function isHarnessShellManifest(bytes: Buffer | string): boolean {
+  if (bytes.length > 64 * 1024) return false;
+  try {
+    const parsed = JSON.parse(
+      typeof bytes === "string" ? bytes : bytes.toString("utf-8"),
+    ) as { name?: unknown };
+    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function deriveHarnessDir(): string {
@@ -14414,13 +14434,14 @@ function sourceIdentityBudget(name: string, fallback: number): number {
 function isSourceHarnessShellDir(root: string, name: string): boolean {
   if (!isHarnessDirName(name)) return false;
   try {
-    const manifestPath = join(root, name, "tools", "data", "harness.json");
+    const manifestPath = join(
+      root,
+      name,
+      ...HARNESS_SHELL_MANIFEST_REL.split("/"),
+    );
     const stat = lstatSync(manifestPath);
     if (!stat.isFile() || stat.size > 64 * 1024) return false;
-    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
-      name?: unknown;
-    };
-    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+    return isHarnessShellManifest(readFileSync(manifestPath, "utf-8"));
   } catch {
     return false;
   }
@@ -16511,13 +16532,27 @@ export function normalizeManifestSourcePath(path: string): { path: string; prefi
   return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
 }
 
+export interface SourceExclusionContext {
+  /** Harness shell dirs of the tree being judged, supplied instead of being
+   *  discovered under `projectDir`. Commit provenance passes this: shells found
+   *  on disk would make a commit's `excluded` paths depend on which harnesses
+   *  happen to be installed in the current checkout, so the same SHA would
+   *  classify `.claude/settings.json` differently in two clones. */
+  harnessShellDirs: ReadonlySet<string>;
+}
+
 export function sourcePathIsExcluded(
   path: string,
   carriesWorkspaceShell: boolean,
   projectDir?: string,
+  context?: SourceExclusionContext,
 ): boolean {
   const withoutTrailingSlash = path.replace(/\/+$/, "");
   const segments = withoutTrailingSlash.split("/");
+  const isShellDir = (name: string): boolean =>
+    context !== undefined
+      ? isHarnessDirName(name) && context.harnessShellDirs.has(name)
+      : projectDir !== undefined && isSourceHarnessShellDir(projectDir, name);
   if (
     carriesWorkspaceShell &&
     (
@@ -16525,10 +16560,7 @@ export function sourcePathIsExcluded(
       path === ".aidlc/" ||
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
-      (
-        projectDir !== undefined &&
-        isSourceHarnessShellDir(projectDir, segments[0])
-      )
+      isShellDir(segments[0])
     )
   ) return true;
 
