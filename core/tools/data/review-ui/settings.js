@@ -33,8 +33,8 @@ const SHIPPED_PRESET = "balanced";
 // unless the project recorded group dials of its own, which is no preset.
 function teamPreset(policy) {
   if (!policy) return null;
-  if (policy.team.preset) return policy.team.preset;
-  return Object.keys(policy.recorded.project?.groups || {}).length ? null : SHIPPED_PRESET;
+  if (policy.team?.preset) return policy.team.preset;
+  return Object.keys(policy.recorded?.project?.groups || {}).length ? null : SHIPPED_PRESET;
 }
 
 let root = null;
@@ -142,13 +142,6 @@ function modelsPage() {
     </div>`;
 }
 
-// Where a group's team value comes from, for the option that names it.
-function teamSource(policy, id, effort) {
-  if (policy.recorded.project?.groups?.[id]) return "project";
-  if (effort === INHERIT) return "";
-  return policy.team.preset ? `preset ${policy.team.preset}` : "shipped default";
-}
-
 function advancedSection(workflow) {
   const policy = workflow.models_policy;
   const efforts = policy?.efforts || ["low", "medium", "high", "xhigh"];
@@ -160,8 +153,8 @@ function advancedSection(workflow) {
     // level records your own dial (aidlc.settings.local.json, this machine
     // only); picking the first option again removes it.
     const team = group.effort;
-    const mine = policy.recorded.local?.groups?.[group.id] || "";
-    const from = policy.recorded.project?.groups?.[group.id] ? "Team" : presetLabel || "Default";
+    const mine = policy.recorded?.local?.groups?.[group.id] || "";
+    const from = policy.recorded?.project?.groups?.[group.id] ? "Team" : presetLabel || "Default";
     const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
