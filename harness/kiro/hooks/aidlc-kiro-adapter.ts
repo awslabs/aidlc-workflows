@@ -1778,8 +1778,27 @@ if (target === "deliver-stage-rules") {
 // work would have begun. It is enforcement by instruction rather than a hard
 // block - 0.12 offers no exit-code refusal at all - and that limit is stated in
 // docs/guide/harnesses/kiro.md rather than papered over.
+//
+// Then a second gate, because the channel stopped being proof. A supported IDE
+// does not RUN a `.kiro.hook` (measured on 1.0.437: nothing fired), but it does
+// LIST one, labelled `legacy`, next to a `Migrate` button - so one click turns
+// this manifest into a current-generation hook that a supported host runs. The
+// USER_PROMPT gate above cannot catch that: 1.x populates USER_PROMPT for a
+// runCommand hook too. Migrated, on `preToolUse`, this notice would deny every
+// tool call on a host that AI-DLC fully supports.
+//
+// So read the host's version rather than trusting the channel. VSCODE_IPC_HOOK
+// names the socket by version line - `.../Kiro/0.12-main.sock` on 0.12.333 and
+// `.../Kiro/1.0.-main.sock` on 1.0.437, both measured, hence the optional third
+// dot. Anything that is not a 0.x major stays silent, and so does an unparseable
+// or absent value: this notice's whole job is to inform, and the worst outcome of
+// a wrong guess is refusing work on a supported install. Silence is the failure
+// mode to prefer, at the cost that a 0.x host which stops setting this variable
+// gets no notice.
 if (target === "legacy-ide-notice") {
   if ((process.env.USER_PROMPT ?? "").trim().length === 0) return 0;
+  const hostLine = /\/(\d+)\.(\d+)\.?-main\.sock$/.exec(process.env.VSCODE_IPC_HOOK ?? "");
+  if (hostLine === null || hostLine[1] !== "0") return 0;
   process.stdout.write(
     "ACCESS DENIED. Permission is not granted for this tool call.\n\n" +
       "AI-DLC no longer supports this version of Kiro IDE.\n\n" +

@@ -1084,13 +1084,16 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       // host turns a non-zero exit into "command execution failed" and never into
       // a refusal, while its preToolUse contract forbids the model from
       // proceeding when the OUTPUT denies access.
+      const payload = JSON.stringify({
+        path: "/w/AGENTS.md",
+        start_line: null,
+        end_line: 10,
+        explanation: "User asked to read the first 10 lines of AGENTS.md.",
+      });
       const legacy = runAdapter(dir, "legacy-ide-notice", "", [], {
-        USER_PROMPT: JSON.stringify({
-          path: "/w/AGENTS.md",
-          start_line: null,
-          end_line: 10,
-          explanation: "User asked to read the first 10 lines of AGENTS.md.",
-        }),
+        USER_PROMPT: payload,
+        // The socket name 0.12.333 was measured to set.
+        VSCODE_IPC_HOOK: "/Users/u/Library/Application Support/Kiro/0.12-main.sock",
       });
       expect(legacy.code).toBe(0);
       expect(legacy.stderr).toBe("");
@@ -1098,6 +1101,30 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(legacy.stdout.startsWith("ACCESS DENIED.")).toBe(true);
       expect(legacy.stdout).toContain("no longer supports this version of Kiro IDE");
       expect(legacy.stdout).toContain("Kiro CLI");
+
+      // A SUPPORTED host that runs this target anyway - which one click on the
+      // `Migrate` button beside the legacy hook produces, and where 1.x populates
+      // USER_PROMPT just the same - must hear nothing. Otherwise the notice denies
+      // every tool call on an install AI-DLC supports. Socket name measured on
+      // 1.0.437, trailing dot included.
+      const supported = runAdapter(dir, "legacy-ide-notice", "", [], {
+        USER_PROMPT: payload,
+        VSCODE_IPC_HOOK: "/Users/u/Library/Application Support/Kiro/1.0.-main.sock",
+      });
+      expect(supported.code).toBe(0);
+      expect(supported.stdout).toBe("");
+      expect(supported.stderr).toBe("");
+
+      // An unreadable host line is silence too: informing is this target's only
+      // job, and refusing work on a supported install is the worse error.
+      for (const ipc of ["", "/tmp/not-a-kiro-socket", "/x/Kiro/main.sock"]) {
+        const unknown = runAdapter(dir, "legacy-ide-notice", "", [], {
+          USER_PROMPT: payload,
+          VSCODE_IPC_HOOK: ipc,
+        });
+        expect(unknown.code, `silent on ${ipc || "<empty>"}`).toBe(0);
+        expect(unknown.stdout, `silent on ${ipc || "<empty>"}`).toBe("");
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
