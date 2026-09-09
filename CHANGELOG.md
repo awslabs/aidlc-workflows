@@ -11,6 +11,9 @@ Preserve summary confirmations when an Assumption Confirmation section is append
 * Appending `## Assumption Confirmation` after a confirmed summary with an adjacent, blank-delimited `---`, `***`, or `___` no longer causes `SUMMARY_CONTENT_STALE` during stage completion. Code examples before the assumption heading and follow-up answers remain covered by the receipt, so substantive edits still require confirmation. Closes #1074.
 * Content appended under a `## ` heading is separated from the following `## ` heading by a blank line, keeping method files well-formed. Closes #1075.
 
+* `aidlc-state.ts unit start|pause|resume` refuses while the engine routes the stage as a wave, leaves state and audit unchanged, and directs callers to `unit complete --wave`. Closes #1071.
+* `aidlc-state.ts set-construction-iteration unit-major` leaves the remaining units completable through the serial lifecycle even when a revised stage already has wave completion receipts.
+
 ## [2.8.6] - 2026-09-09
 
 **Superseded development entry:** No 2.8.6 release was published. The intended release version is 2.8.2, documented above; this entry is retained as development history.
