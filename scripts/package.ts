@@ -1094,6 +1094,12 @@ function rewriteNativeInvocations(
     "worktree",
     "workspace-sync",
   ].join("|");
+  const adapterHookNames = new Set([
+    "kiro-adapter",
+    "codex-adapter",
+    "cursor-adapter",
+    "copilot-adapter",
+  ]);
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;
   const toolPattern = new RegExp(
@@ -1139,7 +1145,7 @@ function rewriteNativeInvocations(
       (_match, delegate: string) => trustedCommand(delegate),
     );
     value = value.replace(hookPattern, (_match, hook: string) => {
-      if (hook.endsWith("-adapter")) {
+      if (adapterHookNames.has(hook)) {
         return trustedCommand(`adapter ${m.name}`);
       }
       if (hook === "statusline") return trustedCommand("statusline");
