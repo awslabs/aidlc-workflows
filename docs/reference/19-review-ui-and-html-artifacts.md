@@ -193,9 +193,9 @@ harness drops - resolved with `resolveModelPolicy` from `aidlc config models`'
 recorded settings and the shipped agent tiers, exactly as `config models --show`
 does. `models_command` names the command that changes it; `recorded` gives what
 each settings layer (`global`, `project`, `local`) holds, and `efforts` the
-vocabulary. Settings shows it (`policy.js` renders the table); there is no
-per-intent effort: a run's agents use the project policy, and only the session
-effort is chosen at Start. Settings (`settings.js`, the rail's bottom cog) edits the
+vocabulary. There is no per-intent effort: a run's agents use the project
+policy, and only the session effort is chosen at Start. Settings
+(`settings.js`, the rail's bottom cog) shows the default effort read-only and edits the
 policy through `POST /api/models-policy`, which runs the public
 `aidlc config models` command - `--preset`, `--<group>-effort`,
 `--agent --effort [--model]`, or `--reset`, with `--project` or `--local` and

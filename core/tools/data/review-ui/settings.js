@@ -1,22 +1,21 @@
-// Settings. A modal with left navigation, opened from the header's cog or the
-// Effort menu's "Settings…" row.
+// Settings. A modal with left navigation, opened from the cog at the bottom of
+// the rail.
 //
-// "Models & effort" is the page that matters today. It says what this run
-// uses (the composer chip), what "default" resolves to and where that lives
-// (read-only: it is the harness's own setting), and edits the project's model
-// policy - preset, the three group efforts, per-agent exceptions - through the
-// daemon, which runs the same `aidlc config models` the terminal does. A
-// change lands in committed files and applies to runs started afterwards; the
-// page says both. "Daemon" is read-only facts about this review UI.
+// "Models & effort" is one page, top to bottom: the default effort (read-only -
+// it is the harness's own setting, what "inherit" means), the preset, each
+// group of agents inheriting that default or pinned to a level, and the
+// per-agent exceptions. Every change is one `aidlc config models` call through
+// the daemon - the same writer the terminal uses - to the committed project
+// layer or to this machine only; it applies to runs started afterwards.
+// "About" is read-only facts about this review UI.
 import { api } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./diff.js";
 import { setNotice, store } from "./store.js";
-import { policyTable } from "./policy.js";
 
 const PAGES = [
   { id: "models", label: "Models & effort" },
-  { id: "daemon", label: "Daemon" },
+  { id: "about", label: "About" },
 ];
 const PRESETS = [
   { id: "thorough", label: "Thorough", summary: "Reviewers think hardest" },
@@ -33,6 +32,7 @@ let root = null;
 let page = "models";
 let scope = "project"; // project = committed team policy · local = this machine only
 let busy = false;
+let addingException = false;
 
 export function init() {
   root = document.getElementById("settings");
@@ -66,73 +66,92 @@ function render() {
     </nav>
     <section class="settings-page ${busy ? "busy" : ""}">
       <button type="button" class="settings-close" data-close aria-label="Close settings">${icon("dismiss", { size: 14 })}</button>
-      ${page === "models" ? modelsPage() : daemonPage()}
+      ${page === "models" ? modelsPage() : aboutPage()}
     </section>
   </div>`;
   bind();
+}
+
+const INHERIT = "inherit";
+
+// Where a group's effective effort comes from, for the note beside it.
+function groupSource(policy, id, effective) {
+  const recorded = policy.recorded;
+  if (recorded.local?.groups?.[id]) return "only me";
+  if (recorded.project?.groups?.[id]) return "project";
+  if (recorded.global?.groups?.[id]) return "this machine";
+  if (effective === INHERIT) return "";
+  return policy.preset ? `preset ${policy.preset}` : "shipped default";
 }
 
 function modelsPage() {
   const workflow = store.workflow || {};
   const policy = workflow.models_policy;
   const fallback = workflow.runner_default_effort;
-  const recorded = policy?.recorded?.[scope];
-  const activePreset = recorded?.preset || null;
   const efforts = policy?.efforts || ["low", "medium", "high", "xhigh"];
-  const command = workflow.models_command || "aidlc config models";
-  const groupValue = (id) => recorded?.groups?.[id] || "";
-  const agentsForPicker = policy ? policy.groups.flatMap((group) => group.agents).concat(policy.exceptions.map((entry) => entry.agent)).sort() : [];
+  const exceptions = policy?.exceptions || [];
+  const agentsForPicker = policy ? policy.groups.flatMap((group) => group.agents).sort() : [];
+  const groupRow = (group) => {
+    const inherits = group.effort === INHERIT;
+    const source = groupSource(policy, group.id, group.effort);
+    return `<div class="settings-row">
+      <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
+      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" ${inherits ? "" : `title="To return this group to inheriting, reset the layer below"`}>
+        ${inherits ? `<option value="" selected>Inherit from default</option>` : ""}
+        ${efforts.map((level) => `<option value="${level}" ${group.effort === level ? "selected" : ""}>${level}</option>`).join("")}
+      </select>
+      <span class="settings-source">${source ? escapeHtml(source) : ""}</span>
+    </div>`;
+  };
   return `<h3>Models &amp; effort</h3>
-    <p class="settings-sub">Two separate controls: the effort a run's <em>session</em> thinks at, and the effort each <em>agent</em> is pinned to by project policy. A pin is never capped by the session.</p>
+    <p class="settings-sub">How hard each group of agents thinks.</p>
 
     <div class="settings-block">
-      <div class="settings-h">This run <span class="settings-scope">the composer chip</span></div>
-      <div class="settings-row"><span class="l">Effort<small>The conductor and every agent that inherits · the same dial as <code>/effort</code></small></span><span class="c">${escapeHtml(workflow.runner_effort ? "chosen when you Start" : "not a per-run dial on this runner")}</span></div>
-      <div class="settings-row"><span class="l">Default<small>${fallback ? `From ${escapeHtml(fallback.source)} - your own setting; change it there.` : "No settings file names an effort; the model's own default applies."}</small></span><span class="c">${fallback ? `<b>${escapeHtml(fallback.level)}</b>` : "model default"}</span></div>
+      <div class="settings-h">Default</div>
+      <div class="settings-row"><span class="l">Default effort<small>${fallback ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(fallback.source)}</code>) - what “inherit” means. Change it there${fallback.source.startsWith(".claude") ? " or with <code>/effort</code>" : ""}.` : "No settings file names an effort; the model's own default applies - what “inherit” means."}</small></span><span class="c"><b>${fallback ? escapeHtml(fallback.level) : "model default"}</b></span></div>
     </div>
 
     <div class="settings-block">
-      <div class="settings-h">Project policy <span class="settings-scope">committed · every intent</span>
-        <span class="settings-toggle" role="radiogroup" aria-label="Write to">
-          <button type="button" role="radio" aria-checked="${scope === "project"}" data-scope="project" title="aidlc.settings.json - committed team policy">Project</button>
-          <button type="button" role="radio" aria-checked="${scope === "local"}" data-scope="local" title="aidlc.settings.local.json - this machine only, not committed">Only me</button>
-        </span></div>
+      <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
-      <div class="settings-h2">Preset</div>
-      <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${activePreset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <div class="settings-h2">Groups <small>the layer's own dial; blank = the preset or shipped default</small></div>
-      ${GROUPS.map((group) => `<div class="settings-row"><span class="l">${group.label}</span>
-        <select data-group="${group.id}" aria-label="${group.label} effort" ${policy ? "" : "disabled"}>
-          <option value="" ${groupValue(group.id) === "" ? "selected" : ""}>-</option>
-          ${efforts.map((level) => `<option value="${level}" ${groupValue(group.id) === level ? "selected" : ""}>${level}</option>`).join("")}
-        </select></div>`).join("")}
-      <div class="settings-h2">Exceptions <small>one agent, its own effort</small></div>
-      ${Object.keys(recorded?.agents || {}).length
-        ? `<ul class="settings-exceptions">${Object.entries(recorded.agents).map(([agent, value]) => `<li><b>${escapeHtml(agent)}</b> · ${escapeHtml(value.effort || "inherit")}${value.model ? ` · <code>${escapeHtml(value.model)}</code>` : ""}</li>`).join("")}</ul>`
-        : `<p class="settings-note">None recorded in this layer.</p>`}
-      <form class="settings-exception-form" data-exception-form>
-        <select name="agent" aria-label="Agent" ${policy ? "" : "disabled"}>${agentsForPicker.map((agent) => `<option>${escapeHtml(agent)}</option>`).join("")}</select>
-        <select name="effort" aria-label="Effort">${efforts.map((level) => `<option>${level}</option>`).join("")}</select>
-        <input name="model" type="text" placeholder="model id (optional)" aria-label="Model id" spellcheck="false">
-        <button type="submit" class="btn" ${policy ? "" : "disabled"}>Add</button>
-      </form>
-      <div class="settings-actions">
-        <button type="button" class="btn" data-reset ${recorded ? "" : "disabled"}>Reset ${scope === "project" ? "project" : "my"} policy</button>
-        <span class="settings-note">Applies to runs started after the change. Written with <code title="${escapeHtml(command)}">aidlc config models --${scope}</code>${scope === "project" ? " - commit the result." : "."}</span>
-      </div>
+      <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${policy?.preset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
     </div>
 
     <div class="settings-block">
-      <div class="settings-h">Effective <span class="settings-scope">${policy?.preset ? `preset ${escapeHtml(policy.preset)}` : policy?.shipped_defaults ? "shipped defaults" : "all layers"}</span></div>
-      ${policyTable(policy)}
-      ${policy ? `<p class="settings-note">Recorded in: ${["global", "project", "local"].filter((layer) => policy.recorded[layer]).map((layer) => `<code>${layer === "global" ? "install root" : layer === "project" ? "aidlc.settings.json" : "aidlc.settings.local.json"}</code>`).join(", ") || "nothing yet - the shipped defaults apply"}</p>` : ""}
+      <div class="settings-h">Groups</div>
+      ${policy ? policy.groups.map(groupRow).join("") : ""}
+      <div class="settings-row">
+        <span class="l">Exceptions<small>One agent pinned to its own effort or model</small></span>
+        <span class="c settings-exceptions-summary">${exceptions.length ? exceptions.map((entry) => `${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}`).join(", ") : "none"}</span>
+        <button type="button" class="btn" data-add-exception ${policy ? "" : "disabled"}>${addingException ? "Cancel" : "Add…"}</button>
+      </div>
+      ${addingException ? `<form class="settings-exception-form" data-exception-form>
+        <select name="agent" aria-label="Agent">${agentsForPicker.map((agent) => `<option>${escapeHtml(agent)}</option>`).join("")}</select>
+        <select name="effort" aria-label="Effort">${efforts.map((level) => `<option ${level === "high" ? "selected" : ""}>${level}</option>`).join("")}</select>
+        <input name="model" type="text" placeholder="model id (optional)" aria-label="Model id" spellcheck="false">
+        <button type="submit" class="btn primary">Pin</button>
+      </form>` : ""}
+    </div>
+
+    <div class="settings-foot">
+      <span class="settings-toggle" role="radiogroup" aria-label="Write to">
+        <button type="button" role="radio" aria-checked="${scope === "project"}" data-scope="project" title="aidlc.settings.json - committed with the project">Project</button>
+        <button type="button" role="radio" aria-checked="${scope === "local"}" data-scope="local" title="aidlc.settings.local.json - this machine only">Only me</button>
+      </span>
+      <span class="settings-note">Changes apply to runs started afterwards${scope === "project" ? "; commit <code>aidlc.settings.json</code> and <code>.claude/agents/</code>" : ""}.</span>
+      <button type="button" class="btn" data-reset ${policy?.recorded?.[scope] ? "" : "disabled"} title="Remove every preset, dial, and exception recorded ${scope === "project" ? "in the project" : "for this machine"}">Reset ${scope === "project" ? "project" : "mine"}</button>
     </div>`;
 }
 
-function daemonPage() {
+function harnessName(workflow) {
+  const names = { claude: "Claude", kiro: "Kiro", "kiro-ide": "Kiro", codex: "Codex", cursor: "Cursor", opencode: "opencode", copilot: "Copilot" };
+  return names[workflow.models_policy?.harness] || "harness";
+}
+
+function aboutPage() {
   const workflow = store.workflow || {};
   const daemon = workflow.daemon || {};
-  return `<h3>Daemon</h3>
+  return `<h3>About</h3>
     <p class="settings-sub">This review UI, as it is running now.</p>
     <div class="settings-block">
       <div class="settings-row"><span class="l">Version</span><span class="c">${escapeHtml(daemon.version || "?")}</span></div>
@@ -149,21 +168,18 @@ function bind() {
   for (const button of root.querySelectorAll("[data-scope]")) button.addEventListener("click", () => { scope = button.dataset.scope; render(); });
   for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change({ action: "preset", preset: button.dataset.preset }));
   for (const select of root.querySelectorAll("[data-group]")) select.addEventListener("change", () => {
-    if (!select.value) {
-      setNotice("Clearing one group dial is not a command the policy tool has; use Reset to clear this layer, then set the others again.", "info");
-      render();
-      return;
-    }
-    change({ action: "group", group: select.dataset.group, effort: select.value });
+    if (select.value) change({ action: "group", group: select.dataset.group, effort: select.value });
   });
+  root.querySelector("[data-add-exception]")?.addEventListener("click", () => { addingException = !addingException; render(); root.querySelector("[data-exception-form] select")?.focus(); });
   root.querySelector("[data-exception-form]")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
     const model = String(form.get("model") || "").trim();
+    addingException = false;
     change({ action: "agent", agent: String(form.get("agent")), effort: String(form.get("effort")), ...(model ? { model } : {}) });
   });
   root.querySelector("[data-reset]")?.addEventListener("click", () => {
-    if (!window.confirm(`Reset the ${scope === "project" ? "committed project" : "personal"} model policy? Every preset, dial, and exception in that layer is removed.`)) return;
+    if (!window.confirm(`Reset the ${scope === "project" ? "project's" : "personal"} model policy? Every preset, dial, and exception recorded ${scope === "project" ? "in the project" : "for this machine"} is removed.`)) return;
     change({ action: "reset" });
   });
 }
@@ -174,7 +190,7 @@ async function change(body) {
   render();
   try {
     await api.post("/api/models-policy", { scope, ...body });
-    setNotice(scope === "project" ? "Project policy updated - commit aidlc.settings.json and .claude/agents/. Applies to runs started from now on." : "Your policy for this machine updated. Applies to runs started from now on.", "info");
+    setNotice(scope === "project" ? "Project policy updated - commit aidlc.settings.json and .claude/agents/." : "Your policy for this machine updated.", "info");
     store.emit("wants-refresh");
   } catch (error) {
     setNotice(`Could not change the policy: ${error.message}`, "error");

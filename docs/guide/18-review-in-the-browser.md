@@ -311,17 +311,19 @@ the run will use.
 
 ### Settings
 
-The cog at the bottom of the left rail opens Settings. **Models & effort** restates the two
-controls, names what *Default* resolves to and where that lives (your own harness
-setting; change it there), and edits the project's model policy: pick a preset,
-set a group's effort, add a per-agent exception, or reset a layer. **Project**
-writes the committed team policy (`aidlc.settings.json` and the agent files —
-commit them); **Only me** writes `aidlc.settings.local.json` for this machine.
-Both go through the same `aidlc config models` command the terminal uses, so
-the transaction, refresh guard, and doctor checks are identical, and a change
-applies to runs started after it. The **Effective** table underneath is the
-resolved result across every layer, with the files it is recorded in. **Daemon**
-lists this review UI's version, address, and runner.
+The cog at the bottom of the left rail opens Settings. **Models & effort** reads
+top to bottom: the **default effort** (your own harness setting — what *inherit*
+means; change it there or with `/effort`), the **preset**, then each **group**
+of agents either *Inherit from default* or pinned to a level, with where that
+value comes from beside it, and the **exceptions** — one agent pinned to its
+own effort or model (*Add…*). Every change is applied immediately through the
+same `aidlc config models` command the terminal uses, so the transaction,
+refresh guard, and doctor checks are identical, and it applies to runs started
+afterwards. The footer chooses the layer — **Project** (`aidlc.settings.json`
+and the agent files; commit them) or **Only me** (`aidlc.settings.local.json`,
+this machine) — and **Reset** clears that layer; there is no per-dial undo,
+because the command has none. **About** lists this review UI's version,
+address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the
 SessionStart hook binds the agent's session), so you can Start a second intent
