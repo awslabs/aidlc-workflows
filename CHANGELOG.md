@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.5] - 2026-09-09
+
+Fixes a plan-approval guard false-positive that blocked the orchestrator from running framework-tool commands with shell artifacts (like `; echo` or `2>&1`) during code-generation plan creation. The guard's second early-exit path (trusted record-dir writes) required a non-opaque shell, but shell artifacts like `; echo` made the shell opaque because `echo` is not in the read-only command set. The `isFrameworkBash` exemption — already applied at the first early-exit — is now also applied at the second, so `aidlc-testing-posture.ts render > file 2>&1; echo` is allowed when all write targets are inside the code-generation record dir. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.5` / `install.ps1 -Version 2.8.5`. No migration; existing workflow records resume normally.
+
+* `aidlc-plan-approval-guard.ts` line 956: the trusted-record-dir early-exit now also checks `isFrameworkBash` (computed at line 903), matching the first early-exit's logic. An opaque shell wrapper around a trusted framework-tool invocation no longer traps commands whose write targets are all inside the record dir.
+
 ## [2.8.4] - 2026-09-09
 
 Fixes a Testing Contract JSON parsing failure on the Devin CLI harness: when the orchestrator pasted the rendered `## Testing Contract` JSON block into `code-generation-plan.md` using Devin's `write` tool, the `\n` escape sequences in `applicable_notes[].text` were interpreted as actual newlines, producing invalid JSON. The `parseTestingContract` function then failed with "no valid ## Testing Contract JSON block", blocking the `begin` command and stalling code generation. The parser now repairs raw control characters inside JSON string values before calling `JSON.parse`, so the parsed object (and its contract hash) match the original. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.4` / `install.ps1 -Version 2.8.4`. No migration; existing workflow records resume normally.

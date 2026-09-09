@@ -946,7 +946,14 @@ export async function run(input: string): Promise<number> {
           (candidate) =>
             !isTrustedRecordTarget(projectDir, candidate, approvalDir),
         );
-        if (!outsideRecord && !mutation.opaqueShell) return 0;
+        // Same isFrameworkBash exemption as the first early-exit above: an
+        // opaque shell wrapper (2>&1, "; echo", etc.) around a trusted
+        // framework-tool invocation should not trap a command whose write
+        // targets are all inside the record dir. Without this, the
+        // orchestrator cannot run `aidlc-testing-posture.ts render > file`
+        // (with shell artifacts) to create the plan — the guard blocks the
+        // very commands Steps 2-3 require.
+        if (!outsideRecord && (!mutation.opaqueShell || isFrameworkBash)) return 0;
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const evidence: UnitEvidence = {
           unit,
