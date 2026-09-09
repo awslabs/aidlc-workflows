@@ -1631,6 +1631,73 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   }, 60000);
 
+  for (const toolName of ["execute_bash", "execute_pwsh"]) {
+    test(`${toolName} forwards native planning commands to the core guard without Plan Approval (#1047)`, () => {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        seedCodeGenerationDirective(dir);
+        const questions = seedStageLevelPlanApproval(dir);
+        const unansweredQuestions = readFileSync(questions, "utf-8");
+        expect(evaluateCodeGenerationApproval(dir, { unit: null })).toMatchObject({
+          ok: false,
+          planExists: true,
+          instructionsExist: true,
+          contractValid: true,
+          approved: false,
+          receiptValid: false,
+        });
+
+        // Exercise populated modern stdin payloads through the real adapter and
+        // core guard. The hook inspects these commands without executing them;
+        // the continuation token is opaque and no human receipt is seeded.
+        const cases = [
+          { command: "aidlc engine orchestrate next", code: 0 },
+          {
+            command: 'aidlc engine orchestrate next "Please explain this plan before I approve"',
+            code: 0,
+          },
+          {
+            command: 'aidlc engine orchestrate continue "opaque-rule-delivery-token"',
+            code: 0,
+          },
+          { command: "aidlc engine state advance", code: 2 },
+          {
+            command: "aidlc engine orchestrate report --stage code-generation --result completed",
+            code: 2,
+          },
+          { command: "echo blocked > src/blocked.ts", code: 2 },
+        ];
+        // Collect every verdict even when a regression blocks the first next.
+        const results = cases.map(({ command, code }) => ({
+          command,
+          expectedCode: code,
+          ...runIdeStdin(dir, "plan-approval-guard", shellPayload(dir, toolName, command)),
+        }));
+
+        expect(readFileSync(questions, "utf-8")).toBe(unansweredQuestions);
+        expect(evaluateCodeGenerationApproval(dir, { unit: null })).toMatchObject({
+          ok: false,
+          approved: false,
+          receiptValid: false,
+        });
+        for (const result of results) {
+          expect(result.code, `${toolName}: ${result.command}\n${result.stderr}`).toBe(
+            result.expectedCode,
+          );
+          expect(result.stdout, result.command).toBe("");
+          if (result.expectedCode === 2) {
+            expect(result.stderr, result.command).toContain("Code generation");
+          } else {
+            expect(result.stderr, result.command).toBe("");
+          }
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 60000);
+  }
+
   test("execute_pwsh and shell are routed to legacy recovery exactly like execute_bash", () => {
     const dir = scratchProject(true);
     const ownerHost = { VSCODE_IPC_HOOK: `pwsh-owner:${dir}`, VSCODE_PID: "501" };

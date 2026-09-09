@@ -880,6 +880,44 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("native forwarding can resume Plan Approval without authorizing generation (#1047)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      for (const command of [
+        "aidlc engine orchestrate next",
+        'aidlc engine orchestrate next "Approve Plan"',
+        'aidlc engine orchestrate next "Request Changes"',
+        "aidlc engine orchestrate continue stage-rules-token",
+        "aidlc.exe engine orchestrate next",
+        "aidlc.exe engine orchestrate continue stage-rules-token",
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      for (const command of [
+        "aidlc engine orchestrate report --stage code-generation --result completed",
+        "aidlc engine state advance",
+        "./aidlc engine orchestrate next",
+        "PATH=. aidlc engine orchestrate next",
+        "env PATH=. aidlc engine orchestrate next",
+        "PATH=.; aidlc engine orchestrate next",
+        "printf next | xargs aidlc engine orchestrate",
+        "aidlc engine orchestrate next; printf code > src/inline.ts",
+        "aidlc engine orchestrate continue stage-rules-token > src/inline.ts",
+        "aidlc engine orchestrate next && bun -e 'await Bun.write(\"src/inline.ts\", \"code\")'",
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(2);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("zero-unit inline generation is refused before approval and allowed after approval", () => {
     const proj = scratchProject();
     try {

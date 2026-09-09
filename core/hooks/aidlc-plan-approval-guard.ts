@@ -553,6 +553,13 @@ function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean
 
   const noun = args[1];
   const verb = args[2];
+  // The conductor re-enters through next on each human turn, and continue
+  // delivers the remaining stage rules. Requiring approval for that transport
+  // traps native installs before they can finish presenting or answering it.
+  // Lifecycle reports and generation remain subject to the approval guard.
+  if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
+    return true;
+  }
   if (
     noun === "testing-posture" &&
     ["resolve", "render", "fingerprint", "verify"].includes(verb)
