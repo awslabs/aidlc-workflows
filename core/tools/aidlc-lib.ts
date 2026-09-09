@@ -4991,7 +4991,8 @@ function contentSha256(value: string): string {
 // Lifecycle and Phase Progress, Scope, Depth, Test Strategy, Revision Count,
 // Unit Ownership, Unit Gate Rhythm, Construction Iteration, Skeleton Stance,
 // Parked, Project Type, State Version, Total Stages, In Progress), and the cache
-// layer is dropped. Changing a routing field still invalidates the directive.
+// layer and empty separator lines are dropped. Changing a routing field still
+// invalidates the directive.
 //
 // Blacklist rather than allowlist, deliberately: a new routing field must be
 // covered by default, and only a field someone consciously classifies as cache
@@ -5041,7 +5042,7 @@ const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
 // Drop the cache layer from aidlc-state.md. Deliberately line-based and
 // field-named rather than section-wide: dropping a whole section would also drop
 // anything appended after it (the template's last section is a cache section), so
-// an unrecognised line anywhere in the file still binds the directive.
+// an unrecognised nonempty line anywhere in the file still binds the directive.
 export function projectStateForDigest(stateContent: string): string {
   const kept: string[] = [];
   let inDerivedTable = false;
@@ -5051,6 +5052,11 @@ export function projectStateForDigest(stateContent: string): string {
   // field's physical line and drop both, leaving a live routing change invisible to
   // the digest.
   for (const line of stateContent.split(/\r\n|[\n\r\u2028\u2029]/)) {
+    // setOrInsertField adds Markdown separators through appendUnderHeading.
+    // Removing or projecting out its field leaves those empty lines behind.
+    // They carry no state authority; retain every other line byte-exact, including
+    // whitespace-only lines, rather than trimming potentially meaningful content.
+    if (line === "") continue;
     if (line.startsWith("## ")) {
       inDerivedTable = line.trim() === STATE_DIGEST_DERIVED_TABLE_SECTION;
       kept.push(line);
