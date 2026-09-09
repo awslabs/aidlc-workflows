@@ -13,7 +13,7 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
@@ -23,10 +23,13 @@ import {
   errorMessage,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
+  mergeReviewRecordsFromDelta,
   parseFieldArgs,
+  holdsAuditLock,
   redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
+  refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
@@ -34,6 +37,7 @@ import {
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
+  worktreeDocsDir,
   worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
@@ -79,6 +83,10 @@ const VALID_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
+  // Break-glass: the human typed the override phrase and the conductor ran
+  // `answer --override`; the receipt binds to content and attempt only.
+  // Emitted by aidlc-log.ts beside PLAN_APPROVAL_RECORDED (Override: yes).
+  "PLAN_APPROVAL_OVERRIDDEN",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -120,6 +128,10 @@ const VALID_EVENT_TYPES = new Set([
   // developer-agent dispatch was refused because no unit had an approved
   // code-generation plan on disk (stage Steps 2-3 must precede Step 4).
   "PLAN_APPROVAL_BLOCKED",
+  // A guard's deterministic off-switch was set while a workflow existed, so a
+  // tool call passed without enforcement. One row per streak: the hook appends
+  // only when the newest row in its shard is not already this event.
+  "GUARD_DISABLED",
   // DocumentKB (emitters wired by aidlc-knowledge.ts onboard/sync/associate).
   // The customer-document store is a SPACE-level object, so all three land in
   // the space-level audit shard even when the document is intent-scoped -- a
@@ -138,6 +150,13 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
+  // Change Control: the per-intent value moved (the change-control verb, or a
+  // memory layer edit observed by a governed checkpoint), and a governed
+  // checkpoint accepted an input change under `relaxed` instead of refusing.
+  // Emitted through the library by aidlc-utility.ts and the checkpoint owners
+  // (aidlc-state.ts, aidlc-log.ts, aidlc-testing-posture.ts).
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
@@ -228,6 +247,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   QUESTION_ANSWERED: "Question Answered",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
+  PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   PIPELINE_LINK_COMPLETED: "Pipeline Link Completed",
@@ -242,6 +262,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
+  GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
   DOCUMENT_REMOVED: "Document Removed",
@@ -252,6 +273,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  CHANGE_CONTROL_SET: "Change Control Set",
+  CHANGE_ACCEPTED: "Change Accepted",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -308,6 +331,7 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
   "SUMMARY_CONFIRMATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
+  "PLAN_APPROVAL_OVERRIDDEN",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
@@ -369,6 +393,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "PLAN_APPROVAL_RECORDED",
+  "PLAN_APPROVAL_OVERRIDDEN",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "PIPELINE_LINK_COMPLETED",
@@ -396,6 +421,11 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Change Control provenance: a governed checkpoint owns the acceptance row
+  // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
+  // a change look already reported and suppress the genuine row.
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
 ]);
 // Events a WORKTREE DELTA may never carry into the main intent shard. This is
 // deliberately an explicit enumeration, not prefix families: a Bolt/swarm
@@ -423,6 +453,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
+  "PLAN_APPROVAL_OVERRIDDEN",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -649,6 +680,11 @@ function appendAuditBlockAtPath(
   block: string,
   expectedIdentity?: AuditAppendExpectation,
 ): void {
+  // Every audit append funnels through here, so one barrier covers
+  // appendAuditEntry, appendAuditEntryUnlocked, appendAuditEntryAtPathUnlocked
+  // and appendAuditEntries: the ledger is authority evidence, and an observer
+  // that appended to it would be minting the very receipts it came to read.
+  refuseEngineObserverWrite("appendAuditBlockAtPath");
   const dir = dirname(shardPath);
   const projectAbs = resolve(projectDir);
   const projectReal = realpathSync(projectAbs);
@@ -813,10 +849,7 @@ export function appendAuditEntries(
   }
   for (const entry of entries) validateAuditEntry(entry);
 
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
-    throw new Error("Failed to acquire audit lock after retries");
-  }
-  try {
+  const append = (): { appended: true; events: string[]; timestamps: string[] } => {
     const timestamps = entries.map(() => isoTimestamp());
     const payload = entries
       .map((entry, index) =>
@@ -832,6 +865,17 @@ export function appendAuditEntries(
       events: entries.map((entry) => entry.eventType),
       timestamps,
     };
+  };
+
+  // A caller may hold the same lock across this batch and its related state
+  // write. In that transaction the validated one-write batch is already
+  // serialized; attempting the non-reentrant acquisition would deadlock.
+  if (holdsAuditLock(projectDir, intent, space)) return append();
+  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+    throw new Error("Failed to acquire audit lock after retries");
+  }
+  try {
+    return append();
   } finally {
     releaseAuditLock(projectDir, intent, space);
   }
@@ -1567,6 +1611,9 @@ function handleAuditMerge(args: string[], projectDir: string): void {
       mainFork.end,
     );
     if (existingMerge || deltaAlreadyPresent) {
+      // The earlier merge carried the delta's review records with its rows; a
+      // retry after that has nothing left to carry and must stay idempotent
+      // even once the worktree is gone.
       alreadyMerged = true;
       result = {
         timestamp: existingMerge
@@ -1574,6 +1621,17 @@ function handleAuditMerge(args: string[], projectDir: string): void {
           : forkTs,
       };
     } else {
+      // The review records the delta's REVIEW_COMPLETED rows name travel with
+      // the rows, under the same lock and before any row lands: main must never
+      // hold a completion pointing at a record it does not have. Paired to
+      // their requests, digest-verified from the worktree, exclusive on main.
+      if (recordPrefix !== null) {
+        mergeReviewRecordsFromDelta(
+          delta,
+          worktreeDocsDir(wtPath, recordPrefix),
+          join(projectDir, ...recordPrefix.split("/")),
+        );
+      }
       const mergedEntry = {
         eventType: "AUDIT_MERGED",
         fields: {

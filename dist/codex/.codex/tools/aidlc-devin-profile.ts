@@ -77,7 +77,7 @@ export function stripDevinUnsupportedProfileFields(
 /** Remove the unsupported top-level field blocks from frontmatter content.
  *  A field block = the `key:` line plus all following indented lines (those
  *  starting with whitespace) up to the next top-level key or end of block. */
-function stripFields(fm: string, sourcePath: string): string {
+function stripFields(fm: string, _sourcePath: string): string {
   const lines = fm.split(/\r?\n/);
   const result: string[] = [];
   let i = 0;

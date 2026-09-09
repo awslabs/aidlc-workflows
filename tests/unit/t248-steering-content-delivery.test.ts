@@ -393,7 +393,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(otherKey).not.toBe(encodedKey);
   });
 
-  test("team probe steering continues normally while solo probes preserve marker publication", () => {
+  test("engine observers are read-only for team and solo, and route checks bypass transport", () => {
     const team = setupIntegrationProject({
       withState: "state-brownfield-feature.md",
     });
@@ -466,6 +466,10 @@ describe("t248 deterministic steering delivery", () => {
       kind: "error",
     });
 
+    // The SOLO probe is the case the deadlock was reported on. It used to mint the
+    // machine-local steering key and publish the marker, and that publication is
+    // what deleted the human's in-flight Plan Approval. A query must leave both
+    // absent, whatever the Unit Ownership.
     const solo = setupIntegrationProject({
       withState: "state-brownfield-feature.md",
     });
@@ -481,16 +485,36 @@ describe("t248 deterministic steering delivery", () => {
       existsSync(
         join(seededRecordDir(solo), ".aidlc-steering-token-key"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       existsSync(
         join(seededRecordDir(solo), ".aidlc-active-directive.json"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       invoke(solo, "continue", [soloProbe.continue_token ?? ""]).directive
         .kind,
     ).not.toBe("error");
+
+    // A route check asks only which Unit would be routed, so it skips transport
+    // entirely: no load-steering, no token, no key, no marker.
+    const routed = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(routed);
+    const routeCheck = invoke(
+      routed,
+      "next",
+      [],
+      { ...process.env, AIDLC_ROUTE_CHECK: "1" },
+    ).directive;
+    expect(routeCheck.kind).toBe("run-stage");
+    expect(
+      existsSync(join(seededRecordDir(routed), ".aidlc-steering-token-key")),
+    ).toBe(false);
+    expect(
+      existsSync(join(seededRecordDir(routed), ".aidlc-active-directive.json")),
+    ).toBe(false);
   });
 
   test("sessionless continuation consumes the same token exactly once", () => {

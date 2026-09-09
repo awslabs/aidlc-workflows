@@ -6,7 +6,7 @@ YAML parser (`parseStageFrontmatter` in `lib.ts`), and the YAML stage
 files all implement against this document.
 
 YAML frontmatter at the top of every stage `.md` is authoritative. The
-build step `bun aidlc-graph.ts compile` regenerates
+build step `bun .claude/tools/aidlc.ts engine graph compile` regenerates
 `.claude/tools/data/stage-graph.json` from the YAML sources; the runtime
 reads the compiled JSON via the unchanged `loadStageGraph()` API at
 `lib.ts:282-289`. The CI drift check `aidlc-graph compile --check` fails
@@ -44,6 +44,7 @@ copies this table verbatim.
 | Field | Type | Required | Enum / Constraint |
 |-------|------|----------|--------------------|
 | `slug` | string | yes | kebab-case; must match filename stem |
+| `name` | string | optional | user-facing display-name override. Omit when title-casing the slug is correct; use for acronyms, conjunctions, or established punctuation |
 | `phase` | string | yes | `initialization` \| `ideation` \| `inception` \| `construction` \| `operation` (lowercase) |
 | `execution` | string | yes | `ALWAYS` \| `CONDITIONAL` |
 | `condition` | string | yes | free-form; describe always-on rationale for `ALWAYS`, branching condition for `CONDITIONAL` |
@@ -51,7 +52,7 @@ copies this table verbatim.
 | `support_agents` | string[] | yes | empty list allowed; each entry a valid agent slug. For `mode: pipeline`, every entry across `lead_agent` plus `support_agents` must be unique so each ordered receipt position has one identity. Renamed from prose `Supporting Agents:` (format-only rename) |
 | `mode` | string | yes | `inline` \| `subagent` \| `pipeline` \| `mob` \| `agent-team`. The stage's **communication topology** — who talks to whom while the body runs. `inline` (conductor adopts every voice, zero dispatches), `subagent` (hub-and-spoke: the conductor dispatches the lead for the draft, then each `support_agents[]` entry as a real, mutually-blind spoke, then the lead to integrate), `pipeline` (chain: the links collectively author the artifacts, each link seeing all upstream work and advancing the work product directly; after every return the conductor mints `PIPELINE_LINK_COMPLETED`, and the final link leaves the artifacts complete), and `mob` (mesh: one room, cross-talk, dissent recorded; judgment-call objections surface to the human mid-stage) are active; `pipeline`/`mob` require non-empty `support_agents`. Writing model: each dispatched support agent writes its own contribution file (`contributions/<agent-slug>.md`, stage-protocol-ensemble.md §11); the lead alone edits the stage's `produces[]` artifacts except that serialized pipeline links advance them directly. On `mob`/`subagent`-with-supports stages contribution files are completion evidence; on `pipeline`, the complete ordered current-attempt receipt chain is completion evidence. **`agent-team` is reserved** — the future native-bus transport for mesh collaboration (`mob` is the portable mode); no stage declares it until a consumer ships. Orchestrator code reading `mode` MUST handle `agent-team` explicitly (at minimum throw "not yet implemented") — do not fall through to a default path. The review loop is NOT a mode: `reviewer` + `reviewer_max_iterations` deliver the two-party critique topology on every mode (stage-protocol-reviewer.md §12a) |
 | `reviewer` | string | optional | agent slug; invoked after artifact production and before the approval gate |
-| `review_artifact` | string | optional | Required whenever `reviewer` is present. Names one required Markdown entry from `produces[]`; that exact artifact owns the appended `## Review` section. For per-unit stages it must remain applicable for every Unit kind on which any required output is applicable. Plugin contributions may add outputs but cannot change this scalar owner implicitly. |
+| `review_artifact` | string | optional | Required whenever `reviewer` is present. Names one required Markdown entry from `produces[]`: the artifact the review is about. The review record is keyed to it, the gate names it as the `**Review:**` path, and `--reject-finding <artifact>#R-NN` addresses its findings; the reviewer never writes to it (a legacy `## Review` section inside it is read for migration only). For per-unit stages it must remain applicable for every Unit kind on which any required output is applicable. Plugin contributions may add outputs but cannot change this scalar owner implicitly. |
 | `reviewer_max_iterations` | integer | optional | positive integer; requires `reviewer`; defaults to `2` |
 | `review_class` | string | optional | `adversarial` \| `advisory`; requires `reviewer`; defaults to `adversarial`. `advisory` is one normal-flow pass with findings quoted verbatim at the human gate; a terminal receipt invalidated by a later output write gets one bounded recovery request at the next ordinal. `none` is not a stage value; scope `review_cap` and per-run `--review` may only lower the effective class |
 | `summary_confirmation` | string | optional | `required` \| `if-present`. Marks stages using the consolidated answer review before artifact generation. `required` requires a questions file, exact `Looks correct` answer, human-backed receipt, unchanged questions-file digest, and native artifact writes after that receipt. `if-present` applies the same checks only when a conditional question flow created a questions file |
@@ -69,15 +70,16 @@ copies this table verbatim.
 
 ---
 
-## Computed fields (NOT authored)
+## Computed fields
 
-Two fields appear in `stage-graph.json` but are derived by the compile step,
-not authored in YAML.
+Numeric display order is derived by the compile step, not authored in YAML.
 
 | Field | Derivation |
 |-------|------------|
 | `display_order` | `<phase-prefix>.<sequence>`. Phase prefix: `initialization=0`, `ideation=1`, `inception=2`, `construction=3`, `operation=4`. Sequence: topological sort of `requires_stage` edges filtered to this phase, slug-alphabetical tiebreak for parallel stages |
-| `name` | Title-case of the slug (hyphens → spaces), or the H1 heading of the stage file |
+
+`name` defaults to title-casing the slug. Author an explicit `name:` only when
+that default would lose an acronym, conjunction, or established display label.
 
 ---
 

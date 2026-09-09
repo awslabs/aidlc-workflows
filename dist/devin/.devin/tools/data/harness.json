@@ -1,4 +1,8 @@
 {
+  "schemaVersion": 1,
+  "distribution": "devin",
+  "productName": "Devin CLI",
+  "configNextStep": "start Devin CLI in this project, then run `/aidlc --doctor`",
   "name": "devin",
   "harnessDir": ".devin",
   "rulesSubdir": "rules",

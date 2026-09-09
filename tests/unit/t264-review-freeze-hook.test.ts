@@ -34,7 +34,6 @@ import {
 } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -287,73 +286,49 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
   });
 
-  test("only a validated pending recovery request suspends its exact scope", () => {
+  test("a pending stale-receipt recovery freezes its exact scope like a receipt does", () => {
+    // The reviewer records its review beside the artifact, never inside it, so
+    // a recovery request opens no write window: the frozen bytes stay frozen
+    // until the recovery verdict or a human decision.
     const raFile =
       "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
     expect(
       judgeFreeze(RA, raFile, NONE, {
+        stageVerdict: null,
+        unitVerdicts: new Map(),
+        stagePending: { recovery: true },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
         ...ready,
-        stageStale: true,
-        stagePending: { recovery: true, suspensionActive: true },
+        stagePending: { recovery: true },
+      }).block,
+    ).toBe(true);
+    // A pending request that is not a recovery neither freezes nor thaws by itself.
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        stageVerdict: null,
+        unitVerdicts: new Map(),
+        stagePending: { recovery: false },
       }).block,
     ).toBe(false);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stagePending: { recovery: true, suspensionActive: true },
-      }).block,
-    ).toBe(true);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        sourceStale: false,
-        newestSourceUnit: null,
-        stagePending: {
-          recovery: true,
-          suspensionActive: true,
-          recoveryCause: "source",
-        },
-      }).block,
-    ).toBe(true);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        sourceStale: true,
-        newestSourceUnit: null,
-        stagePending: {
-          recovery: true,
-          suspensionActive: true,
-          recoveryCause: "source",
-        },
-      }).block,
-    ).toBe(false);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        stagePending: { recovery: false, suspensionActive: false },
-      }).block,
-    ).toBe(true);
 
     const u3 =
       "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const u4 =
       "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const u5 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U05/nfr-requirements/nfr-requirements.md";
     const receipts = {
       stageVerdict: null,
-      unitVerdicts: new Map([
-        ["U03", "READY"],
-        ["U04", "READY"],
-      ]),
-      unitStale: new Set(["U03"]),
-      unitPending: new Map([
-        ["U03", { recovery: true, suspensionActive: true }],
-      ]),
+      unitVerdicts: new Map([["U04", "READY"]]),
+      unitPending: new Map([["U03", { recovery: true }]]),
     };
-    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).unit).toBe("U03");
     expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u5, NONE, receipts).block).toBe(false);
   });
 
   test("guidance failures fall back without changing the freeze decision", () => {
@@ -373,6 +348,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
 
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
     const hostPath = (value: string): string => resolve(value);
+    const bashTargets = (command: string, cwd?: string): string[] =>
+      writeTargets("Bash", { command }, cwd)
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
     expect(writeTargets("Write", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Edit", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Read", { file_path: "/a/b.md" })).toEqual([]);
@@ -472,9 +450,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     ).toContain(hostPath("/p"));
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
-      writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
+      bashTargets("sed --version; cat /a/b.md"),
     ).toEqual([]);
-    expect(writeTargets("Bash", { command: "cat /a/b.md" })).toEqual([]);
+    expect(bashTargets("cat /a/b.md")).toEqual([]);
   });
 });
 
@@ -551,9 +529,13 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
   }
-  appendFileSync(
-    artifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+  const { reviewFile } = JSON.parse(requested.stdout ?? "{}") as {
+    reviewFile: string;
+  };
+  mkdirSync(dirname(join(p, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(p, reviewFile),
+    `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
@@ -622,8 +604,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       "If this is a reviewer suggestion, quote it at the gate",
     );
     expect(blocked.stderr).toContain(
-      "tell me what should change and I'll record your Request Changes decision",
+      'Ask "What should change?" for stage "requirements-analysis"',
     );
+    expect(blocked.stderr).toContain("their exact text unchanged");
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 
     // A recorded gate rejection resets the receipt floor: the freeze lifts
@@ -790,7 +773,7 @@ describe("t264 (c) harness registration", () => {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
       const group = (s.hooks?.PreToolUse ?? []).find((g) =>
-        (g.hooks ?? []).some((h) => (h.command ?? "").includes("aidlc-review-freeze.ts")),
+        (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook review-freeze")),
       );
       expect(group, root).toBeDefined();
       // Shares the state-transition-guard/reviewer-scope matcher group, so the
@@ -803,7 +786,7 @@ describe("t264 (c) harness registration", () => {
 
   test("Codex hooks.json carries the adapter target; the adapter has the case", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("aidlc-codex-adapter.ts review-freeze");
+    expect(hooksJson).toContain("adapter codex review-freeze");
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "codex", "hooks", "aidlc-codex-adapter.ts"),
       "utf-8",

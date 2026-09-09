@@ -12,7 +12,7 @@ file, unioned with each stage's `optional_produces[]` (artifacts a stage may
 conditionally write per unit, see the field reference in
 `15-stage-definition.md`), so a conditionally-produced name stays registered
 and resolvable to its producer. A helper in
-`dist/claude/.claude/tools/aidlc-graph.ts` reads the compiled stage graph and
+`core/tools/aidlc-graph.ts` reads the compiled stage graph and
 returns the union as a set — the same pattern used for scopes
 (`validScopes()` at `aidlc-lib.ts:772`) and for agents (`loadAgents()` at
 `aidlc-lib.ts:794`). Keeping the registry out of this chapter prevents the
@@ -30,7 +30,7 @@ their own record directories. The identifier is a short kebab-case string — no
 file extension, no folder prefix, no slash.
 
 Concrete example from milestone 4's worked example in
-`dist/claude/.claude/aidlc-common/protocols/stage-definition.md`:
+`core/aidlc-common/protocols/stage-definition.md`:
 
 ```yaml
 slug: scope-definition
@@ -75,7 +75,7 @@ Things that are **not** artifacts in this registry:
    declares every canonical name the stage emits. `consumes:` names the
    canonical strings the stage depends on.
 2. **The registry is computed, not written.** Run
-   `bun dist/claude/.claude/tools/aidlc-graph.ts artifacts` to
+   `aidlc engine graph artifacts` to
    print the live registry — one name per line, sorted alphabetically.
    The tool unions every stage's `produces[]` and `optional_produces[]` from the
    compiled `stage-graph.json`.
@@ -98,7 +98,7 @@ stage is populated.
 
 Every canonical name must satisfy `/^[a-z][a-z0-9-]*$/` — the shape
 enforced by `SLUG_RE` in
-`dist/claude/.claude/tools/aidlc-stage-schema.ts`. That means:
+`core/tools/aidlc-stage-schema.ts`. That means:
 
 - **Lowercase only.** `scope-document`, not `ScopeDocument` or
   `SCOPE_DOCUMENT`.
@@ -193,6 +193,29 @@ directives, per-Unit coverage, completion guards, and review fingerprints.
 Every artifact except `traceability` resolves to `<canonical-name>.md`;
 `traceability` resolves to `traceability.json`.
 
+**Review records are not artifacts.** A reviewer-bearing stage's review result
+(verdict, findings, reviewer, request id, the fingerprints it binds, and the
+review text) lives in a framework-owned record at
+`<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` for stage scope,
+or `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` for a Unit,
+written only by `aidlc-log.ts review --verdict` and named, with its digest, by
+the `REVIEW_COMPLETED` row. The stage's `review_artifact` names which declared
+artifact the review is about (the gate's `**Review:**` path and the
+`--reject-finding <artifact>#R-NN` selector key); the reviewer never writes to
+it. A terminal `## Review` section inside an artifact is a review recorded
+before review records existed: readable for migration, never written anew.
+
+**Summary authorizations are not artifacts either.** The active summary
+confirmation for a stage (and Unit) lives at
+`<record>/.aidlc-summary-authorization/<stage>/stage.json` for stage scope, or
+`<record>/.aidlc-summary-authorization/<stage>/units/<unit>.json` for a Unit,
+written by `aidlc-log.ts answer --checkpoint summary-confirmation` on `Looks
+correct` and removed on `Request changes`. It holds the `Summary Authorization
+Id` the receipt row carries; the write-audit hook reads it to stamp the stage's
+`ARTIFACT_CREATED`/`ARTIFACT_UPDATED` rows, and completion compares those stamps
+to the current receipt. It is not an output, is never reviewed, and is not
+listed in `produces[]`.
+
 **Codekb is the space-level exception.** Reverse-engineering's 9 artifacts
 (`business-overview`, `architecture`, `code-structure`, `api-documentation`,
 `component-inventory`, `technology-stack`, `dependencies`,
@@ -201,15 +224,15 @@ under the per-intent record dir. They land in the durable, per-repo code
 knowledge base at `aidlc/spaces/<space>/codekb/<repo>/` — a store shared across
 every intent in the space, keyed by repo rather than by intent. The path is
 resolved outside the record-relative rule via the `isCodekb` branch in
-`resolveArtifactPath` (`dist/claude/.claude/tools/aidlc-orchestrate.ts`), and
-the same directory is printed by the read-only direct utility invocation
-`bun <harness-dir>/tools/aidlc-utility.ts codekb-path`.
+`resolveArtifactPath` (`core/tools/aidlc-orchestrate.ts`), and
+the same directory is printed by the read-only native route
+`aidlc engine workspace codekb`.
 
 **Canonical name ≠ filename for collisions.** Where a collision is split
 (see above), the on-disk filename may keep the pre-split form
 (`test-results.md`) while the canonical name is the disambiguated
 version. Use the stage's `produces:` list and
-`bun aidlc-graph.ts artifacts` as the source of truth, not the
+`aidlc engine graph artifacts` as the source of truth, not the
 filesystem.
 
 ---
@@ -217,7 +240,7 @@ filesystem.
 ## How to view the live registry
 
 ```bash
-bun dist/claude/.claude/tools/aidlc-graph.ts artifacts
+aidlc engine graph artifacts
 ```
 
 Prints one canonical name per line, alphabetically sorted.
@@ -239,7 +262,7 @@ No edit to this chapter required — the registry is derived.
 
 1. Edit the producing stage's `.md` file and add the canonical name to
    its `produces:` list.
-2. Run `bun aidlc-graph.ts artifacts` to confirm it appears.
+2. Run `aidlc engine graph artifacts` to confirm it appears.
 3. Run `/aidlc --doctor` to confirm no consumer references a name that no
    longer exists (the "Graph references" check).
 
@@ -274,7 +297,7 @@ at tag time and the registry at HEAD is a one-line `diff`.
 
 ## Cross-references
 
-- `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` —
+- `core/aidlc-common/protocols/stage-definition.md` —
   authoritative stage format spec; defines `produces[]` / `consumes[]`
   as structured fields.
 - [Stage Definition](15-stage-definition.md) — narrative chapter on the
@@ -284,5 +307,5 @@ at tag time and the registry at HEAD is a one-line `diff`.
   the doc.
 - [User Guide — Artifacts Reference](../guide/14-artifacts-reference.md)
   — user-facing artifact lifecycle and directory layout.
-- `dist/claude/.claude/tools/aidlc-graph.ts` — the derivation tool
+- `core/tools/aidlc-graph.ts` — the derivation tool
   (`artifactsRegistry()` + `artifacts` CLI subcommand).

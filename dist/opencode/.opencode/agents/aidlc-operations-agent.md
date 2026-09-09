@@ -8,8 +8,6 @@ description: >
   SRE and reliability engineer responsible for observability, incident response, and operational optimization.
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
-model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
-variant: medium
 mode: subagent
 permission:
   task: deny

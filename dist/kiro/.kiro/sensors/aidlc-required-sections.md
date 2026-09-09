@@ -1,7 +1,7 @@
 ---
 id: required-sections
 kind: deterministic
-command: bun .kiro/tools/aidlc-sensor-required-sections.ts
+command: bun .kiro/tools/aidlc.ts engine sensor-required-sections
 default_severity: advisory
 fire_on: gate
 description: Checks at the gate that stage output contains the required H2 headings

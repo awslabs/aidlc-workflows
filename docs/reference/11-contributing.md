@@ -11,7 +11,7 @@ Contributions to this implementation are welcome. This guide covers prerequisite
 ## Prerequisites
 
 - **Claude Code** -- native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh | bash`; Windows PowerShell `irm https://claude.ai/install.ps1 | iex`. Or `brew install --cask claude-code`. (see [Claude Code docs](https://code.claude.com/docs/en/quickstart))
-- **bun** -- Required for all CLI tools and all 17 hooks. Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells (`~/.zshenv` for zsh, `~/.bashrc` for bash / Git Bash on Windows).
+- **bun** -- Required to build, package, test, directly run authored TypeScript sources, and use locally generated `dist/<harness>/` projections. Native release runtimes use the installed `aidlc` command. Install via `curl -fsSL https://bun.sh/install | bash`; on Windows use `powershell -c "irm bun.sh/install.ps1 | iex"`.
 - **timeout** (GNU coreutils) -- Required by the test suite for LLM test timeouts (L2/L3). Pre-installed on Linux. macOS: `brew install coreutils` then add gnubin to PATH: `export PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH"` (in `~/.zshenv` or `~/.zshrc`).
 - **Bash** -- Optional for the POSIX compatibility wrapper (`tests/run-tests.sh`). The primary test runner is `bun tests/run-tests.ts`; at runtime, none of the distributable hooks require Bash.
 - **Bedrock access** -- Required for running live integration and e2e tests (L2/L3). Not needed for L1 protocol tests.
@@ -28,9 +28,9 @@ bun install --frozen-lockfile
 ```
 core/                # Hand-authored, harness-neutral source (tools, stages, agents, rules, knowledge, hooks)
 harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/, opencode/, copilot/
-scripts/package.ts   # The build: regenerates dist/<harness>/ from core/ + harness/ (`--check` drift-guards it)
+scripts/package.ts   # The build: materializes ignored local projections (`--check` builds twice and compares)
 scripts/build-binaries.ts # Release-only compiled CLI artifacts in ignored build/binaries/ after package --check
-dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/, dist/opencode/, dist/copilot/ — never hand-edit
+dist/<harness>/      # GENERATED + ignored: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/, dist/opencode/, dist/copilot/ — never hand-edit or commit
 tests/               # All-TypeScript test suite (t*.test.ts, run via bun)
 docs/                # Documentation
   guide/             # User guide (how to use AI-DLC)
@@ -42,10 +42,10 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 ## Development Workflow
 
-1. **Fork and branch** from `main`, then run `bun install --frozen-lockfile`
+1. **Fork and branch** from `main` (the integration branch and PR target), then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
 3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly five subcommands: `next`, `continue`, `report`, `park`, and `team-board`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
-4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate `dist/` — never hand-edit `dist/`, the drift guard (`package.ts --check`) will fail CI
+4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to materialize the ignored local `dist/` and `dist-release/` roots. Never hand-edit or commit either root. `package.ts --check` ignores those on-disk trees, builds the complete projection set twice in independent temporary roots, and byte-compares the results.
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
 6. **Submit** -- Open a PR against `main`
 
@@ -54,13 +54,40 @@ packager. After `bun scripts/package.ts --check` is clean, run
 `bun scripts/build-binaries.ts` for the native artifact or add `--all-targets`
 for the release matrix. The script writes each executable under
 `build/binaries/<target>/`, stages complete generated distributions under that
-target's `runtime/<harness>/` directory, and writes `build-results.json` at
-`build/binaries/`. The native gates run sensors, graph compilation, validation,
-generated-surface checks, plugin selection/composition, orchestration,
-ordinary Bolt and autonomous swarm composition, packaged-runtime immutability, hooks, statusline,
-adapters, and explicit project routing without a `bun` executable on `PATH`.
+target's `runtime/<harness>/` directory, and writes
+`build/binaries/build-results-<target>.json`. Targets executable on the build
+host run sensors, graph compilation, validation, generated-surface checks,
+plugin selection/composition, orchestration, ordinary Bolt and autonomous
+swarm composition,
+packaged-runtime immutability, hooks, statusline, adapters, explicit project
+routing, doctor JSON, init dry-run, versions/plugin listings, Unix completions,
+and package verification without a `bun` executable on `PATH`. Cross artifacts
+receive inspection gates and are explicitly labeled `UNVERIFIED`; host-run
+artifacts are labeled `VERIFIED`.
 The staged `runtime/<harness>/` trees are read-only fallbacks; mutating commands
 must target an installed project harness. Any failed gate fails the build.
+
+After the target binaries are present, `bun scripts/package-release.ts`
+regenerates and verifies the local projections, packages `dist-release/` into
+the versioned `aidlc-runtime-X.Y.Z.tar.gz`, and emits `version.json`, `checksums.txt`,
+`install.sh`, and `install.ps1`. The per-target `runtime/` directories are
+smoke-gate staging; release data archives are rebuilt from the freshly
+generated native projections, not copied from those sidecars.
+`--require-release-matrix` requires all seven targets and a matching
+verification record for each binary. The generated flat directory is the
+contract consumed by the installer and `release packaging tooling`.
+
+The tag-triggered release workflow is deliberately candidate-preserving:
+verification and installer lint run first; target-native jobs produce binaries
+and evidence; `package-release.ts` runs once to create `release-candidate`; the
+staging job checksums and uploads it without signing; and Unix/Windows lifecycle
+jobs consume those bytes. `publish` re-verifies and attests the candidate, adds
+the exported bundle, validates the complete inventory, and uploads one
+`attested-release` artifact. `release` rechecks the tag and checksums, creates
+the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
+uploaded asset inventory. Never rebuild, repackage, or substitute the
+candidate. The full trust design is
+[Supply-Chain Security](19-supply-chain-security.md).
 
 ## Testing
 
@@ -90,6 +117,44 @@ bash tests/run-tests.sh --e2e          # Workflow, worktree, and terminal journe
 
 For the full test strategy, stubs, and how to add new tests, see [reference/09-testing.md](09-testing.md).
 
+## Changing Dispatcher Routes
+
+`core/tools/aidlc.ts` is the registry for public, hidden, and host-only command
+routes. A new route must declare all policy dimensions rather than inheriting
+behavior accidentally:
+
+1. Set `projectRequirement`, `outputModes`, `visibility`, `networkPolicy`, and
+   `mutationScope`.
+2. Choose `pinPolicy` deliberately: `active` for machine lifecycle/management,
+   `inspect` for active-binary diagnosis and repair, or `pinned` for project
+   engine behavior.
+3. Map the route to an existing tool or add the tool to `TOOLS`; hooks,
+   statusline, adapters, and low-level delegates use route-only entries rather
+   than public aliases.
+4. Add route and policy assertions to
+   `tests/unit/t230-dispatcher-routes.test.ts`, including global-flag ordering
+   and compiled/dev parity when applicable.
+5. If authored prose invokes the command, use `{{INVOKE}}` or
+   `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
+   both local channels and run the package determinism guard.
+
+## Adding an Install-Mechanism Mutation
+
+Project and machine mutations in init, lifecycle, pinning, and plugin management
+must use `core/tools/aidlc-transaction.ts`. Build a `TransactionPlan` from
+root-relative, non-overlapping operations; include `expected` destination state
+and source hashes for copy/tree operations. Put semantic checks in
+`validateCandidates` or `validateCommitted`, not after a successful transaction
+returns. A committed validator failure is part of the transaction and therefore
+rolls back.
+
+Add fault-injection coverage before shipping: fail before/after staging,
+snapshot, commit, and committed validation as appropriate; assert every prior
+byte and mode is restored, the lock is released, and incomplete rollback leaves
+named recovery evidence. `t243-install-mechanism.test.ts` is the engine pattern;
+`t224-plugin-selection.test.ts` and `t242-plugin-state.test.ts` are project
+mutation examples.
+
 ## Adding a Utility Handler
 
 > **Before adding an audit event**, read [State Machine](12-state-machine.md). The chapter lists every event in the taxonomy, its emitter, and the "same-commit rule" — update the code AND the chapter's tables in the same PR, or the drift test will fail.
@@ -99,7 +164,7 @@ Utility handlers fall into two categories:
 ### Deterministic handlers (preferred)
 For handlers that require no LLM reasoning (print text, read/format files, check prerequisites, create directories):
 1. Add a subcommand to `core/tools/aidlc-utility.ts`
-2. Dispatch from SKILL.md with a single Bash call: `bun .claude/tools/aidlc-utility.ts <subcommand>`
+2. Register a semantic dispatcher noun/verb and call it from SKILL.md through `aidlc engine <noun> <verb>` (or its public route)
 3. No task tracking needed -- the script runs in under a second
 4. Handle audit logging inside the script via `appendAuditEntry` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks)
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
@@ -108,7 +173,9 @@ The `--help`, `--version`, `--status`, and `--doctor` handlers are reference imp
 
 The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `codekb-scope-diff` handlers are **direct utility verbs**: stage prose invokes
-`bun <harness-dir>/tools/aidlc-utility.ts <verb>`, not `/aidlc <verb>`.
+`bun <harness-dir>/tools/aidlc-utility.ts <verb>`, not `/aidlc <verb>`
+(`codekb-path` is also reachable through the dispatcher as
+`aidlc engine workspace codekb`).
 `codekb-path` and `codekb-scope-diff` are read-only. `codekb-snapshot` may
 recover an interrupted prior CodeKB directory swap before returning the
 source/store generations. `codekb-publish` is the sole shared-store writer: it
@@ -134,7 +201,7 @@ untrusted-content notices as DocumentKB.
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
 1. **Task tracking** -- Create tasks via `TaskCreate` for each logical step, transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code.
 2. **Statusline update** -- If the active intent's `aidlc-state.md` exists, temporarily set `Current Stage` to describe the running utility (e.g., `running health check`), then restore the original value when done. The `aidlc-statusline.ts` hook reads this field for the terminal status bar.
-3. **Audit logging** -- Invoke the appropriate tool subcommand (e.g., `bun .claude/tools/aidlc-utility.ts <handler>` that calls `appendAuditEntry` internally). Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
+3. **Audit logging** -- Invoke the appropriate semantic native dispatcher route, whose backing handler calls `appendAuditEntry` internally. Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
 
 The `intent-create` handler is fully deterministic: all three init stages (workspace-scaffold, workspace-detection, state-init) run inside a single `aidlc-utility intent-create` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` and is not a stage.
 
@@ -153,6 +220,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
+   - `change_control` (optional): `strict` | `relaxed`. The Change Control default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once and continues). Absence means strict. Validated like `skeleton` (the loader names the file and the two values). A memory layer's `## Change Control` `Mode: strict` wins over any scope default.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 
@@ -174,15 +242,15 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 2. **Tag the member stages** — in each stage that should run under `hotfix` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages (`workspace-scaffold`, `workspace-detection`, `state-init`) must include it — they always run.
 
-3. **Recompile + regenerate the scope-table** — `bun .claude/tools/aidlc-graph.ts compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `bun .claude/tools/aidlc-utility.ts scope-table` prints the canonical Markdown region for SKILL.md's compiled scope table. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `bun .claude/tools/aidlc-graph.ts compile --check` and `bun .claude/tools/aidlc-utility.ts scope-table --check` to confirm exit 0 (no drift).
+3. **Recompile + regenerate the scope-table** — `aidlc engine graph compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `aidlc engine gen scope-table` prints the canonical Markdown region for SKILL.md's compiled scope table. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `aidlc engine graph compile --check` and `aidlc engine gen scope-table --check` to confirm exit 0 (no drift).
 
 4. **Verify the scope resolves** - `bun core/tools/aidlc-utility.ts intent-create --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
 
-5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix bun aidlc-utility.ts doctor` should report the env var as valid.
+5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
-6. **Verify keyword inference** (if `keywords` populated) — `bun aidlc-utility.ts detect-scope --from-text --input "urgent customer issue" --project-dir /tmp/scope-smoke` should return `{"scope":"hotfix","source":"keyword","matches":["urgent"]}`.
+6. **Verify keyword inference** (if `keywords` populated) — `aidlc engine scope detect --from-text --input "urgent customer issue" --project-dir /tmp/scope-smoke` should return `{"scope":"hotfix","source":"keyword","matches":["urgent"]}`.
 
-7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 bun .claude/tools/aidlc-graph.ts resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
+7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 aidlc engine graph resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 
 8. **Update scope-aware documentation** — `docs/guide/05-scopes-and-depth.md` (full scope reference, including the Stage-by-Scope Matrix — its cells are drift-guarded against the compiled `scope-grid.json` by `tests/unit/t244-scope-matrix-doc-sync.test.ts`), `docs/guide/13-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same PR.
 
@@ -210,11 +278,11 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 1. **Write the stage file** - create `core/aidlc-common/stages/<phase>/<slug>.md`. Frontmatter declares `slug`, `phase`, `execution`/`condition`, `lead_agent` and any `support_agents` (by agent slug), `mode` (`inline`, `subagent`, `pipeline`, or `mob`; `agent-team` is reserved and not yet implemented), `consumes` / `produces` (artifact vocabulary names), `optional_produces` for artifacts the stage writes only conditionally per unit (exempt from per-unit coverage), `requires_stage` (ordering edges), the `scopes:` membership list, any `sensors:` to bind, `for_each` if it iterates per Unit, and (on a per-unit stage) an optional `produces_kinds` map to prune produces artifacts to each Unit's kind. The body carries the stage's three compartments. See [Stage Definition](15-stage-definition.md) for the full field contract.
 
-2. **Recompile the graph** — `bun .claude/tools/aidlc-graph.ts compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `bun .claude/tools/aidlc-graph.ts compile --check` to confirm exit 0 (no drift). Then refresh the generated SKILL.md mirrors with `bun .claude/tools/aidlc-utility.ts stage-table` and `bun .claude/tools/aidlc-utility.ts scope-table`, and confirm `bun .claude/tools/aidlc-utility.ts stage-table --check` plus `scope-table --check` both exit 0. The stage is runnable immediately via `bun .claude/tools/aidlc-orchestrate.ts next --stage <slug> --single`.
+2. **Recompile the graph** — `aidlc engine graph compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `aidlc engine graph compile --check` to confirm exit 0 (no drift). Then refresh the generated SKILL.md mirrors with `aidlc engine gen stage-table` and `aidlc engine gen scope-table`, and confirm `aidlc engine gen stage-table --check` plus `scope-table --check` both exit 0. The stage is runnable immediately via `aidlc engine orchestrate next --stage <slug> --single`.
 
-3. **Regenerate the runners** — `bun .claude/tools/aidlc-runner-gen.ts write` emits a `/aidlc-<slug>` runner skill per runnable compiled stage, so your new stage gets its typeable command with no hand-authoring. Run `bun .claude/tools/aidlc-runner-gen.ts check` to confirm the on-disk runner set matches the compiled stage set (the drift guard; the bootstrap initialization stages are excluded by design).
+3. **Regenerate the runners** — `aidlc engine gen runners` emits a `/aidlc-<slug>` runner skill per runnable compiled stage, so your new stage gets its typeable command with no hand-authoring. Run `aidlc engine gen runners --check` to confirm the on-disk runner set matches the compiled stage set (the drift guard; the bootstrap initialization stages are excluded by design).
 
-4. **Verify the stage routes** — drive `bun .claude/tools/aidlc-orchestrate.ts next` over a workflow whose scope includes the stage, and confirm the engine emits a `run-stage` directive naming your slug with the resolved `lead_agent`, gate, `consumes`, and `produces`.
+4. **Verify the stage routes** — drive `aidlc engine orchestrate next` over a workflow whose scope includes the stage, and confirm the engine emits a `run-stage` directive naming your slug with the resolved `lead_agent`, gate, `consumes`, and `produces`.
 
 5. **Update scope-aware and stage-aware documentation** — a new stage changes the stage count and the per-scope plans. Update `docs/guide/05-scopes-and-depth.md` (the Stage-by-Scope Matrix — its cells are drift-guarded by `tests/unit/t244-scope-matrix-doc-sync.test.ts`), `docs/reference/16-artifact-vocabulary.md` (the non-initialisation stage count), the Harness Engineer Guide's stage chapters, and any scope reference that enumerates the plan. Per the documentation policy at the end of this chapter, do it in the same PR.
 
@@ -262,7 +330,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 4. **Verify the statusline renders** — seed a state file with `Active Agent: <slug>-agent` and invoke the statusline hook; the output should include the display name after the `--` separator.
 
-5. **Wire the agent into stages** — a new agent that should lead or support stages is named in each stage's frontmatter, in the `lead_agent` / `support_agents` fields of the stage `.md` files under `core/aidlc-common/stages/<phase>/`. Then run `bun .claude/tools/aidlc-graph.ts compile` (and `compile --check` as the drift guard) to regenerate `tools/data/stage-graph.json` from that frontmatter. Do not hand-edit `stage-graph.json` — it is the compiled artifact, and the next `compile` overwrites any manual change. This is separate from discovery — `loadAgents()` makes the agent visible; the stage frontmatter (compiled into the graph) makes it active.
+5. **Wire the agent into stages** — a new agent that should lead or support stages is named in each stage's frontmatter, in the `lead_agent` / `support_agents` fields of the stage `.md` files under `core/aidlc-common/stages/<phase>/`. Then run `aidlc engine graph compile` (and `compile --check` as the drift guard) to regenerate `tools/data/stage-graph.json` from that frontmatter. Do not hand-edit `stage-graph.json` — it is the compiled artifact, and the next `compile` overwrites any manual change. This is separate from discovery — `loadAgents()` makes the agent visible; the stage frontmatter (compiled into the graph) makes it active.
 
 ### What validates automatically
 
@@ -287,6 +355,29 @@ When adding, removing, or renaming files, directories, commands, or flags:
 1. Grep `docs/` and `README.md` for stale references
 2. Update all references in the same commit
 
+## Authority Policy
+
+Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
+attempt, never to the identity of the directive that issued a prompt and never to
+event order. The two rules are stated in
+[`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
+submitting, answer these:
+
+1. Does this change add an input to any fingerprint, epoch, or receipt identity?
+   Name the human-visible change that input detects. If no human action changes
+   it (a re-run of `next`, a probe, a status query, a marker rewrite, a metadata
+   refresh), it does not belong in an identity: record it as provenance instead.
+2. Does this change make a query path write? `next`, the Stop-hook probe, the
+   route check, `--status`, `--doctor`, and `team-board` never write authority
+   state. The engine observers additionally hit a typed barrier at the durable
+   write primitives, so an accidental write fails loudly rather than silently.
+3. Does this change make a guard delete evidence? A guard's only move is to
+   refuse. It does not clear a receipt, a challenge, or a marker to express a
+   refusal, and only an explicit human decision withdraws a recorded one.
+4. Does this change add a field to `aidlc-state.md`? A new field binds the active
+   directive by default. Excluding it from the state digest is a deliberate
+   classification of that field as cache, and it needs the same naming as item 1.
+
 ## Submitting Changes
 
 1. Open a PR against `main` with a clear description of what changed and why
@@ -294,3 +385,4 @@ When adding, removing, or renaming files, directories, commands, or flags:
 3. For hook changes: run `bash tests/run-tests.sh --unit`
 4. For integration tests: run `bash tests/run-tests.sh --integration` (requires `claude` CLI tool)
 5. Update documentation if your changes affect files, commands, or flags (see Documentation Policy above)
+6. If the change adds an input to any fingerprint, epoch, or receipt identity, name the human-visible change it detects (see Authority Policy above)

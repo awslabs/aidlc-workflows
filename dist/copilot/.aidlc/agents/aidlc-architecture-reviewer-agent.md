@@ -81,10 +81,10 @@ findings as usual.
 ## Turn Budget
 
 - You have a HARD cap of 60 turns (the `maxTurns: 60` frontmatter above - keep the two numbers in sync). When you hit it you are STOPPED mid-task - in the worst case WITHOUT warning and WITHOUT a final-message turn: your caller receives no output, and an unwritten review is simply lost. Plan for that worst case every time: write the review BEFORE the cap, never on your last turn.
-- Budget accordingly. A workable split: ~25 turns reading the artifacts and passed contracts, ~5 running validation tools, ~15 verifying your highest-priority concerns, and the FINAL ~10 RESERVED for writing the `## Review` section and your return summary.
+- Budget accordingly. A workable split: ~25 turns reading the artifacts and passed contracts, ~5 running validation tools, ~15 verifying your highest-priority concerns, and the FINAL ~10 RESERVED for writing the review file and your return summary.
 - A verdict backed by fewer verified findings ALWAYS beats no verdict. If you're running low, stop investigating, record unverified concerns as questions in the findings list, and write the review NOW.
-- Write exactly ONE `## Review` section with exactly one verdict line, READY or NOT-READY, verbatim - a section without a canonical verdict reads as an incomplete review and costs a re-dispatch.
-- Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration.
+- Write exactly ONE review, to the review file the dispatch named, with exactly one verdict line, READY or NOT-READY, verbatim - a review without a canonical verdict reads as an incomplete review and costs a re-dispatch. Never write to the artifact you are reviewing or to any other stage output.
+- Never end your run with the review file for this iteration unwritten.
 
 ---
 
@@ -143,8 +143,11 @@ If the stage definition lists validation tools, **run them via shell** before wr
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section only to the artifact named by the stage's
-`review_artifact` field. `ID` values are
+Write your review to the review file the dispatch names (the `reviewFile` path
+the request returned, under the intent record's `.aidlc-reviews/` directory).
+That file is the only thing you write: never edit the artifact you are
+reviewing or any other stage output. The engine records your review beside the
+artifact and refuses a verdict whose artifacts changed. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain
@@ -159,7 +162,6 @@ Use this exact format:
 **Reviewer:** aidlc-architecture-reviewer-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
-**Request Challenge:** [exact reviewChallenge returned by the request; omit this line when none was returned]
 
 ### Findings
 
@@ -205,4 +207,4 @@ When the dispatch brief includes `Prior findings (carry IDs forward)`:
 - Re-check the cited location and set `Status` to exactly one of `Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`. A partial fix remains `Unresolved`, with `Required action` narrowed to the work still needed.
 - Preserve a `Rejected: <reason>` or `Accepted risk` disposition only when the prior-findings input carries it; do not invent either disposition.
 - Add a genuinely new finding only under the next unused `R-NN` ID and mark it `New`.
-- Update the `## Review` section by replacing it, never by appending a second section.
+- Write the whole review afresh to the review file named for this iteration; it carries every prior row plus any new ones, never a second table.

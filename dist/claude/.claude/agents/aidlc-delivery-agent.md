@@ -9,8 +9,7 @@ description: >
   Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages.
   Supports Scope Definition and Units Generation.
 disallowedTools: Task
-model: sonnet
-effort: medium
+model: inherit
 ---
 <!-- aidlc-delegated-knowledge-preflight -->
 **Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.claude/knowledge/aidlc-shared/`, `.claude/knowledge/aidlc-delivery-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-delivery-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.

@@ -1,76 +1,52 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.7.5] - 2026-09-08
+## [2.8.2] - 2026-09-09
 
-Fixes three facets of the plan-approval-guard trap that blocked the conductor
-at the code-generation boundary on Devin 3000.6.14. Shell redirects
-(`2>/dev/null`, `2>&1`) no longer defeat the framework-tool exemption;
-`tool_input.workdir` is now lifted into the top-level `cwd` so the guard
-resolves framework-tool script paths against the directory the conductor
-ran the command in; and `git add`/`git commit` of inception-phase artifacts
-is no longer blocked at the code-generation boundary. **Upgrade:** re-copy
-`dist/devin/` (and `dist/codex/` if you use codex) into your project, then
-fully restart Devin CLI.
+Adds the **Devin CLI** harness — the eighth distribution from one harness-neutral core. Devin CLI (cognition.ai) now runs the full AI-DLC lifecycle natively: the 14 personas dispatch via the `run_subagent` tool, a `hooks.v1.json` adapter wires the 17 framework hooks, and `.devin/rules/aidlc.md` auto-loads the method pointer into ambient context on session start. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`; configure a project with `aidlc config --harness devin`. No migration for existing harnesses.
 
-* plan-approval-guard: pseudo-device redirects (`/dev/null`, `/dev/stdout`,
-  `/dev/stderr`) are excluded from mutation-target detection, and opaque-shell
-  `2>&1` wrappers around framework-tool invocations no longer trap the
-  early-exit. Pre-fix, `bun .devin/tools/aidlc-orchestrate.ts next 2>/dev/null`
-  was blocked because the redirect produced a write target, preventing the
-  early-exit and falling through to the directive check.
-* devin + codex adapters: `tool_input.workdir` is now lifted into the
-  top-level `cwd` field before piping to the core plan-approval-guard, so
-  `isFrameworkToolInvocation` resolves framework-tool script paths against
-  the directory the conductor ran the command in. Pre-fix, a `bun
-  .devin/tools/aidlc-*.ts` command run from a subdirectory could fail the
-  framework-tool exemption because the guard resolved the script path
-  against the project root.
-* plan-approval-guard: `git add` and `git commit` are now allowed at the
-  code-generation boundary when the active directive is not a v2
-  code-generation run-stage. Pre-fix, all `git` commands (including
-  `git add`/`git commit` of inception-phase artifacts) were blocked because
-  `git` is not in `READ_ONLY_SHELL_COMMANDS` and `add`/`commit` are not in
-  `READ_ONLY_GIT_SUBCOMMANDS`. `git push`, `git reset --hard`, and other
-  mutating git subcommands are still blocked.
-* Tests: t265 +6 (redirect exclusion, 2>&1 opaque-shell, real-write
-  regression, git add/commit allowed, git push blocked), t332 +2 (workdir
-  lifted, no-workdir no-regression), t149 +1 (codex workdir parity).
+* New harness: `aidlc config --harness devin` projects `core/` + `harness/devin/` into `.devin/` (engine tree) plus a project-root `aidlc/` workspace shell and `AGENTS.md`. Invoked with `/aidlc`.
+* The packager strips Devin-ignored agent frontmatter fields (`display_name`, `examples`, `disallowedTools`, `maxTurns`) for clean `devin doctor` output, and adds `triggers: [user]` to generated runners and the `aidlc-knowledge`/`aidlc-outcomes-pack` skills so Devin's skill loader activates them.
+* `aidlc-runtime-paths.ts` discovers `.devin` installs and resolves the `devin` distribution (with a metadata-unavailable fallback), so a `.devin` install whose `harness.json` is unreadable no longer falls back to `claude`.
+* Native binary release gates assert the `devin` runtime distribution and its `config.json` (permissions + `read_config_from`).
+* Docs (README, AGENTS, glossary, harness-engineering overview) list Devin CLI alongside the other harnesses; new guide at `docs/guide/harnesses/devin.md`.
 
-## [2.7.4] - 2026-09-08
+## [2.8.1] - 2026-09-08
 
-Fixes two framework bugs that combined to block every path to recording a Plan Approval receipt on Devin 3000.6.14. The Devin/codex adapters now recognize Devin's native `ask_user_question` answer shape (keyed by question text, value is an array of `{selected, custom_text}` objects) alongside the existing Claude Code shape, so a human's `ask_user_question` answer mints a `HUMAN_TURN` audit event and writes the Plan Approval response file. The Stop hook now allows the stop before its engine probe when a pending Plan Approval challenge exists, so the probe can no longer delete the challenge before the pending-question carve-out protects it. **Upgrade:** re-copy `dist/devin/` (and `dist/codex/` if you use codex) into your project, then fully restart Devin CLI.
+Fix defects found while exercising the 2.8.0 native install: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, `aidlc update` on an already-current install failed its integrity check under a normal shell umask, and every native GitHub Copilot and Cursor hook was dead because the 2.8.0 packager projected those adapters onto the one-argument core-hook route. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`. Copilot and Cursor projects configured by 2.8.0 work as soon as the binary is updated: their existing `aidlc engine hook <harness>-adapter ...` wiring is accepted, and the 2.8.0 Copilot adapter still installed in the project (whose core-hook calls are the bare `aidlc hook <name>`) is accepted too. `aidlc config` in the project then rewrites the wiring to the canonical `aidlc engine adapter <harness> ...` spelling and installs the current adapter — Cursor's merged `.cursor/hooks.json` collapses every earlier AI-DLC spelling of an entry (bun-era and 2.8.0) into the one shipped entry instead of leaving duplicates that keep executing, and Copilot's `.github/hooks/aidlc.json` is regenerated.
 
-* Devin + codex adapters: `hasExplicitHumanSelection` and `explicitHumanSelectionText` now use a dual-path parser — the Claude Code shape (`{answers: {<id>: {answers: [...]}}}`) path is unchanged, and a new Devin path recognizes `{answers: {<question text>: [{selected: [...], custom_text: ...}]}}`. Pre-fix, the adapter rejected arrays (`Array.isArray(selection)` → false), so no `HUMAN_TURN` was recorded on a Devin `ask_user_question` answer, blocking Plan Approval receipt recording.
-* Stop hook (`aidlc-continue-workflow.ts`): added a pre-probe carve-out for pending Plan Approval. When a live challenge exists for the current session, the stop is allowed before the engine's `next` probe runs, preventing `resetPlanApprovalRuntime` from deleting the challenge before `isPendingQuestionStop` can protect it. Fail-open (any read error → allow the stop, never trap).
-* Tests: t332 +3 (Devin native shape, Other free-text, end-to-end Plan Approval response file), t121 +1 (challenge survives the Stop hook), t149 +4 (codex `hasExplicitHumanSelection` recognizes Devin shape, no regression on Claude Code shape, rejects cancelled).
+* Pressing Enter at a bracketed default in the first-run `aidlc config` wizard (harness picker, provider, region, preset, plugins, MCP, record layer, and the final `Apply? [Y/n]` gate) now accepts the default as advertised instead of printing `Nothing written.` and exiting 2. Closing stdin (Ctrl-D) still cancels.
+* `aidlc update` on an install that is already at the latest release now reports `You're on the latest version of aidlc (X.Y.Z).` regardless of the caller's umask; previously it failed with `existing X.Y.Z runtime does not match the verified release` (exit 4) unless the shell umask was `077`. Same-release identity is now decided by path set and content; the installed tree's modes are still enforced against its own recorded integrity baseline, so trees installed by 2.8.0 under any umask keep working. `aidlc update --dry-run` on a current install says so instead of `Would update aidlc from X to X.`
+* `aidlc doctor` no longer tells you to copy the workspace shell from `dist/<harness>/`; the remediation is `aidlc config`.
+* README: removed the pre-2.8.0 note that told users to install from a source checkout until native assets shipped.
+* GitHub Copilot hooks no longer fail on every event with `aidlc: undefined is not an object (evaluating 'input.length')`; the adapter's delegated audit, sensor, guard, state, and Stop hooks now run through `aidlc engine hook <name>` under the native binary.
+* Cursor IDE `failClosed` `preToolUse` hooks now emit `{"permission":"allow"}` on allowed tools instead of returning no output (`Hook ... returned no output`) and blocking every tool call; deny decisions continue to emit Cursor permission-deny JSON.
+* Native hook wiring dispatches through `aidlc engine adapter copilot <target>` and `aidlc engine adapter cursor <target>`, preserving each adapter's target and stdin payload. Closes #1061 and #1058.
 
-## [2.7.3] - 2026-09-01
+## [2.8.0] - 2026-09-08
 
-Post-merge fixes for the devin release-engineering PR (#1): closes an unasserted build gate, removes a tautological test assertion, and refreshes a stale test header. **Upgrade:** no action required beyond re-copying `dist/devin/` if you use the compiled single-binary release; the runtime-paths and build-binaries changes from #1 are unchanged.
+AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.
 
-* t238: added `"harness-probe-devin"` to the asserted gate list — the gate was added to `scripts/build-binaries.ts` in #1 but its pass/fail was never checked. The devin probe gate is now enforced alongside kiro, copilot, and opencode.
-* t305: removed a tautological count assertion (`HARNESS_MATRIX.length` vs the same computation it derives from). The per-harness sweep loop below it is the real coverage and is unchanged.
-* t250: refreshed the header comment and test name to reflect the 8-harness derived roster (was stale at "six annexes" after #1 switched from a hardcoded list).
+* `aidlc version` now reports `2.8.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* Solo Code Generation includes the 2.7.1 Plan Approval deadlock fix, so the Stop hook no longer invalidates approval authority at turn boundaries.
+* Native installers and release archives include the 2.7.2 tag-bound provenance and verification flow; release assets use the `aidlc-runtime-X.Y.Z.tar.gz` naming contract.
+* Breaking changes for CI/scripts: none beyond selecting the new `2.8.0` version and asset name.
 
-## [2.7.2] - 2026-09-01
+## [2.7.2] - 2026-09-07
 
-Devin's dispatched-topology stages (`subagent`, `pipeline`, `mob`) now dispatch via `run_subagent` as designed, firing the `deliver-stage-rules` and `log-subagent` hooks; the conductor no longer falls back to inline execution when the ensemble protocol lacks a Devin binding section. **Upgrade:** re-copy `dist/devin/` into your project so the updated ensemble protocol and conductor SKILL replace the prior copies, then fully restart Devin CLI. The agent slug must be passed as the `profile` field of each `run_subagent` call or the `deliver-stage-rules` / `plan-approval-guard` hooks do not fire.
+Bind native releases to the version tag that triggered them and include that version in the runtime archive name. **Upgrade:** use `install.sh --version 2.7.2`, `install.ps1 -Version 2.7.2`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.7.2.tar.gz`.
 
-* Devin: added the missing `### Devin` binding section to the shared ensemble protocol (`stage-protocol-ensemble.md`), covering all three dispatched topologies. The binding names `run_subagent` as the dispatch verb, specifies the `profile`-field mechanic (the adapter and the `deliver-stage-rules` / `plan-approval-guard` hooks match on `tool_input.profile`, not the prompt text), the foreground/background split for parallelism (`is_background: true` for parallel supports, read each result via `read_subagent`), the `ask_user_question`-withheld constraint (the mob's mid-stage human surfacing is the parent conductor's job, not a dispatched spoke's), and the nesting-depth-0 rule (the parent dispatches every participant in every topology).
-* Devin: added a must-dispatch paragraph to `harness/devin/skills/aidlc/SKILL.md` — belt-and-suspenders so the conductor does not run a dispatched-topology stage inline even if the ensemble protocol fails to load. The `subagents_enabled: false` / double-failure case routes through the ensemble §11 failure-recovery protocol; its user-gated "Run it here" option is the only sanctioned inline path.
-* Devin: dispatched agents run on the default subagent model (SWE-1.6 by default), not the parent's model — the AIDLC agent files carry no `model:` frontmatter. To run dispatched agents on your primary model, set the org/enterprise "Default subagent model" to it (see `docs/guide/harnesses/devin.md`).
-* All harnesses: the ensemble protocol now carries a `### Devin` binding section (was missing — Devin was the only shipped harness without one). The protocol file is identical across harness dist trees, so every `dist/<harness>/` gets the new section.
-* New test `tests/unit/t333-ensemble-harness-bindings.test.ts` pins the invariant going forward: every shipped harness has a `### <Display Name>` binding section, and the Devin section names `run_subagent`, `profile`, `is_background`, and the default subagent model.
+* Pushing a `vX.Y.Z` tag now starts the release workflow. The workflow rejects a tag that does not match `AIDLC_VERSION`, does not point to its checked-out commit, or does not belong to `main`.
+* Release manifests and provenance now bind to `refs/tags/vX.Y.Z` instead of `refs/heads/main`.
+* The runtime asset is now named `aidlc-runtime-X.Y.Z.tar.gz`, and the README documents how to use it as the release equivalent of a generated `dist/<harness>/` directory.
+* GitHub CLI is optional for native installs. Compatible versions verify the signed release attestation; missing or older versions continue with source identity checks and SHA-256 verification, while online downloads remain HTTPS-only.
 
 ## [2.7.1] - 2026-09-01
 
-AI-DLC now runs natively on the **Devin CLI** harness — the eighth distribution from the one harness-neutral core. **Upgrade:** no action needed for existing harnesses; to use Devin, copy `dist/devin/` into your project, approve its hooks via `/hooks`, then fully restart Devin CLI.
+Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
 
-* The Devin shell ships in `.devin/`: a stdin adapter shim (`aidlc-devin-adapter.ts`) normalizes Devin's hook payloads onto the shared core hooks, `hooks.v1.json` wires Devin's seven events (SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostCompaction, Stop) to the adapter, `config.json` pre-approves the tools AIDLC workflows run, `mcp_config.json` declares the five MCP servers (context7 + four AWS), and `rules/aidlc.md` is the auto-loaded method pointer (no `@`-import — Devin loads `.devin/rules/*.md` automatically).
-* `/aidlc` invokes the orchestrator; `/aidlc --doctor` validates the Devin setup (adapter presence, the four wiring files, a `devin` CLI version floor of 3000.3.0, and a hook-approval advisory); `/aidlc --status` substitutes for the statusline Devin does not have.
-* Structured gates render via Devin's native `ask_user_question` tool; subagent dispatch uses `run_subagent`; the engine binary is invoked via `exec` (`bun .devin/tools/...`).
-* The doctor's `.devin` arm and the dual-harness coexistence list now recognize `.devin`; the test matrix (`tests/harness/harness-matrix.ts`) registers `devin` with `memoryInclude: "devin-rules"` and `reviewerScopeRegistration: "devin-hooks"`, and `tests/unit/t331-devin-packaging.test.ts` pins the dist parity, wiring shape, and doctor smoke.
+* Answering **Approve Plan** on a solo workflow now yields a stable approval receipt, so Code Generation starts instead of refusing every developer dispatch as "not currently approved".
+* `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` and driving the workflow as team-owned are no longer needed as workarounds for this deadlock.
 
 ## [2.7.0] - 2026-09-01
 

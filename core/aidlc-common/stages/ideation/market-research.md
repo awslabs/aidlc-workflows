@@ -60,7 +60,7 @@ Create competitive analysis, market trends report, build-vs-buy assessment, and 
 ### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage market-research --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage market-research --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval

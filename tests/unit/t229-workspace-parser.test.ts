@@ -235,19 +235,19 @@ describe("parseWorkspaceCommand", () => {
 
 describe("classifier and next parser parity", () => {
   test("workspace migration rows render the same utility subcommand at both call sites", () => {
-    const rows: Array<{ args: string[]; invocation: string }> = [
-      { args: ["space"], invocation: "space" },
-      { args: ["space", "teamB"], invocation: "space teamB" },
-      { args: ["space", "create", "teamB"], invocation: "space-create teamB" },
-      { args: ["space", "list"], invocation: "space" },
-      { args: ["space", "list", "--json"], invocation: "space --json" },
-      { args: ["space", "switch", "teamB"], invocation: "space switch teamB" },
-      { args: ["space-create", "teamB"], invocation: "space-create teamB" },
-      { args: ["intent", "some-slug"], invocation: "intent some-slug" },
-      { args: ["intent", "list"], invocation: "intent" },
-      { args: ["intent", "list", "--json"], invocation: "intent --json" },
-      { args: ["intent", "switch", "list"], invocation: "intent switch list" },
-      { args: ["space", "foo", "--status"], invocation: "space foo" },
+    const rows: Array<{ args: string[]; invocation: string; route: string }> = [
+      { args: ["space"], invocation: "space", route: "space list" },
+      { args: ["space", "teamB"], invocation: "space teamB", route: "space teamB" },
+      { args: ["space", "create", "teamB"], invocation: "space-create teamB", route: "space create teamB" },
+      { args: ["space", "list"], invocation: "space", route: "space list" },
+      { args: ["space", "list", "--json"], invocation: "space --json", route: "space list --json" },
+      { args: ["space", "switch", "teamB"], invocation: "space switch teamB", route: "space switch teamB" },
+      { args: ["space-create", "teamB"], invocation: "space-create teamB", route: "space create teamB" },
+      { args: ["intent", "some-slug"], invocation: "intent some-slug", route: "intent some-slug" },
+      { args: ["intent", "list"], invocation: "intent", route: "intent list" },
+      { args: ["intent", "list", "--json"], invocation: "intent --json", route: "intent list --json" },
+      { args: ["intent", "switch", "list"], invocation: "intent switch list", route: "intent switch list" },
+      { args: ["space", "foo", "--status"], invocation: "space foo", route: "space foo" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -258,7 +258,7 @@ describe("classifier and next parser parity", () => {
       try {
         const d = directive(projectDir, row.args);
         expect(d.kind, row.args.join(" ")).toBe("print");
-        expect(d.message, row.args.join(" ")).toContain(`aidlc-utility.ts ${row.invocation}`);
+        expect(d.message, row.args.join(" ")).toContain(`aidlc.ts engine ${row.route}`);
       } finally {
         cleanup(projectDir);
       }
@@ -273,7 +273,7 @@ describe("classifier and next parser parity", () => {
     try {
       const d = directive(projectDir, args);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts intent-create --scope poc --label x");
+      expect(d.message).toContain("aidlc.ts engine intent create --scope poc --label x");
     } finally {
       cleanup(projectDir);
     }
@@ -324,8 +324,8 @@ describe("classifier and next parser parity", () => {
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts space foo");
-      expect(d.message).not.toContain("aidlc-utility.ts status");
+      expect(d.message).toContain("aidlc.ts engine space foo");
+      expect(d.message).not.toContain("aidlc.ts engine status");
     } finally {
       cleanup(projectDir);
     }
@@ -355,7 +355,7 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const switched = runUtility(projectDir, ["space", "switch", "My Space"]);
       expect(switched.status).toBe(0);
-      expect(switched.stdout).toContain("Active space");
+      expect(switched.stdout).toContain("Active space -> my-space");
       expect(readFileSync(join(projectDir, "aidlc", "active-space"), "utf-8").trim()).toBe("my-space");
     } finally {
       cleanup(projectDir);
@@ -371,9 +371,10 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const d = directive(projectDir, ["intent", "switch", "birth"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts intent switch birth");
+      expect(d.message).toContain("aidlc.ts engine intent switch birth");
 
       const r = runDispatcher(REPO_ROOT, [
+        "engine",
         "intent",
         "switch",
         "birth",
@@ -381,7 +382,7 @@ describe("utility handlers and reservation chokepoints", () => {
         projectDir,
       ]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Active intent");
+      expect(r.stdout).toContain("Active intent -> 260711-birth");
       expect(r.stderr).toBe("");
       expect(readFileSync(registry, "utf-8")).toBe(before);
       expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");
@@ -413,7 +414,7 @@ describe("utility handlers and reservation chokepoints", () => {
     try {
       mkdirSync(join(projectDir, "aidlc", "spaces", "list", "intents"), { recursive: true });
       seedIntent(projectDir, "birth", "260711-birth");
-      const r = runUtility(projectDir, ["doctor"]);
+      const r = runUtility(projectDir, ["doctor", "--verbose"]);
       expect(r.out).toContain(
         "Workspace names shadowing grammar verbs (advisory): space 'list', intent 'birth' - reachable via explicit switch; consider renaming.",
       );
@@ -458,15 +459,15 @@ describe("Kiro quoted argv tokenizer", () => {
       const cases = [
         {
           args: ["space", "create", "My Space"],
-          command: "aidlc-utility.ts space-create 'My Space'",
+          command: "aidlc.ts engine space create 'My Space'",
         },
         {
           args: ["space", "switch", "My Space"],
-          command: "aidlc-utility.ts space switch 'My Space'",
+          command: "aidlc.ts engine space switch 'My Space'",
         },
         {
           args: ["intent", "create", "--scope", "poc", "--label", "My Work"],
-          command: "aidlc-utility.ts intent-create --scope poc --label 'My Work'",
+          command: "aidlc.ts engine intent create --scope poc --label 'My Work'",
         },
       ];
       for (const item of cases) {

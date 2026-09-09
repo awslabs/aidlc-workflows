@@ -42,7 +42,7 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, while balanced and templated agents both pin a mid-size model at `medium` effort on Claude Code, Codex, and opencode. Those two tiers currently project identically but remain distinct so either can be retuned independently. On Kiro, Cursor, and Copilot all tiers inherit the session model. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
-To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until you re-copy the `dist/<harness>/` shell. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until `aidlc config` refreshes that framework-owned file or you manually replace it from the same versioned `runtime/<harness>/` release payload. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 
@@ -109,6 +109,36 @@ You can override scope at any time during a workflow:
 - **At any approval gate**: request a different scope or depth
 - **Via utility command**: `/aidlc --scope enterprise` changes the active scope
 - **Stage inclusion**: at approval gates in Ideation and Inception, you can add a previously skipped stage back into the workflow
+
+---
+
+## Change Control
+
+Change Control is one setting with two values, `strict` and `relaxed`. It decides what happens when something you already approved or confirmed turns out to have changed underneath: the source files moved after you approved a code plan, a reviewed document was edited after its review, or an output was saved without the current summary confirmation.
+
+- `strict` reopens the approval. The run stops with one plain sentence naming what changed (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Look them over and approve the plan again to continue.`) and asks you again.
+- `relaxed` keeps going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it (`... Continuing (Change Control: relaxed). Say 'review the plan again' to reopen approval.`), and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
+
+Neither value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under both values. Change Control only decides the consequence of an input change, not whether the framework notices it.
+
+### Defaults per scope
+
+| Scope | Default |
+|-------|---------|
+| enterprise, security-patch, infra | strict |
+| poc, express, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
+
+A composed scope carries the value the composer proposed and you approved at its gate; a matched stock scope carries that scope's default.
+
+### The three places to set it
+
+1. **The scope file.** `change_control: strict | relaxed` in `scopes/aidlc-<name>.md` is the value every new intent on that scope starts with (absent means strict).
+2. **Memory.** A `## Change Control` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and over any per-intent flip, which is then refused with a sentence naming the file. `Mode: relaxed` or an empty section changes nothing; any other value is a validation error naming the file and the two allowed values.
+3. **The intent.** `/aidlc --change-control strict|relaxed`, or a plain-chat request such as "stop asking me to re-approve when files change", sets the value for the running piece of work (`/aidlc --status` shows it as `Change Control: relaxed (set by you)`).
+
+### Where the value lives
+
+The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Change Control**: <value> (from scope <name>)`, rewritten by the flag or the chat request, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `CHANGE_CONTROL_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it; an invalid field is unavailable until `/aidlc --change-control strict|relaxed` repairs it. The next intent starts from its scope's default again.
 
 ---
 

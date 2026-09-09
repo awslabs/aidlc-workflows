@@ -57,7 +57,7 @@ Read `<record>/aidlc-state.md` to confirm:
 - Project type is brownfield
 
 If the project is not brownfield, run
-`bun .cursor/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "<reason>"`.
+`bun .cursor/tools/aidlc.ts engine orchestrate report --stage reverse-engineering --result skipped --reason "<reason>"`.
 The engine records the skip and advances to the next in-scope stage.
 
 #### Resolve the intent's repo set (multi-repo)
@@ -95,7 +95,7 @@ accumulates across intents. For every repo in the resolved set, run the
 read-only check:
 
 ```
-bun .cursor/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
+bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo <repo>
 ```
 
 - **NO_STORE** - first scan for this repo. Proceed to Step 2; no question.
@@ -185,7 +185,7 @@ Only after every repository decision has been resolved:
 
 - If every repo is reused on an ordinary workflow run, report the stage as
   skipped exactly once:
-  `bun .cursor/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "codekb reuse: all resolved stores CURRENT, human chose reuse"`.
+  `bun .cursor/tools/aidlc.ts engine orchestrate report --stage reverse-engineering --result skipped --reason "codekb reuse: all resolved stores CURRENT, human chose reuse"`.
 - If every repo is reused on an isolated run (`directive.single === true`), do
   NOT call the main-workflow skipped report. Return the reused-repositories
   summary to the orchestrator's isolated stage-runner branch; the single-run
@@ -305,7 +305,7 @@ For the block's `fingerprint:` line, run the mint command with the final
 its output verbatim:
 
    ```
-   bun .cursor/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
+   bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
    ```
 
 At Minimal depth, all nine artifacts and every required section above still
@@ -318,7 +318,7 @@ is the methodology's existing depth contract, not an output-length cap.
 yourself.** Run the read-only tool
 
 ```
-bun .cursor/tools/aidlc-utility.ts codekb-path --repo <repo>
+bun .cursor/tools/aidlc.ts engine workspace codekb --repo <repo>
 ```
 
 (omit `--repo` only for an unrecorded project-root repo; pass it for every
@@ -335,7 +335,7 @@ repo; NOT the timestamp filename - record-dir placement checks key on the
 artifact stems) and run
 
 ```
-bun .cursor/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
+bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
 ```
 
 Keep the output keyed by `<repo>` for Step 5's completion summary. This is the
@@ -394,7 +394,7 @@ Do not report completion until every selected repo's chain has both receipts.
 
 After every selected repo scan has completed, hand completion to
 `stage-protocol.md` exactly once via
-`bun .cursor/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result <outcome>`.
+`bun .cursor/tools/aidlc.ts engine orchestrate report --stage reverse-engineering --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 5: Present Completion & Request Approval

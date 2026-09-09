@@ -1,7 +1,7 @@
 ---
 id: linter
 kind: deterministic
-command: bun .claude/tools/aidlc-sensor-linter.ts
+command: bun .claude/tools/aidlc.ts engine sensor-linter
 default_severity: advisory
 description: Wraps the project's configured linter (eslint by default for v0.5.0); fires on TS/JS code outputs
 category: code-quality

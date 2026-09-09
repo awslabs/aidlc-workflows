@@ -37,7 +37,7 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    ```bash
-   bun .cursor/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
+   bun .cursor/tools/aidlc.ts engine intent create --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    ```
 
    Pass the user's `--scope <name>` when they named one; otherwise omit

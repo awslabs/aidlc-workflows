@@ -2,9 +2,8 @@
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at .codex/aidlc-rules/ (D-10 rename).
 #
-# bun tool allowlist: the deterministic core runs via these exact prefixes.
+# Bun copy-channel allowlist: deterministic framework tools stay under the harness tree.
 prefix_rule(pattern = ["bun", ".codex/tools/"], decision = "allow")
-prefix_rule(pattern = ["bun", ".codex/hooks/"], decision = "allow")
 
 # Git allow-rules (S9d): workspace-write keeps .git read-only in-sandbox and
 # routes git writes through escalation; these prefix rules pre-approve the

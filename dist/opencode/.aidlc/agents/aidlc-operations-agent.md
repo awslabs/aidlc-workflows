@@ -9,8 +9,6 @@ description: >
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
 disallowedTools: Task
-model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
-variant: medium
 ---
 <!-- aidlc-delegated-knowledge-preflight -->
 **Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.aidlc/knowledge/aidlc-shared/`, `.aidlc/knowledge/aidlc-operations-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-operations-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.

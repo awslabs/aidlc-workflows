@@ -178,7 +178,7 @@ Functional Design):
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage domain-design --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage domain-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 8: Present Completion & Request Approval
@@ -193,7 +193,7 @@ Use stage-protocol.md completion template with completion emoji: :building_const
   - Add Units Generation (if it was skipped in execution plan)
 
 If "Add Units Generation" is selected, run
-`bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add units-generation`
+`{{INVOKE}} engine recompose --add units-generation`
 before re-entering the approval flow.
 
 ## Sensors

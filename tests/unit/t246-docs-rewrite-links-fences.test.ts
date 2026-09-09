@@ -51,7 +51,7 @@ describe("t246 docs-rewrite-links fence awareness (CommonMark delimiters)", () =
   test("a missing out-of-tree target fails the run with file:line", () => {
     const r = run("Bad [gone](../missing.md).\n");
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("docs/page.md:1");
+    expect(r.stderr).toContain(`${join("docs", "page.md")}:1`);
     expect(r.page).toContain("[gone](../missing.md)");
   });
 

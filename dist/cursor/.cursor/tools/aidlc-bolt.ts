@@ -172,9 +172,9 @@ function spawnSibling(
       const publicVerb = verb === "audit-fork"
         ? "fork"
         : verb === "audit-merge" ? "merge" : verb;
-      command = [executable, "audit", publicVerb, ...rest, "--project-dir", pd];
+      command = [executable, "engine", "audit", publicVerb, ...rest, "--project-dir", pd];
     } else {
-      command = [executable, noun, ...subargs, "--project-dir", pd];
+      command = [executable, "engine", noun, ...subargs, "--project-dir", pd];
     }
   } else {
     command = [

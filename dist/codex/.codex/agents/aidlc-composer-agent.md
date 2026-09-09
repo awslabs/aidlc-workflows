@@ -77,7 +77,7 @@ START deciding. Target: complete in ≤ 4 tool calls when CodeKB is present.
 
 ### Step 1: Detect Workspace
 
-Run `bun .codex/tools/aidlc-utility.ts detect --json`. Returns workspace scan
+Run `bun .codex/tools/aidlc.ts engine workspace detect --json`. Returns workspace scan
 (projectType, languages, frameworks, buildSystem) and the resolved `scopesDir`
 + `scopeGridPath`. You write ONLY to those two printed paths.
 
@@ -157,7 +157,7 @@ Do NOT compute the composite, bands, or any downstream number yourself. Score
 the five components with cited evidence, then run:
 
 ```
-bun .codex/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
+bun .codex/tools/aidlc.ts engine graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
 ```
 
 and copy its numbers verbatim. The tool owns the weighted composite, the band
@@ -555,11 +555,13 @@ gate.
 
 Write your ARS-derived grid to a temp file and run:
 ```
-bun .codex/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>
+bun .codex/tools/aidlc.ts engine graph validate-grid --proposal <path> --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
 ```
-Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
-`--strict` (the same strict check the recompose verb re-runs after approval -
-a starved required input rejects, so catch it here, before the gate).
+When the dispatch selected a workflow explicitly, pass that same space and
+intent so Change Control validation reads that workflow's memory. Lenient mode
+for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
+strict check the recompose verb re-runs after approval - a starved required
+input rejects, so catch it here, before the gate).
 Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
 Copy the validator's `summary` field into the proposal VERBATIM for the grid
 that validation checked.
@@ -635,6 +637,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
+  "changeControl": "strict | relaxed",
+  "changeControlRationale": "<1 sentence: why an input change after approval should reopen it, or be recorded and continue>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
@@ -651,6 +655,25 @@ contains task text, copy the dispatch's task text exactly without paraphrasing. 
 composition, derive a concise description from the report's actual findings;
 for a task-less front composition, derive it from the proposed work the human
 will approve. Never return a front/report proposal that would create from only a scope name.
+
+`changeControl` is REQUIRED for every mode and is ONE value with a one-line
+`changeControlRationale`. It decides what happens when an input changes after
+the human approved or confirmed something: `strict` reopens that approval;
+`relaxed` records the change once, tells the human in one line, and continues.
+It never removes a gate. For `mode: "matched"` copy the stock scope's
+`change_control` frontmatter value (read from that one scope `.md`; strict when
+the line is absent) and say so in the rationale. For `mode: "custom"` propose
+the value from the evidence: strict when `r` (risk) or `ve` (verification
+entropy) is high, when the work is regulated, or when several people share the
+approvals; relaxed for a spike, a fix, or a solo run where re-approving on
+every changed file would only slow the human down. For `mode: "in-flight"`
+return the running intent's current value unchanged (read `Change Control`
+from `aidlc-state.md`); the composer never flips it, the human does from chat.
+Pass `changeControl` to `validate-grid --change-control <value>` so the
+validator checks it with the grid. The conductor renders it as its own gate
+row so the human can flip it before approving; a custom scope file carries it
+as `change_control: <value>` in its frontmatter and intent creation receives it
+as `--change-control <value>`.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -747,7 +770,7 @@ For `mode: "in-flight"`, skip this step entirely. Return the approved
 `recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`)
+- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, and `change_control: <the approved value>`; prose: one sentence saying what that value does)
 - `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
 
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
@@ -764,7 +787,7 @@ Composed scopes ship `keywords: []`. They resolve by `--scope <name>` but never
 participate in inference. Making a scope inferable is an explicit human choice
 at the gate. If keywords are granted, run the collision check:
 ```
-bun .codex/tools/aidlc-graph.ts validate-grid --proposal <path> --keywords <granted,csv>
+bun .codex/tools/aidlc.ts engine graph validate-grid --proposal <path> --keywords <granted,csv>
 ```
 
 ---

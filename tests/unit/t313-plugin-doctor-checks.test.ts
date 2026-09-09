@@ -129,9 +129,9 @@ describe("t313 plugin doctor checks", () => {
       'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"tool is ready"}]}));\n',
     );
 
-    const run = runDoctor(project);
+    const run = runDoctor(project, ["--verbose"]);
     expect(run.status, output(run)).toBe(0);
-    expect(output(run)).toContain(`✓  Plugin check (${PLUGIN}): tool is ready`);
+    expect(output(run)).toContain(`ok    Plugin check (${PLUGIN}): tool is ready`);
   });
 
   test("failing error-severity check renders a failure and exits 1", () => {
@@ -143,7 +143,8 @@ describe("t313 plugin doctor checks", () => {
 
     const run = runDoctor(project);
     expect(run.status).toBe(1);
-    expect(output(run)).toContain(`✗  Plugin check (${PLUGIN}): tool is missing — install the tool`);
+    expect(output(run)).toContain(`fail  Plugin check (${PLUGIN}): tool is missing`);
+    expect(output(run)).toContain("fix: install the tool");
   });
 
   test("failing advisory check stays visible and exits 0", () => {
@@ -156,8 +157,9 @@ describe("t313 plugin doctor checks", () => {
     const run = runDoctor(project);
     expect(run.status, output(run)).toBe(0);
     expect(output(run)).toContain(
-      `✓  Plugin check (${PLUGIN}): optional tool is missing (advisory) — install it when needed`,
+      `warn  Plugin check (${PLUGIN}): optional tool is missing (advisory)`,
     );
+    expect(output(run)).toContain("fix: install it when needed");
   });
 
   test("traversal and absolute plugin identities cannot execute scripts outside tools", () => {
@@ -226,7 +228,7 @@ describe("t313 plugin doctor checks", () => {
     const run = runDoctor(project);
     const out = output(run);
     expect(run.status).toBe(1);
-    expect(out.match(new RegExp(`✗  Plugin check \\(${PLUGIN}\\):`, "g"))?.length).toBe(1);
+    expect(out.match(new RegExp(`fail  Plugin check \\(${PLUGIN}\\):`, "g"))?.length).toBe(1);
     expect(out).toContain(scriptPath(project));
     expect(out).toContain("required JSON shape");
   });
@@ -244,7 +246,7 @@ describe("t313 plugin doctor checks", () => {
     expect(run.status).toBe(1);
     expect(elapsedMs).toBeLessThan(5_000);
     expect(output(run)).toContain(
-      `✗  Plugin check (${PLUGIN}): check script timed out after 50ms`,
+      `fail  Plugin check (${PLUGIN}): check script timed out after 50ms`,
     );
   });
 
@@ -441,14 +443,17 @@ describe("t313 plugin doctor checks", () => {
     );
 
     const run = runDoctor(project);
-    const pluginRows = output(run)
-      .split(/\r?\n/)
+    const lines = output(run).split(/\r?\n/);
+    const pluginRows = lines
       .filter((line) => line.includes(`Plugin check (${PLUGIN}):`));
     expect(run.status).toBe(1);
     expect(pluginRows).toHaveLength(1);
     expect(pluginRows[0]).not.toContain("\u001b");
     expect(pluginRows[0]).toContain("readyFORGED ROW[31m");
-    expect(pluginRows[0]).toContain("repairFORGED FIX");
+    const fixRows = lines.filter((line) => line.includes("FORGED FIX"));
+    expect(fixRows).toHaveLength(1);
+    expect(fixRows[0]).not.toContain("\u001b");
+    expect(fixRows[0]).toContain("repairFORGED FIX");
   });
 
   test("malformed entries are skipped and summarized once", () => {
@@ -458,14 +463,14 @@ describe("t313 plugin doctor checks", () => {
       'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"valid"},{pass:true,label:"bad fix",fix:7},{pass:false,label:"bad severity",severity:"warning"},{pass:true,label:"bad passing severity",severity:"warning"}]}));\n',
     );
 
-    const run = runDoctor(project);
+    const run = runDoctor(project, ["--verbose"]);
     const out = output(run);
     expect(run.status).toBe(1);
-    expect(out).toContain(`✓  Plugin check (${PLUGIN}): valid`);
+    expect(out).toContain(`ok    Plugin check (${PLUGIN}): valid`);
     expect(out).not.toContain("bad fix");
     expect(out).not.toContain("bad severity");
     expect(out).not.toContain("bad passing severity");
-    expect(out).toContain(`✗  Plugin check (${PLUGIN}): 3 malformed check entries skipped`);
+    expect(out).toContain(`fail  Plugin check (${PLUGIN}): 3 malformed check entries skipped`);
   });
 
   test("check rows are capped and truncation fails loud", () => {
@@ -475,11 +480,11 @@ describe("t313 plugin doctor checks", () => {
       'process.stdout.write(JSON.stringify({checks:Array.from({length:52},(_,i)=>({pass:true,label:["row",i].join(" ")}))}));\n',
     );
 
-    const run = runDoctor(project);
+    const run = runDoctor(project, ["--verbose"]);
     const out = output(run);
     expect(run.status).toBe(1);
-    expect(out).toContain(`✓  Plugin check (${PLUGIN}): row 49`);
-    expect(out).not.toContain(`✓  Plugin check (${PLUGIN}): row 50`);
-    expect(out).toContain(`✗  Plugin check (${PLUGIN}): 2 check result(s) truncated after 50 rows`);
+    expect(out).toContain(`ok    Plugin check (${PLUGIN}): row 49`);
+    expect(out).not.toContain(`ok    Plugin check (${PLUGIN}): row 50`);
+    expect(out).toContain(`fail  Plugin check (${PLUGIN}): 2 check result(s) truncated after 50 rows`);
   });
 });

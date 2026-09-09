@@ -31,7 +31,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -54,6 +53,7 @@ import {
   setActiveSpaceCursor,
   writeSessionBinding,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -180,7 +180,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     kind: "run-stage",
     stage: "code-generation",
     unit,
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
@@ -449,10 +449,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const output = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
           hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { command?: string };
         };
       };
       expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
       expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
         "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
           "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
@@ -485,8 +487,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
       expect(out.reason ?? "").not.toBe("");
-      // The continuation reason names the codex tools path (harnessDir seam).
-      expect(out.reason).toContain(".codex/tools/aidlc-orchestrate.ts");
+      // Copy-channel continuation guidance uses the harness-local Bun tool.
+      expect(out.reason).toContain("bun .codex/tools/aidlc-orchestrate.ts next");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -547,9 +549,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code, r.stderr).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
+          hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { message?: string };
         };
       };
+      expect(out.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
       const message = out.hookSpecificOutput?.updatedInput?.message ?? "";
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
@@ -845,7 +851,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
               session_id: "prior-session-0000",
               tool_input: {
                 command:
-                  "bun .codex/tools/aidlc-utility.ts intent-create --scope poc",
+                  "bun .codex/tools/aidlc.ts engine intent create --scope poc",
               },
               tool_response: firstCreate.stdout,
             },

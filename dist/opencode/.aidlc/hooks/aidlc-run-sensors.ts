@@ -31,6 +31,7 @@ import {
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
+  resolveProjectFlag,
   resolveProjectDirFromHook,
   sensorsDir,
   stateFilePath,
@@ -47,7 +48,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 // avoid patching the production source tree. `Number(undefined) || N`
 // pattern handles unset / empty / unparseable equally.
 const SUBPROCESS_TIMEOUT_MS =
-  Number(process.env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000;
+  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || 90_000;
 
 // Health-dir for the heartbeat (run-sensors.last). Read by the future
 // hook-health doctor.

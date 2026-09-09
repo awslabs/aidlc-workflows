@@ -22,7 +22,7 @@ user's `$ARGUMENTS` through verbatim; they must contain either `--stage
 2. Run:
 
    ```bash
-   bun .cursor/tools/aidlc-orchestrate.ts next $ARGUMENTS
+   bun .cursor/tools/aidlc.ts engine orchestrate next $ARGUMENTS
    ```
 
 3. Act on the directive exactly as the `aidlc` skill's forwarding loop

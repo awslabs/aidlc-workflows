@@ -111,6 +111,7 @@ import {
 import {
   writePlanApprovalChallenge,
   writeSessionPidEntry,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
@@ -183,7 +184,7 @@ function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): 
       version: 1,
       stage,
       ...(unit ? { unit } : {}),
-      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      state_sha256: stateDigest(state),
     })}\n`,
   );
 }
@@ -191,7 +192,7 @@ function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): 
 const COPILOT_SESSION = "t121-copilot-owner";
 function seedCopilotDirective(proj: string, kind = "run-stage", unit?: string): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
-  const digest = createHash("sha256").update(state).digest("hex");
+  const digest = stateDigest(state);
   const commandDigest = createHash("sha256").update("next").digest("hex");
   writeFileSync(
     join(seededRecordDir(proj), ".aidlc-active-directive.json"),
@@ -236,7 +237,7 @@ function seedSessionlessResumeMarker(
   stage = "requirements-analysis",
 ): string {
   const state = readFileSync(seededStateFile(proj), "utf-8");
-  const stateSha256 = createHash("sha256").update(state, "utf-8").digest("hex");
+  const stateSha256 = stateDigest(state);
   const projectSha256 = createHash("sha256").update(realpathSync(proj)).digest("hex");
   const ownerSession = `sessionless:${projectSha256.slice(0, 16)}`;
   const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
@@ -904,8 +905,9 @@ function progressSig(
   const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
-  const stableState = s.replace(/^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm, "");
-  const stateSha256 = createHash("sha256").update(stableState, "utf-8").digest("hex");
+  // Same projection the hook uses, via the shipped helper, so this replica cannot
+  // drift from it.
+  const stateSha256 = stateDigest(s);
   const directiveFingerprint = createHash("sha256")
     .update(JSON.stringify({
       kind: directive.kind ?? "run-stage",
@@ -1700,6 +1702,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       promptSha256: "b".repeat(64),
       sourceFloor: "c".repeat(64),
       markerRevision: 0,
+      plannedSourceSha256: "d".repeat(64),
     });
     const r = runHook(
       proj,

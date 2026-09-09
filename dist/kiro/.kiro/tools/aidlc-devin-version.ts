@@ -109,7 +109,7 @@ export const defaultExec: ExecFn = (binary: string) => {
       stdout: r.stdout?.toString() ?? "",
       stderr: r.stderr?.toString() ?? "",
       exitCode: r.exitCode ?? null,
-      timedOut: r.timedOut ?? false,
+      timedOut: r.exitedDueToTimeout ?? false,
     };
   } catch (e) {
     return {

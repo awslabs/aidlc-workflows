@@ -7,7 +7,7 @@ This schema is the contract between the tool (deterministic) and the LLM (prose 
 ## Usage
 
 ```
-bun .cursor/tools/aidlc-worktree.ts info --slug <kebab-slug>
+bun .cursor/tools/aidlc.ts engine worktree info --slug <kebab-slug>
 ```
 
 The slug is the kebab-case Bolt identifier threaded through every worktree command for that Bolt (`create`, `verify`, `merge`, `discard`). See `SKILL.md` per-Bolt loop "Slug derivation" paragraph for the `name → slug` transformation.

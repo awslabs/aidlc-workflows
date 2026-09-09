@@ -11,7 +11,7 @@
 // The .sh carried NO `# covers:` header, so no registry link is being
 // preserved here. The one enumerated unit these three skills genuinely bind to
 // is the deterministic data plane every one of them sources its numbers from —
-// `bun .claude/tools/aidlc-runtime.ts summary --json` — hence the
+// `aidlc engine runtime summary --json` — hence the
 // `subcommand:aidlc-runtime:summary` claim above. (The session-skill SKILL.md
 // files themselves are not an enumerated unit class in the coverage registry;
 // this twin proves their authored read-only contract.)
@@ -23,7 +23,7 @@
 // Each declares YAML frontmatter (name / user-invocable / classification) and
 // a Markdown body. The PR-C contract the .sh pins:
 //   - name == aidlc-<slug>, user-invocable: true, classification: read-only.
-//   - every skill sources numbers from `aidlc-runtime.ts summary --json`.
+//   - every skill sources numbers from `aidlc engine runtime summary --json`.
 //   - the retired "characters / 4" token heuristic must not reappear anywhere.
 //   - read-only: no skill names appendAuditEntry / aidlc-audit.ts / an
 //     aidlc-state.ts advance|approve|complete call.
@@ -51,9 +51,9 @@
 //   .sh 10 (session-cost classified read-only)         -> "session-cost frontmatter classification: read-only"
 //   .sh 11 (replay classified read-only)               -> "replay frontmatter classification: read-only"
 //   .sh 12 (outcomes-pack classified read-only)        -> "outcomes-pack frontmatter classification: read-only"
-//   .sh 13 (session-cost reads summary --json)         -> "session-cost body sources aidlc-runtime.ts summary --json"
-//   .sh 14 (replay reads summary --json)               -> "replay body sources aidlc-runtime.ts summary --json"
-//   .sh 15 (outcomes-pack reads summary --json)        -> "outcomes-pack body sources aidlc-runtime.ts summary --json"
+//   .sh 13 (session-cost reads summary --json)         -> "session-cost body sources aidlc engine runtime summary --json"
+//   .sh 14 (replay reads summary --json)               -> "replay body sources aidlc engine runtime summary --json"
+//   .sh 15 (outcomes-pack reads summary --json)        -> "outcomes-pack body sources aidlc engine runtime summary --json"
 //   .sh 16 (session-cost drops chars/4 heuristic)      -> "session-cost carries no chars/4 token heuristic"
 //   .sh 17 (replay carries no token heuristic)         -> "replay carries no chars/4 token heuristic"
 //   .sh 18 (outcomes-pack carries no token heuristic)  -> "outcomes-pack carries no chars/4 token heuristic"
@@ -187,14 +187,14 @@ describe("t107 session skills — data-plane sourcing (summary --json)", () => {
   // Every skill must pull its numbers from the deterministic tool, no LLM-side
   // counting. Assert on the body so a stray frontmatter mention couldn't satisfy
   // it (STRONGER than the .sh's whole-file grep).
-  const NEEDLE = "aidlc-runtime.ts summary --json";
-  test("session-cost body sources aidlc-runtime.ts summary --json [.sh 13]", () => {
+  const NEEDLE = "bun .claude/tools/aidlc.ts engine runtime summary --json";
+  test("session-cost body sources aidlc engine runtime summary --json [.sh 13]", () => {
     expect(split(COST).body).toContain(NEEDLE);
   });
-  test("replay body sources aidlc-runtime.ts summary --json [.sh 14]", () => {
+  test("replay body sources aidlc engine runtime summary --json [.sh 14]", () => {
     expect(split(REPLAY).body).toContain(NEEDLE);
   });
-  test("outcomes-pack body sources aidlc-runtime.ts summary --json [.sh 15]", () => {
+  test("outcomes-pack body sources aidlc engine runtime summary --json [.sh 15]", () => {
     expect(split(PACK).body).toContain(NEEDLE);
   });
 });

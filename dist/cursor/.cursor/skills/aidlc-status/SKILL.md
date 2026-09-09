@@ -17,7 +17,7 @@ Show the current workflow status through the same deterministic route as
 1. Run:
 
    ```bash
-   bun .cursor/tools/aidlc-orchestrate.ts next --status
+   bun .cursor/tools/aidlc.ts engine orchestrate next --status
    ```
 
 2. Act on the returned directive exactly as the `aidlc` skill's forwarding

@@ -413,7 +413,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(directive(r).kind).toBe("print");
-    expect(directive(r).message).toContain("intent-create");
+    expect(directive(r).message).toContain("intent create");
     // Mutation stays conductor-side: next must not have created/scaffolded state.
     expect(existsSync(statePath(p))).toBe(false);
   });
@@ -432,7 +432,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent-create --scope bugfix");
+    expect(d.message).toContain("intent create --scope bugfix");
     expect(d.message).toContain(
       "--arguments='Fix duplicate todo persistence'",
     );
@@ -450,11 +450,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   // Special path 6: SCOPE-CHANGE — next names the scope-change command.
   // ============================================================
-  test("SP6: scope-change -> print directive naming `scope-change --scope mvp`", () => {
+  test("SP6: scope-change -> print directive naming `scope change --scope mvp`", () => {
     const p = projWithState("state-mid-ideation.md");
     const r = run(ORCHESTRATE, ["next", "--scope", "mvp", "--project-dir", p]);
     expect(directive(r).kind).toBe("print");
-    expect(r.out).toContain("scope-change --scope mvp");
+    expect(r.out).toContain("scope change --scope mvp");
   });
 
   // ============================================================

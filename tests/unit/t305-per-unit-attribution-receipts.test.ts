@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   currentStageSourceBaseline,
   currentSwarmAttemptObligations,
   currentSwarmSourceMergeChain,
@@ -36,6 +37,8 @@ import {
   readUnitSourceManifest,
   readUnitSourceSnapshot,
   recordDir,
+  reviewRecordDigest,
+  type ReviewRecord,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   serializeSourceListing,
@@ -987,10 +990,33 @@ function approve(project: string, env: Record<string, string> = {}): { rc: numbe
 function stripUnitBindings(project: string): void {
   const root = join(project, "aidlc", "spaces", "default", "intents");
   for (const rec of readdirSync(root)) {
-    const audit = join(root, rec, "audit"); if (!existsSync(audit)) continue;
+    const recordRoot = join(root, rec);
+    const audit = join(recordRoot, "audit");
+    if (!existsSync(audit)) continue;
     for (const file of readdirSync(audit)) {
-      const path = join(audit, file); let body = readFileSync(path, "utf-8");
-      body = body.replace(/^\*\*(?:Unit Source Fingerprint|Unit Source Binding Bypass)\*\*: .*\r?\n/gm, "");
+      const path = join(audit, file);
+      let body = readFileSync(path, "utf-8");
+      for (const block of body.split("\n---\n")) {
+        if (auditBlockField(block, "Event") !== "REVIEW_COMPLETED") continue;
+        const relativeRecord = auditBlockField(block, "Review Record");
+        if (relativeRecord === null) continue;
+        const recordPath = join(recordRoot, relativeRecord);
+        const record = JSON.parse(readFileSync(recordPath, "utf-8")) as ReviewRecord;
+        record.unit_source_fingerprint = null;
+        const bytes = `${JSON.stringify(record, null, 2)}\n`;
+        writeFileSync(recordPath, bytes, "utf-8");
+        const previousDigest = auditBlockField(block, "Review Record Digest");
+        if (previousDigest !== null) {
+          body = body.replace(
+            `**Review Record Digest**: ${previousDigest}`,
+            `**Review Record Digest**: ${reviewRecordDigest(bytes)}`,
+          );
+        }
+      }
+      body = body.replace(
+        /^\*\*(?:Unit Source Fingerprint|Unit Source Binding Bypass)\*\*: .*\r?\n/gm,
+        "",
+      );
       writeFileSync(path, body);
     }
   }

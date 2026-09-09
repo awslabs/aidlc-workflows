@@ -32,7 +32,7 @@ duration, approved/failed/pending tallies, learnings captured — come
 from the tool, not from eyeballing files:
 
 ```bash
-bun .cursor/tools/aidlc-runtime.ts summary --json
+bun .cursor/tools/aidlc.ts engine runtime summary --json
 ```
 
 The narrative prose (what happened, key decisions, reasoning) is yours
@@ -44,7 +44,7 @@ when the tool already reports the figure.
 
 ### Step 1: Read the aggregates
 
-Run `bun .cursor/tools/aidlc-runtime.ts summary --json`.
+Run `bun .cursor/tools/aidlc.ts engine runtime summary --json`.
 
 If it exits non-zero (no `runtime-graph.json` yet), print:
 

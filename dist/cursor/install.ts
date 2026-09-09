@@ -857,6 +857,23 @@ function stringArray(value: unknown, label: string): string[] {
   return value as string[];
 }
 
+function cursorAdapterTarget(command: string): string | null {
+  const normalized = command.trim();
+  const match = /\s([a-z0-9-]+)$/.exec(normalized);
+  if (!match) return null;
+  const invocation = normalized.slice(0, match.index);
+  if (
+    invocation === "aidlc engine hook cursor-adapter" ||
+    invocation === "aidlc engine adapter cursor" ||
+    /^bun\s+(?:"[^"]*\/hooks\/aidlc-cursor-adapter\.ts"|'[^']*\/hooks\/aidlc-cursor-adapter\.ts'|\S*\/hooks\/aidlc-cursor-adapter\.ts)$/.test(
+      invocation,
+    )
+  ) {
+    return match[1];
+  }
+  return null;
+}
+
 function mergeHooks(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -889,17 +906,28 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
     const merged = [...((projectEntries as unknown[] | undefined) ?? [])];
     for (const entry of shippedEntries) {
       const command = isObject(entry) && typeof entry.command === "string" ? entry.command : null;
-      const existingIndex =
-        command === null
-          ? -1
-          : merged.findIndex(
-              (candidate) => isObject(candidate) && candidate.command === command,
-            );
-      // A command match identifies an AI-DLC-owned hook entry. Replace it with
-      // the refreshed shipped object so security metadata such as failClosed
-      // upgrades instead of being frozen at the first installed version.
-      if (existingIndex === -1) merged.push(entry);
-      else merged[existingIndex] = entry;
+      const target = command === null ? null : cursorAdapterTarget(command);
+      // A command or adapter-target match identifies an AI-DLC-owned hook
+      // entry. A project refreshed across releases may carry several spellings
+      // of the same target (bun-era, 2.8.0 `engine hook`, canonical); every
+      // one of them is replaced by the single shipped entry, in the position
+      // of the first, so wiring and failClosed metadata upgrade together and
+      // no stale variant keeps executing beside the current one.
+      const owned = command === null
+        ? []
+        : merged.flatMap((candidate, index) => {
+          if (!isObject(candidate) || typeof candidate.command !== "string") return [];
+          return candidate.command === command ||
+              (target !== null && cursorAdapterTarget(candidate.command) === target)
+            ? [index]
+            : [];
+        });
+      if (owned.length === 0) {
+        merged.push(entry);
+        continue;
+      }
+      merged[owned[0]] = entry;
+      for (const index of owned.slice(1).reverse()) merged.splice(index, 1);
     }
     mergedHooks[event] = merged;
   }

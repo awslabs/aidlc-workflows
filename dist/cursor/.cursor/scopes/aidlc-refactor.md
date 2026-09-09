@@ -7,6 +7,7 @@ keywords:
   - simplify
 description: Clean up existing code
 skeleton: off
+change_control: relaxed
 ---
 
 # refactor scope
@@ -16,6 +17,8 @@ Like `bugfix` it skips ideation and most operations, but it adds back
 functional-design — a refactor reshapes structure, so the design of the
 behaviour being preserved matters — and retains the deployment stages needed
 to ship the verified change.
+
+Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
 
 ## Why these stages, why skip those
 

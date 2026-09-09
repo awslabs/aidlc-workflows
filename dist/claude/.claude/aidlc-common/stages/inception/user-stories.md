@@ -72,7 +72,7 @@ Create `<record>/inception/user-stories/user-stories-assessment.md` documenting 
 - If skipping: what alternative coverage exists (e.g., requirements alone are sufficient)
 
 If skipping, run
-`bun .claude/tools/aidlc-orchestrate.ts report --stage user-stories --result skipped --reason "<reason>"`.
+`bun .claude/tools/aidlc.ts engine orchestrate report --stage user-stories --result skipped --reason "<reason>"`.
 The engine records the skip and advances to the next in-scope stage.
 
 ### Step 3: Load Prior Context
@@ -176,7 +176,7 @@ only with a named downstream stage and `N/A` only with a justification:
 After verifying the three lead artifacts and all three contribution files, run:
 
 ```bash
-bun .claude/tools/aidlc-orchestrate.ts report \
+bun .claude/tools/aidlc.ts engine orchestrate report \
   --stage user-stories --result awaiting-approval
 ```
 

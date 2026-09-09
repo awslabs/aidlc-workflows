@@ -1,7 +1,7 @@
 ---
 id: traceability
 kind: deterministic
-command: bun .aidlc/tools/aidlc-sensor-traceability.ts
+command: bun .aidlc/tools/aidlc.ts engine sensor-traceability
 default_severity: advisory
 description: Verifies element-level upstream coverage, downstream targets, and derived orphans in traceability.json
 category: document-traceability

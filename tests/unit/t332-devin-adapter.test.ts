@@ -494,6 +494,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         promptSha256: "b".repeat(64),
         sourceFloor: "c".repeat(64),
         markerRevision: 0,
+        plannedSourceSha256: "d".repeat(64),
         options: ["yes", "no"],
         requireExactOptionLabels: false,
         hashedOptionLabels: false,

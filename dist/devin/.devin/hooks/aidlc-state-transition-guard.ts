@@ -204,6 +204,21 @@ export function directStateTransition(command: string): string | null {
     const verb = match[1];
     if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
   }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+state[ \t]+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const verb = match[1];
+    if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
+  }
+  const dispatcherTransition = delegatedLifecycleCommand(command)?.match(
+    /\bengine state ([a-z][a-z0-9-]*)$/,
+  )?.[1];
+  if (
+    dispatcherTransition &&
+    BLOCKED_STATE_TRANSITIONS.has(dispatcherTransition)
+  ) {
+    return dispatcherTransition;
+  }
   return null;
 }
 
@@ -219,6 +234,15 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const tool = match[1] ?? match[2] ?? match[3];
     const verb = match[4];
     if (tool === "orchestrate" && verb === "report") return true;
+    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "jump" && verb === "execute") return true;
+  }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+(orchestrate|state|jump)[ \t]+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const tool = match[1];
+    const verb = match[2];
+    if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
     if (tool === "jump" && verb === "execute") return true;
   }
@@ -746,7 +770,12 @@ function delegatedDispatcherCommand(
   prefix: string,
   rawArgs: string[],
 ): string | null {
-  const args = withoutProjectDir(rawArgs);
+  const raw = withoutProjectDir(rawArgs);
+  const namespace = raw[0] === "engine" || raw[0] === "system"
+    ? raw[0]
+    : null;
+  const args = namespace ? raw.slice(1) : raw;
+  const routePrefix = namespace ? `${prefix} ${namespace}` : prefix;
   const group = args[0] ?? "";
   const verb = args[1] ?? "";
   if (
@@ -764,21 +793,30 @@ function delegatedDispatcherCommand(
       "init",
     ].includes(group)
   ) {
-    return `${prefix} ${group}`;
+    return `${routePrefix} ${group}`;
   }
   if (group === "scope" && verb === "change") {
-    return `${prefix} scope change`;
+    return `${routePrefix} scope change`;
+  }
+  if (
+    group === "orchestrate" &&
+    ["next", "continue", "report", "park"].includes(verb)
+  ) {
+    return `${routePrefix} orchestrate ${verb}`;
+  }
+  if (group === "intent" && verb === "create") {
+    return `${routePrefix} intent create`;
   }
   if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
-    return `${prefix} state ${verb}`;
+    return `${routePrefix} state ${verb}`;
   }
   if (group === "jump" && verb === "execute") {
-    return `${prefix} jump execute`;
+    return `${routePrefix} jump execute`;
   }
   if (group === "config" && verb === "set") {
-    return `${prefix} config set`;
+    return `${routePrefix} config set`;
   }
-  return workspaceMutation(prefix, args);
+  return workspaceMutation(routePrefix, args);
 }
 
 function delegatedUtilityCommand(

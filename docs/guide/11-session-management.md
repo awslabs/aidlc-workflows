@@ -172,7 +172,7 @@ Three read-only skills report on the current workflow without changing it. Each 
 
 **They are read-only.** None advances the workflow stage pointer, and none emits an audit event, so they are safe to run at any point — including mid-stage. `/aidlc-session-cost` and `/aidlc-replay` print to the terminal and write nothing; `/aidlc-outcomes-pack` is the only one that writes a file (`OUTCOMES.md` at the workspace root).
 
-**Every number they report comes straight from the data plane.** Each skill reads its figures from `bun .claude/tools/aidlc-runtime.ts summary --json` — the materialised view over `runtime-graph.json`. The skills never estimate or recount; the prose around the numbers (the narrative, the decision rationale) is the only part synthesised from the audit trail and artefacts. There is deliberately no token estimate — the old file-size-to-token heuristic was guesswork and has been removed.
+**Every number they report comes straight from the data plane.** Each skill reads its figures from `aidlc engine runtime summary --json` — the materialised view over `runtime-graph.json`. The skills never estimate or recount; the prose around the numbers (the narrative, the decision rationale) is the only part synthesised from the audit trail and artefacts. There is deliberately no token estimate — the old file-size-to-token heuristic was guesswork and has been removed.
 
 ```
 /aidlc-session-cost      # quick "where are we" snapshot, any time

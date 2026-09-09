@@ -11,8 +11,8 @@
 // SKILL — EXCEPT harness/kiro-ide/skills/aidlc/SKILL.md, which was a stale fork
 // byte-identical to kiro CLI's SKILL at origin/main and never re-synced across the
 // 43-commit stack. It shipped GREEN because NO test reads a per-harness conductor
-// SKILL: `package.ts --check` only proves dist==authored, so a self-consistent-
-// but-stale authored SKILL passes. This gate closes that hole in BOTH directions:
+// SKILL: package determinism cannot detect a self-consistent but stale authored
+// SKILL. This gate closes that hole in BOTH directions:
 //   (a) NEGATIVE — the retired `/aidlc --init` command (a bare `--init` flag
 //       token; `git init`/`npm init` are NOT the aidlc command, same predicate as
 //       t174) must be ABSENT from every shipped conductor SKILL.
@@ -25,8 +25,8 @@
 // carries a bare `--init`, so the POSITIVE set needs no per-harness carve-out.
 // The gate asserts the shipped AUTHORED surface
 // (harness/<h>/skills/aidlc/SKILL.md), the FIRST surface that defines a
-// harness's orchestrator vocabulary; dist is its byte-parity-guarded copy
-// (t148/package.ts --check), so gating the authored source covers every tree.
+// harness's orchestrator vocabulary; dist is regenerated from that source, so
+// gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -119,6 +119,15 @@ const LEARNINGS_QUESTION_TOKENS = [
   "one-option",
   "even when `surface` returns zero candidates",
   "never infer `Nothing to add`",
+];
+
+const CONFIG_ALIAS_TOKENS = [
+  "--config [section]",
+  "**In-session configuration (`--config [section]`).**",
+  "config <section> --show --json",
+  "config <section> <explicit value flags> --yes",
+  "Never invent values",
+  "do not call `next`",
 ];
 
 const APPROVAL_REPORT_TOKEN =
@@ -257,6 +266,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL carries the in-session config contract", () => {
+    const missing: string[] = [];
+    const blocks = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of CONFIG_ALIAS_TOKENS) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+      const start = body.indexOf("**In-session configuration");
+      const end = body.indexOf("**Autonomous reviewer boundary.**");
+      expect(start, `${rel} lacks config alias block`).toBeGreaterThan(-1);
+      expect(end, `${rel} lacks config alias end anchor`).toBeGreaterThan(start);
+      const block = body.slice(start, end).trim();
+      blocks.set(block, [...(blocks.get(block) ?? []), rel]);
+    }
+    expect(missing).toEqual([]);
+    expect([...blocks.values()]).toHaveLength(1);
+    expect([...blocks.values()][0]).toEqual(skills);
   });
 
   test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {
@@ -625,6 +654,64 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "never use `report` for this response route",
       ]) {
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("the guard-recovery rendering clause is byte-identical across every harness", () => {
+    // The clause is authored once and ported: the router and every enforcing tool
+    // emit the same typed ask, so every conductor must render it the same way.
+    // Both the sentence inside the `ask` row and the execution paragraph below the
+    // directive table are extracted by their own anchors and compared as bytes.
+    const sentences = new Map<string, string[]>();
+    const paragraphs = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const askRow = body
+        .split("\n")
+        .find((line) => line.startsWith("| `ask` |"));
+      expect(askRow, `${rel} lacks the ask row`).toBeDefined();
+      const sentenceStart = (askRow as string).indexOf(
+        'When `directive.ask_type === "guard-recovery"`',
+      );
+      const sentenceEnd = (askRow as string).indexOf(
+        "take no engine action until they answer.",
+      );
+      expect(sentenceStart, `${rel} lacks the guard-recovery sentence`).toBeGreaterThan(-1);
+      expect(sentenceEnd, `${rel} lacks the terminal-ask rule`).toBeGreaterThan(sentenceStart);
+      const sentence = (askRow as string).slice(
+        sentenceStart,
+        sentenceEnd + "take no engine action until they answer.".length,
+      );
+      sentences.set(sentence, [...(sentences.get(sentence) ?? []), rel]);
+      const paragraph = body
+        .split("\n")
+        .find((line) => line.startsWith("**Guard-recovery execution.**"));
+      expect(paragraph, `${rel} lacks the guard-recovery execution paragraph`).toBeDefined();
+      paragraphs.set(paragraph as string, [
+        ...(paragraphs.get(paragraph as string) ?? []),
+        rel,
+      ]);
+    }
+    expect([...sentences.values()].map((v) => v.sort())).toHaveLength(1);
+    expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "A remedy without `command` is action-only",
+        "render that follow-up and END THE TURN",
+        "their exact text",
+        "Never synthesize a missing command",
+        "process its returned directive through the table above",
+        "whose last line is a guard-recovery ask JSON is the same directive",
+        "When `directive.remedies` is empty the ask is terminal",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }
     }
     expect(missing).toEqual([]);

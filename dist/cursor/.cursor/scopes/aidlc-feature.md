@@ -5,6 +5,7 @@ keywords: []
 description: Full lifecycle for new features, practical depth
 skeleton: on
 runner: true
+change_control: relaxed
 ---
 
 # feature scope
@@ -13,6 +14,8 @@ The full-lifecycle scope for new feature work at practical depth. Like
 `enterprise`, it runs every stage in the graph, but the stage bodies apply
 Standard rather than Comprehensive depth — lighter ceremony, the same
 end-to-end coverage from ideation through operation.
+
+Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line, and the run continues.
 
 ## Why every stage
 

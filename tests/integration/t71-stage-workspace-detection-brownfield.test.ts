@@ -26,7 +26,7 @@
 // The SDK driver replaces that subprocess wholesale, and sdk-drive's readers
 // (readStateFile/readAuditEvents) resolve the CREATED intent's per-intent record.
 // The creation path is a single deterministic Bash dispatch: the engine names
-// `bun .claude/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "..."`
+// `bun .claude/tools/aidlc.ts engine intent create --scope <scope> --arguments "..."`
 // and the conductor prints its stdout VERBATIM. handleIntentCreate
 // (aidlc-utility.ts:1986) runs detectWorkspace over the brownfield-todo stub and
 // WRITES the classification into the per-intent aidlc-state.md + emits

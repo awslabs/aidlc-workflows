@@ -21,9 +21,15 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "devin",
+  productName: "Devin CLI",
+  configNextStep: "start Devin CLI in this project, then run `/aidlc --doctor`",
   harnessDir: ".devin",
   orchestratorSkillPath: ".devin/skills/aidlc/SKILL.md",
   tierFlavor: "devin",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+  ],
 
   // core/<src> → <harnessDir>/<dst>. Devin keeps every core dir name as-is
   // (same projection as Claude). The method ("memory") is NO LONGER a core dir

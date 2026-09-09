@@ -52,6 +52,8 @@ const TURN_MS = Math.max(300_000, Math.floor((TEST_TIMEOUT_MS - 60_000) / 2));
 
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
+const INTENT_CREATE_TOOL_TITLE =
+  /\baidlc(?:\.ts)?\s+engine\s+intent\s+create(?:\s|$)/;
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
@@ -106,12 +108,12 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           prompt:
             "1 (Approve the composed plan as-is - write the scope files and start the workflow)",
           timeoutMs: TURN_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
+          stopAfterToolTitle: INTENT_CREATE_TOOL_TITLE,
           keepAlive: true,
         });
         expect([...r1.toolCallIssues, ...r2.toolCallIssues]).toEqual([]);
         const creationOutput = r2.toolCalls
-          .filter((t) => t.title.includes("intent-create"))
+          .filter((t) => INTENT_CREATE_TOOL_TITLE.test(t.title))
           .map((t) => t.output.join(""))
           .join("");
         expect(creationOutput).toContain("State initialized:");

@@ -48,7 +48,7 @@ continuation; the escape hatch is `next --new-intent`.
 
 - **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject
-  (`bun .claude/tools/aidlc-utility.ts intent --json` gives its `slug` and
+  (`bun .claude/tools/aidlc.ts engine intent list --json` gives its `slug` and
   `status`). When in doubt, continue: false-positive offers are the main risk.
 - **On genuine new-work, OFFER, never auto-create.** Surface an
   `AskUserQuestion` showing the active intent and the proposed new one, **including
@@ -62,7 +62,7 @@ continuation; the escape hatch is `next --new-intent`.
   new-work text:
 
   ```bash
-  bun .claude/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
+  bun .claude/tools/aidlc.ts engine orchestrate next --new-intent --scope <the confirmed scope> "<the new-work description>"
   ```
 
   The engine returns a `print` directive naming the `intent-create` command

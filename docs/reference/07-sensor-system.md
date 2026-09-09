@@ -1,5 +1,9 @@
 # Sensor System
 
+Concrete `dist/claude/` paths in this chapter refer to the ignored local
+projection materialized by `bun scripts/package.ts`; installed projects use the
+same relative paths under `.claude/`.
+
 > Audience: Tier 2/3 (team adopter, framework contributor).
 
 This chapter is the **schema reference** for AI-DLC sensor manifests —
@@ -69,7 +73,7 @@ on the stage side via the stage's frontmatter `sensors:` field (see
 ---
 id: required-sections                       # required
 kind: deterministic                          # required
-command: bun .claude/tools/aidlc-sensor-required-sections.ts   # required
+command: aidlc engine sensor-required-sections   # required
 default_severity: advisory                   # required
 fire_on: gate                               # optional; write (default) | gate
 description: Checks that stage output ...    # required
@@ -93,7 +97,7 @@ timeout_seconds: 5                           # optional
 |---|---|---|---|
 | `id` | ✓ | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
 | `kind` | ✓ | enum | Only `deterministic` is accepted today; `llm` reserved for the v0.11.0 LLM-dispatch chapter. See [`kind` enum](#kind-enum) below. |
-| `command` | ✓ | string | Canonical invocation prefix — each shipped sensor names its own per-sensor script (e.g. `bun .claude/tools/aidlc-sensor-required-sections.ts`). The dispatcher (`aidlc-sensor.ts`) appends `--stage <slug>` plus the file flag matching the sensor's input shape: `--output-path <path>` for document sensors, `--file-path <path>` for the code sensors (`linter`, `type-check`). |
+| `command` | ✓ | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; third-party sensors may declare another runtime. The sensor dispatcher appends `--stage <slug>` plus `--output-path <path>` for document sensors or `--file-path <path>` for code sensors. |
 | `default_severity` | ✓ | enum | `advisory` or `blocking`. Blocking is enforced for `fire_on: gate`; write-fired blocking declarations remain advisory in this release. |
 | `description` | ✓ | string | One-line human description. |
 | `category` | optional | string | Free-form descriptive label (the shipped manifests use `document-provenance`, `document-shape`, and `code-quality`; not a closed enum). |
@@ -292,14 +296,14 @@ sensors (`linter`, `type-check`):
 So a manifest with:
 
 ```yaml
-command: bun .claude/tools/aidlc-sensor-required-sections.ts
+command: aidlc engine sensor-required-sections
 ```
 
 invoked against `requirements-analysis` writing the requirements artifact in the
 intent's record dir is dispatched as:
 
 ```
-bun .claude/tools/aidlc-sensor-required-sections.ts \
+aidlc engine sensor-required-sections \
   --stage requirements-analysis \
   --output-path aidlc/spaces/default/intents/260624-inventory-api/inception/requirements-analysis/requirements.md
 ```
@@ -316,7 +320,7 @@ deterministic tool (`aidlc-learnings.ts`) and the conductor (the live
 `/aidlc` session) has two legs, with a knowledge step and a judgement
 step between them:
 
-1. **`surface` (stdout).** `bun .claude/tools/aidlc-learnings.ts surface
+1. **`surface` (stdout).** `aidlc engine learnings surface
    --slug <stage-slug>` reads the stage's `memory.md` and prints structured
    JSON: `candidates[]` (one per non-blank Interpretation / Deviation /
    Tradeoff entry, each carrying `id`, `source_heading`, `ts`, `summary`,
@@ -342,7 +346,7 @@ step between them:
    proceed. Sensor manifests have no org-section analogue and skip the check.
 4. **`persist` (selections-file in).** The conductor writes the kept
    selections to `<record>/.aidlc-learnings/<slug>-selections.json` (in the intent's record dir)
-   (gitignored) and calls `bun .claude/tools/aidlc-learnings.ts persist
+   (gitignored) and calls `aidlc engine learnings persist
    --slug <slug> --selections-json <path>`. The tool is the deterministic
    writer — it never judges conflicts; it routes each learning as a practice to
    `aidlc/spaces/<surface-time-space>/memory/{project,team}.md` and, for a sensor selection, does the
@@ -373,7 +377,7 @@ framework-distribution paths are rejected). Fields default to:
 |---|---|---|
 | `id` | derived from user free-text (kebab-case it) | |
 | `kind` | `deterministic` | sole accepted value today |
-| `command` | `bun .claude/tools/aidlc-sensor-<id>.ts` | placeholder per-sensor script; user updates to the script that implements the check |
+| `command` | `bun ./plugins/acme/aidlc-sensor-<id>.ts` | third-party Bun-backed example; the plugin must declare that runtime requirement |
 | `default_severity` | `advisory` | non-blocking default |
 | `fire_on` | `write` | incremental write dispatch |
 | `description` | from user free-text | |

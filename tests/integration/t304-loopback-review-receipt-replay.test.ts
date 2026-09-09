@@ -8,12 +8,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { sourceBaselineAuditFields } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -207,9 +206,11 @@ function recordReview(unit: string): void {
   ];
   const requested = run(LOG, args);
   expect(requested.status, requested.out).toBe(0);
-  appendFileSync(
-    artifact,
-    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  mkdirSync(dirname(join(project, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(project, reviewFile),
+    `**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
   const completed = run(LOG, [...args, "--verdict", "READY"]);

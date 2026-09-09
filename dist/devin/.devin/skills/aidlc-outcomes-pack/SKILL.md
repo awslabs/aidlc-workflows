@@ -33,7 +33,7 @@ Stage tallies, per-phase rollup, memory-entry counts, and learnings
 captured come from the tool, not from eyeballing the artefact tree:
 
 ```bash
-bun .devin/tools/aidlc-runtime.ts summary --json
+bun .devin/tools/aidlc.ts engine runtime summary --json
 ```
 
 Section *content* (what was built, setup steps, decisions) is yours to
@@ -44,7 +44,7 @@ appears in the pack must trace to the tool's output.
 
 ### Step 1: Read the aggregates
 
-Run `bun .devin/tools/aidlc-runtime.ts summary --json`.
+Run `bun .devin/tools/aidlc.ts engine runtime summary --json`.
 
 If it exits non-zero (no `runtime-graph.json` yet), print:
 

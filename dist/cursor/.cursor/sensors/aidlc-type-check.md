@@ -1,7 +1,7 @@
 ---
 id: type-check
 kind: deterministic
-command: bun .cursor/tools/aidlc-sensor-type-check.ts
+command: bun .cursor/tools/aidlc.ts engine sensor-type-check
 default_severity: advisory
 description: Wraps the project's configured type-checker (tsc by default for v0.5.0); fires on TS/TSX code outputs
 category: code-quality

@@ -377,7 +377,7 @@ function rewriteStdinToolName(rawInput: string, devin: DevinHookInput): string {
 // plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:665).
 // The guard's isFrameworkToolInvocation resolves framework-tool script
 // paths against cwd (resolve(cwd, script) at line 487). Without this lift,
-// a `bun .devin/tools/aidlc-*.ts` command run from a subdirectory (Devin
+// a framework tool command run from a subdirectory (Devin
 // passes the subdirectory as workdir) fails the framework-tool exemption
 // because the guard resolves the script path against the project root.
 function rewriteStdinCwd(rawInput: string, devin: DevinHookInput): string {

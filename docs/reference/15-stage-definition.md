@@ -10,7 +10,7 @@ a stage *does*.
 
 Contributors read this to understand the format. When writing or editing a
 stage file, refer to the authoritative contract at
-`dist/claude/.claude/aidlc-common/protocols/stage-definition.md`. That file is
+`core/aidlc-common/protocols/stage-definition.md`. That file is
 the canonical spec — this chapter adds narrative and "when to use" guidance.
 
 ---
@@ -54,26 +54,28 @@ which artifacts a stage produces while editing its prose.
 ## Authoring flow
 
 ```
-┌─────────┐         ┌──────────────────┐         ┌──────────────────┐         ┌──────────────────┐
-│ Edit    │  ───→   │ Pre-commit hook  │  ───→   │ stage-graph.json │  ───→   │ loadStageGraph() │
-│ stage   │         │ aidlc-graph      │         │ (build artifact, │         │ (runtime,        │
-│ .md YAML│         │ compile          │         │  checked in)     │         │  unchanged)      │
-└─────────┘         └──────────────────┘         └──────────────────┘         └──────────────────┘
-     │                                                                                 ▲
-     │                              ┌──────────────────┐                               │
-     └────────────────────────────→ │ CI drift check   │ ──── blocks merge on drift ───┘
-                                    │ compile --check  │
-                                    └──────────────────┘
+Edit stage YAML
+      |
+      v
+bun scripts/package.ts
+      |
+      +--> ignored dist/<harness>/tools/data/stage-graph.json
+      |
+      +--> ignored dist-release/<harness>/tools/data/stage-graph.json
+                    |
+                    v
+             loadStageGraph()
 ```
 
-The YAML is authoritative. The JSON is a build artifact. CI enforces the
-relationship.
+The YAML is authoritative. The JSON is a generated build artifact. Repository
+packaging regenerates it from source; installed runtimes may also recompile it
+after plugin composition.
 
-`aidlc-graph compile` and `compile --check` ship as CLI subcommands (milestone 9);
-run compile manually after editing stage YAML, and CI enforces `compile
---check` to catch drift. A pre-commit hook that automates this is deferred
-to a later PR. `stage-graph.json` is a compiled artifact — do not edit it
-by hand; edit the YAML and recompile.
+`aidlc-graph compile` and `compile --check` remain runtime and diagnostic
+subcommands, but repository contributors do not preserve a compiled JSON copy
+in source control. Edit the YAML and run `bun scripts/package.ts`; packaging
+creates fresh ignored projections, and `bun scripts/package.ts --check`
+rebuilds twice in temporary roots to check generator determinism.
 
 ---
 
@@ -134,12 +136,23 @@ and a later human turn, binding it to the questions-file digest and its recorded
 `Hash Scope` (`confirmed-content-v1` for the normalized canonical questions
 content, including all visible Q<n> and feedback sections in file order; one
 post-summary `Assumption Confirmation` section is excluded; unscoped legacy
-receipts use the whole-file SHA-256). Completion refuses a missing or stale receipt, a changed
-confirmed section or forbidden heading, or a declared artifact without a native
-write after the receipt. A legacy in-flight receipt must be re-confirmed to
-create a scoped receipt before that permitted append can be accepted. Per-unit stages require one
-unit-scoped receipt per applicable Unit; isolated runs use the same check with
-their `single-stage:<slug>` workflow identity.
+receipts use the whole-file SHA-256). A `Looks correct` receipt also carries a
+`Summary Authorization Id` (a digest of the attempt, stage, Unit, workflow,
+questions path, confirmed content, and choice) that becomes the scope's active
+authorization; the write-audit hook stamps that id on every later
+`ARTIFACT_CREATED`/`ARTIFACT_UPDATED` row for the stage's outputs. Completion
+refuses a missing or stale receipt, a changed confirmed section or forbidden
+heading, or a declared artifact whose newest native write does not carry the
+current receipt's id (the output does not descend from the current
+confirmation). Identical re-confirmations mint the same id, so a repeated
+`Looks correct` reaffirms instead of revoking; changed answers mint a new id, so
+the outputs must be saved again under it; the order in which the receipt and the
+writes landed decides nothing. A legacy receipt without an id still requires a
+native write after the receipt, and a legacy in-flight receipt must be
+re-confirmed to create a scoped receipt before that permitted append can be
+accepted. Per-unit stages require one unit-scoped receipt per applicable Unit;
+isolated runs use the same check with their `single-stage:<slug>` workflow
+identity.
 
 ### `workspace_requires`
 
@@ -419,9 +432,10 @@ compile validates the value against the discovered agent roster the same way
 `lead_agent` is validated.
 
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
-required Markdown entry from `produces[]`. That scalar is the sole owner of the
-appended `## Review` section; list ordering and plugin-added outputs cannot
-change it. On a per-Unit stage the target must remain applicable for every Unit
+required Markdown entry from `produces[]`: the artifact the review is about.
+The review record is keyed to it, the gate names it, and
+`--reject-finding <artifact>#R-NN` addresses its findings; the reviewer never
+writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
 
@@ -477,7 +491,7 @@ file, add the required frontmatter, and the helpers pick it up at runtime.
 ## Worked example
 
 The canonical example is `scope-definition`. The normative YAML block lives
-in `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` — refer
+in `core/aidlc-common/protocols/stage-definition.md` — refer
 there rather than duplicating here.
 
 The example encodes, in structured form, what today's prose describes:
@@ -524,10 +538,9 @@ else. Most stage files already use `## Steps` as their first body heading.
 milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
 `lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
 stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
-`aidlc-graph.ts` to compile the YAML into `stage-graph.json` and added
-`compile --check` as the CI drift guard. Running `bun aidlc-graph.ts
-compile --check` on a clean tree exits 0; editing any stage YAML without
-recompiling the JSON exits 1 with a clear message.
+`aidlc-graph.ts` to compile the YAML into `stage-graph.json`. The repository now
+generates that file only inside ignored projections; package determinism, not a
+committed compiled-file drift check, is the source-tree gate.
 
 ---
 
@@ -577,7 +590,7 @@ replaces the `Reserved` marker with the real emitter path.
 
 ## Cross-references
 
-- `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` — the
+- `core/aidlc-common/protocols/stage-definition.md` — the
   authoritative spec this chapter narrates.
 - [Stage Protocol](04-stage-protocol.md) — runtime execution behaviour.
 - [Agent System](05-agent-system.md) — parallel YAML-first contract for

@@ -396,7 +396,7 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     const r = status(p);
     expect(r.status).toBe(0);
     expect(r.out).toContain(
-      "Validity:       Untracked completions — advisory; routing continues",
+      "Validity:       Untracked completions - advisory; routing continues",
     );
     expect(r.out).toContain("Untracked:");
   });

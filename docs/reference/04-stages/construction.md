@@ -773,9 +773,11 @@ This stage has a **two-part structure**: planning followed by generation.
    `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
    blank first. After both files are final, run
    `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
-   `aidlc-testing-posture.ts fingerprint` for zero-Unit stage-level work. Then
+   `aidlc-testing-posture.ts fingerprint --stage-level` for zero-Unit
+   stage-level work. Then
    create or reset `code-generation-questions.md` in the resolved record
-   directory with that `[Approval Fingerprint]`, a **Plan Approval** question,
+   directory with BOTH tags the command prints (`[Approval Fingerprint]` and
+   `[Planned Source]`), a **Plan Approval** question,
    and blank `[Answer]:`; render it as a structured question and stop the turn:
    - "Approve Plan" -- proceed to code generation
    - "Request Changes" -- revise the plan
@@ -784,7 +786,9 @@ This stage has a **two-part structure**: planning followed by generation.
    recorded, both files are revised as needed, the contract/fingerprint are
    regenerated, and the Plan Approval tag is reset before re-prompting. A
    post-approval plan/instruction change or Testing Posture/scope/strategy/type
-   change invalidates the fingerprint and reopens approval. A forwarding-loop
+   change invalidates the fingerprint and reopens approval, as does a workspace
+   source change or a new stage attempt. Re-running `next`, or a reissued
+   directive for the same target and attempt, never reopens it. A forwarding-loop
    continuation is never approval.
 
 #### PART 2 -- Generation (Steps 4-7)
@@ -797,13 +801,13 @@ This stage has a **two-part structure**: planning followed by generation.
    (subagent_type="aidlc-developer-agent").
 
    **Context passed to subagent:**
-   - As the first prompt line, the exact target marker:
-     `AIDLC-UNIT: <directive.unit>` for unit work, or
-     `AIDLC-STAGE: code-generation` for a zero-Unit directive. Contextual
+   - First, verbatim, the output of `aidlc-testing-posture.ts brief --unit
+     <unit>` (or `--stage-level`). Its first line is the exact target marker,
+     `AIDLC-UNIT: <directive.unit>` for unit work or
+     `AIDLC-STAGE: code-generation` for a zero-Unit directive; its second line
+     is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the approved plan. The
+     dispatch guard rejects missing, different, or stale hashes. Contextual
      dependencies do not receive additional target markers.
-   - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the
-     approved plan. The dispatch guard rejects missing, different, or stale
-     hashes.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -811,8 +815,12 @@ This stage has a **two-part structure**: planning followed by generation.
    - A 1-2 line summary of each inception-phase artifact with its file path
      (requirements summary, stories summary, app design summary) -- the
      subagent can Read specific files if it needs full content
-   - The approved code-generation-plan.md (full content)
-   - The approved unit-test-instructions.md (full content)
+   - The approved plan and the approved unit-test-instructions.md, which that
+     output already carries exactly as the fingerprint bound them: the plan
+     with a terminal `## Review` appendix removed, task markers reset, and
+     spacing normalized, plus the instructions byte for byte. The fingerprint
+     excludes the appendix, so it was never approved as work; the dispatch
+     guard refuses a handoff that quotes it
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
@@ -1069,9 +1077,12 @@ with the aidlc-devsecops-agent providing security testing expertise.
     unit-major the autonomous swarm never fires; the replay follows the serial
     per-Unit walk and still needs no extra human turn.
 
-    The replay repairs the already-approved Code Generation plan. Preserve its
-    Plan Approval `[Answer]:`, record the delta in the Loop-Back Log, and treat
-    gated "Retry with fix" as the human's re-approval of the revised approach.
+    The replay repairs the Code Generation plan under a NEW stage attempt, so the
+    prior approval no longer applies. Record the delta in the Loop-Back Log, then
+    reset the Plan Approval `[Answer]:`, regenerate the fingerprint, and run the
+    full decision/human-turn/answer receipt sequence again before any fix
+    generation. The gated "Retry with fix" choice authorizes the jump; it is not
+    approval of the revised plan.
 
     **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
     boundary token, so stale convergence rows cannot count. Discard stale

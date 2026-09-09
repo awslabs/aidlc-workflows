@@ -9,8 +9,6 @@ description: >
   Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages.
   Supports Scope Definition and Units Generation.
 disallowedTools: Task
-model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
-variant: medium
 ---
 <!-- aidlc-delegated-knowledge-preflight -->
 **Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.aidlc/knowledge/aidlc-shared/`, `.aidlc/knowledge/aidlc-delivery-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-delivery-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.

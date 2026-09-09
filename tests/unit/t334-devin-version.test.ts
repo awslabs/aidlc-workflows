@@ -168,7 +168,7 @@ describe("t334 devin version — checkDevinVersion with injectable seams", () =>
       execReturning({ stdout: "Devin CLI version unknown (debug build)\n" }),
     );
     expect(r.pass).toBe(false);
-    expect(r.exitCode === 0 || r.parsedVersion === null).toBe(true);
+    expect(r.parsedVersion).toBeNull();
     expect(r.label).toContain("unparseable");
   });
 

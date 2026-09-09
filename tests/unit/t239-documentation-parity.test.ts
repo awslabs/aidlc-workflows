@@ -49,8 +49,16 @@ function agentTokens(text: string): string[] {
 }
 
 function documentedDistNames(text: string): string[] {
-  return [...new Set([...text.matchAll(/dist\/([a-z][a-z-]+)\//g)].map((match) => match[1]))]
-    .sort();
+  return [
+    ...new Set([
+      ...[...text.matchAll(/(?:dist|runtime)\/([a-z][a-z-]+)\//g)].map(
+        (match) => match[1],
+      ),
+      ...[...text.matchAll(/--harness\s+([a-z][a-z-]+)/g)].map(
+        (match) => match[1],
+      ),
+    ]),
+  ].sort();
 }
 
 function markdownCells(line: string): string[] {
@@ -147,7 +155,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(91);
+    expect(eventTypes.length).toBe(95);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -502,7 +510,7 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
-  test("workspace CLI docs follow the implemented router and keep utility-only verbs direct-only", () => {
+  test("workspace CLI docs follow the implemented public and hidden routes", () => {
     const lib = read("core", "tools", "aidlc-lib.ts");
     const workspaceBlock = sliceBetween(
       lib,
@@ -514,25 +522,26 @@ describe("documentation parity derives current behavior from authored implementa
 
     const cliGuide = read("docs", "guide", "12-cli-commands.md");
     for (const verb of workspaceVerbs) expect(cliGuide).toContain(`/aidlc ${verb}`);
-    const directOnlyVerbs = [
-      "codekb-path",
-      "codekb-snapshot",
-      "codekb-publish",
-      "codekb-scope-diff",
-      "select-plugins",
-    ];
-    for (const verb of directOnlyVerbs) {
+    const hiddenUtilityRoutes = new Map([
+      ["codekb-path", "aidlc engine workspace codekb"],
+      ["select-plugins", "aidlc config"],
+    ]);
+    for (const [verb, route] of hiddenUtilityRoutes) {
       expect(workspaceVerbs).not.toContain(verb);
-      expect(cliGuide).toContain("direct utility invocation");
-      expect(cliGuide).toContain(`not an \`/aidlc ${verb}\` command`);
+      expect(cliGuide).toContain(route);
     }
+    expect(workspaceVerbs).not.toContain("codekb-scope-diff");
+    expect(workspaceVerbs).not.toContain("codekb-snapshot");
+    expect(workspaceVerbs).not.toContain("codekb-publish");
+    expect(cliGuide).toContain("direct utility invocation");
+    expect(cliGuide).toContain("not an `/aidlc codekb-scope-diff` command");
 
     const helpTail = sliceBetween(
       read("core", "tools", "aidlc-utility.ts"),
       "const HELP_TEXT_TAIL = `",
       "`;",
     );
-    for (const verb of directOnlyVerbs) expect(helpTail).not.toContain(verb);
+    for (const verb of hiddenUtilityRoutes.keys()) expect(helpTail).not.toContain(verb);
   });
 
   test("Codex onboarding fills and rendered output name the emitted agent TOML directory", () => {
@@ -557,6 +566,15 @@ describe("documentation parity derives current behavior from authored implementa
     expect(pkg.repository.url).toBe("https://github.com/awslabs/aidlc-workflows");
     expect(pkg.repository.directory).toBeUndefined();
     expect(read("bun.lock")).toContain(`"name": "${pkg.name}"`);
+  });
+
+  test("README tool inventory is derived from authored aidlc tools", () => {
+    const toolCount = readdirSync(at("core", "tools"))
+      .filter((name) => /^aidlc-.*\.ts$/.test(name))
+      .length;
+    expect(read("README.md")).toContain(
+      `${toolCount} aidlc-*.ts engine and authoring tools`,
+    );
   });
 
   test("documented model-pinning tier projections match TIER_PROJECTIONS", () => {

@@ -4,14 +4,18 @@
 // live on the tool-owned GATE_APPROVED / GATE_REJECTED audit rows and are folded
 // into rendered briefs and future reviewer dispatch context at read time.
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import {
   type AuditShardEvent,
+  attemptEventAfterFrontier,
+  attemptEventDefinitelyBefore,
   auditBlockField,
   extractMarkdownSection,
   findStageBySlug,
+  latestReviewRecordRefs,
+  pairedReviewRecordForCompletion,
+  parseReviewSection,
   readAuditShardEvents,
   readUnitSourceSnapshot,
   recordDir,
@@ -19,31 +23,20 @@ import {
   resolveProjectDir,
   type ReviewArtifactEntry,
   reviewArtifactEntries,
+  type ReviewFinding,
+  reviewFindingFingerprint,
+  type ReviewFindingStatus,
+  reviewInvalidationAttemptView,
   type ReviewFingerprintStage,
+  reviewRecordFindings,
+  maximalAttemptEvents,
   toPosix,
 } from "./aidlc-lib.js";
 
+export { reviewFindingFingerprint, type ReviewFinding, type ReviewFindingStatus };
+
 export const REVIEW_FINDING_DISPOSITIONS_FIELD =
   "Review Finding Dispositions";
-
-export type ReviewFindingStatus =
-  | "New"
-  | "Unresolved"
-  | "Resolved"
-  | "Accepted risk"
-  | `Rejected: ${string}`;
-
-export interface ReviewFinding {
-  artifact: string;
-  unit?: string;
-  id: string;
-  severity: string;
-  location: string;
-  finding: string;
-  requiredAction: string;
-  status: ReviewFindingStatus;
-  fingerprint: string;
-}
 
 export interface ReviewArtifactContext {
   artifact: string;
@@ -66,61 +59,11 @@ interface ReviewFindingDispositionEnvelope {
 
 export type ReviewBriefReason = "first" | "revision" | "stale";
 
-function splitMarkdownRow(line: string): string[] {
-  const trimmed = line.trim();
-  const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const body = inner.endsWith("|") ? inner.slice(0, -1) : inner;
-  const cells: string[] = [];
-  let cell = "";
-  let escaped = false;
-  for (const char of body) {
-    if (escaped) {
-      cell += char;
-      escaped = false;
-    } else if (char === "\\") {
-      escaped = true;
-    } else if (char === "|") {
-      cells.push(cell.trim());
-      cell = "";
-    } else {
-      cell += char;
-    }
-  }
-  if (escaped) cell += "\\";
-  cells.push(cell.trim());
-  return cells;
-}
-
-function validFindingStatus(value: string): value is ReviewFindingStatus {
-  return (
-    value === "New" ||
-    value === "Unresolved" ||
-    value === "Resolved" ||
-    value === "Accepted risk" ||
-    /^Rejected: \S[\s\S]*$/.test(value)
-  );
-}
-
-export function reviewFindingFingerprint(
-  finding: Pick<
-    ReviewFinding,
-    "id" | "location" | "finding" | "requiredAction"
-  >,
-): string {
-  return `sha256:${
-    createHash("sha256")
-      .update(
-        JSON.stringify([
-          finding.id,
-          finding.location,
-          finding.finding,
-          finding.requiredAction,
-        ]),
-      )
-      .digest("hex")
-  }`;
-}
-
+/**
+ * Parse a legacy embedded review: the `## Review` section a reviewer wrote into
+ * the artifact under the retired appendix protocol. Read for migration only;
+ * new reviews live in review records.
+ */
 export function parseReviewArtifact(
   content: string,
   artifact: string,
@@ -128,92 +71,12 @@ export function parseReviewArtifact(
 ): ReviewArtifactContext | null {
   const review = extractMarkdownSection(content, "## Review");
   if (!review) return null;
-
-  const verdictMatch = review.match(
-    /^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m,
-  );
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) {
-    return {
-      artifact,
-      ...(unit ? { unit } : {}),
-      verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-      findings: [],
-    };
-  }
-  let end = lines.length;
-  for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const table = lines
-    .slice(heading + 1, end)
-    .filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) {
-    return {
-      artifact,
-      ...(unit ? { unit } : {}),
-      verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-      findings: [],
-    };
-  }
-  const headers = splitMarkdownRow(table[0]);
-  const required = [
-    "ID",
-    "Severity",
-    "Location",
-    "Finding",
-    "Required action",
-    "Status",
-  ];
-  for (const name of required) {
-    if (!headers.includes(name)) {
-      return {
-        artifact,
-        ...(unit ? { unit } : {}),
-        verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-        findings: [],
-      };
-    }
-  }
-  const index = new Map(headers.map((name, position) => [name, position]));
-  const findings: ReviewFinding[] = [];
-  for (const line of table.slice(2)) {
-    const cells = splitMarkdownRow(line);
-    const value = (name: string): string =>
-      cells[index.get(name) ?? -1]?.trim() ?? "";
-    const id = value("ID");
-    if (!/^R-[0-9]+$/.test(id)) {
-      throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}`);
-    }
-    const status = value("Status");
-    if (!validFindingStatus(status)) {
-      throw new Error(
-        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}`,
-      );
-    }
-    const finding: ReviewFinding = {
-      artifact,
-      ...(unit ? { unit } : {}),
-      id,
-      severity: value("Severity"),
-      location: value("Location"),
-      finding: value("Finding"),
-      requiredAction: value("Required action"),
-      status,
-      fingerprint: "",
-    };
-    finding.fingerprint = reviewFindingFingerprint(finding);
-    findings.push(finding);
-  }
+  const parsed = parseReviewSection(review, artifact, unit);
   return {
     artifact,
     ...(unit ? { unit } : {}),
-    verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-    findings,
+    verdict: parsed.verdict,
+    findings: parsed.findings,
   };
 }
 
@@ -231,6 +94,13 @@ function entryUnit(logicalPath: string, stageSlug: string): string | undefined {
   return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
+/**
+ * The current review per scope. A scope whose newest completion names a
+ * review record renders that record (keyed to `review_artifact`, the artifact
+ * the review is about); a scope without one falls back to the legacy embedded
+ * `## Review` sections in its artifacts, so an intent reviewed before review
+ * records keeps working until its next review.
+ */
 export function readReviewArtifactContexts(
   projectDir: string,
   stage: ReviewFingerprintStage,
@@ -239,13 +109,46 @@ export function readReviewArtifactContexts(
   const contexts: ReviewArtifactContext[] = [];
   const entries = reviewArtifactEntries(projectDir, stage, unit);
   if (entries === null) return contexts;
+  const records = latestReviewRecordRefs(projectDir, stage);
+  const recordScopes = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.reviewAppendixTarget) continue;
+    const scopeUnit = unit ?? entryUnit(entry.logicalPath, stage.slug);
+    const ref = records.get(scopeUnit ?? "");
+    if (!ref) continue;
+    const record = pairedReviewRecordForCompletion(
+      projectDir,
+      ref.completion,
+    );
+    if (
+      record === null ||
+      record.stage !== stage.slug ||
+      (record.unit ?? "") !== (scopeUnit ?? "")
+    ) {
+      continue;
+    }
+    recordScopes.add(scopeUnit ?? "");
+    // A retried incomplete review has terminal verdict authority but no review
+    // content to render. Leave the scope context-free so the gate can supply
+    // its explicit fallback finding instead of claiming there were no findings.
+    if (record.body.length === 0) continue;
+    const artifact = workspaceArtifactPath(projectDir, entry);
+    contexts.push({
+      artifact,
+      ...(scopeUnit ? { unit: scopeUnit } : {}),
+      verdict: record.verdict,
+      findings: reviewRecordFindings(record, artifact),
+    });
+  }
   for (const entry of entries) {
     if (entry.path === null || !existsSync(entry.path)) continue;
+    const scopeUnit = unit ?? entryUnit(entry.logicalPath, stage.slug);
+    if (recordScopes.has(scopeUnit ?? "")) continue;
     const artifact = workspaceArtifactPath(projectDir, entry);
     const parsed = parseReviewArtifact(
       readFileSync(entry.path, "utf-8"),
       artifact,
-      unit ?? entryUnit(entry.logicalPath, stage.slug),
+      scopeUnit,
     );
     if (parsed) contexts.push(parsed);
   }
@@ -542,31 +445,6 @@ function pathUnit(path: string, stageSlug: string): string | undefined {
   return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
-function definitelyBefore(
-  first: Pick<AuditShardEvent, "timestamp" | "shard" | "pos">,
-  second: Pick<AuditShardEvent, "timestamp" | "shard" | "pos">,
-): boolean {
-  if (first.timestamp !== second.timestamp) {
-    return first.timestamp < second.timestamp;
-  }
-  return first.shard === second.shard && first.pos < second.pos;
-}
-
-function maximalEvents(events: AuditShardEvent[]): AuditShardEvent[] {
-  return events.filter((candidate, index) =>
-    !events.some((other, otherIndex) =>
-      otherIndex !== index && definitelyBefore(candidate, other)
-    )
-  );
-}
-
-function afterFrontier(
-  frontier: AuditShardEvent[],
-  event: AuditShardEvent,
-): boolean {
-  return frontier.every((boundary) => definitelyBefore(boundary, event));
-}
-
 function sourcePathDisplay(key: string): string | null {
   const separator = key.indexOf("\0");
   if (separator === -1 || key.indexOf("\0", separator + 1) !== -1) return null;
@@ -625,27 +503,15 @@ export function reviewInvalidationDetails(
   stage: ReviewFingerprintStage,
   contexts: ReviewArtifactContext[],
 ): ReviewInvalidationDetails {
-  const events = readAuditShardEvents(projectDir).sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-    if (a.shard === b.shard) return a.pos - b.pos;
-    return a.shardIndex - b.shardIndex;
-  });
-
   // Equal-second rows from different shards are causally unordered. Keep the
   // maximal boundary frontier instead of resolving ties by shard filename.
-  const attemptFrontier = maximalEvents(
-    events.filter((event) =>
-      event.event === "WORKFLOW_STARTED" ||
-      event.event === "STAGE_JUMPED" ||
-      (
-        (event.event === "GATE_APPROVED" ||
-          event.event === "GATE_REJECTED") &&
-        auditBlockField(event.block, "Stage") === stage.slug
-      )
-    ),
+  const attemptView = reviewInvalidationAttemptView(
+    readAuditShardEvents(projectDir),
+    stage.slug,
   );
+  const { events, floor: attemptFrontier } = attemptView;
   const inAttempt = (event: AuditShardEvent): boolean =>
-    afterFrontier(attemptFrontier, event);
+    attemptEventAfterFrontier(attemptFrontier, event);
 
   const currentArtifacts = new Set(
     (reviewArtifactEntries(projectDir, stage) ?? []).map((entry) =>
@@ -676,8 +542,9 @@ export function reviewInvalidationDetails(
     for (const event of events) {
       if (
         !inAttempt(event) ||
-        !afterFrontier(reviewFrontier, event) ||
-        (before !== undefined && !definitelyBefore(event, before))
+        !attemptEventAfterFrontier(reviewFrontier, event) ||
+        (before !== undefined &&
+          !attemptEventDefinitelyBefore(event, before))
       ) {
         continue;
       }
@@ -730,13 +597,13 @@ export function reviewInvalidationDetails(
       continue;
     }
     const unit = auditBlockField(event.block, "Unit") ?? undefined;
-    const staleReviewFrontier = maximalEvents(
+    const staleReviewFrontier = maximalAttemptEvents(
       events.filter((candidate) =>
         inAttempt(candidate) &&
         candidate.event === "REVIEW_COMPLETED" &&
         auditBlockField(candidate.block, "Stage") === stage.slug &&
         (auditBlockField(candidate.block, "Unit") ?? undefined) === unit &&
-        definitelyBefore(candidate, event)
+        attemptEventDefinitelyBefore(candidate, event)
       ),
     );
     if (staleReviewFrontier.length === 0) continue;
@@ -797,7 +664,7 @@ export function reviewInvalidationDetails(
   }
   for (const [key, reviews] of reviewScopes) {
     collectArtifactChanges(
-      maximalEvents(reviews),
+      maximalAttemptEvents(reviews),
       undefined,
       key.length > 0 ? key : undefined,
     );
@@ -834,7 +701,7 @@ export function reviewInvalidationDetails(
       // Consume paths only when the gate is causally proven after the jump.
       // Equal-second cross-shard ties remain pending rather than hiding work
       // that may have been invalidated after that gate.
-      if (!definitelyBefore(boundary, event)) continue;
+      if (!attemptEventDefinitelyBefore(boundary, event)) continue;
       const consumedStageSlug = auditBlockField(event.block, "Stage");
       const consumedStage = consumedStageSlug
         ? findStageBySlug(consumedStageSlug)
@@ -868,6 +735,40 @@ export function reviewInvalidationDetails(
     invalidatedArtifacts: [...invalidatedArtifacts].sort(),
     invalidatedReviews: [...invalidatedReviews].sort(),
   };
+}
+
+/**
+ * The CHANGE_ACCEPTED rows for reviewed content of `stageSlug` in the current
+ * attempt: the human line each carried and the paths it named, oldest first.
+ */
+export function acceptedReviewChanges(
+  projectDir: string,
+  stageSlug: string,
+): Array<{ notice: string; changed: string[] | null }> {
+  const attemptView = reviewInvalidationAttemptView(
+    readAuditShardEvents(projectDir),
+    stageSlug,
+  );
+  const accepted: Array<{ notice: string; changed: string[] | null }> = [];
+  for (const event of attemptView.events) {
+    if (
+      event.event !== "CHANGE_ACCEPTED" ||
+      !attemptEventAfterFrontier(attemptView.floor, event) ||
+      auditBlockField(event.block, "Stage") !== stageSlug ||
+      auditBlockField(event.block, "Checkpoint") !== "review-receipt"
+    ) {
+      continue;
+    }
+    const changed = auditBlockField(event.block, "Changed");
+    accepted.push({
+      notice: auditBlockField(event.block, "Details") ?? "Reviewed content changed after it was reviewed.",
+      changed:
+        changed === null || changed === "(paths unavailable)"
+          ? null
+          : changed.split(", ").map((path) => path.trim()).filter((path) => path.length > 0),
+    });
+  }
+  return accepted;
 }
 
 export function renderReviewBrief(
@@ -931,6 +832,18 @@ export function renderReviewBrief(
     `**Review outcome:** ${outcome}`,
     `**Why now:** ${why}`,
   ];
+  // Reviewed content that changed after the receipt and was accepted under
+  // Change Control `relaxed` (the ledger's CHANGE_ACCEPTED rows for this stage
+  // in the current attempt). The verdict above is the reviewer's; these lines
+  // tell the human what moved since it was recorded.
+  for (const accepted of acceptedReviewChanges(projectDir, stage.slug)) {
+    lines.push(`**Reviewed content differs:** ${accepted.notice}`);
+    if (accepted.changed !== null) {
+      lines.push(
+        `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`,
+      );
+    }
+  }
   if (reason === "stale") {
     const invalidation = reviewInvalidationDetails(
       projectDir,

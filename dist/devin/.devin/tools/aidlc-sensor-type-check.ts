@@ -3,9 +3,9 @@
 // Owns the type-check itself; the dispatcher (aidlc-sensor.ts) routes a
 // SENSOR fire to this script via the manifest's `command:` field. It uses the
 // shared project resolver to keep incremental state under the active record,
-// then wraps `bunx tsc --project <tsconfig> --noEmit --pretty false
-// --incremental --tsBuildInfoFile <record cache path>` and prints the locked
-// stdout JSON shape:
+// then wraps `bunx --package typescript@6 tsc --project <tsconfig> --noEmit
+// --pretty false --incremental --tsBuildInfoFile <record cache path>` and
+// prints the locked stdout JSON shape:
 //
 //   {"pass": <bool>, "errors": [{file, line, column, message}, ...]}
 //
@@ -36,7 +36,8 @@
 //   re-check only changed files instead of the entire project. This doesn't
 //   fix cross-file attribution, but it cuts re-reporting noise.
 //
-// * Tool-unavailable detection: probe `bunx tsc --version` once at
+// * Tool-unavailable detection: probe `bunx --package typescript@6 tsc
+//   --version` once at
 //   startup. `bunx <tool>` returns non-127 codes for several failure
 //   modes (network-fetch, package-resolution, registry timeout) so the
 //   dispatcher's `result.status === 127` won't catch them. On any
@@ -126,7 +127,7 @@ function parseArgs(argv: string[]): Args {
 function printHelp(): void {
 	process.stdout.write(
 		`Usage: aidlc-sensor-type-check --stage <slug> --file-path <path>\n\n` +
-			`Wraps \`bunx tsc --project <tsconfig> --noEmit --pretty false\` and\n` +
+			`Wraps \`bunx --package typescript@6 tsc --project <tsconfig> --noEmit --pretty false\` and\n` +
 			`prints {pass, errors[]} JSON to stdout (filtered to --file-path).\n`,
 	);
 }
@@ -149,12 +150,18 @@ function findTsconfig(filePath: string): string | null {
 
 // --- tsc subprocess wrappers ------------------------------------------------
 
-// Probe `bunx tsc --version`. `bunx <tool>` returns non-127 codes for
-// several failure modes (network-fetch, package-resolution, registry
-// timeout). The dispatcher's branch b (status === 127) won't catch
-// those — propagate by exiting 127 ourselves on any non-zero exit.
+// A bare `bunx tsc` installs the unrelated npm package named "tsc" when
+// the target project has no local TypeScript dependency. Name TypeScript
+// explicitly and pin its major, matching the linter sensor's deterministic
+// tool resolution.
+const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;
+
+// Probe the same TypeScript command used for the real compile. `bunx`
+// returns non-127 codes for several failure modes (network-fetch, package-
+// resolution, registry timeout). The dispatcher's branch b (status === 127)
+// won't catch those — propagate by exiting 127 ourselves on any non-zero.
 function probeTscAvailable(cwd: string): void {
-	const result = spawnSync("bunx", ["tsc", "--version"], {
+	const result = spawnSync("bunx", [...TSC_ARGS, "--version"], {
 		encoding: "utf-8",
 		timeout: 30_000,
 		cwd,
@@ -173,7 +180,7 @@ function runTsc(opts: {
 	const result = spawnSync(
 		"bunx",
 		[
-			"tsc",
+			...TSC_ARGS,
 			"--project",
 			opts.tsconfigPath,
 			"--noEmit",

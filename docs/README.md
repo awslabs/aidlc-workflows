@@ -1,48 +1,79 @@
 # AI-DLC Documentation
 
-**AI-DLC is a methodology** — a structured, gated approach to AI-driven software
-development (defined by AWS). **This repository is its native, multi-harness
-implementation:** the methodology rendered as skills, agents, hooks, and tools
-from one harness-neutral `core/`, so it runs natively in the CLI harness you use
-— today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, GitHub Copilot, or Devin CLI, and any capable CLI you port it to.
-The methodology is the *what*; each harness distribution is the *how* for one
-runtime, and every distribution is generated from the same source.
+AI-DLC is a structured, gated methodology for AI-driven software development.
+This repository runs it natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI,
+Cursor, opencode, GitHub Copilot, and Devin CLI.
 
-New here? The [README](../README.md) has the install Quick Start and the
-"pick your harness" table. This page is the map of the documentation itself.
+## Quick Start
 
-## Choose a workflow
+### 1. Install
 
-AI-DLC ships 11 workflow profiles for different kinds of work, including
-**Classic** for the established lifecycle, **Express** for the lightest
-requirements-to-code path, and focused profiles for features, enterprise work,
-MVPs, bugfixes, refactors, infrastructure, security patches, proofs of concept,
-and workshops. Start with [Workflow Profiles](guide/workflow-profiles.md) to
-compare them. Internally, the engine calls these profiles *scopes*.
+macOS, Linux, or WSL:
 
-## Three guides, one per reader
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh | sh
+```
 
-Pick by what you're trying to change:
+Windows PowerShell:
 
-| Guide | You are… | You change… |
-|-------|----------|-------------|
-| **[User Guide](guide/00-introduction.md)** | building software *with* AI-DLC | nothing in the framework — you run `/aidlc`, answer at gates, review artifacts |
-| **[Harness Engineer Guide](harness-engineering/00-overview.md)** | reshaping *how* AI-DLC behaves for your team | the **data** the framework reads: stages, agents, scopes, rules, sensors, knowledge — and porting to a new harness |
-| **[Developer Reference](reference/00-overview.md)** | changing AI-DLC *itself* | the **code** that reads that data: the engine, hooks, CLI tools, the compile pipeline, the test suite |
+```powershell
+irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
+```
 
-The line between the Harness Engineer Guide and the Developer Reference is
-**data versus code**; the line between the User Guide and the rest is **using**
-versus **shaping**.
+The native installer includes every harness runtime and does not require Bun or
+Node.js.
 
-## Running on a specific harness
+### 2. Configure
 
-The guides are harness-neutral; each harness's install steps and the handful of
-behaviours that differ live in [Running on other harnesses](guide/harnesses/README.md)
-(Claude Code is covered throughout the User Guide, whose examples run on it).
+Run from your project root:
 
-## Building and contributing
+```bash
+aidlc config --harness claude
+aidlc doctor
+```
 
-Maintainers author in `core/` and regenerate the `dist/<harness>/` trees with
-`bun scripts/package.ts` — see the [Contributing Guide](reference/11-contributing.md)
-for the full build-and-test loop, and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
-to add one.
+Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`,
+`copilot`, or `devin`. A bare `aidlc config` starts the interactive setup.
+
+### 3. Start
+
+Open the configured harness and describe the work:
+
+```text
+/aidlc Build a REST API for inventory management
+```
+
+Codex CLI uses `$aidlc`. See [Getting Started](guide/01-getting-started.md) for
+provider setup, trust prompts, project refreshes, and the first workflow.
+
+## Choose Your Harness
+
+| Harness | Guide |
+| --- | --- |
+| Claude Code | [Getting Started](guide/01-getting-started.md) |
+| Kiro CLI | [Running AI-DLC on Kiro CLI](guide/harnesses/kiro-cli.md) |
+| Kiro IDE | [Running AI-DLC on Kiro IDE](guide/harnesses/kiro-ide.md) |
+| Codex CLI | [AI-DLC on Codex CLI](guide/harnesses/codex-cli.md) |
+| Cursor | [AI-DLC on Cursor](guide/harnesses/cursor.md) |
+| opencode | [AI-DLC on opencode](guide/harnesses/opencode.md) |
+| GitHub Copilot | [AI-DLC on GitHub Copilot](guide/harnesses/copilot.md) |
+| Devin CLI | [AI-DLC on Devin CLI](guide/harnesses/devin.md) |
+
+## Choose Your Guide
+
+| Guide | Use it when |
+| --- | --- |
+| [User Guide](guide/00-introduction.md) | Building software with AI-DLC |
+| [Workflow Profiles](guide/workflow-profiles.md) | Choosing Classic, Express, or a focused workflow |
+| [Install and Lifecycle](guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
+| [Harness Engineer Guide](harness-engineering/00-overview.md) | Reshaping stages, agents, scopes, rules, sensors, or knowledge |
+| [Developer Reference](reference/00-overview.md) | Changing the engine, hooks, packaging, or test suite |
+
+## Development
+
+Maintainers author in `core/` and `harness/`. Generated `dist/` and
+`dist-release/` trees are local outputs and must not be hand-edited.
+
+See the [Contributing Guide](reference/11-contributing.md) for the development
+workflow and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
+to add another runtime.

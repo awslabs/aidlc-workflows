@@ -89,4 +89,4 @@ approved patterns, or constraints registers.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-architect-agent](../../guide/agents/architect-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-architect-agent.md`](../../../dist/claude/.claude/agents/aidlc-architect-agent.md)
+- Authored source: [`core/agents/aidlc-architect-agent.md`](../../../core/agents/aidlc-architect-agent.md)
