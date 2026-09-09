@@ -25,10 +25,11 @@ permissions:
         - "bun {{HARNESS_DIR}}/tools/aidlc-*"
         # The dispatcher, scoped to the trusted route namespace. Shell matches are
         # globs where `*` is any sequence, so the line above requires a literal
-        # `-` after `aidlc` and never covers the dispatcher itself - the only
-        # command the orchestrator skill issues. Scoped to `engine` rather than
-        # widened to every route, so the boundary is the one the native channel
-        # already draws and the other namespaces keep prompting on both.
+        # `-` after `aidlc` and never covers the dispatcher itself - which is how
+        # the orchestrator skill drives its loop, 19 of its 22 shell calls. Scoped
+        # to `engine` rather than widened to every route, so the boundary is the one
+        # the native channel already draws: the remaining three calls are `config`
+        # routes, and they keep prompting on both channels.
         - "{{INVOKE}} engine *"
         - "date -u *"
     - capability: shell

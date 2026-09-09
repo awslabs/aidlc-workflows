@@ -4,7 +4,7 @@
 
 {{SLOT:prereq_bullets}}
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: Hooks are declared as data (this harness's hook wiring files) and their commands run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+- **Hook permissions**: No executable bits required — nothing in the hook wiring is invoked as an executable; the harness loads it and the framework's scripts run through an explicit interpreter. Works identically on macOS, Linux, and native Windows PowerShell.
 {{SLOT:hook_permissions_note}}
 {{SLOT:prereq_bullets_tail}}
 

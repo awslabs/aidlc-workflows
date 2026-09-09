@@ -136,7 +136,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).toContain("capability: shell");
     expect(fm).toContain("bun .kiro/tools/aidlc-*");
     // The tool glob cannot cover the dispatcher: `aidlc-*` needs a literal `-`,
-    // and `aidlc.ts` is the only command the orchestrator skill issues.
+    // and the dispatcher is what the orchestrator skill drives its loop with.
     expect(fm).toContain("bun .kiro/tools/aidlc.ts engine *");
     expect(fm).toContain("date -u *");
     // And the denials that bound it.
