@@ -124,16 +124,21 @@ interface DevinHookInput {
 // extracts it before parsing. A non-string tool_response that lacks an
 // `output` string field yields no selection → skip (advisory).
 //
-// Two inner answer shapes are recognized (the outer {answers: {...}} wrapper
-// is shared):
+// Three inner answer shapes are recognized. The outer {answers: {...}}
+// wrapper may be present (Claude Code, synthetic Devin fixtures) or absent
+// (real Devin 3000.6.14 interactive export):
 //   1. Claude Code: {answers: {<question id>: {answers: ["<string>"]}}}
 //      — keyed by question id; value is a non-array object with an `answers`
 //      array of plain strings.
-//   2. Devin: {answers: {<question text>: [{selected: ["<label>"], custom_text: ""}]}}
+//   2. Devin synthetic: {answers: {<question text>: [{selected: ["<label>"], custom_text: ""}]}}
 //      — keyed by question TEXT (not id); value is an ARRAY of objects each
 //      with a `selected` (string[]) and `custom_text` (string) field. For
 //      "Other" free-text: {selected: ["Other"], custom_text: "<text>"}. For
 //      multi-select: {selected: ["<opt1>", "<opt2>"], custom_text: ""}.
+//   3. Devin 3000.6.14 native: {<question text>: {selected: ["<label>"], skipped: false}}
+//      — keyed by question TEXT; value is a SINGLE object (not an array) with
+//      a `selected` (string[]) and `skipped` (boolean) field. Captured from a
+//      real interactive session export (evidence/devin-e2e-run/fourth-run/).
 
 // Normalize Devin's PostToolUse tool_response into the JSON string the
 // selection parsers expect. Devin delivers {success, output, error}; the
@@ -236,8 +241,10 @@ function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): 
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
   const response = parsed as Record<string, unknown>;
-  if (Object.keys(response).length !== 1 || !("answers" in response)) return false;
-  const answers = response.answers;
+  // The answers object may be wrapped in {answers: {...}} or be the top-level
+  // object itself (real Devin 3000.6.14 interactive export has no wrapper).
+  let answers: unknown = response;
+  if ("answers" in response) answers = (response as Record<string, unknown>).answers;
   if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return false;
   const selections = Object.entries(answers as Record<string, unknown>);
   if (selections.length === 0) return false;
@@ -247,11 +254,30 @@ function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): 
     // Claude Code shape: non-array object with an `answers` array of strings.
     if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
       const record = selection as Record<string, unknown>;
-      if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
-      return record.answers.length > 0 && record.answers.every((answer) => {
-        if (typeof answer !== "string" || answer.trim().length === 0) return false;
-        return !isNonAnswer(answer) || offered.get(questionKey)?.has(answer.trim()) === true;
-      });
+      if (Array.isArray(record.answers)) {
+        return record.answers.length > 0 && record.answers.every((answer) => {
+          if (typeof answer !== "string" || answer.trim().length === 0) return false;
+          return !isNonAnswer(answer) || offered.get(questionKey)?.has(answer.trim()) === true;
+        });
+      }
+      // Devin 3000.6.14 native shape: single object with `selected` array and
+      // `skipped` boolean (not an array of objects like the synthetic shape).
+      if (Array.isArray(record.selected)) {
+        if (record.skipped === true) return false;
+        const texts: string[] = [];
+        for (const label of record.selected) {
+          if (typeof label === "string") texts.push(label);
+        }
+        if (typeof record.custom_text === "string" && record.custom_text.trim().length > 0) {
+          texts.push(record.custom_text);
+        }
+        if (texts.length === 0) return false;
+        return texts.every((text) => {
+          if (text.trim().length === 0) return false;
+          return !isNonAnswer(text) || offeredByText.get(questionKey)?.has(text.trim()) === true;
+        });
+      }
+      return false;
     }
     // Devin shape: array of {selected: string[], custom_text: string} objects.
     if (Array.isArray(selection)) {
@@ -282,10 +308,16 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
   const json = normalizeToolResponse(toolResponse);
   if (json === null) return "";
   try {
-    const parsed = JSON.parse(json) as {
-      answers?: Record<string, { answers?: unknown[] } | unknown[]>;
-    };
-    for (const selection of Object.values(parsed.answers ?? {})) {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    // The answers object may be wrapped in {answers: {...}} or be the top-level
+    // object itself (real Devin 3000.6.14 interactive export has no wrapper).
+    let answersObj: Record<string, unknown> | undefined;
+    if (parsed.answers !== null && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
+      answersObj = parsed.answers as Record<string, unknown>;
+    } else {
+      answersObj = parsed;
+    }
+    for (const selection of Object.values(answersObj)) {
       // Claude Code shape: object with an `answers` array of strings.
       if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
         const record = selection as Record<string, unknown>;
@@ -294,8 +326,17 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
             if (typeof answer === "string" && answer.trim()) return answer.trim();
           }
         }
+        // Devin 3000.6.14 native shape: single object with `selected` array.
+        if (Array.isArray(record.selected)) {
+          for (const label of record.selected) {
+            if (typeof label === "string" && label.trim()) return label.trim();
+          }
+          if (typeof record.custom_text === "string" && record.custom_text.trim()) {
+            return record.custom_text.trim();
+          }
+        }
       }
-      // Devin shape: array of {selected: string[], custom_text: string} objects.
+      // Devin synthetic shape: array of {selected: string[], custom_text: string} objects.
       if (Array.isArray(selection)) {
         for (const entry of selection) {
           if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;

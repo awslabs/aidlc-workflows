@@ -7,7 +7,8 @@ Fixes the S08 gate-receipt bug on the Devin CLI harness: `ask_user_question` app
 
 * Devin adapter `record-human-turn` case: skip only for genuine cancellations (`tool_response.success === false` or cancellation phrase in `output`), not for unrecognized answer shapes. A `success:true` response mints a `HUMAN_TURN` regardless of whether the inner JSON shape matches the expected `{answers:...}` envelope.
 * New `isAskUserQuestionCancellation` helper in `harness/devin/hooks/aidlc-devin-adapter.ts` distinguishes dismissed widgets from answered ones with unrecognized response shapes.
-* Test fixtures `postToolUse_askUserQuestion_unrecognizedShape` (success:true, unrecognized JSON) and `postToolUse_askUserQuestion_cancelled` (success:false) added to `tests/fixtures/devin-hook-payloads/payloads.json`; test cases 13e and 13f in `tests/unit/t332-devin-adapter.test.ts` assert the mint and skip respectively.
+* `hasExplicitHumanSelection` and `explicitHumanSelectionText` now recognize the real Devin 3000.6.14 interactive answer shape — a single object `{selected: ["<label>"], skipped: false}` keyed by question text — captured from a live session export (`evidence/devin-e2e-run/fourth-run/devin-session-1.txt`). The `{answers:...}` wrapper is now optional (the export format has no wrapper).
+* Test fixtures `postToolUse_askUserQuestion_unrecognizedShape` (success:true, unrecognized JSON), `postToolUse_askUserQuestion_cancelled` (success:false), `postToolUse_askUserQuestion_native3000_unwrapped` and `postToolUse_askUserQuestion_native3000_wrapped` (real Devin 3000.6.14 shape) added to `tests/fixtures/devin-hook-payloads/payloads.json`; test cases 13e–13h in `tests/unit/t332-devin-adapter.test.ts` assert the mint, skip, and native-shape recognition.
 
 ## [2.8.2] - 2026-09-09
 

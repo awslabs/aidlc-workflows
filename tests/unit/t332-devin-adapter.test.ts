@@ -516,6 +516,47 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test("13g: record-human-turn with Devin 3000.6.14 native shape (unwrapped) mints a HUMAN_TURN and recognizes the selection", () => {
+    // Captured from evidence/devin-e2e-run/fourth-run/devin-session-1.txt step 46:
+    // the real interactive Devin 3000.6.14 answer shape is a single object
+    // {selected: ["<label>"], skipped: false} keyed by question TEXT, with NO
+    // {answers:...} wrapper. The parser now recognizes this third shape directly
+    // (not just via the success:true fallback).
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_native3000_unwrapped as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13h: record-human-turn with Devin 3000.6.14 native shape (wrapped) mints a HUMAN_TURN and recognizes the selection", () => {
+    // Same shape but with the {answers:...} wrapper, in case the hook payload
+    // includes it even though the export format strips it.
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_native3000_wrapped as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("13d: record-human-turn with Devin native shape writes a Plan Approval response when a challenge is seeded", () => {
     // The end-to-end path that was actually blocked: a human answers an
     // ask_user_question with a Plan Approval choice, the adapter forwards it to
