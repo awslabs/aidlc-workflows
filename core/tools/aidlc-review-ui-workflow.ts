@@ -42,8 +42,9 @@ import {
   readAgentTiers,
   resolveModelPolicy,
   type ModelGroup,
+  type ModelPolicyRecord,
 } from "./aidlc-model-policy.ts";
-import { invalidateSettingsCache, modelPolicyForHarness, readSettingsTarget, resolveAidlcSettings, resolveAidlcSettingsWithOverride, type SettingsTarget } from "./aidlc-settings.ts";
+import { invalidateSettingsCache, modelPolicyForHarness, readSettingsTarget, resolveAidlcSettings, type SettingsTarget } from "./aidlc-settings.ts";
 import { resolveTierCap } from "./aidlc-tiers.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
@@ -158,18 +159,9 @@ export interface ModelsPolicyView {
   preset: string | null;
   /** True when nothing is recorded: every agent follows the shipped tier defaults. */
   shipped_defaults: boolean;
-  groups: Array<{
-    id: ModelGroup;
-    label: string;
-    /** Agents in this group that take the group's effective effort (not exceptions). */
-    agents: string[];
-    /** The group's effort when every non-exception agent agrees; "inherit" = the session's. */
-    effort: string;
-    /** Distinct efforts when the group's agents disagree without exceptions (tier caps). */
-    mixed: boolean;
-  }>;
+  groups: PolicyGroupView[];
   /** Per-agent exceptions recorded in the policy. */
-  exceptions: Array<{ agent: string; group: ModelGroup; model: string | null; effort: string | null }>;
+  exceptions: PolicyExceptionView[];
   /** What this harness cannot express, when the policy asks for something it drops. */
   honesty: string | null;
   /**
@@ -181,12 +173,25 @@ export interface ModelsPolicyView {
   /** The effort vocabulary the policy accepts, for pickers. */
   efforts: readonly string[];
   /**
-   * The team's policy alone - machine and project layers, the personal `local`
-   * layer left out: what a teammate without overrides gets, and what "back to
-   * team" means for each group.
+   * The team's policy alone: the committed project layer over the shipped
+   * defaults, both personal layers (`global`, `local`) left out. What every
+   * teammate shares, and what "back to team" means for a group.
    */
-  team: { preset: string | null; groups: Record<ModelGroup, string> };
+  team: { preset: string | null; groups: PolicyGroupView[]; exceptions: PolicyExceptionView[] };
 }
+
+export interface PolicyGroupView {
+  id: ModelGroup;
+  label: string;
+  /** Agents in this group that take the group's effort (not exceptions). */
+  agents: string[];
+  /** The group's effort when every non-exception agent agrees; "inherit" = the session's. */
+  effort: string;
+  /** Distinct efforts when the group's agents disagree without exceptions (tier caps). */
+  mixed: boolean;
+}
+
+export interface PolicyExceptionView { agent: string; group: ModelGroup; model: string | null; effort: string | null }
 
 function recordedLayer(projectDir: string, target: SettingsTarget, harness: string): ModelsPolicyView["recorded"][SettingsTarget] {
   const models = readSettingsTarget(projectDir, target)?.models as {
@@ -218,53 +223,50 @@ export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
   const policy = modelPolicyForHarness(resolved.models, harness);
   const tiers = readAgentTiers(installed.root);
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
-  const effective = Object.entries(tiers)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, tier]) => resolveModelPolicy(policy, name, tier, harness, cap));
-  const teamPolicy = modelPolicyForHarness(resolveAidlcSettingsWithOverride(projectDir, "local", null).models, harness);
-  const teamGroups = {} as Record<ModelGroup, string>;
-  for (const id of Object.keys(MODEL_GROUPS) as ModelGroup[]) {
-    const efforts = [...new Set(Object.entries(tiers)
-      .map(([name, tier]) => resolveModelPolicy(teamPolicy, name, tier, harness, cap))
-      .filter((item) => item.group === id && item.layer !== "agent-exception")
-      .map((item) => item.effort ?? "inherit"))];
-    teamGroups[id] = efforts.length === 1 ? efforts[0] : efforts.join(" / ");
-  }
-  const shortName = (agent: string): string => agent.replace(/^aidlc-/, "").replace(/-agent$/, "");
-  const groups = (Object.keys(MODEL_GROUPS) as ModelGroup[]).map((id) => {
-    const members = effective.filter((item) => item.group === id && item.layer !== "agent-exception");
-    const efforts = [...new Set(members.map((item) => item.effort ?? "inherit"))];
-    return {
-      id,
-      label: MODEL_GROUPS[id].label,
-      agents: members.map((item) => shortName(item.agent)),
-      effort: efforts.length === 1 ? efforts[0] : efforts.join(" / "),
-      mixed: efforts.length > 1,
-    };
-  });
-  const exceptions = effective
-    .filter((item) => item.layer === "agent-exception")
-    .map((item) => ({
-      agent: shortName(item.agent),
-      group: item.group,
-      // The resolver spells "no model pin" as the literal "inherit".
-      model: item.model && item.model !== "inherit" ? item.model : null,
-      effort: item.effort ?? null,
-    }));
+  const summarise = (policy: ModelPolicyRecord | null) => {
+    const effective = Object.entries(tiers)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, tier]) => resolveModelPolicy(policy, name, tier, harness, cap));
+    const shortName = (agent: string): string => agent.replace(/^aidlc-/, "").replace(/-agent$/, "");
+    const groups: PolicyGroupView[] = (Object.keys(MODEL_GROUPS) as ModelGroup[]).map((id) => {
+      const members = effective.filter((item) => item.group === id && item.layer !== "agent-exception");
+      const efforts = [...new Set(members.map((item) => item.effort ?? "inherit"))];
+      return {
+        id,
+        label: MODEL_GROUPS[id].label,
+        agents: members.map((item) => shortName(item.agent)),
+        effort: efforts.length === 1 ? efforts[0] : efforts.join(" / "),
+        mixed: efforts.length > 1,
+      };
+    });
+    const exceptions: PolicyExceptionView[] = effective
+      .filter((item) => item.layer === "agent-exception")
+      .map((item) => ({
+        agent: shortName(item.agent),
+        group: item.group,
+        // The resolver spells "no model pin" as the literal "inherit".
+        model: item.model && item.model !== "inherit" ? item.model : null,
+        effort: item.effort ?? null,
+      }));
+    return { groups, exceptions, unexpressed: effective.some((item) => item.unexpressed.length > 0) };
+  };
+  const all = summarise(policy);
+  const teamPolicy = modelPolicyForHarness(readSettingsTarget(projectDir, "project")?.models ?? null, harness);
+  const team = summarise(teamPolicy);
   return {
     harness,
     preset: policy?.preset ?? null,
     shipped_defaults: modelPolicyIsEmpty(policy),
-    groups,
-    exceptions,
-    honesty: effective.some((item) => item.unexpressed.length > 0) ? HARNESS_HONESTY[harness].message : null,
+    groups: all.groups,
+    exceptions: all.exceptions,
+    honesty: all.unexpressed ? HARNESS_HONESTY[harness].message : null,
     recorded: {
       global: recordedLayer(projectDir, "global", harness),
       project: recordedLayer(projectDir, "project", harness),
       local: recordedLayer(projectDir, "local", harness),
     },
     efforts: MODEL_EFFORTS,
-    team: { preset: teamPolicy?.preset ?? null, groups: teamGroups },
+    team: { preset: teamPolicy?.preset ?? null, groups: team.groups, exceptions: team.exceptions },
   };
 }
 

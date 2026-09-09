@@ -212,8 +212,11 @@ harness drops - resolved with `resolveModelPolicy` from `aidlc config models`'
 recorded settings and the shipped agent tiers, exactly as `config models --show`
 does. `models_command` names the command that changes it; `recorded` gives what
 each settings layer (`global`, `project`, `local`) holds, `efforts` the
-vocabulary, and `team` the policy resolved without the `local` layer (the
-preset and each group's effort a teammate gets - what "back to team" means).
+vocabulary, and `team` the policy resolved from the committed `project` layer
+alone - both personal layers, `global` and `local`, left out - with the same
+`groups` and `exceptions` shape: what every teammate shares, so Advanced never
+shows a personal agent pin as the team's (the agent stays in its group there)
+and "back to team" has one meaning per project.
 There is no per-intent effort: a run's agents use the project policy, and only
 the session effort is chosen at Start. Settings (`settings.js`, the rail's
 bottom cog) edits the policy through `POST /api/models-policy`, which runs the

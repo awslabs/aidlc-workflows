@@ -323,15 +323,20 @@ names the file. Then the **preset** — the team's policy, committed with the
 project (`aidlc.settings.json`): *Thorough*, *Balanced*, or *Minimal* sets each
 group's effort for everyone.
 
-**Advanced** is the fine grain. **Groups** lists each group of agents with the
+**Advanced**, a fold at the bottom of the same page (open by itself while you
+override the team on this machine), is the fine grain, and everything it lists
+is the **team's** view — the committed project layer over the shipped
+defaults, no personal layer. **Groups** lists each group of agents with the
 team's value first — *Team · xhigh (preset thorough)*, *Team · inherits the
 default* — and the levels beneath it: pick one and it is **your** override, on
 this machine only (`aidlc.settings.local.json`, not committed; a *yours* pill
 marks the row and teammates keep the team's value); pick the team option again
 to return to it. **Exceptions** pins one agent to its own effort or model for the
-whole team (*Add…*). **Clear my overrides** removes everything recorded for this
-machine; **Reset team policy** removes the project's preset, dials, and
-exceptions. Every change goes through the same `aidlc config models` command the
+whole team (*Add…*). Anything personal set from the terminal that has no control
+here — a `--local` preset or agent pin, or a `--global` entry for every project
+on this machine — is named in a note beneath, never shown as the team's.
+**Clear my overrides** removes everything recorded for this machine;
+**Reset team policy** removes the project's preset, dials, and exceptions. Every change goes through the same `aidlc config models` command the
 terminal uses, so the transaction, refresh guard, and doctor checks are
 identical, and it applies to runs started afterwards. Returning one group to the
 team is the one exception: the command has no per-dial unset, so the daemon

@@ -15,7 +15,6 @@ import { setNotice, store } from "./store.js";
 
 const PAGES = [
   { id: "models", label: "Models & effort" },
-  { id: "advanced", label: "Advanced" },
   { id: "about", label: "About" },
 ];
 const PRESETS = [
@@ -32,6 +31,10 @@ let page = "models";
 // yours: the personal `local` layer, this machine only, over the team's value.
 let busy = false;
 let addingException = false;
+// Advanced - per-group overrides and exceptions - is the bottom of the Models &
+// effort page, folded until asked for; it opens by itself when you override the
+// team on this machine, so that is never hidden.
+let advancedOpen = false;
 // The harness's model catalogue (GET /api/models): fetched once when Settings
 // opens, so the picker offers real names, not ids to type.
 let catalogue = null; // { models: [{id, name, description}], current } | null
@@ -52,6 +55,7 @@ export function init() {
 
 export function open(target = "models") {
   page = PAGES.some((entry) => entry.id === target) ? target : "models";
+  advancedOpen = Boolean(store.workflow?.models_policy?.recorded?.local);
   root.hidden = false;
   render();
   root.querySelector(".settings-nav .on")?.focus();
@@ -84,7 +88,7 @@ function render() {
     </nav>
     <section class="settings-page ${busy ? "busy" : ""}">
       <button type="button" class="settings-close" data-close aria-label="Close settings">${icon("dismiss", { size: 14 })}</button>
-      ${page === "models" ? modelsPage() : page === "advanced" ? advancedPage() : aboutPage()}
+      ${page === "models" ? modelsPage() : aboutPage()}
     </section>
   </div>`;
   bind();
@@ -118,29 +122,36 @@ function modelsPage() {
       <div class="settings-h">Preset<small>team policy</small></div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${policy?.team?.preset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <p class="settings-note">The preset sets each group's effort for the whole team; it is committed with the project (<code>aidlc.settings.json</code>). ${policy?.recorded?.local ? "You override part of it on this machine - see " : "Per-group and per-agent settings are under "}<button type="button" class="linkish" data-page="advanced">Advanced</button>.</p>
+      <p class="settings-note">The preset sets each group's effort for the whole team; it is committed with the project (<code>aidlc.settings.json</code>).</p>
+    </div>
+
+    <div class="settings-block settings-advanced">
+      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span><small>${policy?.recorded?.local ? "you override the team on this machine" : "effort per group, pinned agents"}</small></button>
+      ${advancedOpen ? advancedSection(workflow) : ""}
     </div>`;
 }
 
 // Where a group's team value comes from, for the option that names it.
 function teamSource(policy, id, effort) {
   if (policy.recorded.project?.groups?.[id]) return "project";
-  if (policy.recorded.global?.groups?.[id]) return "this machine";
   if (effort === INHERIT) return "";
   return policy.team.preset ? `preset ${policy.team.preset}` : "shipped default";
 }
 
-function advancedPage() {
-  const workflow = store.workflow || {};
+function advancedSection(workflow) {
   const policy = workflow.models_policy;
   const efforts = policy?.efforts || ["low", "medium", "high", "xhigh"];
-  const exceptions = policy?.exceptions || [];
-  const agentsForPicker = policy ? policy.groups.flatMap((group) => group.agents).sort() : [];
+  // Everything on this page is the team's view: the committed project layer
+  // over the shipped defaults, no personal layer - the exceptions listed here
+  // are shared ones, and an agent you pin for yourself stays in its group.
+  const teamGroups = policy?.team?.groups || [];
+  const exceptions = policy?.team?.exceptions || [];
+  const agentsForPicker = teamGroups.flatMap((group) => group.agents).sort();
   const groupRow = (group) => {
     // First option: the team's value for this group and where it comes from.
     // Picking a level records your own dial in aidlc.settings.local.json (this
     // machine only); picking the team option again removes it.
-    const team = policy.team.groups[group.id];
+    const team = group.effort;
     const mine = policy.recorded.local?.groups?.[group.id] || "";
     const source = teamSource(policy, group.id, team);
     const teamLabel = team === INHERIT ? "Team · inherits the default" : `Team · ${team}${source ? ` (${source})` : ""}`;
@@ -153,12 +164,9 @@ function advancedPage() {
       </select>
     </div>`;
   };
-  return `<h3>Advanced</h3>
-    <p class="settings-sub">Effort per group of agents, and agents pinned on their own.</p>
-
-    <div class="settings-block">
+  return `<div class="settings-block">
       <div class="settings-h">Groups<small>team value · your override</small></div>
-      ${policy ? policy.groups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
+      ${policy ? teamGroups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <p class="settings-note">Your overrides live in <code>aidlc.settings.local.json</code> - this machine only, not committed. Teammates keep the team's values.</p>
     </div>
 
@@ -187,17 +195,23 @@ function advancedPage() {
     </div>`;
 }
 
-// A personal preset or agent pin set from the terminal has no control above;
-// name it, because it changes what runs on this machine.
+// Personal entries with no control above - a preset or agent pin in your
+// local layer, or anything in the machine-wide global layer - are set from the
+// terminal; name them, because they change what runs on this machine and are
+// not part of the team's view shown here.
 function personalNote(policy) {
-  const local = policy?.recorded?.local;
-  if (!local) return "";
-  const parts = [
-    ...(local.preset ? [`preset ${local.preset}`] : []),
-    ...Object.entries(local.agents).map(([agent, value]) => `${agent} ${value.effort || ""}${value.model ? ` ${value.model}` : ""}`.trim()),
-  ];
-  if (!parts.length) return "";
-  return `<p class="settings-note settings-personal">Also on this machine, from the terminal (<code>aidlc config models … --local</code>): ${escapeHtml(parts.join(" · "))}. Clear my overrides removes these too.</p>`;
+  const describe = (layer, withGroups) => layer ? [
+    ...(layer.preset ? [`preset ${layer.preset}`] : []),
+    ...(withGroups ? Object.entries(layer.groups).map(([group, effort]) => `${group} ${effort}`) : []),
+    ...Object.entries(layer.agents).map(([agent, value]) => `${agent} pinned ${value.effort || ""}${value.model ? ` ${value.model}` : ""}`.trim()),
+  ] : [];
+  const local = describe(policy?.recorded?.local, false);
+  const global = describe(policy?.recorded?.global, true);
+  if (!local.length && !global.length) return "";
+  return `<p class="settings-note settings-personal">Also yours, from the terminal: ${[
+    local.length ? `${escapeHtml(local.join(" · "))} (<code>--local</code>, this project; Clear my overrides removes these too)` : "",
+    global.length ? `${escapeHtml(global.join(" · "))} (<code>--global</code>, every project on this machine)` : "",
+  ].filter(Boolean).join("; ")}.</p>`;
 }
 
 const LOCAL_SETTINGS = ".claude/settings.local.json";
@@ -279,6 +293,7 @@ function bind() {
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
   for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change("project", { action: "preset", preset: button.dataset.preset }));
   root.querySelector("[data-models-retry]")?.addEventListener("click", () => loadCatalogue(true));
+  root.querySelector("[data-advanced]")?.addEventListener("click", () => { advancedOpen = !advancedOpen; render(); });
   root.querySelector("[data-default-model]")?.addEventListener("change", async (event) => {
     const model = event.target.value;
     if (busy) return;

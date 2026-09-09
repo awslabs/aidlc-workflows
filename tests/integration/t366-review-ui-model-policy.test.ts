@@ -188,14 +188,25 @@ describe("t366 review UI model policy settings", () => {
     expect(view.recorded.local?.groups).toEqual({ reviewing: "medium", deciding: "low" });
     expect(view.recorded.project?.preset).toBe("thorough");
     // What a teammate gets: the committed preset and the project's own dial (writing-up, above), the personal dials left out.
-    expect(view.team).toEqual({ preset: "thorough", groups: { deciding: "inherit", reviewing: "xhigh", "writing-up": "low" } });
+    expect(view.team.preset).toBe("thorough");
+    expect(Object.fromEntries(view.team.groups.map((entry: { id: string; effort: string }) => [entry.id, entry.effort]))).toEqual({ deciding: "inherit", reviewing: "xhigh", "writing-up": "low" });
     expect(agentEffort("product-lead")).toBe("medium");
+
+    // A personal agent pin is an exception on this machine, not the team's: the team view keeps the agent in its group.
+    expect((await api("POST", "/api/models-policy", { scope: "local", action: "agent", agent: "developer", effort: "high" })).status).toBe(200);
+    view = await policy();
+    expect(view.exceptions.map((entry: { agent: string }) => entry.agent)).toContain("developer");
+    expect(view.team.exceptions.map((entry: { agent: string }) => entry.agent)).not.toContain("developer");
+    expect(view.team.groups.find((entry: { id: string }) => entry.id === "deciding")?.agents).toContain("developer");
+    expect(view.groups.find((entry: { id: string }) => entry.id === "deciding")?.agents).not.toContain("developer");
+    expect(view.recorded.local?.agents.developer).toEqual({ effort: "high", model: null });
 
     // Back to the team's value for one group: the personal layer is rebuilt without that dial, keeping the other.
     expect((await api("POST", "/api/models-policy", { scope: "project", action: "clear-group", group: "reviewing" })).status).toBe(400);
     expect((await api("POST", "/api/models-policy", { scope: "local", action: "clear-group", group: "reviewing" })).status).toBe(200);
     view = await policy();
     expect(view.recorded.local?.groups).toEqual({ deciding: "low" });
+    expect(view.recorded.local?.agents.developer).toEqual({ effort: "high", model: null });
     expect(group(view, "reviewing").effort).toBe("xhigh");
     expect(agentEffort("product-lead")).toBe("xhigh");
     // Clearing a dial that is not there changes nothing.
@@ -206,5 +217,6 @@ describe("t366 review UI model policy settings", () => {
     view = await policy();
     expect(view.recorded.local).toBeNull();
     expect(group(view, "deciding").effort).toBe("inherit");
-  }, 60_000);
+    expect(view.exceptions.map((entry: { agent: string }) => entry.agent)).not.toContain("developer");
+  }, 90_000);
 });
