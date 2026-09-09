@@ -20,12 +20,13 @@ differs.
 
 > [!NOTE]
 > Kiro IDE 0.x is not supported. Update to a current Kiro IDE, or use Kiro CLI.
-> On 0.x a single legacy hook denies each tool call and says so; that host has no
-> way for a hook to refuse outright, so the denial is an instruction its agent is
-> told to honour rather than a block the IDE enforces. A supported IDE never runs
-> that hook, but it does list it as `legacy` with a **Migrate** button: leave it
-> alone. Migrating it is not needed and not supported — the notice checks the host
-> version and stays silent on a supported one either way.
+> On 0.x a single legacy hook refuses each tool call and says why. The refusal is
+> the hook's exit code, which that host honours on its pre-tool seam; the message
+> is there so the refusal reads as a decision rather than a broken hook. A
+> supported IDE never runs that hook, but it does list it as `legacy` with a
+> **Migrate** button: leave it alone. Migrating it is not needed and not supported
+> — the notice checks the host version and stays silent on a supported one either
+> way.
 
 ## Prerequisites
 

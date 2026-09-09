@@ -1080,10 +1080,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(modern.stderr).toBe("");
 
       // A 0.x host delivers the payload in USER_PROMPT - on this trigger the tool
-      // input, verbatim from a 0.12.333 firing. Exit 0 and stdout, because that
-      // host turns a non-zero exit into "command execution failed" and never into
-      // a refusal, while its preToolUse contract forbids the model from
-      // proceeding when the OUTPUT denies access.
+      // input, verbatim from a 0.12.333 firing. Exit 2 is the refusal that seam
+      // honours (measured: a preToolUse hook exiting 2 refused the read outright),
+      // and the denial text is the explanation the model is told to obey. Both
+      // streams carry it because `stdout || stderr` is the success path's rule.
       const payload = JSON.stringify({
         path: "/w/AGENTS.md",
         start_line: null,
@@ -1095,12 +1095,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         // The socket name 0.12.333 was measured to set.
         VSCODE_IPC_HOOK: "/Users/u/Library/Application Support/Kiro/0.12-main.sock",
       });
-      expect(legacy.code).toBe(0);
-      expect(legacy.stderr).toBe("");
-      // The denial has to lead, or the host's contract does not engage.
-      expect(legacy.stdout.startsWith("ACCESS DENIED.")).toBe(true);
-      expect(legacy.stdout).toContain("no longer supports this version of Kiro IDE");
-      expect(legacy.stdout).toContain("Kiro CLI");
+      expect(legacy.code).toBe(2);
+      // The denial has to lead on whichever stream the host surfaces.
+      for (const stream of [legacy.stdout, legacy.stderr]) {
+        expect(stream.startsWith("ACCESS DENIED.")).toBe(true);
+        expect(stream).toContain("no longer supports this version of Kiro IDE");
+        expect(stream).toContain("Kiro CLI");
+      }
 
       // A SUPPORTED host that runs this target anyway - which one click on the
       // `Migrate` button beside the legacy hook produces, and where 1.x populates
@@ -1114,6 +1115,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(supported.code).toBe(0);
       expect(supported.stdout).toBe("");
       expect(supported.stderr).toBe("");
+      // Silence here is the whole point: a migrated hook on a supported host must
+      // not refuse anything, and exit 2 would now do exactly that.
 
       // An unreadable host line is silence too: informing is this target's only
       // job, and refusing work on a supported install is the worse error.

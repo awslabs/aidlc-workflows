@@ -1761,23 +1761,31 @@ if (target === "deliver-stage-rules") {
 // variable holds the TOOL INPUT as JSON, not the user's prompt (measured on
 // 0.12.333) - only its presence is read here, never its shape.
 //
-// Exit 0 and stdout, which reads backwards until you see what 0.12 does with
-// either. Measured in the host's own hook runner: a non-zero exit is turned into
-// `HookFailedCommandError` ("Hook '<name>' command execution failed") and is
-// never a refusal, so exiting 2 here got the notice classified as a BROKEN HOOK
-// - whereupon a 0.x session's own agent diagnosed it as misfiring and wrote
-// `"enabled": false` into this manifest. What that host does honour is the text:
-// its preToolUse contract tells the model that when a hook's output denies
-// access it "is FORBIDDEN from retrying the tool invocation" and "MUST NOT
-// proceed with the tool call under any circumstances". So the denial has to be
-// the first thing the output says, and the output has to arrive on the success
-// path. stdout because the runner takes `stdout || stderr` and stdout wins.
+// Exit 2 AND the denial text, because 0.12 answers differently per seam and the
+// two answers are complementary rather than alternative:
+//
+//   On `promptSubmit`, exit 2 does not stop anything. The runner turns any
+//   non-zero exit into `HookFailedCommandError` ("Hook '<name>' command execution
+//   failed"), and on that seam nothing downstream reads it as a refusal - the turn
+//   continued, the notice arrived framed as a BROKEN HOOK, and a 0.x session's own
+//   agent duly diagnosed it as misfiring and wrote `"enabled": false` into this
+//   manifest (which does not even disable it - that host keeps enablement in
+//   workspace state).
+//   On `preToolUse`, exit 2 DOES refuse the call. Measured on 0.12.333 against a
+//   probe: the read was refused outright and never retried.
+//
+// So the exit code is the enforcement and the text is the explanation. The text
+// matters independently because this host's preToolUse contract tells the model
+// that when a hook's output denies access it "is FORBIDDEN from retrying the tool
+// invocation" and "MUST NOT proceed with the tool call under any circumstances" -
+// so a denial that leads the output is read as a decision rather than a fault.
+// Written to BOTH streams on purpose: `stdout || stderr` is the SUCCESS path's
+// rule and does not apply here, and the delivery actually measured on a non-zero
+// exit was via stderr. Writing both removes the guess.
 //
 // This refuses per TOOL CALL rather than per prompt, which is the right seam:
 // nothing in AI-DLC advances without a tool, and the refusal lands exactly where
-// work would have begun. It is enforcement by instruction rather than a hard
-// block - 0.12 offers no exit-code refusal at all - and that limit is stated in
-// docs/guide/harnesses/kiro.md rather than papered over.
+// work would have begun.
 //
 // Then a second gate, because the channel stopped being proof. A supported IDE
 // does not RUN a `.kiro.hook` (measured on 1.0.437: nothing fired), but it does
@@ -1799,15 +1807,15 @@ if (target === "legacy-ide-notice") {
   if ((process.env.USER_PROMPT ?? "").trim().length === 0) return 0;
   const hostLine = /\/(\d+)\.(\d+)\.?-main\.sock$/.exec(process.env.VSCODE_IPC_HOOK ?? "");
   if (hostLine === null || hostLine[1] !== "0") return 0;
-  process.stdout.write(
-    "ACCESS DENIED. Permission is not granted for this tool call.\n\n" +
-      "AI-DLC no longer supports this version of Kiro IDE.\n\n" +
-      "Update Kiro IDE, or run this project with Kiro CLI instead - one AI-DLC " +
-      "install serves both. The workflow record under aidlc/ is unaffected and " +
-      "resumes where it stopped once you are on a supported version.\n\n" +
-      "See docs/guide/harnesses/kiro.md for the supported versions.\n",
-  );
-  return 0; // Not a refusal code: 0.12 has none. The denial is the text above.
+  const notice = "ACCESS DENIED. Permission is not granted for this tool call.\n\n" +
+    "AI-DLC no longer supports this version of Kiro IDE.\n\n" +
+    "Update Kiro IDE, or run this project with Kiro CLI instead - one AI-DLC " +
+    "install serves both. The workflow record under aidlc/ is unaffected and " +
+    "resumes where it stopped once you are on a supported version.\n\n" +
+    "See docs/guide/harnesses/kiro.md for the supported versions.\n";
+  process.stdout.write(notice);
+  process.stderr.write(notice);
+  return 2; // The refusal this seam honours; the text says why.
 }
 
 if (target === "state-transition-guard") {
