@@ -1,7 +1,7 @@
 // covers: tool:aidlc-init, tool:aidlc-lifecycle, file:core/tools/aidlc-archive.ts
 // covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts
 
-import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -104,10 +104,6 @@ const NEXT_VERSION = (() => {
 const temporary: string[] = [];
 const originalPath = process.env.PATH;
 
-// The default also governs afterAll removal of 128 staged roots, several of them
-// dist-sized, which exceeds bun's 5s hook default.
-setDefaultTimeout(120_000);
-
 beforeAll(() => {
   process.env.PATH = `${join(REPO_ROOT, "tests", "fixtures", "bin")}${delimiter}${
     originalPath ?? ""
@@ -118,11 +114,12 @@ function releaseBinaryName(): string {
   return `aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
 }
 
+// Removing the accumulated temporary trees can exceed bun's 5s hook default.
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+}, 120_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
 // the canonical temp root (macOS aliases /var to /private/var).
@@ -1313,7 +1310,7 @@ describe("t243 project initialization", () => {
     };
     expect(merged.mcpServers.context7).toEqual(custom);
     expect(merged.projectSetting).toBe(true);
-  });
+  }, 60_000);
 
   test("MCP consent and managed AGENTS blocks preserve user-owned configuration", () => {
     const claudeProject = temp("aidlc-t240-mcp-matrix-");
