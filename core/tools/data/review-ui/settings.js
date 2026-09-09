@@ -125,9 +125,9 @@ function modelsPage() {
         ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(fallback.source)}</code>) - what “inherit” means${fallback.source.startsWith(".claude") ? ", the same value <code>/effort</code> sets" : ""}.`
         : "No settings file names an effort; the model's own default applies - what “inherit” means."}</small></span>
         ${workflow.runner_default_effort_editable
-          ? `<select data-default-effort aria-label="Default effort">
-              <option value="" ${fallback ? "" : "selected"}>model default</option>
-              ${SESSION_LEVELS.map((level) => `<option value="${level}" ${fallback?.level === level ? "selected" : ""}>${level}</option>`).join("")}
+          ? `<select data-default-effort aria-label="Default effort" title="Written to ${LOCAL_SETTINGS}; the first option is what applies with no entry there">
+              <option value="" ${fallback?.source === LOCAL_SETTINGS ? "" : "selected"}>${escapeHtml(fallback ? (fallback.source === LOCAL_SETTINGS ? "model default" : `${fallback.level} · from ${fallback.source}`) : "model default")}</option>
+              ${SESSION_LEVELS.map((level) => `<option value="${level}" ${fallback?.source === LOCAL_SETTINGS && fallback.level === level ? "selected" : ""}>${level}</option>`).join("")}
             </select>`
           : `<span class="c"><b>${fallback ? escapeHtml(fallback.level) : "model default"}</b></span>`}
       </div>
@@ -177,6 +177,17 @@ function personalNote(policy) {
   return `<p class="settings-note settings-personal">On this machine you override the team: ${escapeHtml(parts.join(" · "))} (<code>aidlc.settings.local.json</code>, set from the terminal with <code>aidlc config models … --local</code>).</p>`;
 }
 
+const LOCAL_SETTINGS = ".claude/settings.local.json";
+
+// The unset option of a personal-default picker. The browser writes only the
+// local file; with no key there, the harness falls back to the project or user
+// file - so "unset" must name that value, not pretend to be a blank slate.
+function unsetLabel(current) {
+  if (!current) return "harness default";
+  if (current.source === LOCAL_SETTINGS) return "harness default";
+  return `${current.value} · from ${current.source}`;
+}
+
 // The session's model: the harness's own `model` setting, which every agent
 // without a pin uses. The picker offers what the runner's agent listed at its
 // last session, the current value, and a free-text id for anything else.
@@ -184,15 +195,16 @@ function modelRow(workflow) {
   const current = workflow.runner_default_model;
   const editable = workflow.runner_default_model_editable;
   const known = workflow.runner_models || [];
+  const local = current?.source === LOCAL_SETTINGS;
   const options = known.map((entry) => ({ value: entry.id, label: entry.name === entry.id ? entry.id : `${entry.name} · ${entry.id}` }));
-  if (current && !options.some((entry) => entry.value === current.value)) options.unshift({ value: current.value, label: current.value });
+  if (local && !options.some((entry) => entry.value === current.value)) options.unshift({ value: current.value, label: current.value });
   return `<div class="settings-row"><span class="l">Model<small>${current
     ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(current.source)}</code>) - what every agent without a model pin uses.`
     : `No settings file names a model; ${escapeHtml(harnessName(workflow))} picks - what every agent without a model pin uses.`}</small></span>
     ${editable
-      ? `<select data-default-model aria-label="Model">
-          <option value="" ${current ? "" : "selected"}>harness default</option>
-          ${options.map((entry) => `<option value="${escapeHtml(entry.value)}" ${current?.value === entry.value ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")}
+      ? `<select data-default-model aria-label="Model" title="Written to ${LOCAL_SETTINGS}; the first option is what applies with no entry there">
+          <option value="" ${local ? "" : "selected"}>${escapeHtml(unsetLabel(current))}</option>
+          ${options.map((entry) => `<option value="${escapeHtml(entry.value)}" ${local && current.value === entry.value ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")}
           <option value="__other">Other model id…</option>
         </select>`
       : `<span class="c"><b>${current ? escapeHtml(current.value) : "harness default"}</b></span>`}

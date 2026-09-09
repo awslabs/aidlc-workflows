@@ -369,6 +369,11 @@ describe("t365 review UI agent runs", () => {
     expect(((await api("GET", "/api/workflow")).body as typeof models).runner_default_model).toEqual({ value: "fake-deep", source: ".claude/settings.local.json" });
     expect((await api("POST", "/api/default-model", { model: null })).status).toBe(200);
     expect(JSON.parse(readFileSync(settings, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
+    // Unset locally does not mean unset: a project-level value shows through with its source,
+    // which is what the picker's first option must name.
+    writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({ model: "sonnet" }));
+    expect(((await api("GET", "/api/workflow")).body as typeof models).runner_default_model).toEqual({ value: "sonnet", source: ".claude/settings.json" });
+    rmSync(join(project, ".claude", "settings.json"));
     rmSync(settings);
   }, 30_000);
 
