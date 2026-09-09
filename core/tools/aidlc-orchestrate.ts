@@ -4681,8 +4681,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
-  //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
-  //     is within the matcher's word bound): a one-line confirm naming the
+  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input or an
+  //     affirmative high-specificity match in long prose): a one-line confirm naming the
   //     MATCHED scope, with "name another scope" and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the

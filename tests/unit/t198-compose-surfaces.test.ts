@@ -293,6 +293,27 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(d.question)).not.toContain('"feature" workflow');
   });
 
+  test("long affirmative refactor description -> confirm the refactor plan", () => {
+    proj = createTestProject();
+    const d = directiveOf(
+      runNext(proj, ["Please refactor the authentication module without changing its behavior"]).out,
+    );
+    expect(d.kind).toBe("ask");
+    expect(String(d.question)).toContain('This looks like "refactor" work');
+    expect(String(d.question)).toContain("Say go ahead");
+  });
+
+  test.each([
+    "Do not refactor anything; add a new login screen",
+    "Build a production service, not a proof of concept",
+  ])("negated scope in long prose -> compose offer: %s", (input) => {
+    proj = createTestProject();
+    const d = directiveOf(runNext(proj, [input]).out);
+    expect(d.kind).toBe("ask");
+    expect(String(d.question)).toContain("None of the ready-made plans is an obvious fit");
+    expect(String(d.question)).toContain("compose");
+  });
+
   test("known-scope positional still creates (Branch 7b untouched)", () => {
     proj = createTestProject();
     // The creation path needs a GENUINELY empty workspace (zero intents), else the
