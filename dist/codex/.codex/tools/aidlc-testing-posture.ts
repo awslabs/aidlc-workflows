@@ -16,6 +16,7 @@ import {
   auditBlockField,
   collectStalePlanApprovalReceipts,
   contentBeforeTerminalReviewAppendix,
+  readCurrentSessionId,
   docsRoot,
   getField,
   isoTimestamp,
@@ -1910,13 +1911,29 @@ export function recordPlanApprovalHumanResponse(
   session: string,
   responseText: string,
 ): PlanApprovalHumanResponseResult {
-  const challenge = readPlanApprovalChallenge(projectDir, session);
+  // The orchestrator may pass the intent UUID as --session (reading the binding
+  // file instead of .current-session), while the record-human-turn hook
+  // receives the Devin session name. Fall back to .current-session when the
+  // challenge isn't found under the given session, so the response is written
+  // under the same key the orchestrator's answer command will look up.
+  let challenge = readPlanApprovalChallenge(projectDir, session);
+  let effectiveSession = session;
+  if (!challenge) {
+    const currentSession = readCurrentSessionId(projectDir);
+    if (currentSession && currentSession !== session) {
+      const fallback = readPlanApprovalChallenge(projectDir, currentSession);
+      if (fallback) {
+        challenge = fallback;
+        effectiveSession = currentSession;
+      }
+    }
+  }
   if (challenge) {
     const choice = offeredPlanApprovalChoice(challenge, responseText);
     if (choice) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
-        session,
+        session: effectiveSession,
         challengeId: challenge.challengeId,
         choice,
         responseSha256: createHash("sha256")
@@ -2012,8 +2029,21 @@ function certifyPlanApprovalReceipt(
 ): PlanApprovalReceiptResult {
   const identity = runtimeIdentity(evidence);
   const provenance = runtimeProvenance(evidence);
-  const challenge = readPlanApprovalChallenge(projectDir, session);
-  const response = readPlanApprovalResponse(projectDir, session);
+  let challenge = readPlanApprovalChallenge(projectDir, session);
+  let response = readPlanApprovalResponse(projectDir, session);
+  // Fall back to .current-session when the challenge/response isn't found
+  // under the given session (orchestrator may pass intent UUID as --session).
+  if (!challenge || !response) {
+    const currentSession = readCurrentSessionId(projectDir);
+    if (currentSession && currentSession !== session) {
+      const fallbackChallenge = readPlanApprovalChallenge(projectDir, currentSession);
+      const fallbackResponse = readPlanApprovalResponse(projectDir, currentSession);
+      if (fallbackChallenge && fallbackResponse) {
+        challenge = fallbackChallenge;
+        response = fallbackResponse;
+      }
+    }
+  }
   if (
     !challenge ||
     !response ||

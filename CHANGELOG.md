@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.0] - 2026-09-09
+
+Fixes a Plan Approval session mismatch on the Devin CLI harness. The orchestrator read the binding file (`aidlc/.aidlc-sessions/<devin-session>`) which contains the intent UUID, and passed that as `--session` to `aidlc-log decision`/`answer`. The challenge was written as `challenge-<intent-uuid>.json`, but the `record-human-turn` hook receives the Devin session name and wrote no response (it looked for `challenge-<devin-session>.json` and found nothing). The `answer` command then failed with "Plan Approval requires the actual offered choice from this prompt and session." Both `recordPlanApprovalHumanResponse` and `certifyPlanApprovalReceipt` now fall back to `.current-session` when the challenge/response isn't found under the given session, so the response is written and certified under the Devin session name regardless of which identifier the orchestrator passed. **Upgrade:** `aidlc update`, or `install.sh --version 2.9.0` / `install.ps1 -Version 2.9.0`. No migration; existing workflow records resume normally.
+
+* `recordPlanApprovalHumanResponse` in `aidlc-testing-posture.ts`: falls back to `readCurrentSessionId` when `readPlanApprovalChallenge` returns null under the given session, writes the response under the effective session.
+* `certifyPlanApprovalReceipt`: falls back to `.current-session` for both challenge and response lookups when either is missing under the given session.
+
 ## [2.8.9] - 2026-09-09
 
 Fixes three plan-approval guard false-positives that blocked the orchestrator during code-generation plan creation. `sed` without `-i`/`--in-place` (read-only pattern printing) was treated as a mutation command because it's in `TRACKED_SHELL_MUTATORS` — the guard now checks for `-i`/`--in-place` and treats `sed` without them as read-only. `mkdir` (creates directories, doesn't modify files) was missing from `READ_ONLY_SHELL_COMMANDS` — added. `bun -e` remains opaque (it can write files via `Bun.write`), so the orchestrator should use `bun <script>` for framework checks instead. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.9` / `install.ps1 -Version 2.8.9`. No migration; existing workflow records resume normally.
