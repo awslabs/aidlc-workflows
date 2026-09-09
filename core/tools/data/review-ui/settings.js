@@ -133,7 +133,7 @@ function modelsPage() {
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${teamPreset(policy) === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}${!policy?.team?.preset && entry.id === SHIPPED_PRESET ? ` <span class="settings-tag">default</span>` : ""}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <p class="settings-note">Team-wide · saved with the project</p>
+      <p class="settings-note">Choose how your team balances quality, speed, and cost. Applies to everyone and is saved with the project.</p>
     </div>
 
     <div class="settings-block settings-advanced">
@@ -231,13 +231,13 @@ function modelRow(workflow) {
     control = `<span class="c"><b>${escapeHtml(current ? modelName(current.value) : "harness default")}</b> <button type="button" class="btn" data-models-retry title="${escapeHtml(catalogueError)}">Retry</button></span>`;
   } else {
     const models = catalogue?.models || [];
-    control = `<select data-default-model aria-label="Model" title="${escapeHtml(title)}">
+    control = `<select data-default-model aria-label="Default model" title="${escapeHtml(title)}">
       <option value="" ${local ? "" : "selected"}>${escapeHtml(defaultLabel)}</option>
       ${models.map((model) => `<option value="${escapeHtml(model.id)}" ${local && current.value === model.id ? "selected" : ""} ${model.description ? `title="${escapeHtml(model.description)}"` : ""}>${escapeHtml(model.name)}</option>`).join("")}
       ${local && !models.some((model) => model.id === current.value) ? `<option value="${escapeHtml(current.value)}" selected>${escapeHtml(current.value)}</option>` : ""}
     </select>`;
   }
-  return `<div class="settings-row"><span class="l">Model<small>The model all agents use</small></span>${control}</div>`;
+  return `<div class="settings-row"><span class="l">Default model<small>The model all agents use</small></span>${control}</div>`;
 }
 
 function harnessName(workflow) {

@@ -313,7 +313,7 @@ the run will use.
 
 The cog at the bottom of the left rail opens Settings. **Models & Effort** is
 one page, in the order you would use it. First your **defaults** — the
-**model** every agent runs on and the **default effort** they inherit — your own
+**default model** every agent runs on and the **default effort** they inherit — your own
 harness settings; on Claude the browser edits both in place (`model` and
 `effortLevel` in `.claude/settings.local.json`, the latter the same value
 `/effort` sets). The model picker is Claude's own list — the names its `/model`
@@ -322,7 +322,9 @@ picker shows, asked of the agent once and cached — with your Claude default
 *Thorough*, *Balanced*, or *Minimal* — the team's policy, committed with the
 project (`aidlc.settings.json`); one card is always lit, the shipped default
 (*Balanced*, tagged *default*) when nothing is recorded, so there is nothing to
-reset: to go back, pick the default card.
+reset: to go back, pick the default card. The line beneath says what the choice
+is: how the team balances quality, speed, and cost, for everyone, saved with
+the project.
 
 **Advanced**, a fold at the bottom (open by itself while you have a change of
 your own), is *change a group's effort just for you*. Each group's first option
