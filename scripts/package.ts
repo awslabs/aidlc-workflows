@@ -917,13 +917,22 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
   const agentsDir = join(outRoot, m.harnessDir, "agents");
   for (const file of walk(agentsDir)) {
     if (file.endsWith(".md")) {
-      // Kiro IDE persona surfaces carry a YAML shell allowlist; the native
-      // channel replaces the bun tool glob with the aidlc command prefix.
+      // Kiro persona and conductor surfaces carry a YAML shell allowlist; the
+      // native channel replaces the bun tool glob with the aidlc command prefix.
+      // The conductor carries a second entry for the dispatcher — a path glob
+      // cannot express a route namespace that lives in the arguments — and on
+      // this channel both entries project to the same command, so the second
+      // becomes a duplicate and is dropped.
       const value = readFileSync(file, "utf-8");
-      const rewritten = value.replaceAll(
-        `- "bun ${m.harnessDir}/tools/aidlc-*"`,
-        `- "${trustedCommand("*")}"`,
-      );
+      const native = `- "${trustedCommand("*")}"`;
+      const rewritten = value
+        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, native)
+        .replace(
+          new RegExp(
+            `( *)${escapeRegExp(native)}\\n(?:[^\\n]*\\n)*? *${escapeRegExp(native)}\\n`,
+          ),
+          `$1${native}\n`,
+        );
       if (rewritten !== value) writeFileSync(file, rewritten);
       continue;
     }

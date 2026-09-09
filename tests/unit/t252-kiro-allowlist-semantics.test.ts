@@ -394,8 +394,13 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       );
       const matches = (effect: string) =>
         shell.filter((rule) => rule.effect === effect).flatMap((rule) => rule.match ?? []);
+      // The dispatcher entry is not redundant with the tool glob: shell matches
+      // are globs, so `aidlc-*` requires a literal `-` and never covers
+      // `aidlc.ts` — the only command the orchestrator skill issues. Scoped to
+      // `engine` so the trusted boundary is the one the native channel draws.
       expect(matches("allow")).toEqual([
         "bun .kiro/tools/aidlc-*",
+        "bun .kiro/tools/aidlc.ts engine *",
         "date -u *",
       ]);
       expect(matches("deny")).toEqual(["rm -rf *", "git push *"]);
