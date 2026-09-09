@@ -257,6 +257,14 @@ test("descriptor redirections preserve command boundaries and real operands", ()
   expect(shellCommandInvocations('printf "2">&1')).toEqual([
     { name: "printf", args: ["2"] },
   ]);
+  expect(shellCommandInvocations(String.raw`printf x\>&1`)).toEqual([
+    { name: "printf", args: ["x>"] },
+    { name: "1", args: [] },
+  ]);
+  expect(shellCommandInvocations(String.raw`printf x\<&0`)).toEqual([
+    { name: "printf", args: ["x<"] },
+    { name: "0", args: [] },
+  ]);
 });
 
 const NONE: ReadonlySet<string> = new Set();

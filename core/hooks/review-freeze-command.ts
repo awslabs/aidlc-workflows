@@ -94,12 +94,13 @@ function shellCommandSegments(command: string): string[] {
     }
     // Descriptor duplication/closure is one redirection operator, not a
     // background separator followed by a command named "1" or "-".
-    if (
-      ch === "&" &&
-      (command[i - 1] === ">" || command[i - 1] === "<") &&
-      /^[ \t]*(?:\d+|-)(?=$|[\s;|&()<>])/.test(command.slice(i + 1))
-    ) {
-      continue;
+    if (ch === ">" || ch === "<") {
+      const descriptorRedirect =
+        /^[<>]&[ \t]*(?:\d+|-)(?=$|[\s;|&()<>])/.exec(command.slice(i));
+      if (descriptorRedirect) {
+        i += descriptorRedirect[0].length - 1;
+        continue;
+      }
     }
     if (ch !== ";" && ch !== "\n" && ch !== "|" && ch !== "&") continue;
     segments.push(command.slice(start, i));

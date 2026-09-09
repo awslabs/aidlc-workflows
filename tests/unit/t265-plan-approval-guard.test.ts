@@ -963,6 +963,8 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine orchestrate next; printf code > src/inline.ts`,
           `bun ${entry} engine orchestrate next 2>&1; printf code > src/inline.ts`,
           `bun ${entry} engine orchestrate next & printf code > src/inline.ts`,
+          String.raw`printf x\>&1`,
+          String.raw`printf x\<&0`,
           `bun --preload evil.ts ${entry} engine orchestrate next`,
           `bun ${entry} engine orchestrate next --require=evil.ts`,
           `./bun ${entry} engine orchestrate next`,
