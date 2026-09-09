@@ -41,6 +41,17 @@ function shellWords(command: string): string[] {
       quote = ch;
       continue;
     }
+    if (ch === "<" || ch === ">" || (word.length === 0 && /\d/.test(ch))) {
+      const descriptorRedirect =
+        /^\d*[<>]&[ \t]*(?:\d+|-)(?=$|[\s;|&()<>])/.exec(command.slice(i));
+      if (descriptorRedirect) {
+        // Shell descriptors are syntax, not argv. In particular, keeping a
+        // trailing "2" or "1" would change a mutator's apparent destination.
+        push();
+        i += descriptorRedirect[0].length - 1;
+        continue;
+      }
+    }
     if (/\s/.test(ch) || ";|&()<>".includes(ch)) {
       push();
       continue;
@@ -79,6 +90,15 @@ function shellCommandSegments(command: string): string[] {
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      continue;
+    }
+    // Descriptor duplication/closure is one redirection operator, not a
+    // background separator followed by a command named "1" or "-".
+    if (
+      ch === "&" &&
+      (command[i - 1] === ">" || command[i - 1] === "<") &&
+      /^[ \t]*(?:\d+|-)(?=$|[\s;|&()<>])/.test(command.slice(i + 1))
+    ) {
       continue;
     }
     if (ch !== ";" && ch !== "\n" && ch !== "|" && ch !== "&") continue;

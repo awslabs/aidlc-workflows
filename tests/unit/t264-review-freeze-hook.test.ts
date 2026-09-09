@@ -239,6 +239,26 @@ test("inspection marks altered executable lookup and data-driven mutations", () 
   ]);
 });
 
+test("descriptor redirections preserve command boundaries and real operands", () => {
+  for (const redirect of ["2>&1", "1>&2", "2>&-", "0<&0", "2>& 1"]) {
+    expect(shellCommandInvocations(`cp source target ${redirect}`), redirect).toEqual([
+      { name: "cp", args: ["source", "target"] },
+    ]);
+  }
+  expect(
+    shellCommandInvocations('cp source target 2>&1 && printf "%s" "2>&1"'),
+  ).toEqual([
+    { name: "cp", args: ["source", "target"] },
+    { name: "printf", args: ["%s", "2>&1"] },
+  ]);
+  expect(shellCommandInvocations("printf value2>&1")).toEqual([
+    { name: "printf", args: ["value2"] },
+  ]);
+  expect(shellCommandInvocations('printf "2">&1')).toEqual([
+    { name: "printf", args: ["2"] },
+  ]);
+});
+
 const NONE: ReadonlySet<string> = new Set();
 const ready = { stageVerdict: "READY", unitVerdicts: new Map<string, string>() };
 const notReady = { stageVerdict: "NOT-READY", unitVerdicts: new Map<string, string>() };
@@ -675,6 +695,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       `printf "change">>${JSON.stringify(file)}`,
       `printf "change" >> "$PWD/${rel}"`,
       `cp --target-directory=${JSON.stringify(dirname(file))} /tmp/requirements.md`,
+      `cp /tmp/requirements.md ${JSON.stringify(file)} 2>&1`,
+      `cp /tmp/requirements.md ${JSON.stringify(file)} 2>&-`,
+      `cp /tmp/requirements.md ${JSON.stringify(file)} 2>& 1`,
       `mv ${JSON.stringify(file)} /tmp/review-freeze-moved`,
       `install -dv ${JSON.stringify(file)} /tmp/review-freeze-directory`,
       `truncate -s 1 -o ${JSON.stringify(file)}`,
@@ -694,8 +717,10 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
 
     for (const command of [
       `cat ${JSON.stringify(file)}`,
+      `cat ${JSON.stringify(file)} 2>&1`,
       `sed -n '1p' ${JSON.stringify(file)}`,
       `cp ${JSON.stringify(file)} /tmp/review-freeze-copy`,
+      `cp ${JSON.stringify(file)} /tmp/review-freeze-copy 2>&1`,
       `cp --target-directory=/tmp ${JSON.stringify(file)}`,
       `cp /tmp/requirements.md ${JSON.stringify(
         join(p, "unrelated", "inception", "requirements-analysis"),

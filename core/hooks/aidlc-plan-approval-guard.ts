@@ -608,6 +608,7 @@ function isFrameworkToolInvocation(
   args: string[],
   executableResolutionChanged = false,
   dataDriven = false,
+  wrapped = false,
 ): boolean {
   if (isNativePlanApprovalPrerequisite(name, args)) {
     return !executableResolutionChanged && !dataDriven;
@@ -640,11 +641,13 @@ function isFrameworkToolInvocation(
   }
   // The installed Bun entry point dispatches both planning and mutation routes.
   // Give it the native planning exceptions only, after checking the interpreter
-  // and arguments; the same real-file/no-symlink boundary below still applies.
+  // and arguments. Wrappers may change cwd after parsing, so require a direct
+  // invocation. The same real-file/no-symlink boundary below still applies.
   if (
     unifiedEntryPoint &&
     (
       !["bun", "bun.exe"].includes(name.toLowerCase()) ||
+      wrapped ||
       executableResolutionChanged ||
       dataDriven ||
       !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1))
@@ -671,6 +674,7 @@ function shellInvocationNeedsApproval(
     name: string;
     args: string[];
     executable?: string;
+    launchers?: string[];
     dataDriven?: boolean;
     executableResolutionChanged?: boolean;
   },
@@ -709,6 +713,7 @@ function shellInvocationNeedsApproval(
       invocation.args,
       invocation.executableResolutionChanged,
       invocation.dataDriven,
+      (invocation.launchers?.length ?? 0) > 0,
     )
   ) {
     return false;

@@ -924,13 +924,21 @@ describe("t265b hook lifecycle", () => {
       const proj = scratchProject();
       try {
         seedState(proj);
+        const shadowEntry = join(proj, "other", ".claude", "tools", "aidlc.ts");
+        mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+        writeFileSync(shadowEntry, "// This is not the installed entry point.\n");
         if (published) {
           seedActiveDirective(proj, "code-generation");
           seedUnit(proj, null, { plan: true, answer: null });
         }
         const entry = ".claude/tools/aidlc.ts";
+        const wrapped = `env -C other bun ${entry} engine orchestrate next`;
+        expect(runHook(proj, BASH(wrapped)).code, wrapped).toBe(2);
         for (const command of [
           `bun ${entry} engine orchestrate next 2>&1`,
+          `bun ${entry} engine orchestrate next 1>&2`,
+          `bun ${entry} engine orchestrate next 2>&-`,
+          `bun ${entry} engine orchestrate next 2>& 1`,
           `bun run ${entry} engine orchestrate next "Explain the plan"`,
           `bun ${entry} engine orchestrate continue stage-rules-token`,
           `bun "${join(proj, entry)}" engine orchestrate next`,
@@ -953,11 +961,20 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} system lifecycle uninstall --yes`,
           `bun ${entry} engine orchestrate next > src/inline.ts`,
           `bun ${entry} engine orchestrate next; printf code > src/inline.ts`,
+          `bun ${entry} engine orchestrate next 2>&1; printf code > src/inline.ts`,
+          `bun ${entry} engine orchestrate next & printf code > src/inline.ts`,
           `bun --preload evil.ts ${entry} engine orchestrate next`,
           `bun ${entry} engine orchestrate next --require=evil.ts`,
           `./bun ${entry} engine orchestrate next`,
           `PATH=. bun ${entry} engine orchestrate next`,
           `env PATH=. bun ${entry} engine orchestrate next`,
+          `env -C other bun ${entry} engine orchestrate next`,
+          `env -Cother bun ${entry} engine orchestrate next`,
+          `env --chdir=other bun ${entry} engine orchestrate next`,
+          `sudo -D other bun ${entry} engine orchestrate next`,
+          `cd other && bun ${entry} engine orchestrate next`,
+          `env bun ${entry} engine orchestrate next`,
+          `command bun ${entry} engine orchestrate next`,
           `printf next | xargs bun ${entry} engine orchestrate`,
           "bun fake.ts .claude/tools/aidlc.ts engine orchestrate next",
           "bun other/aidlc.ts engine orchestrate next",
