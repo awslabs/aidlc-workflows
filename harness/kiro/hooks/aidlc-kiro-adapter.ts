@@ -2442,7 +2442,7 @@ function buildForward(): Forward {
       // stages - so route through it rather than re-reading stages here.
       if (CREW_DISPATCH_TOOLS.has(toolName)) {
         const crew = kiroDispatch({ tool_name: toolName, tool_input: toolArgs });
-        if (crew !== null && crew.agents.includes("aidlc-developer-agent")) {
+        if (crew?.agents.includes("aidlc-developer-agent")) {
           return {
             hook: "aidlc-plan-approval-guard.ts",
             input: {

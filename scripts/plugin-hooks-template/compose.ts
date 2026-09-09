@@ -1102,79 +1102,8 @@ function yamlIndent(line: string): number {
   return line.match(/^\s*/)?.[0].length ?? 0;
 }
 
-function inlineYamlListHasValue(raw: string): boolean {
-  const value = raw.trim();
-  if (!value.startsWith("[") || !value.endsWith("]")) return false;
-  return value.slice(1, -1).split(",").some((item) => {
-    const parsed = yamlScalarValue(item);
-    return parsed !== null && parsed !== "null" && parsed !== "~";
-  });
-}
 
-function blockYamlListHasValue(
-  lines: string[],
-  start: number,
-  parentIndent: number,
-  end = lines.length,
-): boolean {
-  for (let i = start; i < end; i++) {
-    const line = lines[i];
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const indent = yamlIndent(line);
-    if (indent <= parentIndent) break;
-    const item = line.trimStart().match(/^-\s+(.+)$/)?.[1];
-    if (item && yamlScalarValue(item)) return true;
-  }
-  return false;
-}
 
-function validIdePermissionRule(
-  lines: string[],
-  start: number,
-  end: number,
-  itemIndent: number,
-): boolean {
-  let capability: string | null = null;
-  let effect: string | null = null;
-  let match = false;
-  let mappingIndent: number | null = null;
-  for (let i = start; i < end; i++) {
-    const line = lines[i];
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    let field = line.trimStart();
-    let indent = yamlIndent(line);
-    if (i === start) {
-      const item = field.match(/^-\s*(.*)$/);
-      if (!item) return false;
-      field = item[1];
-      if (!field) continue;
-      indent = itemIndent + 2;
-    } else if (indent <= itemIndent) {
-      return false;
-    }
-    if (mappingIndent === null) mappingIndent = indent;
-    if (indent < mappingIndent) return false;
-    if (indent > mappingIndent) continue;
-
-    const capabilityLine = field.match(/^capability:\s*(.*)$/);
-    if (capabilityLine) {
-      capability = yamlScalarValue(capabilityLine[1]);
-      continue;
-    }
-    const effectLine = field.match(/^effect:\s*(.*)$/);
-    if (effectLine) {
-      effect = yamlScalarValue(effectLine[1]);
-      continue;
-    }
-    const matchLine = field.match(/^match:\s*(.*)$/);
-    if (matchLine) {
-      match = matchLine[1].trim()
-        ? inlineYamlListHasValue(matchLine[1])
-        : blockYamlListHasValue(lines, i + 1, indent, end);
-    }
-  }
-  return Boolean(capability && (effect === "allow" || effect === "deny") && match);
-}
 
 // A Markdown agent needs no `tools` grant and no `permissions` block to be
 // dispatchable, so the presence of the file is the whole check. Both halves are

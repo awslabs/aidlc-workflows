@@ -15,7 +15,6 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
