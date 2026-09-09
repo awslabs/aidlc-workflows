@@ -1588,6 +1588,22 @@ async function defaultEffortResponse(projectDir: string, request: Request, launc
   return json({ ok: true, default_effort: written });
 }
 
+/** The personal default model - the harness's `model` setting - written by the runner profile like the effort. */
+async function defaultModelResponse(projectDir: string, request: Request, launch: AcpLaunch | null, publishState: () => void): Promise<Response> {
+  if (!launch?.setDefaultModel) throw new HttpError(409, "this harness keeps its default model in a file the review UI does not write; change it there");
+  const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as { model?: unknown } | null;
+  const model = body?.model ?? null;
+  if (model !== null && (typeof model !== "string" || !MODEL_ID.test(model.trim()))) throw new HttpError(400, "model must be null or a model alias or id");
+  let written: ReturnType<NonNullable<AcpLaunch["setDefaultModel"]>>;
+  try {
+    written = launch.setDefaultModel(projectDir, model === null ? null : model.trim());
+  } catch (error) {
+    throw new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
+  publishState();
+  return json({ ok: true, default_model: written });
+}
+
 interface AnswersLanded {
   stage: string;
   questionsFile: string;
@@ -1846,6 +1862,9 @@ async function serve(projectDir: string): Promise<void> {
             payload.runner_effort = runnerLaunch?.effort !== undefined;
             payload.runner_default_effort = runnerLaunch?.defaultEffort?.(projectDir) ?? null;
             payload.runner_default_effort_editable = Boolean(runnerLaunch?.setDefaultEffort);
+            payload.runner_default_model = runnerLaunch?.defaultModel?.(projectDir) ?? null;
+            payload.runner_default_model_editable = Boolean(runnerLaunch?.setDefaultModel);
+            payload.runner_models = runs.knownModels();
             // Agent effort is project policy, not a per-intent choice: show what
             // this project runs at and where to change it.
             try {
@@ -1877,6 +1896,7 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
           if (request.method === "POST" && url.pathname === "/api/models-policy") return await modelsPolicyResponse(projectDir, request, publishState);
           if (request.method === "POST" && url.pathname === "/api/default-effort") return await defaultEffortResponse(projectDir, request, runnerLaunch, publishState);
+          if (request.method === "POST" && url.pathname === "/api/default-model") return await defaultModelResponse(projectDir, request, runnerLaunch, publishState);
           if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir, selectionFromUrl(url)).intent, runnerRequirement);
           const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
           if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);

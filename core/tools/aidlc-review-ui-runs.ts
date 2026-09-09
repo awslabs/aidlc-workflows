@@ -44,6 +44,7 @@ import {
   type AcpPermissionRequest,
   type AcpSessionUpdate,
   type AcpStopReason,
+  type AcpModelChoice,
 } from "./aidlc-review-ui-acp.ts";
 import { ENV_REVIEW_RUN, recordReviewUiDir } from "./aidlc-review-ui-shared.ts";
 
@@ -77,6 +78,8 @@ export interface RunRecord {
   bound: boolean;
   /** The session effort pinned at Start, when the backend takes one. */
   session_effort: SessionEffort | null;
+  /** The models the agent offered at session/new, when it said; the Settings model picker's choices. */
+  models?: AcpModelChoice[] | null;
 }
 
 // How long after `session/new` the binding may take to appear: the hook runs
@@ -163,6 +166,14 @@ export class RunManager {
   }
 
   /** Every run whose agent process is alive. */
+  /** The most recent model list any run's agent offered, live or finished; null until a session has said. */
+  knownModels(): AcpModelChoice[] | null {
+    const records = [...[...this.runs.values()].map((run) => run.record), ...[...this.finished.values()].map((entry) => entry.record)]
+      .filter((record) => Array.isArray(record.models) && record.models.length > 0)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    return records[0]?.models ?? null;
+  }
+
   liveRuns(): RunRecord[] {
     const live: RunRecord[] = [];
     for (const run of this.runs.values()) {
@@ -269,6 +280,7 @@ export class RunManager {
       await live.client.start({ [ENV_REVIEW_RUN]: `${space}/${intent}` });
       const session = await live.client.newSession();
       record.session_id = session.sessionId;
+      record.models = session.models;
       record.pid = live.client.pid;
       this.persist(live);
       await this.applyEffort(live);

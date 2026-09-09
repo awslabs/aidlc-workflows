@@ -47,6 +47,25 @@ export type AcpBackend = "claude" | "kiro" | "codex" | "cursor" | "opencode" | "
 export const SESSION_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 export type SessionEffort = (typeof SESSION_EFFORT_LEVELS)[number];
 
+/** One model the agent offers (ACP `session/new` `models.availableModels`). */
+export interface AcpModelChoice {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
+function parseModelChoices(value: unknown): AcpModelChoice[] | null {
+  const list = (value as { availableModels?: unknown } | null)?.availableModels;
+  if (!Array.isArray(list)) return null;
+  const choices: AcpModelChoice[] = [];
+  for (const entry of list) {
+    const record = entry as { modelId?: unknown; name?: unknown; description?: unknown };
+    if (typeof record?.modelId !== "string" || !record.modelId) continue;
+    choices.push({ id: record.modelId, name: typeof record.name === "string" && record.name ? record.name : record.modelId, description: typeof record.description === "string" ? record.description : null });
+  }
+  return choices;
+}
+
 /** How a backend takes a session effort: an ACP config option after `session/new`, a launch flag, or not at all. */
 export type EffortControl = { kind: "config"; configId: string } | { kind: "flag"; flag: string };
 
@@ -66,23 +85,39 @@ function readJsonFile(path: string): Record<string, unknown> | null {
   }
 }
 
+/** What a session uses when Start pins nothing: a setting's value and the file that says so. */
+export interface DefaultSessionSetting {
+  value: string;
+  source: string;
+}
+
 /**
- * Claude's session effort when nothing pins it: `effortLevel` in the settings
- * the session loads, local over project over user - the same precedence the
- * adapter's `--setting-sources user,project,local` gives the CLI. Null when no
- * settings file names one (the model's own default applies).
+ * A Claude setting as the session will see it: local over project over user -
+ * the same precedence the adapter's `--setting-sources user,project,local`
+ * gives the CLI. Null when no settings file names it.
  */
-export function claudeDefaultSessionEffort(projectDir: string, home: string = homedir()): DefaultSessionEffort | null {
+function claudeSetting(projectDir: string, key: string, home: string): DefaultSessionSetting | null {
   const candidates: Array<[string, string]> = [
     [join(projectDir, ".claude", "settings.local.json"), ".claude/settings.local.json"],
     [join(projectDir, ".claude", "settings.json"), ".claude/settings.json"],
     [join(home, ".claude", "settings.json"), "~/.claude/settings.json"],
   ];
   for (const [path, source] of candidates) {
-    const level = readJsonFile(path)?.effortLevel;
-    if (typeof level === "string" && level) return { level, source };
+    const value = readJsonFile(path)?.[key];
+    if (typeof value === "string" && value) return { value, source };
   }
   return null;
+}
+
+/** Claude's session effort when nothing pins it (`effortLevel`); null = the model's own default. */
+export function claudeDefaultSessionEffort(projectDir: string, home: string = homedir()): DefaultSessionEffort | null {
+  const setting = claudeSetting(projectDir, "effortLevel", home);
+  return setting ? { level: setting.value, source: setting.source } : null;
+}
+
+/** Claude's session model when Start pins nothing (`model`: an alias or a model id); null = the harness's default. */
+export function claudeDefaultSessionModel(projectDir: string, home: string = homedir()): DefaultSessionSetting | null {
+  return claudeSetting(projectDir, "model", home);
 }
 
 /**
@@ -99,6 +134,17 @@ export function claudeDefaultSessionEffort(projectDir: string, home: string = ho
  * exists but is not a JSON object.
  */
 export function writeClaudeDefaultSessionEffort(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null {
+  writeClaudeLocalSetting(projectDir, "effortLevel", level);
+  return claudeDefaultSessionEffort(projectDir);
+}
+
+/** Set (or, with null, remove) Claude's personal default model - the `model` key, same file and caveats as the effort. */
+export function writeClaudeDefaultSessionModel(projectDir: string, model: string | null): DefaultSessionSetting | null {
+  writeClaudeLocalSetting(projectDir, "model", model);
+  return claudeDefaultSessionModel(projectDir);
+}
+
+function writeClaudeLocalSetting(projectDir: string, key: string, value: string | null): void {
   const path = join(projectDir, ".claude", "settings.local.json");
   // Re-base guard, not a CAS (a pathname cannot be swapped atomically against
   // a check): if the file changed while the merge was computed, start over.
@@ -110,8 +156,8 @@ export function writeClaudeDefaultSessionEffort(projectDir: string, level: Sessi
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(".claude/settings.local.json is not a JSON object");
       settings = parsed as Record<string, unknown>;
     }
-    if (level === null) delete settings.effortLevel;
-    else settings.effortLevel = level;
+    if (value === null) delete settings[key];
+    else settings[key] = value;
     const tmp = `${path}.${process.pid}.${attempt}.tmp`;
     const fd = openSync(tmp, "wx");
     try {
@@ -130,7 +176,7 @@ export function writeClaudeDefaultSessionEffort(projectDir: string, level: Sessi
       try { unlinkSync(tmp); } catch { /* the rename failed; nothing of ours to keep */ }
       throw error;
     }
-    return claudeDefaultSessionEffort(projectDir);
+    return;
   }
   throw new Error(".claude/settings.local.json kept changing underneath; try again");
 }
@@ -164,6 +210,10 @@ export interface AcpLaunch {
   defaultEffort?(projectDir: string): DefaultSessionEffort | null;
   /** Change that default in the harness's own settings, when the file's shape is ours to write. */
   setDefaultEffort?(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null;
+  /** The session's default model from the harness's settings; null = the harness decides. */
+  defaultModel?(projectDir: string): DefaultSessionSetting | null;
+  /** Change that default model in the harness's own settings, when the file's shape is ours to write. */
+  setDefaultModel?(projectDir: string, model: string | null): DefaultSessionSetting | null;
 }
 
 export interface AcpBackendProfile {
@@ -187,6 +237,8 @@ export interface AcpBackendProfile {
   defaultEffort?(projectDir: string): DefaultSessionEffort | null;
   /** Writes that default into the harness's settings; absent when the browser does not own that file's shape. */
   setDefaultEffort?(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null;
+  defaultModel?(projectDir: string): DefaultSessionSetting | null;
+  setDefaultModel?(projectDir: string, model: string | null): DefaultSessionSetting | null;
 }
 
 /** `<toolsDir>/vendor/acp`: where `vendor-agent` installs the pinned adapter. */
@@ -224,6 +276,8 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     effort: { kind: "config", configId: "effort" },
     defaultEffort: (projectDir) => claudeDefaultSessionEffort(projectDir),
     setDefaultEffort: (projectDir, level) => writeClaudeDefaultSessionEffort(projectDir, level),
+    defaultModel: (projectDir) => claudeDefaultSessionModel(projectDir),
+    setDefaultModel: (projectDir, model) => writeClaudeDefaultSessionModel(projectDir, model),
     // Zed's adapter over the Agent SDK. The SDK needs the local `claude`
     // executable and does not search PATH for it, so it travels in the env.
     resolve(env, which, vendored) {
@@ -320,12 +374,12 @@ export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv 
   if (override) {
     const extra: Record<string, string> = {};
     if (profile.backend === "claude" && env.CLAUDE_CODE_EXECUTABLE) extra.CLAUDE_CODE_EXECUTABLE = env.CLAUDE_CODE_EXECUTABLE;
-    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort, setDefaultEffort: profile.setDefaultEffort };
+    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort, setDefaultEffort: profile.setDefaultEffort, defaultModel: profile.defaultModel, setDefaultModel: profile.setDefaultModel };
   }
   // A vendored adapter (vendor-agent) beats PATH and bunx: it is the pinned
   // copy an offline host carries.
   const resolved = profile.resolve(env, which, vendoredAcpBin(toolsDir, profile));
-  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort, setDefaultEffort: profile.setDefaultEffort } : null;
+  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort, setDefaultEffort: profile.setDefaultEffort, defaultModel: profile.defaultModel, setDefaultModel: profile.setDefaultModel } : null;
 }
 
 /** The launch with a session effort applied where the backend takes it as a flag. */
@@ -486,10 +540,10 @@ export class AcpClient {
     return (result ?? {}) as AcpInitializeResult;
   }
 
-  async newSession(): Promise<{ sessionId: string }> {
-    const result = (await this.request("session/new", { cwd: this.cwd, mcpServers: [] }, ACP_HANDSHAKE_TIMEOUT_MS)) as { sessionId?: unknown };
+  async newSession(): Promise<{ sessionId: string; models: AcpModelChoice[] | null }> {
+    const result = (await this.request("session/new", { cwd: this.cwd, mcpServers: [] }, ACP_HANDSHAKE_TIMEOUT_MS)) as { sessionId?: unknown; models?: unknown };
     if (typeof result?.sessionId !== "string" || !result.sessionId) throw new AcpError("session/new returned no sessionId");
-    return { sessionId: result.sessionId };
+    return { sessionId: result.sessionId, models: parseModelChoices(result.models) };
   }
 
   /**

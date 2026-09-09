@@ -15,6 +15,7 @@ import {
   AcpClient,
   AcpError,
   claudeDefaultSessionEffort,
+  claudeDefaultSessionModel,
   kiroDefaultSessionEffort,
   resolveAcpLaunch,
   type AcpElicitationRequest,
@@ -244,6 +245,14 @@ describe("t364 review UI ACP client", () => {
     // A file without the key does not shadow the ones below it.
     writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({ model: "opus" }));
     expect(claudeDefaultSessionEffort(project, home)?.level).toBe("high");
+
+    // The model setting follows the same precedence and lives in the same files
+    // (the local file above holds `model: opus` and no effort).
+    expect(claudeDefaultSessionModel(project, home)).toEqual({ value: "opus", source: ".claude/settings.local.json" });
+    writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({}));
+    expect(claudeDefaultSessionModel(project, home)).toBeNull();
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ effortLevel: "xhigh", model: "fable" }));
+    expect(claudeDefaultSessionModel(project, home)).toEqual({ value: "fable", source: "~/.claude/settings.json" });
 
     // Kiro: the single model default's output_config.effort; ambiguous or absent = null.
     const kiro = scratch();

@@ -356,6 +356,19 @@ describe("t365 review UI agent runs", () => {
     expect(workflow.runner_default_effort).toEqual({ level: "high", source: ".claude/settings.local.json" });
     expect((await api("POST", "/api/default-effort", { level: null })).status).toBe(200);
     expect(JSON.parse(readFileSync(settings, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
+
+    // The model, the same way; the picker's choices are what the agent listed at session/new.
+    const models = (await api("GET", "/api/workflow")).body as { runner_models: unknown; runner_default_model: unknown; runner_default_model_editable: boolean };
+    expect(models.runner_default_model_editable).toBe(true);
+    expect(models.runner_models).toEqual([{ id: "fake-fast", name: "Fake Fast", description: "the quick one" }, { id: "fake-deep", name: "Fake Deep", description: null }]);
+    expect((await api("POST", "/api/default-model", { model: "not a model!" })).status).toBe(400);
+    const pinnedModel = await api("POST", "/api/default-model", { model: "fake-deep" });
+    expect(pinnedModel.status, JSON.stringify(pinnedModel.body)).toBe(200);
+    expect(pinnedModel.body.default_model).toEqual({ value: "fake-deep", source: ".claude/settings.local.json" });
+    expect(JSON.parse(readFileSync(settings, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] }, model: "fake-deep" });
+    expect(((await api("GET", "/api/workflow")).body as typeof models).runner_default_model).toEqual({ value: "fake-deep", source: ".claude/settings.local.json" });
+    expect((await api("POST", "/api/default-model", { model: null })).status).toBe(200);
+    expect(JSON.parse(readFileSync(settings, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
     rmSync(settings);
   }, 30_000);
 

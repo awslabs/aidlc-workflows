@@ -263,6 +263,11 @@ export interface WorkflowPayload {
   runner_default_effort?: { level: string; source: string } | null;
   /** True when the browser can change that default (POST /api/default-effort): the profile owns the file's shape. */
   runner_default_effort_editable?: boolean;
+  /** The session's default model from the harness's settings (an alias or id) and its source; null = the harness decides. */
+  runner_default_model?: { value: string; source: string } | null;
+  runner_default_model_editable?: boolean;
+  /** The models the runner's agent offered at its last session/new, for the picker; null until a run has said. */
+  runner_models?: Array<{ id: string; name: string; description: string | null }> | null;
   /** The project's effective per-agent model policy, for the composer to show. */
   models_policy?: ModelsPolicyView | null;
   /** How to change that policy from a terminal (`<invoke> config models`). */

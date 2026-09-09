@@ -120,6 +120,7 @@ function modelsPage() {
 
     <div class="settings-block">
       <div class="settings-h">Default</div>
+      ${modelRow(workflow)}
       <div class="settings-row"><span class="l">Default effort<small>${fallback
         ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(fallback.source)}</code>) - what “inherit” means${fallback.source.startsWith(".claude") ? ", the same value <code>/effort</code> sets" : ""}.`
         : "No settings file names an effort; the model's own default applies - what “inherit” means."}</small></span>
@@ -176,6 +177,28 @@ function personalNote(policy) {
   return `<p class="settings-note settings-personal">On this machine you override the team: ${escapeHtml(parts.join(" · "))} (<code>aidlc.settings.local.json</code>, set from the terminal with <code>aidlc config models … --local</code>).</p>`;
 }
 
+// The session's model: the harness's own `model` setting, which every agent
+// without a pin uses. The picker offers what the runner's agent listed at its
+// last session, the current value, and a free-text id for anything else.
+function modelRow(workflow) {
+  const current = workflow.runner_default_model;
+  const editable = workflow.runner_default_model_editable;
+  const known = workflow.runner_models || [];
+  const options = known.map((entry) => ({ value: entry.id, label: entry.name === entry.id ? entry.id : `${entry.name} · ${entry.id}` }));
+  if (current && !options.some((entry) => entry.value === current.value)) options.unshift({ value: current.value, label: current.value });
+  return `<div class="settings-row"><span class="l">Model<small>${current
+    ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(current.source)}</code>) - what every agent without a model pin uses.`
+    : `No settings file names a model; ${escapeHtml(harnessName(workflow))} picks - what every agent without a model pin uses.`}</small></span>
+    ${editable
+      ? `<select data-default-model aria-label="Model">
+          <option value="" ${current ? "" : "selected"}>harness default</option>
+          ${options.map((entry) => `<option value="${escapeHtml(entry.value)}" ${current?.value === entry.value ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")}
+          <option value="__other">Other model id…</option>
+        </select>`
+      : `<span class="c"><b>${current ? escapeHtml(current.value) : "harness default"}</b></span>`}
+  </div>`;
+}
+
 function harnessName(workflow) {
   const names = { claude: "Claude", kiro: "Kiro", "kiro-ide": "Kiro", codex: "Codex", cursor: "Cursor", opencode: "opencode", copilot: "Copilot" };
   return names[workflow.models_policy?.harness] || "harness";
@@ -199,6 +222,26 @@ function bind() {
   root.querySelector("[data-close]")?.addEventListener("click", close);
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
   for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change({ action: "preset", preset: button.dataset.preset }));
+  root.querySelector("[data-default-model]")?.addEventListener("change", async (event) => {
+    let model = event.target.value;
+    if (model === "__other") {
+      model = (window.prompt("Model alias or id (for example opus, sonnet, or a full model id):", "") || "").trim();
+      if (!model) return render();
+    }
+    if (busy) return;
+    busy = true;
+    render();
+    try {
+      await api.post("/api/default-model", { model: model || null });
+      setNotice("Default model updated in your harness settings; runs started from now on use it.", "info");
+      store.emit("wants-refresh");
+    } catch (error) {
+      setNotice(`Could not change the default model: ${error.message}`, "error");
+    } finally {
+      busy = false;
+      render();
+    }
+  });
   root.querySelector("[data-default-effort]")?.addEventListener("change", async (event) => {
     if (busy) return;
     busy = true;

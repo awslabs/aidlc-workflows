@@ -177,7 +177,7 @@ function onMessage(message: Rpc): void {
         mkdirSync(bindings, { recursive: true });
         writeFileSync(join(bindings, `${sessionId}.binding.json`), JSON.stringify({ space: target[1], intent: target[2], boundAt: new Date().toISOString() }));
       }
-      send({ id: message.id, result: { sessionId, modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }] } } });
+      send({ id: message.id, result: { sessionId, modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }] }, models: { currentModelId: "fake-fast", availableModels: [{ modelId: "fake-fast", name: "Fake Fast", description: "the quick one" }, { modelId: "fake-deep", name: "Fake Deep" }] } } });
       return;
     }
     case "session/load": {
