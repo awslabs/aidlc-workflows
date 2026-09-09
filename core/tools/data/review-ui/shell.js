@@ -12,6 +12,7 @@ const ICONS = {
   history: icon("history", { size: 17 }),
   outline: icon("textBulletListTree", { size: 17 }),
   agent: icon("flow", { size: 17 }),
+  settings: icon("settings", { size: 17 }),
 };
 
 let rail;
@@ -396,6 +397,7 @@ function renderHeader() {
       <span class="connection ${store.connected ? "connected" : "disconnected"}" title="${escapeHtml(connectedTitle)}" aria-label="${escapeHtml(connectedTitle)}"><i></i></span>
       ${panelButtons(view)}
       ${headerActions(view, stage)}
+      <button type="button" class="header-icon header-settings" data-header-action="settings" title="Settings" aria-label="Settings">${ICONS.settings}</button>
     </div>`;
 }
 
@@ -563,7 +565,8 @@ async function selectIntent(slug) {
 
 function handleHeaderAction(action) {
   const stage = stageForView();
-  if (action === "approve" || action === "request-changes") store.emit("decide", action);
+  if (action === "settings") store.emit("open-settings", "models");
+  else if (action === "approve" || action === "request-changes") store.emit("decide", action);
   else if (action === "save-answers") store.emit("save-answers");
   else if (action === "open-artifact") artifactView(stage, firstArtifact(stage, false));
   else if (action === "open-questions") questionsView(stage);

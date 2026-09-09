@@ -11,6 +11,7 @@ import { init as initThreads } from "./threads.js";
 import { init as initHistory } from "./history.js";
 import { init as initQuestions } from "./questions.js";
 import { init as initAgent } from "./agent.js";
+import { init as initSettings } from "./settings.js";
 
 const elements = {
   notice: document.getElementById("notice"),
@@ -103,6 +104,7 @@ async function boot() {
   initHistory();
   initQuestions();
   initAgent();
+  initSettings();
   store.set({ sidebar: true, panel: store.panel });
   await refresh();
   connectSocket(() => {

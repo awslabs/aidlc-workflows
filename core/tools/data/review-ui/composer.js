@@ -15,6 +15,7 @@ import { api } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./diff.js";
 import { setNotice, store } from "./store.js";
+import { policyTable } from "./policy.js";
 
 // The shipped scopes, as `core/scopes/*.md` declares them. The catalogue will
 // come from the daemon once this leaves prototype.
@@ -179,11 +180,13 @@ function openMenuFor(anchor, kind, rerender) {
 }
 
 function closeOnOutside(event) {
-  if (openMenu && !openMenu.contains(event.target)) closeMenu();
+  const inside = (openMenu && openMenu.contains(event.target)) || (openCascade && openCascade.contains(event.target));
+  if (openMenu && !inside) closeMenu();
   else if (openMenu) document.addEventListener("mousedown", closeOnOutside, { once: true });
 }
 
 export function closeMenu() {
+  closeCascade();
   openMenu?.remove();
   openMenu = null;
 }
@@ -204,28 +207,69 @@ function scopeMenu() {
     ${byDepth.map((depth) => `<div class="composer-menu-group">${depth}</div>${SCOPES.filter((entry) => entry.depth === depth).map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.scope === entry.name}" data-pick-scope="${escapeHtml(entry.name)}"><span class="check">${draft.scope === entry.name ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(entry.name)}</b><small>${escapeHtml(entry.description)}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ""}</small></button>`).join("")}`).join("")}`;
 }
 
+// Effort, as a two-level menu. The first level is the one question a run
+// asks - how hard should this session think? - with the default named. The
+// "Agents" row slides out the project's policy (read-only here; Settings edits
+// it) so the human can see what each agent will run at without leaving the box.
+const LEVELS = [
+  ["low", "Low", "Quick and cheap; fine for small, well-understood work"],
+  ["medium", "Medium", "The everyday setting"],
+  ["high", "High", "Deeper reasoning on every turn"],
+  ["xhigh", "Extra high", "For the hardest problems; slowest"],
+];
+
 function effortMenu() {
   const sessionDial = runnerAvailable() && store.workflow?.runner_effort;
   const fallback = store.workflow?.runner_default_effort;
-  // "default (medium)" names what an unpinned session runs at and, in the
-  // tooltip, which settings file says so.
-  const defaultLabel = fallback ? `default (${fallback.level})` : "default (model default)";
   const policy = store.workflow?.models_policy;
-  const command = store.workflow?.models_command || "aidlc config models";
-  const level = (value) => value === "inherit" ? `<span class="composer-inherit" title="Follows the session's effort">inherits the session</span>` : `<b>${escapeHtml(value)}</b>`;
-  const policyRows = policy
-    ? `${policy.groups.map((group) => `<tr><th><b>${escapeHtml(group.label)}</b><small>${escapeHtml(group.agents.join(", "))}</small></th><td>${group.mixed ? `<b>${escapeHtml(group.effort)}</b>` : level(group.effort)}</td></tr>`).join("")}
-      ${policy.exceptions.map((entry) => `<tr class="composer-exception"><th><b>${escapeHtml(entry.agent)}</b><small>exception · ${escapeHtml(entry.group)}</small></th><td>${level(entry.effort || "inherit")}${entry.model ? `<small>${escapeHtml(entry.model)}</small>` : ""}</td></tr>`).join("")}`
-    : `<tr><td colspan="2"><small>No policy to show for this install.</small></td></tr>`;
+  const current = draft.sessionEffort || "default";
+  const row = (value, label, small) => `<button type="button" role="menuitemradio" aria-checked="${current === value}" data-pick-effort="${value}"><span class="check">${current === value ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(label)}</b><small>${escapeHtml(small)}</small></button>`;
+  const summary = policy
+    ? policy.preset ? `preset ${policy.preset}` : policy.shipped_defaults ? "shipped defaults" : "project policy"
+    : "not available";
   return `<div class="composer-menu-title">Effort</div>
     ${sessionDial
-      ? `<div class="composer-session-effort"><span>The session's effort, as <code>/effort</code> sets it.</span>
-      <select data-session-effort aria-label="Effort" title="${fallback ? escapeHtml(`Default from ${fallback.source}`) : "No settings file names an effort; the model's own default applies"}">${["default", ...SESSION_EFFORTS].map((entry) => `<option value="${entry}" ${(draft.sessionEffort || "default") === entry ? "selected" : ""}>${entry === "default" ? escapeHtml(defaultLabel) : entry}</option>`).join("")}</select></div>`
-      : ""}
-    <div class="composer-menu-group">Agents${policy?.preset ? ` · <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? " · shipped defaults" : ""}</div>
-    <table class="composer-policy"><tbody>${policyRows}</tbody></table>
-    ${policy?.honesty ? `<p class="composer-menu-note">${escapeHtml(policy.honesty)}</p>` : ""}
-    <p class="composer-menu-note">Project policy · set with <code title="${escapeHtml(command)}">aidlc config models</code></p>`;
+      ? `${row("default", fallback ? `Default (${fallback.level})` : "Default", fallback ? `Your setting, from ${fallback.source}` : "The model's own default")}
+    ${LEVELS.map(([value, label, small]) => row(value, label, small)).join("")}`
+      : `<p class="composer-menu-note">This runner takes no per-run effort; the session's own setting applies.</p>`}
+    <div class="composer-menu-sep"></div>
+    <button type="button" role="menuitem" class="composer-cascade" data-cascade="agents" aria-haspopup="menu"><span class="check"></span><b>Agents <span class="composer-menu-value">${escapeHtml(summary)}</span>${icon("chevronRight", { size: 12 })}</b><small>What each agent runs at under this project's policy</small></button>
+    <button type="button" role="menuitem" data-open-settings><span class="check"></span><b>Settings…</b><small>Change the project policy</small></button>`;
+}
+
+// The slide-out: the same table Settings shows, read-only.
+function agentsCascade() {
+  const policy = store.workflow?.models_policy;
+  const header = policy?.preset ? `Agents · preset <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? "Agents · shipped defaults" : "Agents";
+  return `<div class="composer-menu-title">${header}</div>
+    ${policyTable(policy)}
+    <p class="composer-menu-note">Project policy · change it in Settings or with <code>aidlc config models</code></p>`;
+}
+
+let openCascade = null;
+
+function openCascadeFor(anchor, menu, rerender) {
+  closeCascade();
+  const panel = document.createElement("div");
+  panel.className = "composer-menu composer-menu-cascade";
+  panel.setAttribute("role", "menu");
+  panel.innerHTML = agentsCascade();
+  document.body.append(panel);
+  const at = anchor.getBoundingClientRect();
+  const box = menu.getBoundingClientRect();
+  const size = panel.getBoundingClientRect();
+  // To the right of the menu when there is room, else to the left.
+  const right = box.right + 6;
+  const left = right + size.width <= window.innerWidth - 8 ? right : Math.max(8, box.left - size.width - 6);
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(Math.min(at.top - 8, window.innerHeight - size.height - 8))}px`;
+  openCascade = panel;
+  panel.querySelector("[data-open-settings]")?.addEventListener("click", () => { closeMenu(); store.emit("open-settings", "models"); });
+}
+
+function closeCascade() {
+  openCascade?.remove();
+  openCascade = null;
 }
 
 function bindMenu(menu, kind, rerender) {
@@ -245,8 +289,18 @@ function bindMenu(menu, kind, rerender) {
     }
   });
   for (const button of menu.querySelectorAll("[data-pick-scope]")) button.addEventListener("click", () => { draft.scope = button.dataset.pickScope || null; draft.proposal = null; closeMenu(); rerender(); });
-  menu.querySelector("[data-session-effort]")?.addEventListener("change", (event) => {
-    draft.sessionEffort = event.target.value === "default" ? null : event.target.value;
+  for (const button of menu.querySelectorAll("[data-pick-effort]")) button.addEventListener("click", () => {
+    draft.sessionEffort = button.dataset.pickEffort === "default" ? null : button.dataset.pickEffort;
+    closeMenu();
     rerender();
   });
+  const cascade = menu.querySelector("[data-cascade]");
+  if (cascade) {
+    const open = () => openCascadeFor(cascade, menu, rerender);
+    cascade.addEventListener("mouseenter", open);
+    cascade.addEventListener("click", (event) => { event.stopPropagation(); if (openCascade) closeCascade(); else open(); });
+    // Leaving the row towards anything but the slide-out closes it.
+    menu.addEventListener("mouseleave", (event) => { if (openCascade && !openCascade.contains(event.relatedTarget)) closeCascade(); });
+  }
+  menu.querySelector("[data-open-settings]")?.addEventListener("click", () => { closeMenu(); store.emit("open-settings", "models"); });
 }

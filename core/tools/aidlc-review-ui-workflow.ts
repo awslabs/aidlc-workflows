@@ -35,6 +35,7 @@ import {
 } from "./aidlc-lib.ts";
 import {
   HARNESS_HONESTY,
+  MODEL_EFFORTS,
   MODEL_GROUPS,
   isModelHarness,
   modelPolicyIsEmpty,
@@ -42,7 +43,7 @@ import {
   resolveModelPolicy,
   type ModelGroup,
 } from "./aidlc-model-policy.ts";
-import { modelPolicyForHarness, resolveAidlcSettings } from "./aidlc-settings.ts";
+import { invalidateSettingsCache, modelPolicyForHarness, readSettingsTarget, resolveAidlcSettings, type SettingsTarget } from "./aidlc-settings.ts";
 import { resolveTierCap } from "./aidlc-tiers.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
@@ -171,6 +172,30 @@ export interface ModelsPolicyView {
   exceptions: Array<{ agent: string; group: ModelGroup; model: string | null; effort: string | null }>;
   /** What this harness cannot express, when the policy asks for something it drops. */
   honesty: string | null;
+  /**
+   * What each settings layer records (`aidlc config models --global|--project|--local`),
+   * so an editor shows where a value is written and what each layer holds.
+   * Null when that layer records no model policy.
+   */
+  recorded: Record<SettingsTarget, { preset: string | null; groups: Partial<Record<ModelGroup, string>>; agents: Record<string, { effort: string | null; model: string | null }> } | null>;
+  /** The effort vocabulary the policy accepts, for pickers. */
+  efforts: readonly string[];
+}
+
+function recordedLayer(projectDir: string, target: SettingsTarget): ModelsPolicyView["recorded"][SettingsTarget] {
+  const models = readSettingsTarget(projectDir, target)?.models as {
+    preset?: string;
+    groups?: Partial<Record<ModelGroup, { effort?: string }>>;
+    agents?: Record<string, { effort?: string; model?: unknown }>;
+  } | undefined;
+  if (!models) return null;
+  const groups: Partial<Record<ModelGroup, string>> = {};
+  for (const [group, value] of Object.entries(models.groups ?? {})) if (value?.effort) groups[group as ModelGroup] = value.effort;
+  const agents: Record<string, { effort: string | null; model: string | null }> = {};
+  for (const [agent, value] of Object.entries(models.agents ?? {})) {
+    agents[agent] = { effort: value?.effort ?? null, model: typeof value?.model === "string" ? value.model : null };
+  }
+  return { preset: models.preset ?? null, groups, agents };
 }
 
 /** Null when the project has no installed harness the policy vocabulary knows. */
@@ -178,6 +203,8 @@ export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
   const installed = discoverProjectHarnesses(projectDir)[0];
   if (!installed || !isModelHarness(installed.distribution)) return null;
   const harness = installed.distribution;
+  // The daemon is long-lived and the CLI writes these files out of process.
+  invalidateSettingsCache();
   const resolved = resolveAidlcSettings(projectDir);
   const policy = modelPolicyForHarness(resolved.models, harness);
   const tiers = readAgentTiers(installed.root);
@@ -213,6 +240,12 @@ export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
     groups,
     exceptions,
     honesty: effective.some((item) => item.unexpressed.length > 0) ? HARNESS_HONESTY[harness].message : null,
+    recorded: {
+      global: recordedLayer(projectDir, "global"),
+      project: recordedLayer(projectDir, "project"),
+      local: recordedLayer(projectDir, "local"),
+    },
+    efforts: MODEL_EFFORTS,
   };
 }
 

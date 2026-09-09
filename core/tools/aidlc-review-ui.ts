@@ -1467,6 +1467,94 @@ async function createSpaceResponse(projectDir: string, request: Request, publish
   return json({ space: name }, 201);
 }
 
+// ---- Settings: model policy and the personal default effort ----------------
+//
+// Agent effort is project policy. The browser edits it through the one writer
+// the terminal uses - `aidlc config models` - so #756's transaction, refresh
+// guard, and doctor checks apply to both. A change lands in committed files
+// (aidlc.settings.json, the agent surfaces) and applies to runs started after
+// it; the composer's next payload shows the effective result.
+
+const MODEL_POLICY_GROUPS = ["deciding", "reviewing", "writing-up"] as const;
+const MODEL_POLICY_PRESETS = ["thorough", "balanced", "minimal"] as const;
+const MODEL_POLICY_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const MODEL_POLICY_SCOPES = ["project", "local"] as const;
+const AGENT_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+type ModelPolicyChange =
+  | { action: "preset"; preset: (typeof MODEL_POLICY_PRESETS)[number] }
+  | { action: "group"; group: (typeof MODEL_POLICY_GROUPS)[number]; effort: (typeof MODEL_POLICY_EFFORTS)[number] }
+  | { action: "agent"; agent: string; effort: (typeof MODEL_POLICY_EFFORTS)[number]; model?: string }
+  | { action: "reset" };
+
+function parseModelPolicyChange(body: unknown): { scope: (typeof MODEL_POLICY_SCOPES)[number]; change: ModelPolicyChange } {
+  if (!body || typeof body !== "object") throw new HttpError(400, "invalid body");
+  const record = body as Record<string, unknown>;
+  const scope = record.scope;
+  if (typeof scope !== "string" || !(MODEL_POLICY_SCOPES as readonly string[]).includes(scope)) {
+    throw new HttpError(400, `scope must be one of ${MODEL_POLICY_SCOPES.join(", ")}`);
+  }
+  const oneOf = (value: unknown, allowed: readonly string[], what: string): string => {
+    if (typeof value !== "string" || !allowed.includes(value)) throw new HttpError(400, `${what} must be one of ${allowed.join(", ")}`);
+    return value;
+  };
+  switch (record.action) {
+    case "preset":
+      return { scope: scope as never, change: { action: "preset", preset: oneOf(record.preset, MODEL_POLICY_PRESETS, "preset") as never } };
+    case "group":
+      return { scope: scope as never, change: { action: "group", group: oneOf(record.group, MODEL_POLICY_GROUPS, "group") as never, effort: oneOf(record.effort, MODEL_POLICY_EFFORTS, "effort") as never } };
+    case "agent": {
+      if (typeof record.agent !== "string" || !AGENT_NAME.test(record.agent)) throw new HttpError(400, "agent must be a lowercase agent name");
+      const change: ModelPolicyChange = { action: "agent", agent: record.agent, effort: oneOf(record.effort, MODEL_POLICY_EFFORTS, "effort") as never };
+      if (record.model !== undefined && record.model !== null && record.model !== "") {
+        if (typeof record.model !== "string" || !MODEL_ID.test(record.model)) throw new HttpError(400, "model must be a model id");
+        change.model = record.model;
+      }
+      return { scope: scope as never, change };
+    }
+    case "reset":
+      return { scope: scope as never, change: { action: "reset" } };
+    default:
+      throw new HttpError(400, "action must be one of preset, group, agent, reset");
+  }
+}
+
+function modelPolicyArgv(change: ModelPolicyChange): string[] {
+  switch (change.action) {
+    case "preset": return ["--preset", change.preset];
+    case "group": return [`--${change.group}-effort`, change.effort];
+    case "agent": return ["--agent", change.agent, "--effort", change.effort, ...(change.model ? ["--model", change.model] : [])];
+    case "reset": return ["--reset"];
+  }
+}
+
+/** argv for the public `config models` command: the binary when compiled, the dispatcher file under bun. */
+function configModelsCommand(projectDir: string, args: readonly string[]): string[] {
+  const scoped = [...args, "--project-dir", projectDir];
+  return compiledInvocationArgv("config", "models", ...scoped)
+    ?? [process.execPath, join(import.meta.dir, "aidlc.ts"), "config", "models", ...scoped];
+}
+
+async function modelsPolicyResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
+  const { scope, change } = parseModelPolicyChange(await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES));
+  const result = Bun.spawnSync({
+    cmd: configModelsCommand(projectDir, [...modelPolicyArgv(change), `--${scope}`, "--yes"]),
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = `${result.stdout.toString()}\n${result.stderr.toString()}`.trim();
+  if (result.exitCode !== 0) {
+    const detail = output.replace(/\s+/g, " ").slice(0, 400);
+    throw new HttpError(result.exitCode === 2 ? 400 : 500, `config models refused: ${detail}`);
+  }
+  publishState();
+  // "Outstanding actions" the CLI prints are advisory follow-ups for the human.
+  const notes = output.split("\n").filter((line) => /^\s{2}\S/.test(line)).map((line) => line.trim()).slice(0, 6);
+  return json({ ok: true, scope, change, notes, models_policy: modelsPolicyView(projectDir) });
+}
+
 interface AnswersLanded {
   stage: string;
   questionsFile: string;
@@ -1753,6 +1841,7 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "POST" && url.pathname === "/api/intents") return await intentRequestResponse(projectDir, request, publishState, runs);
           if (request.method === "DELETE" && url.pathname === "/api/intents") return withdrawIntentRequestResponse(projectDir, url, publishState);
           if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
+          if (request.method === "POST" && url.pathname === "/api/models-policy") return await modelsPolicyResponse(projectDir, request, publishState);
           if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir, selectionFromUrl(url)).intent, runnerRequirement);
           const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
           if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);

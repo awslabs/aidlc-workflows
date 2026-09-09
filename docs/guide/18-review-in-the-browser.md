@@ -303,10 +303,25 @@ there.
 Which effort each *agent* runs at is not a per-intent choice. It is the project's
 model policy — `aidlc config models` (a preset, per-group dials for Deciding /
 Reviewing / Writing up, or per-agent exceptions), committed with the project and
-shared by every intent. The same menu shows that policy read-only: each group
-with its agents and effort (*inherits the session* when nothing pins it), any
-exceptions, and the command to change it. What you see there is what the run
-will use.
+shared by every intent. A pin is never capped by the session's effort, and the
+session's effort never moves a pin: they are two separate controls. The Effort
+menu's **Agents** row slides that policy out read-only — each group with its
+agents and effort (*inherits the session* when nothing pins it), any exceptions —
+so what you see there is what the run will use.
+
+### Settings
+
+The cog at the top right opens Settings. **Models & effort** restates the two
+controls, names what *Default* resolves to and where that lives (your own harness
+setting; change it there), and edits the project's model policy: pick a preset,
+set a group's effort, add a per-agent exception, or reset a layer. **Project**
+writes the committed team policy (`aidlc.settings.json` and the agent files —
+commit them); **Only me** writes `aidlc.settings.local.json` for this machine.
+Both go through the same `aidlc config models` command the terminal uses, so
+the transaction, refresh guard, and doctor checks are identical, and a change
+applies to runs started after it. The **Effective** table underneath is the
+resolved result across every layer, with the files it is recorded in. **Daemon**
+lists this review UI's version, address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the
 SessionStart hook binds the agent's session), so you can Start a second intent

@@ -191,9 +191,17 @@ agents and effective effort (`"inherit"` when the session's applies), per-agent
 exceptions, and the harness honesty note when the policy asks for something the
 harness drops - resolved with `resolveModelPolicy` from `aidlc config models`'
 recorded settings and the shipped agent tiers, exactly as `config models --show`
-does. `models_command` names the command that changes it. The composer shows it
-read-only; there is no per-intent effort: a run's agents use the project policy,
-and only the session effort is chosen at Start.
+does. `models_command` names the command that changes it; `recorded` gives what
+each settings layer (`global`, `project`, `local`) holds, and `efforts` the
+vocabulary. The composer's Agents slide-out shows it read-only (`policy.js`, the
+table Settings shares); there is no per-intent effort: a run's agents use the
+project policy, and only the session effort is chosen at Start. Settings
+(`settings.js`, the header cog or the Effort menu's *Settings…* row) edits the
+policy through `POST /api/models-policy`, which runs the public
+`aidlc config models` command - `--preset`, `--<group>-effort`,
+`--agent --effort [--model]`, or `--reset`, with `--project` or `--local` and
+`--yes` - the binary when compiled, the dispatcher file under bun, always with
+`--project-dir`. The daemon never writes the settings or agent files itself.
 
 **Nudge (daemon-side forwarding loop).** When a turn ends with no pending input,
 the pointer at `none`, and the state file's Current Stage still `[-]` in
@@ -530,6 +538,7 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `POST /api/run/cancel` | Cookie/header | `{intent}` — `session/cancel` the live turn (pending inputs resolve cancelled); an idle run is closed |
 | `DELETE /api/intents?id=` | Cookie/header | Withdraws a pending request; 404 when none |
 | `POST /api/spaces` | Cookie/header | Body `{name}` (lowercase letters, digits, dashes). Runs the same `space-create` move as the terminal; 409 when it exists |
+| `POST /api/models-policy` | Cookie/header | Body `{scope: project\|local, action: preset\|group\|agent\|reset, preset?, group?, effort?, agent?, model?}`. Runs `aidlc config models` with the matching flags and `--yes`; 400 for an unknown scope, preset, group, effort, agent name, or model id (nothing written); returns `{ok, scope, change, notes, models_policy}` with the refreshed view |
 | `POST /api/decision` | Cookie/header | Active intent only. Exact body `{stage,unit,revision,decision:"approve"|"request-changes",notes?}`; validate exact current target and `awaiting-approval`, write `decision-NNN.json`, append browser `HUMAN_TURN`, return `{file}`. Stale or closed gates return 409 |
 | `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after watched record changes |
 

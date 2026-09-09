@@ -1170,6 +1170,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t362-review-ui-decision.test.ts",
     "integration/t363-review-ui-intent-requests.test.ts",
     "integration/t365-review-ui-agent-runs.test.ts",
+    "integration/t366-review-ui-model-policy.test.ts",
     "unit/t354-html-check-guide.test.ts",
   ];
 
