@@ -1,6 +1,54 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.1] - 2026-09-08
+
+Fix two defects found while exercising the 2.8.0 native install on Linux and Windows: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, and `aidlc update` on an already-current install failed its integrity check under a normal shell umask. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`; no project changes are required, and `aidlc config` refreshes projects when convenient.
+
+* Pressing Enter at a bracketed default in the first-run `aidlc config` wizard (harness picker, provider, region, preset, plugins, MCP, record layer, and the final `Apply? [Y/n]` gate) now accepts the default as advertised instead of printing `Nothing written.` and exiting 2. Closing stdin (Ctrl-D) still cancels.
+* `aidlc update` on an install that is already at the latest release now reports `You're on the latest version of aidlc (X.Y.Z).` regardless of the caller's umask; previously it failed with `existing X.Y.Z runtime does not match the verified release` (exit 4) unless the shell umask was `077`. Same-release identity is now decided by path set and content; the installed tree's modes are still enforced against its own recorded integrity baseline, so trees installed by 2.8.0 under any umask keep working. `aidlc update --dry-run` on a current install says so instead of `Would update aidlc from X to X.`
+* `aidlc doctor` no longer tells you to copy the workspace shell from `dist/<harness>/`; the remediation is `aidlc config`.
+* README: removed the pre-2.8.0 note that told users to install from a source checkout until native assets shipped.
+
+## [2.8.0] - 2026-09-08
+
+AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.
+
+* `aidlc version` now reports `2.8.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* Solo Code Generation includes the 2.7.1 Plan Approval deadlock fix, so the Stop hook no longer invalidates approval authority at turn boundaries.
+* Native installers and release archives include the 2.7.2 tag-bound provenance and verification flow; release assets use the `aidlc-runtime-X.Y.Z.tar.gz` naming contract.
+* Breaking changes for CI/scripts: none beyond selecting the new `2.8.0` version and asset name.
+
+## [2.7.2] - 2026-09-07
+
+Bind native releases to the version tag that triggered them and include that version in the runtime archive name. **Upgrade:** use `install.sh --version 2.7.2`, `install.ps1 -Version 2.7.2`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.7.2.tar.gz`.
+
+* Pushing a `vX.Y.Z` tag now starts the release workflow. The workflow rejects a tag that does not match `AIDLC_VERSION`, does not point to its checked-out commit, or does not belong to `main`.
+* Release manifests and provenance now bind to `refs/tags/vX.Y.Z` instead of `refs/heads/main`.
+* The runtime asset is now named `aidlc-runtime-X.Y.Z.tar.gz`, and the README documents how to use it as the release equivalent of a generated `dist/<harness>/` directory.
+* GitHub CLI is optional for native installs. Compatible versions verify the signed release attestation; missing or older versions continue with source identity checks and SHA-256 verification, while online downloads remain HTTPS-only.
+
+## [2.7.1] - 2026-09-01
+
+Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
+
+* Answering **Approve Plan** on a solo workflow now yields a stable approval receipt, so Code Generation starts instead of refusing every developer dispatch as "not currently approved".
+* `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` and driving the workflow as team-owned are no longer needed as workarounds for this deadlock.
+
+## [2.7.0] - 2026-09-01
+
+AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.
+
+* The lifecycle now has 33 stages: Application Design became Domain Design, Contract Design was added, and the Domain, Functional, and Infrastructure Design outputs were consolidated. Consumers of the retired artifact names must use `components.md`, `contract-summary.md`, `entities.md`, `rules.md`, `functional-spec.md`, and `infrastructure-specification.md`; a merge-copy upgrade must also remove the stale `skills/aidlc-application-design/` runner.
+* Classic and Express are first-class scopes, and Classic is the implicit default. Set `AWS_AIDLC_DEFAULT_SCOPE=feature` to retain the previous full-lifecycle default.
+* Human gates, plan approval, review freezes, and source-bound reviewer receipts now use deterministic authority checks. Structured-question protocol guidance requires self-explanatory prompts and reuse of answers already recorded in the current workflow. Every custom or plugin stage that declares `reviewer:` must add `review_artifact:` naming one required Markdown output from `produces[]`; for per-Unit stages that target must cover every applicable Unit kind.
+* Construction resolves the team's affirmed Testing Posture or its documented fallback, supports bounded Build and Test loop-back, and binds review authority to Git and non-Git source state. Autonomous mode skips the remaining stage gates under its final-batch contract, while team-owned Units can converge from independent clones or sibling worktrees through a pinned human-gated merge.
+* Reverse Engineering and CodeKB require complete current-attempt evidence and support generation-checked focused rescans that merge newly analyzed areas without replacing unrelated knowledge.
+* Intent Capture and Requirements Analysis can ingest bounded project documents and existing requirements through a separate trust-marked document-input path.
+* Plugin workflows gained selection-aware composition and doctor checks plus offline create, validate, build, and compose-test tooling. Engine replacement restores the stock graph, so `/aidlc plugin sync` is required after every upgrade; automation must treat exit 1 as an incomplete plugin installation when configured roots are unusable.
+* Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode now share stronger session binding, single-use continuation, hook diagnostics, human-presence checks, and delegated-agent attribution. Any unattended driver that submits prompts without a person present must set `AIDLC_UNATTENDED=1`. Codex users must run `bun scripts/package.ts codex trust --project <absolute-project-path>`, replace existing entries for those hook paths, and start a fresh Codex session. Claude Code users must approve project hooks through `/hooks` and fully restart; a reported `disableAllHooks` setting must be removed or overridden in an editable layer, while `allowManagedHooksOnly` requires an administrator policy change.
+* Integrations that consume adaptive-composer proposals must rename `birthDescription` to `creationDescription`; scripts that consume the retired design artifact names must migrate before reading 2.7.0 outputs.
+
 ## [2.6.124] - 2026-08-28
 
 Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.

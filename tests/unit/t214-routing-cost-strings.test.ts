@@ -173,7 +173,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
-    expect(m).toContain("intent-create --scope bugfix");
+    expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
     expect(m).toContain(`(${costClause(bf)})`);
     expect(m).not.toContain("per unit of work");
@@ -194,7 +194,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
 });
 
 describe("t214 scope-change stdout carries the Approval gates line", () => {
-  test("scope-change --scope mvp prints Stages in scope AND Approval gates", () => {
+  test("scope change --scope mvp prints Stages in scope AND Approval gates", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);

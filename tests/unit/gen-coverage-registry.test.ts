@@ -797,11 +797,11 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // when their segment stopped saying cli. Same predicate, same honesty ratchet:
   // a new spawning test still cannot land without a human edit here.
   const EXPECTED_NONE_TO_CLI = [
-    "unit/t150-codex-packaging.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
     "unit/t238-build-binaries.test.ts",
+    "unit/t243-install-mechanism.test.ts",
     "unit/t267-usage.test.ts",
     "unit/t270-metrics-transport.test.ts",
     "unit/t280-contract-design-wiring.test.ts",
@@ -811,6 +811,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
     "unit/t240-opencode-packaging.test.ts",
+    "unit/t244-install-management.test.ts",
+    "unit/t242-plugin-state.test.ts",
     "unit/t263-reviewer-terminal-ordering.test.ts",
     "unit/t264-review-freeze-hook.test.ts",
     "unit/t266-conversation-language-rule.test.ts",
@@ -1003,6 +1005,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t144-harness-seam.test.ts",
     "unit/t147-kiro-hook-adapter.test.ts",
     "unit/t149-codex-hook-adapter.test.ts",
+    "unit/t150-codex-packaging.test.ts",
     "unit/t155-template-override.test.ts",
     "unit/t158-memory-writer-reader-seam.test.ts",
     "unit/t161-per-intent-lock-reaper.test.ts",
@@ -1065,6 +1068,14 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t248-steering-content-delivery.test.ts",
     "unit/t278-per-unit-wave.test.ts",
     "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
+    "unit/t293-config-models.test.ts",
+    "unit/t294-config-diagnostics.test.ts",
+    "unit/t295-config-choices.test.ts",
+    "unit/t296-config-setup-walk.test.ts",
+    "unit/t298-settings-hierarchy.test.ts",
+    "unit/t299-first-run-wizard.test.ts",
+    "unit/t304-round18-acceptance-fixes.test.ts",
+    "unit/t305-public-cli-color.test.ts",
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
     "unit/t304-review-brief.test.ts",
@@ -1139,6 +1150,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t11-halt-and-ask-retry-correlation.test.ts",
     "e2e/t12-bolt-runtime-graph-fork.test.ts",
     "e2e/t134-swarm-referee.test.ts",
+    // t-ide-kiro constructs its approval-gate fixture by spawning the real
+    // shipped tools (runSetupTool), so its body is a deterministic spawner
+    // even though its filename segment carries no mechanism.
   ];
 
   test("the none->cli reclassification set is exactly the deterministic spawners", () => {

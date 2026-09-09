@@ -215,6 +215,100 @@ function approve(project: string, questions: string, session: string): void {
 }
 
 describe("t328 Plan Approval runtime authority", () => {
+  // Regression for the solo Plan Approval deadlock (#995): the Stop hook's own
+  // read-only `next` probe fires at the turn boundary BETWEEN the challenge mint
+  // (turn N) and the receipt write (turn N+1). When that probe still published
+  // the durable directive marker it bumped code_generation_authority_revision
+  // and reset the plan-approval runtime dir, so the approval could never
+  // stabilize on a solo (non-team) workflow.
+  test("a solo Stop-hook probe between challenge mint and receipt write leaves Plan Approval intact", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "solo-stop-hook-probe";
+    appendAuditEntry(
+      "SESSION_STARTED",
+      { Source: "startup", Session: session },
+      project,
+    );
+    const identity = decisionArgs(questions, session);
+    expect(
+      runLog(project, [
+        "decision",
+        ...identity,
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ]).exitCode,
+    ).toBe(0);
+    const runtimeDir = join(sessionsDir(project), "plan-approval");
+    const mintedRuntime = readdirSync(runtimeDir).sort();
+    expect(mintedRuntime.length).toBeGreaterThan(0);
+    const epochBefore =
+      resolveCodeGenerationAuthority(project, { unit: null }).directiveEpoch;
+
+    const probe = Bun.spawnSync(
+      [
+        BUN,
+        join(DIST_ROOT, "tools", "aidlc-orchestrate.ts"),
+        "next",
+        "--project-dir",
+        project,
+      ],
+      {
+        cwd: project,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_STOP_HOOK_PROBE: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(probe.exitCode, probe.stderr.toString()).toBe(0);
+    expect(readdirSync(runtimeDir).sort()).toEqual(mintedRuntime);
+    expect(
+      resolveCodeGenerationAuthority(project, { unit: null }).directiveEpoch,
+    ).toBe(epochBefore);
+
+    const human = Bun.spawnSync(
+      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: session,
+          prompt: "Approve Plan",
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(human.exitCode).toBe(0);
+    writeFileSync(
+      questions,
+      readFileSync(questions, "utf-8").replace(
+        /\[Answer\]:\s*$/,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    const answer = runLog(project, [
+      "answer",
+      ...identity,
+      "--details",
+      "Approve Plan",
+    ]);
+    expect(
+      answer.exitCode,
+      `${answer.stdout?.toString() ?? ""}\n${answer.stderr?.toString() ?? ""}`,
+    ).toBe(0);
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(
+      true,
+    );
+  }, 60000);
+
   test("rejects malformed Plan Approval violation records", () => {
     const project = createProject();
     const runtimeDir = join(sessionsDir(project), "plan-approval");

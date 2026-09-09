@@ -55,7 +55,7 @@
 //          workflow start), proving a second workflow truly began.
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - creation dispatch:            engine NAMES `intent-create --scope <scope>` (aidlc-orchestrate.ts:302)
+//   - creation dispatch:            engine NAMES `intent create --scope <scope>` (aidlc-orchestrate.ts:302)
 //   - NO re-init guard:          handleIntentCreate (aidlc-utility.ts:1986) — no "already exists" die()
 //   - second creation mints a 2nd intent:  createIntent appends a 2nd registry row + record dir + cursor flip
 //   - WORKFLOW_STARTED on every creation:  aidlc-utility.ts:2065

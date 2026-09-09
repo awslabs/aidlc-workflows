@@ -5,8 +5,7 @@
 //   - core/agents/aidlc-product-lead-agent.md (domain-voiced restatement)
 //   - core/agents/aidlc-architecture-reviewer-agent.md (domain-voiced restatement)
 // plus the shipped dist/claude projection of the protocol (the other dist
-// trees are byte-parity-guarded by `package.ts --check`, so one projection
-// pin suffices).
+// trees come from the same generated source, so one projection pin suffices).
 //
 // Mechanism = none: pure text invariants over files already on disk, exactly
 // like t68's metadata greps. A refactor that rewords the contract should
@@ -110,8 +109,9 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
       );
       // Part 0 orders the gate open AFTER the logged learnings answer - the
       // QUESTION_ANSWERED-before-STAGE_AWAITING_APPROVAL audit proof.
-      expect(src).toContain(
-        "After the learnings answer is logged: `bun",
+      // Core carries the {{INVOKE}} token; dist carries its channel expansion.
+      expect(src).toMatch(
+        /After the learnings answer is logged: `(?:\{\{INVOKE\}\}|bun |aidlc )/,
       );
       expect(src).not.toContain(
         "Before showing the completion message",

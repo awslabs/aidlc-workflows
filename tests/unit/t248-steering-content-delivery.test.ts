@@ -393,7 +393,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(otherKey).not.toBe(encodedKey);
   });
 
-  test("team probe steering continues normally while solo probes preserve marker publication", () => {
+  test("probe steering continues normally for team and solo without publishing the marker", () => {
     const team = setupIntegrationProject({
       withState: "state-brownfield-feature.md",
     });
@@ -482,11 +482,14 @@ describe("t248 deterministic steering delivery", () => {
         join(seededRecordDir(solo), ".aidlc-steering-token-key"),
       ),
     ).toBe(true);
+    // A solo probe keys its token normally, but it must NOT publish the durable
+    // marker either: publication bumps code_generation_authority_revision and
+    // resets the plan-approval runtime, which deadlocked Plan Approval (#995).
     expect(
       existsSync(
         join(seededRecordDir(solo), ".aidlc-active-directive.json"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       invoke(solo, "continue", [soloProbe.continue_token ?? ""]).directive
         .kind,

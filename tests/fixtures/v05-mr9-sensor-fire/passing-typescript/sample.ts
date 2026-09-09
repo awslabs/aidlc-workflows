@@ -9,6 +9,6 @@
 // Exercised by:
 //   - linter sensor: bunx eslint --format json --max-warnings=-1 sample.ts
 //     emits errorCount=0, pass=true.
-//   - type-check sensor: bunx tsc --project tsconfig.json --noEmit
+//   - type-check sensor: bunx --package typescript@6 tsc --project tsconfig.json --noEmit
 //     --pretty false emits zero diagnostics, pass=true.
 export const greet = (name) => `hello ${name}`;

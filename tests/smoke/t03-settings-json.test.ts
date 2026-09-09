@@ -3,8 +3,9 @@
 // In-process port of tests/smoke/t03-settings-json.sh (TAP plan 16 + Fable pin),
 // mechanism = none. The .sh is a schema-validation check on the SHIPPED
 // dist/claude/.claude/settings.json: it `jq`-parsed the file and asserted the
-// presence/value of permission entries, the statusLine command, the orchestrator
-// model pin, and the Bedrock env block (enable flag, region, four model IDs).
+// presence/value of permission entries, the statusLine command, inherited
+// session model/effort, and the Bedrock env block (enable flag, region, four
+// model IDs).
 //
 // The .sh carried NO `# covers:` header, so it joined to zero enumerated registry
 // units — and none of the seven enumerated unit classes
@@ -26,7 +27,7 @@
 // with JSON.parse is itself a STRONGER restatement of test 1 ("valid JSON"):
 // JSON.parse throws on malformed JSON exactly as `jq empty` failed.
 //
-// FIXTURE DISCIPLINE: the input is the REAL committed shipped file at
+// FIXTURE DISCIPLINE: the input is the REAL generated shipped file at
 // dist/claude/.claude/settings.json, read-only, resolved through AIDLC_SRC from
 // tests/harness/fixtures.ts (the same anchor the .sh's $SETTINGS pointed at —
 // fixtures resolves AIDLC_SRC to <repo>/dist/claude/.claude). NOTHING is written;
@@ -36,14 +37,14 @@
 //   dist/claude/.claude/settings.json
 //     .permissions.allow[]                 — pre-approved tool list
 //     .statusLine.command                  — references aidlc-statusline.ts
-//     .model                               — "opus[1m]" orchestrator pin
+//     .model / .effortLevel                -- ABSENT (session values inherit)
 //     .env.CLAUDE_CODE_USE_BEDROCK         — "1" (Bedrock enabled)
 //     .env.AWS_REGION                      — non-empty (Bedrock requires it)
 //     .env.ANTHROPIC_DEFAULT_FABLE_MODEL   — "global.anthropic.claude-fable-5[1m]"
 //     .env.ANTHROPIC_DEFAULT_OPUS_MODEL    — "global.anthropic.claude-opus-4-8[1m]"
 //       (global. since v0.6.5: the us. regional profile fails under Bedrock's
 //        provider_data_share retention mode; global. works under every mode)
-//       ([1m]: the 1M-context variant, so tier-pinned subagents get 1M too —
+//       ([1m]: the 1M-context variant, used when the alias is selected;
 //        Claude Code strips the suffix before the model ID reaches Bedrock)
 //     .env.ANTHROPIC_DEFAULT_SONNET_MODEL  — "global.anthropic.claude-sonnet-4-6[1m]"
 //     .env.ANTHROPIC_DEFAULT_HAIKU_MODEL   — "global.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -54,7 +55,7 @@
 //   .sh 2-9    permissions.allow contains <8 tools>        -> one test() per tool,
 //                Read/Edit/Write/Bash/Glob/Grep/Task/WebSearch (8 tests)
 //   .sh 10     statusLine.command -> aidlc-statusline.ts   -> "statusLine.command references aidlc-statusline.ts"
-//   .sh 11     model == opus[1m]                           -> "model is pinned to opus[1m]"
+//   .sh 11     legacy model pin                            -> "model and effortLevel are absent"
 //   .sh 12     env.CLAUDE_CODE_USE_BEDROCK == 1            -> "env.CLAUDE_CODE_USE_BEDROCK is 1"
 //   .sh 13     env.AWS_REGION non-empty                    -> "env.AWS_REGION is set"
 //   extra      env.ANTHROPIC_DEFAULT_FABLE_MODEL pinned    -> "env.ANTHROPIC_DEFAULT_FABLE_MODEL is pinned"
@@ -94,18 +95,13 @@ describe("settings.json — JSON validity [.sh test 1]", () => {
 });
 
 describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
-  // The .sh looped `for tool in Read Edit Write Bash Glob Grep Task WebSearch`
-  // and grepped each as an EXACT line (`grep -c "^${tool}$"`) in the allow
-  // array. STRONGER here: assert exact membership in the parsed array, so a
-  // tool that only appeared as a substring (e.g. inside
-  // `Bash(bun .../tools/*)`) would NOT satisfy it — matching the .sh's
-  // anchored `^...$` grep, which the bare `Bash` entry on its own line passes.
+  // The generated dist/ copy projection grants only its harness-local Bun
+  // dispatcher instead of unrestricted Bash or a native binary dependency.
   const allow = settings.permissions?.allow ?? [];
   const REQUIRED_TOOLS = [
     "Read",
     "Edit",
     "Write",
-    "Bash",
     "Glob",
     "Grep",
     "Task",
@@ -117,29 +113,24 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       expect(allow).toContain(tool);
     });
   }
+  test("permissions.allow grants only the Bun copy-channel tool directory", () => {
+    expect(allow).toContain("Bash(bun .claude/tools/*)");
+    expect(allow).not.toContain("Bash");
+    expect(allow).not.toContain("Bash(aidlc *)");
+  });
 });
 
 describe("statusLine [.sh test 10]", () => {
-  test("statusLine.command references aidlc-statusline.ts", () => {
+  test("statusLine.command routes through the Bun copy-channel dispatcher", () => {
     const cmd = settings.statusLine?.command ?? "";
-    expect(cmd).toContain("aidlc-statusline.ts");
+    expect(cmd).toBe("bun .claude/tools/aidlc.ts engine statusline");
   });
 });
 
-describe("orchestrator model pin [.sh test 11]", () => {
-  test("model is pinned to opus[1m]", () => {
-    // .sh asserted exact string equality (`[ "$MODEL" = "opus[1m]" ]`).
-    expect(settings.model).toBe("opus[1m]");
-  });
-});
-
-describe("orchestrator reasoning-effort pin", () => {
-  // The shipped default raises reasoning effort to xhigh (the orchestrator runs
-  // a long forwarding loop where deeper reasoning earns its cost). Valid Claude
-  // Code effortLevel tiers: low|medium|high|xhigh|max. Pin xhigh so the default
-  // can't silently regress to high.
-  test("effortLevel is pinned to xhigh", () => {
-    expect(settings.effortLevel).toBe("xhigh");
+describe("session model and effort inheritance [.sh test 11]", () => {
+  test("model and effortLevel keys are absent", () => {
+    expect(Object.hasOwn(settings, "model")).toBe(false);
+    expect(Object.hasOwn(settings, "effortLevel")).toBe(false);
   });
 });
 

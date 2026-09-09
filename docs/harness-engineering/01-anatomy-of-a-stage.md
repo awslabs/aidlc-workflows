@@ -76,7 +76,12 @@ When you author or move a stage, these three lists are what wire it into the wor
 
 ## stage-graph.json is compiled — never hand-edit it
 
-This implementation runs the graph from a JSON file at `dist/claude/.claude/tools/data/stage-graph.json`. That file is a **build artifact**, not a source file. The YAML frontmatter across the stage files is authoritative; the JSON is what you get when you compile it.
+In a source build, the generated Claude projection runs the graph from
+`dist/claude/.claude/tools/data/stage-graph.json`. `dist/` is an ignored local
+output materialized by `bun scripts/package.ts`; the installed runtime carries
+the same relative file under `.claude/tools/data/`. The JSON is a **build
+artifact**, not a source file. The YAML frontmatter across the stage files is
+authoritative; the JSON is what you get when you compile it.
 
 The flow is:
 

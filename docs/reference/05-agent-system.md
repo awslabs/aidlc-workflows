@@ -31,7 +31,7 @@ tier: judgment                      # judgment | balanced | templated (see Agent
 | `description` | Yes | Brief role summary |
 | `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
 | `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
-| `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in `dist/<harness>/` |
+| `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in the ignored local `dist/<harness>/` tree and versioned release runtime. |
 
 Kiro IDE projects this core contract differently: it removes
 `disallowedTools`, adds `tools: ["read", "write", "shell"]`, and adds
@@ -90,14 +90,8 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 | Tier | Agents | Meaning |
 |------|--------|---------|
 | `judgment` | architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality | Multi-constraint reasoning under ambiguity; output cascades downstream. Never downgraded: inherits the session's model AND effort |
-| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Mid-size model at reduced effort on Claude Code, Codex, and opencode (on Kiro, Cursor, and Copilot, inherits session model like all tiers) |
-| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). Mid-size model at reduced effort on Claude Code, Codex, and opencode (on Kiro, Cursor, and Copilot, inherits session model like all tiers) |
-
-`balanced` and `templated` currently project IDENTICALLY in every harness -- both pin
-the mid-size model at `medium` effort. The two names are kept apart because they
-describe different WORK, and because either may be retuned without the other; a
-reader should not infer two distinct projections from two distinct tier names.
-`judgment` is the only tier that inherits the session's effort.
+| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. The measured baseline pins a mid-size model at medium effort on Claude Code, Codex, and opencode |
+| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). The tier remains the Writing up models-dial group, but its shipped baseline inherits the session model and effort |
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
@@ -105,25 +99,34 @@ The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of 
 |------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|-----------------------------|--------------------------|
 | `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (inherits the session model) |
 | `balanced` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
-| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
+| `templated` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (see below) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (see below) |
 
 Key facts behind the table:
 
-- **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment alone; `balanced` and `templated` both pin `effort: medium`. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0 and 0.142.5; the current doctor-enforced minimum is 0.145.0 for immediate compact-session reload). On Kiro CLI the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model"; Kiro IDE likewise inherits when its agent `.md` omits `model:`.
+- **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment and templated. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0 and 0.142.5; the current doctor-advised minimum is 0.145.0 for immediate compact-session reload). On Kiro the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model" (the `/model` persisted preference).
+- **Writing up is dialable, not downgraded by default.** The former templated downgrade is now a per-install choice through `aidlc config models`; the authored `templated` tier remains unchanged so policy continues to address delivery, pipeline/deploy, and operations as one group.
 - **Kiro never pins a model.** A shipped Kiro model ID resolves only when that model is enabled on the user's install; a session running any other model rejects every delegated spawn with `Invalid model ID`, and Kiro rejects the Claude-dialect tier aliases (`opus`/`sonnet`) outright -- so there is no universally safe pinnable value. Every Kiro tier therefore omits `"model"` (and the `.md` frontmatter `model:` line): all agents inherit the session model. The kiro slots in `TIER_PROJECTIONS` and the `kiroModelDefaults()` machinery remain in place, dormant, should a resolvable per-install pinning mechanism appear.
 - **Kiro has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so a per-model effort default can only ride on `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort`. With no tier pinning a model, only the authored conditional entry ships (`claude-opus-4.8` -> `xhigh`, applied only when the session actually runs that model). That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
 - **Cursor never pins a model either.** Model availability on Cursor is plan-dependent (a Free account rejects every named model and can only run `Auto`), so a pinned agent model would hard-fail installs on lower plans. Every Cursor tier therefore omits the `.md` frontmatter `model:` line (Cursor has no per-agent effort key -- effort rides the model-id suffix), and all agents inherit the session model; the cursor slots in `TIER_PROJECTIONS` are model-only, dormant, should a plan-independent pinning mechanism appear.
 
-### Tier cap (cost override)
+### Tier cap (projection override)
 
-A project can cap every projection at pack time, without editing any agent file:
+A project can select a lower tier projection at pack time, without editing any agent file. This is a taxonomy ceiling, not a guaranteed cost ceiling now that the templated baseline inherits:
 
-- **Persistent knob:** a `tier_cap:` key in the YAML frontmatter of the space memory layer files (`core/memory/org.md` -> `team.md` -> `project.md`, last writer wins -- a project may lower OR raise the org ceiling). Example: `tier_cap: balanced` collapses `judgment` to `balanced` in every harness's projection (on Kiro, where no tier pins a model, the cap is inert -- all tiers already inherit the session model).
+- **Persistent knob:** a `tier_cap:` key in the YAML frontmatter of the space memory layer files (`core/memory/org.md` -> `team.md` -> `project.md`, last writer wins -- a project may lower OR raise the org ceiling). Example: `tier_cap: balanced` maps `judgment` to the measured reviewer baseline in every harness's projection. A `templated` ceiling maps higher tiers to the inheriting Writing up projection; use `aidlc config models` when the goal is an explicit lower-cost policy.
 - **Per-invocation override:** the `AIDLC_TIER_CAP` env var beats the memory layers for one packager run (`AIDLC_TIER_CAP=templated bun scripts/package.ts`). To build UNCAPPED once while a memory cap is in force, set it to the top tier -- `AIDLC_TIER_CAP=judgment` -- which beats the memory layer and clamps nothing (an empty value means unset, not uncapped).
 
-The two knobs differ in scope: the memory cap travels with the repo, so it applies in BOTH write and `--check` modes (a project that commits a capped dist stays self-consistent). The env var is a one-shot WRITE knob and is IGNORED under `--check` - the drift guard compares what the committed dist was legitimately built from, and a stray `AIDLC_TIER_CAP` in a CI or test runner's environment must neither fail nor mask drift (the packager prints a notice when it ignores one). The packager also prints the active cap and its source on every capped run.
+The two knobs differ in scope: the memory cap travels with the repo, so it
+applies in both write and `--check` modes and both temporary check builds use
+the same repository-defined cap. The environment variable is a one-shot write
+knob and is ignored under `--check`; a stray `AIDLC_TIER_CAP` in CI must not
+change the determinism measurement. The packager prints a notice when it
+ignores one and names the active cap and source on every capped write run.
 
-To opt a SINGLE agent out instead, edit the projected value in your installed `dist/<harness>/` copy (e.g. set `model: opus` on one Claude agent .md) -- the edit survives until you re-copy the dist shell.
+To opt a SINGLE agent out instead, edit the projected value in the installed
+harness directory (for example, set `model: opus` on one Claude agent `.md`).
+The edit survives until a later `aidlc config` refresh replaces that
+framework-owned file after reporting the local modification.
 
 ---
 
@@ -148,7 +151,7 @@ access grant.
 
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (10 stages across 3 phases).
-- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier, three carry the inheriting `templated` tier, and only the two `balanced` reviewers step down on Claude Code, Codex, and opencode. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
 - Six of 11 agents are expected to use Bash for CLI interaction.
 - Three agents are expected to use WebSearch for research tasks.
@@ -181,8 +184,8 @@ Agent display names and example knowledge files are authoritative in each agent'
 
 1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `examples`, `description`, `disallowedTools` (including `Task`), `tier`. Never author raw `model:`/`effort:` in core frontmatter -- they are projection outputs (see Agent Tiers above). An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
 2. Add knowledge files to `core/knowledge/{name}-agent/`
-3. Add the agent to the stage files (`core/aidlc-common/stages/`) where it participates — set `lead_agent` / `support_agents` in each stage's frontmatter. The compiled `tools/data/stage-graph.json` is GENERATED from that frontmatter by `bun scripts/package.ts`; never hand-edit it (the `package.ts --check` drift guard fails CI on a hand-edited dist).
-4. Regenerate the distributions: `bun scripts/package.ts` (then `--check` to confirm no drift)
+3. Add the agent to the stage files (`core/aidlc-common/stages/`) where it participates — set `lead_agent` / `support_agents` in each stage's frontmatter. The compiled `tools/data/stage-graph.json` is GENERATED from that frontmatter by `bun scripts/package.ts`; never hand-edit generated output.
+4. Materialize the ignored local distributions with `bun scripts/package.ts`, then run `--check` to build twice and verify deterministic output.
 5. Add the agent→examples row to the hand-maintained knowledge tables (the space-level team-knowledge dir is `aidlc/knowledge/{name}-agent/`, created by the team when it has content — the engine does not scaffold it)
 6. Update tests: smoke tests for file existence, feature tests for stage-agent cross-references
 7. Update documentation in this file and [reference/agents/](agents/)
@@ -190,7 +193,7 @@ Agent display names and example knowledge files are authoritative in each agent'
 ## How to Modify an Agent
 
 - **Change tools**: Add or edit a `tools:` allowlist in frontmatter to narrow the agent; omit it to inherit the full session toolset. A `tools:` list drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed.
-- **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed copy instead, edit the projected `model:` in your `dist/<harness>/` agent file (Claude Code accepts aliases, full ids, and `inherit`).
+- **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed project instead, edit the projected `model:` in its harness agent file (Claude Code accepts aliases, full ids, and `inherit`).
 - **Change behavior**: Edit the markdown body sections (responsibilities, principles).
 - **Change stage assignments**: Edit `lead_agent` / `support_agents` in the relevant stage files (`core/aidlc-common/stages/`), then regenerate with `bun scripts/package.ts` — the compiled stage graph is derived from stage frontmatter, never hand-edited.
 

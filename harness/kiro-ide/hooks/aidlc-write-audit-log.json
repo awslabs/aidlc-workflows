@@ -6,7 +6,7 @@
       "trigger": "PostToolUse",
       "matcher": "fs_write|str_replace|fs_append",
       "description": "Records every artifact you create or update in the workflow's audit log, then runs the checks that apply to that file.",
-      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors" }
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide audit-and-sensors" }
     }
   ]
 }

@@ -159,7 +159,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(
         r.out,
-        "command: bun .claude/tools/aidlc-sensor-required-sections.ts",
+        "command: bun .claude/tools/aidlc.ts engine sensor-required-sections",
       ),
     ).toBe(true);
     expect(hasLine(r.out, "default_severity: advisory")).toBe(true);
@@ -173,7 +173,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(
         r.out,
-        "command: bun .claude/tools/aidlc-sensor-upstream-coverage.ts",
+        "command: bun .claude/tools/aidlc.ts engine sensor-upstream-coverage",
       ),
     ).toBe(true);
     expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);
@@ -185,7 +185,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(hasLine(r.out, "id: linter")).toBe(true);
     expect(hasLine(r.out, "matches: **/*.{ts,js}")).toBe(true);
     expect(
-      hasLine(r.out, "command: bun .claude/tools/aidlc-sensor-linter.ts"),
+      hasLine(r.out, "command: bun .claude/tools/aidlc.ts engine sensor-linter"),
     ).toBe(true);
   });
 
@@ -195,7 +195,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(hasLine(r.out, "id: type-check")).toBe(true);
     expect(hasLine(r.out, "matches: **/*.{ts,tsx}")).toBe(true);
     expect(
-      hasLine(r.out, "command: bun .claude/tools/aidlc-sensor-type-check.ts"),
+      hasLine(r.out, "command: bun .claude/tools/aidlc.ts engine sensor-type-check"),
     ).toBe(true);
   });
 
@@ -206,7 +206,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(
         r.out,
-        "command: bun .claude/tools/aidlc-sensor-claim-sources.ts",
+        "command: bun .claude/tools/aidlc.ts engine sensor-claim-sources",
       ),
     ).toBe(true);
     expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);
@@ -217,7 +217,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(r.status).toBe(0);
     expect(hasLine(r.out, "id: traceability")).toBe(true);
     expect(
-      hasLine(r.out, "command: bun .claude/tools/aidlc-sensor-traceability.ts"),
+      hasLine(r.out, "command: bun .claude/tools/aidlc.ts engine sensor-traceability"),
     ).toBe(true);
     expect(hasLine(r.out, "matches: **/traceability.json")).toBe(true);
   });

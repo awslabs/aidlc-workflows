@@ -57,7 +57,7 @@ function runDoctor(version: string): { status: number; out: string } {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   writeFileSync(seededStateFile(proj), stateWithVersion(version), "utf-8");
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env },
   });

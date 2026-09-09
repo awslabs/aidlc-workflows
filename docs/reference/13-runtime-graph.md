@@ -158,8 +158,8 @@ The compile is invoked by the PostToolUse Bash hook
 audit emit. The hook fires on every `Bash` tool call from the
 conductor and filters cheaply:
 
-1. **Command filter** — only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts`
-   invocations get past the early exit. `aidlc-runtime.ts` is excluded
+1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
+   utility routes get past the early exit. The runtime route is excluded
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
@@ -170,7 +170,7 @@ conductor and filters cheaply:
 5. **Event-class filter** — match
    `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)`
    against any of the 3 blocks. Exit on no match.
-6. **Dispatch** — `spawnSync("bun", [".claude/tools/aidlc-runtime.ts", "compile", ...])`.
+6. **Dispatch** — `aidlc engine runtime compile ...`.
 
 `WORKFLOW_COMPLETED` is in the transition set so the final-stage
 approve fires the compile. `handleCompleteWorkflow` at
@@ -347,10 +347,10 @@ worktrees per `aidlc-bolt.ts` to surface a recovery prompt for those.
 
 ```bash
 # Walk audit + memory.md, write runtime-graph.json (invoked by hook).
-bun .claude/tools/aidlc-runtime.ts compile
+aidlc engine runtime compile
 
 # Print one stage row from runtime-graph.json (debug/test surface).
-bun .claude/tools/aidlc-runtime.ts read <stage-slug>
+aidlc engine runtime read <stage-slug>
 
 # Print deterministic aggregates over runtime-graph.json: stage/phase
 # outcome tallies, memory-entry counts by category, sensor 4-state
@@ -358,18 +358,18 @@ bun .claude/tools/aidlc-runtime.ts read <stage-slug>
 # session skills (session-cost, replay, outcomes-pack) consume the
 # --json shape so every number they render comes from here, not from
 # LLM-side counting.
-bun .claude/tools/aidlc-runtime.ts summary [--json]
+aidlc engine runtime summary [--json]
 
 # Byte-copy main runtime-graph.json into a Bolt's worktree fragment
 # (one-shot; called by `aidlc-bolt start --worktree`). No audit emit —
 # the fragment lifecycle rides on STATE_FORKED + AUDIT_FORKED.
-bun .claude/tools/aidlc-runtime.ts fragment-fork --slug <kebab-slug>
+aidlc engine runtime fragment-fork --slug <kebab-slug>
 
 # Remove the worktree fragment (idempotent; called by
 # `aidlc-bolt complete --merge`). No audit emit — the fragment
 # lifecycle rides on STATE_MERGED + AUDIT_MERGED. Main's runtime-graph
 # is rebuilt event-source by the post-Bash compile hook on AUDIT_MERGED.
-bun .claude/tools/aidlc-runtime.ts fragment-merge --slug <kebab-slug>
+aidlc engine runtime fragment-merge --slug <kebab-slug>
 ```
 
 All subcommands accept `--project-dir <path>` to override the standard
@@ -395,14 +395,14 @@ load-bearing tenet documented in
 Runtime-graph compile is data-plane substrate that must be observable
 from outside any specific session. Coupling it to LLM-invoked tools
 means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` after a human
+conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` after a human
 clicks Approve, the audit row never appends AND the compile never
 fires; runtime-graph silently lags, recovery substrate is corrupt.
 
-The PostToolUse Bash hook fires on the conductor's actual
-subprocess invocation regardless of what the LLM does next. The
-audit-emit-side seam (`bun aidlc-(state|jump|bolt|utility).ts`) is
-the deterministic anchor.
+The PostToolUse Bash hook fires on the conductor's actual command invocation
+regardless of what the LLM does next. The audit-emitting hidden dispatcher
+routes (`aidlc engine state ...`, `jump ...`, `bolt ...`, and
+`utility ...`) are the deterministic anchor.
 
 ---
 

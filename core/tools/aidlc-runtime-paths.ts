@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
-const KNOWN_HARNESSES = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+const PROJECTED_INVOKE = "{{INVOKE}}";
 
 export interface HarnessLocation {
   harnessDir?: string;
@@ -13,22 +13,163 @@ export interface HarnessLocation {
   projectDir?: string;
 }
 
+export interface ProjectHarness {
+  root: string;
+  harnessDir: string;
+  distribution: string;
+  frameworkVersion?: string;
+}
+
+const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+
+function markerRecord(path: string): Record<string, unknown> {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (error) {
+    throw new Error(
+      `${path}: invalid harness metadata (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path}: harness metadata must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function legacyDistribution(harnessDir: string): string | null {
+  if (!/^\.[a-z0-9][a-z0-9._-]*$/i.test(harnessDir)) return null;
+  return harnessDir.slice(1);
+}
+
+function harnessIdentity(root: string, strict = false): ProjectHarness | null {
+  const harnessDir = basename(root);
+  const dataDir = join(root, "tools", "data");
+  const harnessPath = join(dataDir, "harness.json");
+  const stampPath = join(dataDir, "aidlc-stamp.json");
+  if (!existsSync(harnessPath) && !existsSync(stampPath)) return null;
+
+  try {
+    // The immutable projection stamp is authoritative. harness.json is mutable
+    // plugin-selection state, so malformed contents must not hide an otherwise
+    // identifiable stamped install.
+    const markerPath = existsSync(stampPath) ? stampPath : harnessPath;
+    const marker = markerRecord(markerPath);
+    if (marker.harnessDir !== harnessDir) {
+      throw new Error(`${markerPath}: harness metadata identity is invalid`);
+    }
+
+    // Releases before projection stamps shipped only harnessDir + rulesSubdir.
+    // Keep those trees identifiable so init can adopt and rewrite them.
+    const legacy = !existsSync(stampPath) && marker.schemaVersion === undefined;
+    const distribution = legacy
+      ? legacyDistribution(harnessDir)
+      : marker.distribution;
+    if (
+      (!legacy && marker.schemaVersion !== 1) ||
+      typeof distribution !== "string" ||
+      !/^[a-z0-9][a-z0-9-]*$/.test(distribution)
+    ) {
+      throw new Error(`${markerPath}: harness metadata identity is invalid`);
+    }
+    const frameworkVersion = marker.frameworkVersion;
+    if (
+      existsSync(stampPath) &&
+      (
+        typeof frameworkVersion !== "string" ||
+        !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(frameworkVersion)
+      )
+    ) {
+      throw new Error(`${stampPath}: frameworkVersion must be strict semver`);
+    }
+    return {
+      root,
+      harnessDir,
+      distribution,
+      ...(typeof frameworkVersion === "string" ? { frameworkVersion } : {}),
+    };
+  } catch (error) {
+    if (strict) throw error;
+    return null;
+  }
+}
+
+export function discoverProjectHarnesses(projectDir: string): ProjectHarness[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(projectDir, { withFileTypes: true });
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return [];
+    throw error;
+  }
+  const priority = (name: string): number => {
+    const index = HARNESS_PRECEDENCE.indexOf(name as typeof HARNESS_PRECEDENCE[number]);
+    return index < 0 ? HARNESS_PRECEDENCE.length : index;
+  };
+  const harnesses: ProjectHarness[] = [];
+  for (
+    const entry of entries.sort((left, right) =>
+      priority(left.name) - priority(right.name) || left.name.localeCompare(right.name)
+    )
+  ) {
+    if (!entry.isDirectory()) continue;
+    const identity = harnessIdentity(join(projectDir, entry.name));
+    if (identity) harnesses.push(identity);
+  }
+  return harnesses;
+}
+
+export function isCompiledModuleUrl(url: string): boolean {
+  return /\/(?:\$bunfs|%7ebun|~bun)\//i.test(url.replace(/\\/g, "/"));
+}
+
 export function isCompiledExecutable(
   moduleUrl = import.meta.url,
   executable = process.execPath,
 ): boolean {
-  const normalizedModuleUrl = moduleUrl.replace(/\\/g, "/");
   const executableName = basename(executable.replace(/\\/g, "/")).toLowerCase();
-  return normalizedModuleUrl.includes("/$bunfs/") || !executableName.startsWith("bun");
+  return isCompiledModuleUrl(moduleUrl) || !executableName.startsWith("bun");
 }
 
-export function compiledExecutable(): string | null {
+export function compiledExecutable(
+  moduleUrl = import.meta.url,
+  executable = process.execPath,
+): string | null {
   const explicit = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
   if (explicit) return explicit;
-  return isCompiledExecutable() ? process.execPath : null;
+  return isCompiledExecutable(moduleUrl, executable) ? executable : null;
+}
+
+export function aidlcInvocation(): string {
+  if (isCompiledExecutable()) return "aidlc";
+  if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
+  return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
+}
+
+export function aidlcDispatcherInvocation(route: string): string {
+  return `${aidlcInvocation()} engine ${route}`;
+}
+
+export function aidlcToolInvocation(
+  route: string,
+  sourceTool?: string,
+  qualifiedSource = true,
+): string {
+  const invoke = aidlcInvocation();
+  if (!invoke.startsWith("bun ")) return aidlcDispatcherInvocation(route);
+  const tool = sourceTool ??
+    route.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+  const path = qualifiedSource
+    ? `${runtimeHarnessDir()}/tools/aidlc-${tool}.ts`
+    : `aidlc-${tool}.ts`;
+  return `bun ${path}`;
 }
 
 function explicitRuntimeProjectDir(): string | null {
+  const internal = process.env.AIDLC_RUNTIME_PROJECT_DIR;
+  if (internal) {
+    return isAbsolute(internal) ? internal : resolve(process.cwd(), internal);
+  }
   const argv = process.argv.slice(1);
   const index = argv.indexOf("--project-dir");
   if (index >= 0 && argv[index + 1] && !argv[index + 1].startsWith("--")) {
@@ -36,7 +177,8 @@ function explicitRuntimeProjectDir(): string | null {
       ? argv[index + 1]
       : resolve(process.cwd(), argv[index + 1]);
   }
-  const explicit = process.env.AIDLC_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR;
+  const explicit = process.env.AIDLC_PROJECT_DIR ??
+    process.env.CLAUDE_PROJECT_DIR ?? process.env.KIRO_PROJECT_DIR;
   return explicit
     ? isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)
     : null;
@@ -55,10 +197,7 @@ export function runtimeHarnessDir(projectDir = runtimeProjectDir()): string {
     if (/^\.[a-z0-9][a-z0-9._-]*$/i.test(candidate)) return candidate;
   }
 
-  for (const candidate of KNOWN_HARNESSES) {
-    if (isAidlcHarnessRoot(join(projectDir, candidate))) return candidate;
-  }
-  return ".claude";
+  return discoverProjectHarnesses(projectDir)[0]?.harnessDir ?? ".claude";
 }
 
 function readHarnessName(root: string): string | null {

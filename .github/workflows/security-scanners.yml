@@ -3,10 +3,10 @@ name: Security Scanners
 on:
   pull_request:
     branches:
-      - v2
+      - main
   push:
     branches:
-      - v2
+      - main
   workflow_dispatch:
 
 permissions:
@@ -200,7 +200,7 @@ jobs:
 
       # The current lock has known high-severity transitive advisories in the
       # Claude Agent SDK dependency graph. Keep them visible in the artifact,
-      # while preventing any critical advisory from entering the v2 branch.
+      # while preventing any critical advisory from entering the main branch.
       - name: Enforce critical-severity threshold
         if: always()
         env:

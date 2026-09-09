@@ -26,7 +26,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -110,7 +110,7 @@ function timestampBody(opts: {
 // Write a store timestamp for the project's basename-keyed repo dir (0
 // recorded repos → codekbRepoName === basename, matching t182's discipline).
 function seedStore(proj: string, body: string): string {
-  const repo = proj.split("/").pop() as string;
+  const repo = basename(proj);
   const dir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", repo);
   mkdirSync(dir, { recursive: true });
   const p = join(dir, "reverse-engineering-timestamp.md");

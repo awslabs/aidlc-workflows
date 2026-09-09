@@ -263,21 +263,24 @@ async function runAdapterAsync(projectDir: string, target: string, payload: unkn
 
 type CommandForm = "direct" | "source" | "compiled";
 function commandSpec(dir: string, form: CommandForm, args: string[]) {
+  // Verb-shaped invocations route through the reshaped `engine orchestrate`
+  // namespace; flag shorthands (`--resume`) stay on the public alias surface.
+  const routed = args[0]?.startsWith("-") ? args : ["engine", "orchestrate", ...args];
   if (form === "direct") return {
     text: `bun .aidlc/tools/aidlc-orchestrate.ts ${args.map((arg) => JSON.stringify(arg)).join(" ")}`,
     executable: process.execPath,
     argv: [join(dir, ".aidlc", "tools", "aidlc-orchestrate.ts"), ...args],
   };
   if (form === "source") return {
-    text: `bun .aidlc/tools/aidlc.ts ${args.map((arg) => JSON.stringify(arg)).join(" ")}`,
+    text: `bun .aidlc/tools/aidlc.ts ${routed.map((arg) => JSON.stringify(arg)).join(" ")}`,
     executable: process.execPath,
-    argv: [join(dir, ".aidlc", "tools", "aidlc.ts"), ...args],
+    argv: [join(dir, ".aidlc", "tools", "aidlc.ts"), ...routed],
   };
   if (!COMPILED_BINARY) throw new Error("compiled coverage requires: bun scripts/build-binaries.ts");
   return {
-    text: `${JSON.stringify(COMPILED_BINARY)} ${args.map((arg) => JSON.stringify(arg)).join(" ")}`,
+    text: `${JSON.stringify(COMPILED_BINARY)} ${routed.map((arg) => JSON.stringify(arg)).join(" ")}`,
     executable: COMPILED_BINARY,
-    argv: args,
+    argv: routed,
   };
 }
 
@@ -1867,7 +1870,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const directAlias = join(dir, ".aidlc", "tools", "orchestrate-alias.ts");
     symlinkSync("aidlc.ts", dispatcherAlias);
     symlinkSync("aidlc-orchestrate.ts", directAlias);
-    const nextCommand = "bun .aidlc/tools/aidlc-alias.ts next";
+    const nextCommand = "bun .aidlc/tools/aidlc-alias.ts engine orchestrate next";
     const rewrittenNext = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, nextCommand, "alias-next")));
     const next = runShell(dir, rewrittenNext);
     expect(next.status, next.stderr).toBe(0);
