@@ -156,7 +156,7 @@ describe("t308 hook registration matchers select captured fixture tool names", (
   });
 
   test("Kiro IDE matcher-bearing manifests reach observed tool names", () => {
-    const hooksDir = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
+    const hooksDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "hooks");
     const registrations: KiroIdeMatcherRegistration[] = [];
     for (const file of readdirSync(hooksDir).filter(
       (entry) => entry.startsWith("aidlc-") && entry.endsWith(".json"),

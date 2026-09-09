@@ -1,4 +1,4 @@
-// covers: doc:harness/kiro-ide/skills/aidlc/question-rendering.md(numbered-other), file:tests/harness/kiro-ide-driver.ts(snapshotNumberedLists)
+// covers: doc:harness/kiro/skills/aidlc/question-rendering.md(numbered-other), file:tests/harness/kiro-ide-driver.ts(snapshotNumberedLists)
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -11,7 +11,7 @@ import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTuiProject,
-  KIRO_IDE_SRC,
+  KIRO_SRC,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import {
@@ -75,8 +75,8 @@ function skipReason(): string | null {
   if (!existsSync(KIRO_IDE_BIN)) {
     return `Kiro IDE binary not found at ${KIRO_IDE_BIN}`;
   }
-  if (!existsSync(KIRO_IDE_SRC)) {
-    return `distributable missing: ${KIRO_IDE_SRC}`;
+  if (!existsSync(KIRO_SRC)) {
+    return `distributable missing: ${KIRO_SRC}`;
   }
   return null;
 }
@@ -88,7 +88,7 @@ describe("t-ide-kiro-numbered-other (native Windows visual question rendering)",
     `interaction mode visibly renders exactly one numbered Other as option 4${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const sandbox = setupTuiProject({
-        harness: "kiro-ide",
+        harness: "kiro",
         noAidlcDocs: true,
       });
       const seedDir = generateKiroIdeSeed(

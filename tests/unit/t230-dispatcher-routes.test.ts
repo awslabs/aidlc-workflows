@@ -1131,13 +1131,13 @@ describe("t230 version-aware startup", () => {
   test("Kiro IDE adapter routing never waits for its open stdin pipe", async () => {
     const project = makeProject();
     cpSync(
-      join(REPO_ROOT, "dist", "kiro-ide", ".kiro"),
+      join(REPO_ROOT, "dist", "kiro", ".kiro"),
       join(project, ".kiro"),
       { recursive: true },
     );
     const child = spawn(
       BUN,
-      [DISPATCHER, "engine", "adapter", "kiro-ide", "mint", "--project-dir", project],
+      [DISPATCHER, "engine", "adapter", "kiro", "mint", "--project-dir", project],
       {
         cwd: project,
         env: childEnv(project, {

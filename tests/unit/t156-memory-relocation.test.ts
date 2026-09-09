@@ -200,50 +200,43 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(rulesDirFiles).toEqual(["aidlc.md"]);
   });
 
-  test("7: EVERY Kiro CLI agent resources glob points at the active space's memory tree", () => {
-    // Select the CLI resource binding from explicit matrix capabilities, then
-    // derive the agent list from each shipped tree. Kiro IDE uses its native
-    // always-included steering file instead; its agent JSONs are compatibility
-    // surfaces, not the IDE binding.
+  test("7: the Kiro conductor's resources glob points at the active space's memory tree", () => {
+    // This used to walk every agent JSON: on the agent-v1 row each persona config
+    // carried its own resources list. The row is Markdown now and one conductor
+    // carries the resources, so that is the surface to bind. A custom agent picks
+    // up NEITHER steering nor skills on its own, which is why both globs belong
+    // here and why the steering glob is now correct rather than stale - the row
+    // ships steering/aidlc-active-memory.md.
     const kiroTrees = HARNESS_MATRIX.filter(
-      (harness) => harness.capabilities.memoryInclude === "kiro-resources",
+      (harness) => harness.capabilities.harnessDir === ".kiro",
     );
     expect(kiroTrees.length).toBeGreaterThan(0);
-
-    let checkedAgents = 0;
-    let expectedAgents = 0;
     for (const harness of kiroTrees) {
-      const agentsDir = join(harness.engineRoot, "agents");
-      const agentFiles = readdirSync(agentsDir).filter((f) => f.endsWith(".json"));
-      expect(agentFiles.length, `${harness.name} ships agent JSONs`).toBeGreaterThan(0);
-      expectedAgents += agentFiles.length;
-      let harnessChecked = 0;
-      for (const f of agentFiles) {
-        const json = JSON.parse(readFileSync(join(agentsDir, f), "utf-8")) as {
-          resources?: string[];
-        };
-        expect(Array.isArray(json.resources), `${harness.name}/${f}: resources`).toBe(true);
-        if (!json.resources) continue;
-        checkedAgents++;
-        harnessChecked++;
-        expect(json.resources, `${harness.name}/${f} resources → relocated memory`).toContain(
-          "file://aidlc/spaces/default/memory/**/*.md",
-        );
-        // The old steering glob is gone from `resources` (note: `.kiro/steering/**`
-        // may legitimately remain in fs_write.allowedPaths — that is a write
-        // permission, NOT a method-load glob, so we only inspect `resources`).
-        expect(
-          json.resources.some((r) => r.includes(".kiro/steering")),
-          `${harness.name}/${f} resources must not point at the empty steering dir`,
-        ).toBe(false);
-      }
-      expect(harnessChecked, `${harness.name}: agents with resources`).toBeGreaterThan(0);
+      const conductor = readFileSync(
+        join(harness.engineRoot, "agents", "aidlc.md"),
+        "utf-8",
+      );
+      const fm = conductor.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+      expect(fm, `${harness.name}: conductor frontmatter`).toContain("resources:");
+      expect(fm, `${harness.name}: relocated memory glob`).toContain(
+        "file://aidlc/spaces/default/memory/**/*.md",
+      );
+      expect(fm, `${harness.name}: steering glob`).toContain(
+        "file://.kiro/steering/**/*.md",
+      );
+      expect(
+        existsSync(join(harness.engineRoot, "steering", "aidlc-active-memory.md")),
+        `${harness.name}: the steering glob must point at a directory that ships content`,
+      ).toBe(true);
+      // The agent-v1 roster must not come back.
+      expect(
+        readdirSync(join(harness.engineRoot, "agents")).filter((f) => f.endsWith(".json")),
+      ).toEqual([]);
     }
-    expect(checkedAgents).toBe(expectedAgents);
   });
 
-  test("7b: Kiro IDE standing rules use always-included live file references", () => {
-    const ide = HARNESS_MATRIX.find((harness) => harness.name === "kiro-ide");
+  test("7b: Kiro standing rules use always-included live file references", () => {
+    const ide = HARNESS_MATRIX.find((harness) => harness.name === "kiro");
     expect(ide?.capabilities.memoryInclude).toBe("kiro-steering");
     const steering = readFileSync(
       join(

@@ -46,7 +46,6 @@ const EXPECTED_HARNESSES = [
   "copilot",
   "cursor",
   "kiro",
-  "kiro-ide",
   "opencode",
 ];
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t315-"));
@@ -229,7 +228,7 @@ describe("t315 standalone plugin builder", () => {
     expect(run([pluginRoot, "kiro", outDir, "--json"]).status).toBe(0);
     writeFileSync(join(outDir, "sentinel.txt"), "preserve\n", "utf-8");
 
-    const refused = run([pluginRoot, "kiro-ide", outDir, "--json"]);
+    const refused = run([pluginRoot, "codex", outDir, "--json"]);
     expect(refused.status).toBe(1);
     const parsed = JSON.parse(refused.stdout) as {
       errors: Array<{ message: string }>;

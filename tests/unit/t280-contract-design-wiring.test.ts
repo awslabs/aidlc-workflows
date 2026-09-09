@@ -89,7 +89,7 @@ describe("t280 contract-design + decisions graph wiring", () => {
   // missing Codex/Cursor/Kiro/Kiro-IDE/OpenCode projection cannot pass
   // unnoticed — every shipped harness must carry the wired stage-graph.
   test("contract-design is wired with summary_confirmation across every shipped harness", () => {
-    expect(HARNESS_MATRIX.length).toBeGreaterThanOrEqual(7);
+    expect(HARNESS_MATRIX.length).toBeGreaterThanOrEqual(6);
     for (const harness of HARNESS_MATRIX) {
       const graphPath = join(harness.engineRoot, "tools", "data", "stage-graph.json");
       const g = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{

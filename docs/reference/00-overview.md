@@ -8,7 +8,7 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 
 > **Paths in this reference.** AI-DLC is authored once and generated per harness, so a file is named by one of four conventions, by intent:
 > - **`core/…`** -- the hand-authored, harness-neutral **source of truth** (e.g. `core/tools/aidlc-orchestrate.ts`, `core/aidlc-common/stages/`). This is where you edit. When a path names where a file is *authored* or *changed*, it is a `core/` path.
-> - **`dist/<harness>/…`** -- an **ignored local generated** source/development projection (`dist/claude/.claude/`, `dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/opencode/`, `dist/copilot/`). Never hand-edited or committed; materialized by `bun scripts/package.ts`. Release payloads use `runtime/<harness>/` inside `aidlc-runtime-X.Y.Z.tar.gz`.
+> - **`dist/<harness>/…`** -- an **ignored local generated** source/development projection (`dist/claude/.claude/`, `dist/kiro/.kiro/`, `dist/codex/`, `dist/opencode/`, `dist/copilot/`). Never hand-edited or committed; materialized by `bun scripts/package.ts`. Release payloads use `runtime/<harness>/` inside `aidlc-runtime-X.Y.Z.tar.gz`.
 > - **`<harness-dir>/…`** (e.g. `.claude/`, `.kiro/`, `.codex/`) -- the **runtime** location inside an *installed* project, where commands run and the framework reads/writes during a workflow (`{{INVOKE}} engine graph compile`, `loadAgents()` reading `.claude/agents/`). The directory is a parameter of the harness.
 >
 > Where this reference shows a bare `.claude/` path, read it as the runtime location for the Claude harness specifically; the same file is authored in `core/` and ships to each harness's own directory.

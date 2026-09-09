@@ -1041,7 +1041,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t211-detect-submodules.test.ts",
     "unit/t212-doctor-submodules.test.ts",
     "unit/t221-reviewer-scope-hook.test.ts",
-    "unit/t218-kiro-ide-hook-adapter.test.ts",
+    "unit/t218-kiro-hook-adapter-channel.test.ts",
     "unit/t222-plugin-runner-naming.test.ts",
     "unit/t223-naming-enforcement.test.ts",
     "unit/t232-phase-progress-flip.test.ts",

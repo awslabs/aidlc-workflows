@@ -905,24 +905,36 @@ describe("t264 (c) harness registration", () => {
     expect(adapter).toContain('input: claudeShaped("PreToolUse", reviewerToolName)');
   });
 
-  test("Kiro IDE ships the hook body but NO registration (prose-only harness)", () => {
-    // The body lands via the whole-dir hooks copy; no .kiro.hook wiring file
-    // consumes it (PreToolUse tool inputs are not uniformly available there).
-    expect(existsSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-review-freeze.ts"))).toBe(true);
+  test("Kiro ships the hook body AND a blocking registration", () => {
+    // This used to pin the opposite - body copied, no wiring file, prose-only -
+    // because PreToolUse tool inputs were not uniformly available on the IDE.
+    // They are on the supported generation, and PreToolUse is the only trigger
+    // that can refuse the write this guard exists to refuse, so the registration
+    // is the point.
     expect(
-      existsSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-review-freeze.kiro.hook")),
-    ).toBe(false);
-    const ideConductor = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "agents", "aidlc.md"),
-      "utf-8",
-    );
-    expect(ideConductor).not.toContain("review-freeze");
-    for (const name of readdirSync(join(REPO_ROOT, "harness", "kiro-ide", "agents"))) {
-      if (!name.endsWith("-agent.md")) continue;
+      existsSync(join(REPO_ROOT, "dist", "kiro", ".kiro", "hooks", "aidlc-review-freeze.ts")),
+    ).toBe(true);
+    const manifestPath = join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-review-freeze.json");
+    expect(existsSync(manifestPath), manifestPath).toBe(true);
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      hooks: Array<{ trigger?: string; matcher?: string }>;
+    };
+    for (const hook of parsed.hooks) {
+      expect(hook.trigger).toBe("PreToolUse");
+      for (const tool of ["fs_write", "str_replace", "delete_file", "execute_bash"]) {
+        expect(new RegExp(hook.matcher ?? "").test(tool), tool).toBe(true);
+      }
+    }
+    // Registration lives in the manifests, never inside an agent file.
+    for (const name of readdirSync(join(REPO_ROOT, "harness", "kiro", "agents"))) {
       expect(
-        readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "agents", name), "utf-8"),
+        readFileSync(join(REPO_ROOT, "harness", "kiro", "agents", name), "utf-8"),
         name,
       ).not.toContain("review-freeze");
     }
+    // The agent-v1 wiring generation must not come back.
+    expect(
+      existsSync(join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-review-freeze.kiro.hook")),
+    ).toBe(false);
   });
 });

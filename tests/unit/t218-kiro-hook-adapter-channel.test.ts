@@ -1,4 +1,4 @@
-// t218-kiro-ide-hook-adapter: the Kiro IDE hook shim normalizes the IDE's hook
+// t218-kiro-hook-adapter-channel: the Kiro IDE hook shim normalizes the IDE's hook
 // context into the core hooks' contract. The channel changed across IDE
 // generations and the adapter accepts BOTH (upstream #543/#555):
 //   - IDE 1.x: JSON on STDIN, snake_case { tool_name, tool_input,
@@ -17,7 +17,7 @@
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/env/stdout/exit-code surface being contracted.
-// Each case runs `bun dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts <target>`
+// Each case runs `bun dist/kiro/.kiro/hooks/aidlc-kiro-adapter.ts <target>`
 // with the context on stdin (1.x) or in USER_PROMPT (0.12) and asserts the
 // observable effect.
 
@@ -63,7 +63,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
+const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 
 const PINNED_CLONE_ID = "testcloneid218";
 function pinnedShardName(): string {
@@ -79,7 +79,7 @@ function pinnedShardName(): string {
 function seedShell(dir: string): void {
   const intentsDir = intentsDirOf(dir, DEFAULT_SPACE);
   cpSync(
-    join(KIRO_IDE_TREE, "tools", "data", "memory-seed"),
+    join(KIRO_TREE, "tools", "data", "memory-seed"),
     join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"),
     { recursive: true },
   );
@@ -99,7 +99,7 @@ function seedShell(dir: string): void {
 
 function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t218-"));
-  cpSync(KIRO_IDE_TREE, join(dir, ".kiro"), { recursive: true });
+  cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
   seedShell(dir);
   if (withState) {
     writeFileSync(
@@ -319,7 +319,7 @@ function runIdeStdin(
   };
 }
 
-/** Exercise the hidden `aidlc engine adapter kiro-ide` dispatcher route rather than
+/** Exercise the hidden `aidlc engine adapter kiro` dispatcher route rather than
  * invoking the adapter file directly. */
 function runIdeDispatcherStdin(
   projectDir: string,
@@ -334,7 +334,7 @@ function runIdeDispatcherStdin(
       join(projectDir, ".kiro", "tools", "aidlc.ts"),
       "engine",
       "adapter",
-      "kiro-ide",
+      "kiro",
       target,
     ],
     { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
@@ -407,7 +407,7 @@ function installArgvUtility(dir: string): string {
   return argvPath;
 }
 
-describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
+describe("t218 Kiro hook adapter (channel normalization)", () => {
   test("1: audit-and-sensors resolves a RELATIVE toolResult path (real IDE shape) and logs CREATE", () => {
     const dir = scratchProject(true);
     try {
@@ -1499,7 +1499,7 @@ async function runIdeDispatcherOpenStdin(
       join(projectDir, ".kiro", "tools", "aidlc.ts"),
       "engine",
       "adapter",
-      "kiro-ide",
+      "kiro",
       target,
     ],
     userPrompt,
@@ -1546,7 +1546,7 @@ async function runOpenStdinCommand(
   return { code: proc.exitCode, elapsedMs, stdout, timedOut: false };
 }
 
-describe("t218 Kiro IDE plan-approval enforcement", () => {
+describe("t218 Kiro legacy plan-approval enforcement", () => {
   test("populated 1.x PreToolUse write and dispatch payloads are blocked before approval", () => {
     const dir = scratchProject(true);
     try {
@@ -1775,18 +1775,19 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
     const dir = scratchProject(true);
     try {
+      // The legacy `.kiro.hook` registration this used to read is gone with the
+      // row merge; the standalone manifest is the registration channel now. The
+      // 0.12 payload path below is what this case is really about, and the
+      // adapter still accepts it.
       const registration = JSON.parse(
         readFileSync(
-          join(KIRO_IDE_TREE, "hooks", "aidlc-record-human-turn.kiro.hook"),
+          join(KIRO_TREE, "hooks", "aidlc-record-human-turn.json"),
           "utf-8",
         ),
-      ) as {
-        when?: { type?: string };
-        then?: { command?: string };
-      };
-      expect(registration.when?.type).toBe("promptSubmit");
-      expect(registration.then?.command).toContain(
-        "engine adapter kiro-ide record-human-turn",
+      ) as { hooks?: Array<{ trigger?: string; action?: { command?: string } }> };
+      expect(registration.hooks?.[0]?.trigger).toBe("UserPromptSubmit");
+      expect(registration.hooks?.[0]?.action?.command).toContain(
+        "engine adapter kiro record-human-turn",
       );
       initGitWorkspace(dir);
       seedCodeGenerationDirective(dir);

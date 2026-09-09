@@ -41,7 +41,7 @@ failure and prints the command above; it never runs `apk` or installs system
 packages. The upstream Bun tracking includes `oven-sh/bun#15829` and
 `oven-sh/bun#29681`.
 
-The installer includes `claude`, `kiro`, `kiro-ide`, `codex`, and `opencode`
+The installer includes `claude`, `kiro`, `codex`, and `opencode`
 together:
 
 ```bash

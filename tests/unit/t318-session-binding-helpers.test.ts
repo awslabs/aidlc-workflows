@@ -391,7 +391,6 @@ describe("t318 session binding helpers", () => {
       "copilot",
       "cursor",
       "kiro",
-      "kiro-ide",
       "opencode",
     ]) {
       const body = readFileSync(

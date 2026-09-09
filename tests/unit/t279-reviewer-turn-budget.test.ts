@@ -404,17 +404,18 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("kiro-ide SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the module pointer)", () => {
-    const body = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", SKILL), "utf-8");
+  test("the kiro SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the module pointer)", () => {
+    const body = readFileSync(join(REPO_ROOT, "harness", "kiro", SKILL), "utf-8");
     expect(body).toContain("stage-protocol-reviewer.md");
     expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
-    // The shared module keeps the guard prose and grants kiro-ide its
-    // no-dispatch-record carve-out explicitly.
+    // The shared module keeps the guard prose. Its carve-out for a harness
+    // without reviewer-scope enforcement is gone: this row enforces the hook now,
+    // so the dispatch record is written like anywhere else.
     const module = readFileSync(
-      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
+      join(REPO_ROOT, "dist", "kiro", ".kiro", "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
       "utf-8",
     );
     expect(module).toContain(MISSING_VERDICT_FINDING);
-    expect(module).toContain("(Kiro IDE today), do not write the record");
+    expect(module).toContain("Every shipped harness enforces this hook");
   });
 });

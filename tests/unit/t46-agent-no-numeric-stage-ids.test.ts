@@ -68,12 +68,6 @@ const DELEGATED_SURFACES = [
     harnessDir: ".cursor",
   },
   {
-    name: "kiro-ide",
-    root: join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents"),
-    ext: ".md",
-    harnessDir: ".kiro",
-  },
-  {
     name: "kiro",
     root: join(REPO_ROOT, "dist", "kiro", ".kiro", "agents"),
     ext: ".md",

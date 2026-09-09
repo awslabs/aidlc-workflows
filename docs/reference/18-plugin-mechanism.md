@@ -555,7 +555,7 @@ Cursor's emitted hook uses Cursor's flat camelCase schema
 `./hooks/aidlc-plugin-compose.ts .cursor`. That Bun launcher uses `Bun.which`
 and `process.execPath` to probe `aidlc` and run the sibling `compose.ts`
 portably, without a `sh -c` dependency on native Windows. Kiro IDE's v2
-SessionStart registration uses the same launcher with `.kiro kiro-ide` after
+The lifecycle registrations use the same launcher with `.kiro kiro` after
 the projection is folder-dropped into the workspace root.
 
 **Install, per host:**

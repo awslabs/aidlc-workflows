@@ -1499,13 +1499,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("15: shipped kiro + kiro-ide adapter sources respawn via process.execPath, never a bare 'bun' argv[0]", () => {
+  test("15: the shipped kiro adapter source respawns via process.execPath, never a bare 'bun' argv[0]", () => {
     // Source pin (matches this suite's grep-pin style). Both shipped adapter
     // copies must spawn children via the running interpreter, so a stale
     // regeneration or a hand-edit reintroducing the bare-name respawn reds here.
     for (const adapter of [
       join(REPO_ROOT, "dist", "kiro", ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
-      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
     ]) {
       const src = readFileSync(adapter, "utf-8");
       // No spawn whose argv[0] is the bare literal "bun".

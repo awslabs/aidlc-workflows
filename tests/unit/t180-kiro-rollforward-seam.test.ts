@@ -242,7 +242,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
   });
 
   // 2d/2e are the KIRO-ONLY half of the knowledge noun. The failure mode is
-  // asymmetric: `/aidlc knowledge …` can work in Claude, Codex, kiro-ide and
+  // asymmetric: `/aidlc knowledge …` can work in Claude, Codex, Kiro and
   // opencode and still be swallowed here, because only Kiro runs this pre-LLM
   // interceptor. Nothing outside this file catches that.
   test("2d: knowledge onboard dispatches off-band and stamps the knowledge-verb latch", () => {

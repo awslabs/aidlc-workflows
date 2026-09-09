@@ -19,6 +19,7 @@
 //   - AGENTS.md lands at the PROJECT ROOT (dist/kiro/AGENTS.md), outside .kiro/.
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
+import { TRUSTED_COMMAND_PREFIX } from "../../core/tools/aidlc-command.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
@@ -58,6 +59,22 @@ const manifest: HarnessManifest = {
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
         ],
       },
+    },
+  ],
+
+  // The IDE surface needs its hook and tool invocations pre-trusted, or an
+  // untrusted project command silently never runs. Native-channel only: the Bun
+  // copy channel invokes through `bun .kiro/...`, which the IDE already allows.
+  // Carried over from the folded row - one row serves both surfaces, so the
+  // integration follows the surface that needs it rather than the row name.
+  nativeRootIntegrations: [
+    {
+      content: `${JSON.stringify({
+        "kiroAgent.trustedCommands": [`${TRUSTED_COMMAND_PREFIX} *`],
+      }, null, 2)}\n`,
+      path: ".vscode/settings.json",
+      policy: "json-array",
+      jsonKey: "kiroAgent.trustedCommands",
     },
   ],
 

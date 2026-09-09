@@ -271,7 +271,7 @@ scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
 dist/<harness>/        # GENERATED + ignored: claude/.claude, kiro/.kiro,
-                       #   kiro-ide/.kiro, codex/{.codex,.agents},
+                       #   codex/{.codex,.agents},
                        #   opencode/{.aidlc,.opencode}, copilot/{.aidlc,.github} — never hand-edited
 ```
 

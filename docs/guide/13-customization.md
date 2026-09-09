@@ -13,8 +13,7 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > (permissions only), opencode in the project-root `opencode.json`, and Copilot
 > in `.github/hooks/aidlc.json` (hook wiring) + `~/.copilot/config.json`
 > (folder trust) — see
-> [Running on Kiro CLI](harnesses/kiro-cli.md),
-> [Running on Kiro IDE](harnesses/kiro-ide.md),
+> [Running on Kiro](harnesses/kiro.md),
 > [Running on Codex CLI](harnesses/codex-cli.md),
 > [AI-DLC on Cursor](harnesses/cursor.md),
 > [AI-DLC on opencode](harnesses/opencode.md), and

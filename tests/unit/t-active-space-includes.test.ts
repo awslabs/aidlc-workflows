@@ -210,7 +210,7 @@ describe("t-active-space-includes: Kiro IDE steering follows the active space", 
     const steeringPath = join(steeringDir, "aidlc-active-memory.md");
     cpSync(
       distSurface(
-        "kiro-ide",
+        "kiro",
         ".kiro",
         "steering",
         "aidlc-active-memory.md",
@@ -239,7 +239,7 @@ describe("t-active-space-includes: Kiro IDE steering follows the active space", 
     const steeringPath = join(steeringDir, "aidlc-active-memory.md");
     cpSync(
       distSurface(
-        "kiro-ide",
+        "kiro",
         ".kiro",
         "steering",
         "aidlc-active-memory.md",

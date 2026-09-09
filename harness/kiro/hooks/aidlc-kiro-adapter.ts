@@ -1898,9 +1898,22 @@ function buildForward(): Forward {
           },
         };
       }
+      // A delegation is never an opaque mutation. The classifier asks "is this a
+      // write whose target the host failed to report?", which is why a
+      // mutation-capable tool with no path counts - but a dispatch has no path by
+      // construction: its payload is a prompt. Without this carve-out every
+      // delegation during code-generation was diverted into the legacy 0.x
+      // recovery machinery, which pre-empts the core guard and answers with a
+      // recovery message instead of the guard's own reasoning. Measured on a
+      // seeded fixture: all three dispatch shapes hit the "authority state is
+      // missing or corrupt" fallback instead of reaching plan-approval-guard.
+      const dispatching =
+        DISPATCH_TOOL_NAMES.has(toolName) ||
+        (toolName.startsWith("subagent_") && toolName !== "subagent_response");
       const opaqueMutation =
         toolName === "" ||
         (
+          !dispatching &&
           mutationCapableTool(toolName) &&
           (
             Object.keys(toolArgs).length === 0 ||
@@ -2448,7 +2461,7 @@ function buildForward(): Forward {
     case "continue-workflow":
       // ADVISORY ONLY ON THIS HARNESS. The IDE's `Stop` trigger cannot block and
       // does not forward the hook's output — matching what
-      // aidlc-continue-workflow.json and the kiro-ide guide have always said.
+      // aidlc-continue-workflow.json and the Kiro guide have always said.
       // Measured live on IDE 1.x with a probe hook: the command RAN (witness
       // file written), and neither its stdout nor its stderr reached the
       // agent's context. The Stop payload is only

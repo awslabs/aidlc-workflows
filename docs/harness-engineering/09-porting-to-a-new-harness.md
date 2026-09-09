@@ -79,7 +79,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for
-  in-tree harnesses (claude, kiro, kiro-ide); codex emits them instead.
+  in-tree harnesses (claude, kiro); codex emits them instead.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into each channel (supported text formats get token
   substitution).
@@ -90,7 +90,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   that tree, such as `.agents/skills/aidlc/SKILL.md`.
 - `frontmatterAdditions` (optional) - per-file YAML lines appended to a
   core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
-  field that must not ship to other harnesses (kiro-ide injects
+  field that must not ship to other harnesses (kiro injects
   `tools: ["read", "write", "shell"]` into its delegation-target agent files -
   the IDE reads subagent tool grants from the `.md` frontmatter). Declared as
   manifest data so core stays single-source; the packager errors on a typo'd

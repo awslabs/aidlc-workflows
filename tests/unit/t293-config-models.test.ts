@@ -331,7 +331,6 @@ describe("t293 model policy resolution", () => {
       ["copilot", ".aidlc"],
       ["cursor", ".cursor"],
       ["kiro", ".kiro"],
-      ["kiro-ide", ".kiro"],
       ["opencode", ".aidlc"],
     ];
     for (const [harness, dir] of roots) {

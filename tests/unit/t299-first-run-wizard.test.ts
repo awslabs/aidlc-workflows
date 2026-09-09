@@ -138,7 +138,7 @@ function runWizard(
   mkdirSync(join(project, ".git"));
   executable(join(bin, "claude"), "claude 2.1.220");
   for (const [name, value] of Object.entries(options.harnesses ?? {})) {
-    if (!value.found || name === "claude" || name === "kiro-ide") continue;
+    if (!value.found || name === "claude") continue;
     executable(
       join(bin, name === "kiro" ? "kiro-cli" : name),
       value.version ?? `${name} 1.0.0`,
