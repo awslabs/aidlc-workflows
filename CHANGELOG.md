@@ -3,12 +3,17 @@ All notable changes to this project will be documented in this file.
 
 ## [2.8.2] - 2026-09-10
 
-Improve review-findings table diagnostics so a missing cell no longer produces a misleading status error or guesses which column was omitted. Malformed rows report their cell count and the expected column order, with a repair hint when the last cell looks like a shifted status. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. No migration is required.
+Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
 
 * Short review-findings rows show the expected columns and, when applicable, suggest checking earlier cells for a missing value or `|` separator. Review completion remains refused until the row is corrected. Closes #1076.
 * Review-findings rows with surplus cells report the extra count. Well-formed rows, including escaped pipes and explicit blank cells, retain their existing behavior.
+* `aidlc version` reports `2.8.2`; the unpublished `2.8.6` development version is superseded.
+* Appending `## Assumption Confirmation` after a confirmed summary with an adjacent, blank-delimited `---`, `***`, or `___` no longer causes `SUMMARY_CONTENT_STALE` during stage completion. Code examples before the assumption heading and follow-up answers remain covered by the receipt, so substantive edits still require confirmation. Closes #1074.
+* Content appended under a `## ` heading is separated from the following `## ` heading by a blank line, keeping method files well-formed. Closes #1075.
 
 ## [2.8.6] - 2026-09-09
+
+**Superseded development entry:** No 2.8.6 release was published. The intended release version is 2.8.2, documented above; this entry is retained as development history.
 
 Fix a markdown-hygiene defect in the shared section writer: `appendUnderHeading` inserted new content flush against the following `## ` heading, so a bullet written under a section (for example a self-learning entry under `## Decided` in `project.md`) abutted the next heading with no separating blank line. The engine re-reads `project.md` every stage and the file is human-editable, so the malformed markdown could misgroup for a re-reading model or a stricter markdown tool. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration is required; existing files are corrected the next time content is appended to an affected section.
 
