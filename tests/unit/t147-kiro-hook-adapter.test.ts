@@ -141,6 +141,13 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+/** The adapter's own drop log, one line per recorded degradation. */
+function dropLines(dir: string): string[] {
+  const path = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf-8").split("\n").filter((l) => l.trim().length > 0);
+}
+
 function appendInteractionEvent(
   dir: string,
   event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
@@ -1135,6 +1142,65 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code, "two personas inflight must not disable the guard").toBe(2);
       expect(r.stderr).toContain("This review cannot open");
+      // The attribution and its cost are recorded, since the refusal may belong
+      // to the other delegate.
+      expect(dropLines(dir)).toHaveLength(1);
+      expect(dropLines(dir)[0]).toContain("attributed to the dispatched reviewer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g2: a crew with no review in flight leaves the drop log clean", () => {
+    // Regression: the ambiguity branch logged a drop whenever two delegates were
+    // inflight, including when NO dispatch record existed - the ordinary state of
+    // a crew stage. That appended a line per guarded call for the whole stage,
+    // and a non-empty .drops file is a release signal in this repo.
+    const dir = scratchProject(true);
+    try {
+      openDelegationWindow(dir, "aidlc-developer-agent");
+      openDelegationWindow(dir, "aidlc-quality-agent");
+      for (let i = 0; i < 3; i++) {
+        const r = runAdapter(dir, "reviewer-scope", {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "read_file",
+          tool_input: { path: `construction/todo-core/file-${i}.md` },
+        });
+        expect(r.code, "no review in flight: nothing to enforce").toBe(0);
+      }
+      expect(dropLines(dir), "no record means no drop").toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g3: a record naming a delegate that is not inflight is a drop", () => {
+    // The other half of the same branch: enforcement WAS expected here, and the
+    // adapter could not attribute the call, so the gap is recorded.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-quality-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      openDelegationWindow(dir, "aidlc-developer-agent");
+      const r = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "read_file",
+        tool_input: { path: "construction/sibling-unit/design.md" },
+      });
+      expect(r.code, "identity unresolved: fail open").toBe(0);
+      expect(dropLines(dir)).toHaveLength(1);
+      expect(dropLines(dir)[0]).toContain("is not among them");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

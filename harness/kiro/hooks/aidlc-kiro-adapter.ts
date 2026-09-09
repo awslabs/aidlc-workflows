@@ -1618,20 +1618,27 @@ if (target === "reviewer-scope") {
   // outside the reviewed artifact during the same window is refused as if it were
   // the reviewer. That is the direction to err in - this guard only bounds reads
   // and writes outside one artifact, and a refusal is recoverable where a missed
-  // violation is not. It is recorded either way.
+  // violation is not. Both outcomes under a live review are recorded as drops.
   const latched = inflightDelegates(
     ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
   );
   let registeredAgent = latched.length === 1 ? latched[0] : "";
   if (registeredAgent === "" && latched.length > 1) {
+    // No record means no review is in flight, which is the ordinary state of a
+    // crew stage - the core hook fails open on its own and there is nothing to
+    // report. Only a record that exists and cannot be attributed is a drop;
+    // logging the recordless case appended a line per guarded call for the
+    // whole stage, and a non-empty .drops file is a release signal here.
+    const recordPath = reviewerDispatchPath(projectDir);
+    const reviewInFlight = existsSync(recordPath);
     let dispatchedReviewer = "";
-    try {
-      const record = JSON.parse(
-        readFileSync(reviewerDispatchPath(projectDir), "utf-8"),
-      ) as { reviewer?: unknown };
-      if (typeof record.reviewer === "string") dispatchedReviewer = record.reviewer.trim();
-    } catch {
-      dispatchedReviewer = ""; // no record: the core hook fails open on its own
+    if (reviewInFlight) {
+      try {
+        const record = JSON.parse(readFileSync(recordPath, "utf-8")) as { reviewer?: unknown };
+        if (typeof record.reviewer === "string") dispatchedReviewer = record.reviewer.trim();
+      } catch {
+        dispatchedReviewer = ""; // malformed record: the core hook fails open on its own
+      }
     }
     if (dispatchedReviewer !== "" && latched.includes(dispatchedReviewer)) {
       registeredAgent = dispatchedReviewer;
@@ -1642,13 +1649,17 @@ if (target === "reviewer-scope") {
           latched.join(", ")
         }) — attributed to the dispatched reviewer "${dispatchedReviewer}"; a call from another delegate is refused as if it were the reviewer's`,
       );
-    } else {
+    } else if (reviewInFlight) {
       recordHookDrop(
         projectDir,
         "kiro-adapter",
         `reviewer-scope: ${latched.length} delegates inflight (${
           latched.join(", ")
-        }) and none is the dispatched reviewer — read-scope not enforced`,
+        }) and ${
+          dispatchedReviewer === ""
+            ? "the dispatch record names no reviewer"
+            : `the dispatched reviewer "${dispatchedReviewer}" is not among them`
+        } — read-scope not enforced`,
       );
     }
   }

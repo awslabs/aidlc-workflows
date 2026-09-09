@@ -24,14 +24,12 @@
 // exempt[]} - the facts no harness payload delivers. Identity comes from the
 // harness: Claude Code and Codex put the active subagent's name in the
 // payload's agent_type (absent on main-session calls; probe-verified on
-// both), and the Kiro CLI adapter asserts scoped registration instead (it
-// wires this hook inside the reviewer agents' own JSON configs, so every
-// call arriving through that registration IS the reviewer's). Kiro IDE
-// ships no registration: tool inputs are not uniformly available across its
-// supported generations (captured 0.12 and early-1.x payloads are empty; later
-// 1.x builds populate some PreToolUse and delegation inputs - see
-// docs/reference/kiro-ide-hook-payload.md), and its payloads carry no
-// agent_type, so no stable identity/target contract exists there.
+// both). A harness whose payloads carry no such field substitutes its own
+// signal: OpenCode asserts scoped_registration for an unnamed child session
+// while a dispatch record exists, and the Kiro adapter resolves the acting
+// delegate from its delegation window - the dispatch tool's PreToolUse /
+// PostToolUse pair - falling back to this record's `reviewer` when more than
+// one delegate is inflight (harness/kiro/hooks/aidlc-kiro-adapter.ts).
 //
 // Fail-open everywhere: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
@@ -1001,16 +999,12 @@ export async function run(input: string): Promise<number> {
 
   // Identity: enforce only for the dispatched reviewer. Claude Code and Codex
   // deliver the active subagent's name as agent_type (absent on main-session
-  // calls). The Kiro CLI adapter instead asserts scoped_registration - it
-  // registers this hook inside the reviewer agents' own JSON configs, so
-  // every call arriving through that registration is the reviewer's. (Kiro
-  // IDE ships no registration at all: tool inputs are not uniformly available
-  // across its supported generations - captured 0.12 and early-1.x payloads
-  // are empty, while later 1.x builds populate some PreToolUse and delegation
-  // inputs (see docs/reference/kiro-ide-hook-payload.md) - and its payloads
-  // carry no agent_type, so no stable identity/target contract exists there.)
-  // Anything else - the conductor's own calls, other subagents - passes
-  // through untouched.
+  // calls). The Kiro adapter has no such field either and supplies an
+  // agent_type it resolved from its delegation window (see the header note).
+  // An adapter that can establish only that the call belongs to the dispatched
+  // reviewer, without a name for it, asserts scoped_registration instead -
+  // OpenCode does that from an unnamed child session. Anything else - the
+  // conductor's own calls, other subagents - passes through untouched.
   const agentType = parsed.agent_type ?? "";
   const scopedRegistration = parsed.scoped_registration === true;
   const isDispatchedReviewer =

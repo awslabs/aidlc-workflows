@@ -149,9 +149,11 @@ tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
 registrations out and document the gap rather than wiring dead hooks - the
 prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
 payloads carry no subagent identity, scope reviewer-scope registration to the
-reviewer agents themselves where the harness supports per-agent hooks (the
-Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
-matching `agent_type`).
+reviewer agents themselves where the harness supports per-agent hooks — the
+adapter then asserts `scoped_registration` instead of matching `agent_type`.
+Where it does not, derive the identity from whatever the harness does mark: an
+unnamed child session (the OpenCode pattern) or the dispatch call that opened
+the delegation window (the Kiro pattern).
 
 > **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
 > (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
