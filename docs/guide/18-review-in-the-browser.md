@@ -304,10 +304,10 @@ Which effort each *agent* runs at is not a per-intent choice. It is the project'
 model policy — `aidlc config models` (a preset, per-group dials for Deciding /
 Reviewing / Writing up, or per-agent exceptions), committed with the project and
 shared by every intent. A pin is never capped by the session's effort, and the
-session's effort never moves a pin: they are two separate controls. The Effort
-menu's **Agents** row slides that policy out read-only — each group with its
-agents and effort (*inherits the session* when nothing pins it), any exceptions —
-so what you see there is what the run will use.
+session's effort never moves a pin: they are two separate controls. Settings
+shows that policy — each group with its agents and effort (*inherits the
+session* when nothing pins it), any exceptions — so what you see there is what
+the run will use.
 
 ### Settings
 

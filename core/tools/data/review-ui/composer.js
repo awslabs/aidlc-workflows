@@ -2,10 +2,10 @@
 //
 // The box above the Inbox where a new intent starts: which workspace (a team's
 // world under aidlc/spaces/), what to build, which workflow (a scope, or let
-// the composer decide), and the session effort the run's agent session itself
-// thinks at. Which effort each *agent* runs at is project policy (`aidlc config
-// models`, committed with the project) - the Effort menu shows it read-only so
-// the human sees what the run will use; it is not a per-intent choice. With an
+// the composer decide), and the effort the run's agent session itself thinks
+// at. Which effort each *agent* runs at is project policy (`aidlc config
+// models`, committed with the project), edited and shown in Settings - it is
+// not a per-intent choice. With an
 // agent runner on the daemon, Start creates the intent and runs the agent right
 // here; the browser follows it in the Agent panel.
 // Without one, Start records a pending request and the next bare `/aidlc` in a
@@ -15,7 +15,6 @@ import { api } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./diff.js";
 import { setNotice, store } from "./store.js";
-import { policyTable } from "./policy.js";
 
 // The shipped scopes, as `core/scopes/*.md` declares them. The catalogue will
 // come from the daemon once this leaves prototype.
@@ -180,13 +179,11 @@ function openMenuFor(anchor, kind, rerender) {
 }
 
 function closeOnOutside(event) {
-  const inside = (openMenu && openMenu.contains(event.target)) || (openCascade && openCascade.contains(event.target));
-  if (openMenu && !inside) closeMenu();
+  if (openMenu && !openMenu.contains(event.target)) closeMenu();
   else if (openMenu) document.addEventListener("mousedown", closeOnOutside, { once: true });
 }
 
 export function closeMenu() {
-  closeCascade();
   openMenu?.remove();
   openMenu = null;
 }
@@ -207,10 +204,9 @@ function scopeMenu() {
     ${byDepth.map((depth) => `<div class="composer-menu-group">${depth}</div>${SCOPES.filter((entry) => entry.depth === depth).map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.scope === entry.name}" data-pick-scope="${escapeHtml(entry.name)}"><span class="check">${draft.scope === entry.name ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(entry.name)}</b><small>${escapeHtml(entry.description)}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ""}</small></button>`).join("")}`).join("")}`;
 }
 
-// Effort, as a two-level menu. The first level is the one question a run
-// asks - how hard should this session think? - with the default named. The
-// "Agents" row slides out the project's policy (read-only here; Settings edits
-// it) so the human can see what each agent will run at without leaving the box.
+// Effort: the one question a run asks - how hard should this session think? -
+// with the default named. What each agent is pinned to is project policy and
+// lives in Settings (the rail's cog), not here.
 const LEVELS = [
   ["low", "Low", "Quick and cheap; fine for small, well-understood work"],
   ["medium", "Medium", "The everyday setting"],
@@ -221,55 +217,13 @@ const LEVELS = [
 function effortMenu() {
   const sessionDial = runnerAvailable() && store.workflow?.runner_effort;
   const fallback = store.workflow?.runner_default_effort;
-  const policy = store.workflow?.models_policy;
   const current = draft.sessionEffort || "default";
   const row = (value, label, small) => `<button type="button" role="menuitemradio" aria-checked="${current === value}" data-pick-effort="${value}"><span class="check">${current === value ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(label)}</b><small>${escapeHtml(small)}</small></button>`;
-  const summary = policy
-    ? policy.preset ? `preset ${policy.preset}` : policy.shipped_defaults ? "shipped defaults" : "project policy"
-    : "not available";
   return `<div class="composer-menu-title">Effort</div>
     ${sessionDial
       ? `${row("default", fallback ? `Default (${fallback.level})` : "Default", fallback ? `Your setting, from ${fallback.source}` : "The model's own default")}
     ${LEVELS.map(([value, label, small]) => row(value, label, small)).join("")}`
-      : `<p class="composer-menu-note">This runner takes no per-run effort; the session's own setting applies.</p>`}
-    <div class="composer-menu-sep"></div>
-    <button type="button" role="menuitem" class="composer-cascade" data-cascade="agents" aria-haspopup="menu"><span class="check"></span><b>Agents <span class="composer-menu-value">${escapeHtml(summary)}</span>${icon("chevronRight", { size: 12 })}</b><small>What each agent runs at under this project's policy</small></button>
-    <button type="button" role="menuitem" data-open-settings><span class="check"></span><b>Settings…</b><small>Change the project policy</small></button>`;
-}
-
-// The slide-out: the same table Settings shows, read-only.
-function agentsCascade() {
-  const policy = store.workflow?.models_policy;
-  const header = policy?.preset ? `Agents · preset <b>${escapeHtml(policy.preset)}</b>` : policy?.shipped_defaults ? "Agents · shipped defaults" : "Agents";
-  return `<div class="composer-menu-title">${header}</div>
-    ${policyTable(policy)}
-    <p class="composer-menu-note">Project policy · change it in Settings or with <code>aidlc config models</code></p>`;
-}
-
-let openCascade = null;
-
-function openCascadeFor(anchor, menu, rerender) {
-  closeCascade();
-  const panel = document.createElement("div");
-  panel.className = "composer-menu composer-menu-cascade";
-  panel.setAttribute("role", "menu");
-  panel.innerHTML = agentsCascade();
-  document.body.append(panel);
-  const at = anchor.getBoundingClientRect();
-  const box = menu.getBoundingClientRect();
-  const size = panel.getBoundingClientRect();
-  // To the right of the menu when there is room, else to the left.
-  const right = box.right + 6;
-  const left = right + size.width <= window.innerWidth - 8 ? right : Math.max(8, box.left - size.width - 6);
-  panel.style.left = `${Math.round(left)}px`;
-  panel.style.top = `${Math.round(Math.min(at.top - 8, window.innerHeight - size.height - 8))}px`;
-  openCascade = panel;
-  panel.querySelector("[data-open-settings]")?.addEventListener("click", () => { closeMenu(); store.emit("open-settings", "models"); });
-}
-
-function closeCascade() {
-  openCascade?.remove();
-  openCascade = null;
+      : `<p class="composer-menu-note">This runner takes no per-run effort; the session's own setting applies.</p>`}`;
 }
 
 function bindMenu(menu, kind, rerender) {
@@ -294,13 +248,4 @@ function bindMenu(menu, kind, rerender) {
     closeMenu();
     rerender();
   });
-  const cascade = menu.querySelector("[data-cascade]");
-  if (cascade) {
-    const open = () => openCascadeFor(cascade, menu, rerender);
-    cascade.addEventListener("mouseenter", open);
-    cascade.addEventListener("click", (event) => { event.stopPropagation(); if (openCascade) closeCascade(); else open(); });
-    // Leaving the row towards anything but the slide-out closes it.
-    menu.addEventListener("mouseleave", (event) => { if (openCascade && !openCascade.contains(event.relatedTarget)) closeCascade(); });
-  }
-  menu.querySelector("[data-open-settings]")?.addEventListener("click", () => { closeMenu(); store.emit("open-settings", "models"); });
 }
