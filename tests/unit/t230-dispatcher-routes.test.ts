@@ -2434,6 +2434,25 @@ describe("t230 dispatcher hook routing", () => {
       expect(copilot.path.endsWith("aidlc-copilot-adapter.ts")).toBe(true);
     }
 
+    // The spelling 2.8.0 wrote into every native Copilot project. It is
+    // project-owned wiring, so the dispatcher must keep resolving it to the
+    // adapter action (target and extra args intact) for `aidlc update` alone
+    // to restore those projects.
+    const legacy = resolveAction([
+      "engine",
+      "hook",
+      "copilot-adapter",
+      "guard-tool-call",
+      "aidlc-product-lead-agent",
+    ]);
+    expect(legacy.type).toBe("adapter");
+    if (legacy.type === "adapter") {
+      expect(legacy.harness).toBe("copilot");
+      expect(legacy.target).toBe("guard-tool-call");
+      expect(legacy.extraArgs).toEqual(["aidlc-product-lead-agent"]);
+      expect(legacy.path.endsWith("aidlc-copilot-adapter.ts")).toBe(true);
+    }
+
     const cursor = resolveAction(["engine", "adapter", "cursor", "validate-state"]);
     expect(cursor.type).toBe("adapter");
     if (cursor.type === "adapter") {
@@ -2527,28 +2546,29 @@ describe("t230 dispatcher hook routing", () => {
   });
 
   test("Copilot adapter target dispatches through the installed harness adapter", () => {
-    const projectDir = makeProject();
-    cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(projectDir, ".aidlc"), {
-      recursive: true,
-    });
-    const input = JSON.stringify({
-      hook_event_name: "PreCompact",
-      cwd: projectDir,
-      session_id: "t230-copilot",
-    });
-    const res = viaDispatcher(
+    for (const route of [
       ["engine", "adapter", "copilot", "validate-state"],
-      projectDir,
-      {},
-      input,
-    );
+      ["engine", "hook", "copilot-adapter", "validate-state"],
+    ]) {
+      const projectDir = makeProject();
+      cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(projectDir, ".aidlc"), {
+        recursive: true,
+      });
+      const input = JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: projectDir,
+        session_id: "t230-copilot",
+      });
+      const res = viaDispatcher(route, projectDir, {}, input);
 
-    expect(res.exitCode).toBe(0);
-    expect(res.stderr.toString("utf-8")).toBe("");
-    expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
-    ).toBe(true);
+      expect(res.exitCode, route.join(" ")).toBe(0);
+      expect(res.stderr.toString("utf-8"), route.join(" ")).toBe("");
+      expect(
+        existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
+          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+        route.join(" "),
+      ).toBe(true);
+    }
   });
 
   test.skipIf(process.platform === "win32")(

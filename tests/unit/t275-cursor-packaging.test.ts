@@ -339,15 +339,21 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     try {
       const cursorDir = join(project, ".cursor");
       mkdirSync(cursorDir, { recursive: true });
+      // A project's own preToolUse hook sits beside the 2.8.0 AI-DLC entry; only
+      // the AI-DLC entry is owned and may be replaced.
+      const userEntry = { command: "bun scripts/my-guard.ts guards", failClosed: false };
       writeFileSync(
         join(cursorDir, "hooks.json"),
         `${JSON.stringify({
           version: 1,
           hooks: {
-            preToolUse: [{
-              command: "aidlc engine hook cursor-adapter guards",
-              failClosed: true,
-            }],
+            preToolUse: [
+              userEntry,
+              {
+                command: "aidlc engine hook cursor-adapter guards",
+                failClosed: true,
+              },
+            ],
           },
         }, null, 2)}\n`,
       );
@@ -365,10 +371,13 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const hooks = JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf-8")) as {
         hooks: Record<string, Array<{ command: string; failClosed?: boolean }>>;
       };
-      expect(hooks.hooks.preToolUse).toEqual([{
-        command: "aidlc engine adapter cursor guards",
-        failClosed: true,
-      }]);
+      expect(hooks.hooks.preToolUse).toEqual([
+        userEntry,
+        {
+          command: "aidlc engine adapter cursor guards",
+          failClosed: true,
+        },
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
