@@ -213,6 +213,46 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       input: { command: "cd construction/U03-scoring && cat ../U01-infra/functional-design/design2.md" },
       block: true,
     },
+    // -- piped stdin-reading search (no path operand) --------------------------
+    // A search command downstream of a pipe reads stdin and opens no file, so a
+    // no-operand grep/rg there must NOT be judged as a recursive sweep of ".".
+    // The first segment (an in-scope path) is allowed on its own merits.
+    {
+      name: "piped no-operand grep (2nd segment) reads stdin -> allowed",
+      tool: "Bash",
+      input: { command: "grep -rn latency construction/U03-scoring/ | grep ml" },
+      block: false,
+    },
+    {
+      name: "piped no-operand rg (2nd segment) reads stdin -> allowed",
+      tool: "Bash",
+      input: { command: "cat construction/U03-scoring/nfr.md | rg endpoint" },
+      block: false,
+    },
+    {
+      name: "three-stage pipeline, final no-operand grep reads stdin -> allowed",
+      tool: "Bash",
+      input: { command: "grep -rn x construction/U03-scoring/ | sort | grep y" },
+      block: false,
+    },
+    {
+      name: "first-segment recursive grep in a pipeline still blocks (opens '.')",
+      tool: "Bash",
+      input: { command: "grep -rn TODO | cat" },
+      block: true,
+    },
+    {
+      name: "no-operand grep after || (logical-or, not a pipe) still blocks",
+      tool: "Bash",
+      input: { command: "test -f x || grep -rn TODO" },
+      block: true,
+    },
+    {
+      name: "no-operand grep after ; (sequential, not a pipe) still blocks",
+      tool: "Bash",
+      input: { command: "echo hi ; grep -rn TODO" },
+      block: true,
+    },
     // -- Glob / Grep tools -------------------------------------------------------
     {
       name: "Glob pattern spanning siblings blocked",
@@ -348,6 +388,27 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(reason).toContain("U03-scoring");
     expect(reason).toContain("construction/*/*/*.md");
     expect(reason).toContain("the files supplied with the review");
+  });
+
+  test("a no-operand recursive grep blocks with a defaulted '.' target", () => {
+    const v = evaluateReviewerScope(
+      "Bash",
+      { command: "grep -rn TODO" },
+      DISPATCH,
+      SCOPE_CONTEXT,
+    );
+    expect(v.block).toBe(true);
+    expect(v.target).toBe(".");
+    expect(v.defaulted).toBe(true);
+  });
+
+  test("blockReason flags a defaulted target as implicit, not typed", () => {
+    const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
+    const typed = blockReason("construction/U01-infra/design.md", full, false);
+    expect(typed).not.toContain("implicit recursive search");
+    const defaulted = blockReason(".", full, true);
+    expect(defaulted).toContain("names no path");
+    expect(defaulted).toContain("implicit recursive search");
   });
 
   test("parseDispatchRecord accepts the documented shape and rejects malformed records", () => {
@@ -488,6 +549,22 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
       tool_input: { command: "grep -rn x construction/U03-scoring/" },
     });
     expect(r.code).toBe(0);
+  });
+
+  test("piped no-operand grep (reads stdin) -> exit 0 while a first-segment recursive grep blocks", () => {
+    const proj = scratchProject();
+    seedRecord(proj);
+    const piped = runHook(proj, {
+      ...SIBLING_SWEEP,
+      tool_input: { command: "grep -rn x construction/U03-scoring/ | grep y" },
+    });
+    expect(piped.code).toBe(0);
+    const firstSeg = runHook(proj, {
+      ...SIBLING_SWEEP,
+      tool_input: { command: "grep -rn TODO | cat" },
+    });
+    expect(firstSeg.code).toBe(2);
+    expect(firstSeg.stderr).toContain("names no path");
   });
 
   test("no record -> exit 0 even for a reviewer sibling sweep (nothing sound to enforce)", () => {

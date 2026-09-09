@@ -94,6 +94,10 @@ export interface ReviewerDispatch {
 export interface ScopeVerdict {
   block: boolean;
   target?: string;
+  /** True when `target` is a synthesized default search root (e.g. ".") that a
+   *  command with no path operand falls back to, not a token the caller typed.
+   *  Lets the refusal message say the offending path was implied, not written. */
+  defaulted?: boolean;
 }
 
 /** Optional path context for the pure matcher. The live hook supplies both:
@@ -310,6 +314,14 @@ function verdict(target: string): ScopeVerdict {
   return { block: true, target };
 }
 
+// Mark a block verdict whose target is a synthesized default (the "." a search
+// command falls back to with no path operand), so the refusal message can say
+// the path was implied rather than typed. A non-block or null verdict is
+// passed through untouched.
+function markDefaulted(v: ScopeVerdict | null): ScopeVerdict | null {
+  return v && v.block ? { ...v, defaulted: true } : v;
+}
+
 function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | null {
   const comps = normalizedComps(text);
   for (let i = 0; i < comps.length; i++) {
@@ -380,7 +392,10 @@ interface ShellWord {
   quoted: boolean;
 }
 
-type ShellToken = ShellWord | { sep: true };
+// A separator carries `pipe` = true only for a single `|` (a real stdin pipe);
+// `||`, `&&`, `;`, `&`, and grouping parens do NOT feed stdout to the next
+// command, so a downstream command after them is not reading a pipe.
+type ShellToken = ShellWord | { sep: true; pipe: boolean };
 
 function shellTokens(command: string): ShellToken[] {
   const tokens: ShellToken[] = [];
@@ -418,8 +433,11 @@ function shellTokens(command: string): ShellToken[] {
     }
     if (";|&()".includes(ch)) {
       pushWord();
-      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i++;
-      tokens.push({ sep: true });
+      const doubled = (ch === "|" || ch === "&") && command[i + 1] === ch;
+      if (doubled) i++;
+      // A single `|` pipes stdout to the next command's stdin; `||` (doubled)
+      // is logical-or and does not.
+      tokens.push({ sep: true, pipe: ch === "|" && !doubled });
       continue;
     }
     text += ch;
@@ -428,18 +446,29 @@ function shellTokens(command: string): ShellToken[] {
   return tokens;
 }
 
-function shellSegments(command: string): ShellWord[][] {
-  const segments: ShellWord[][] = [];
+// A command segment plus whether it receives its stdin from a pipe (the
+// preceding separator was a single `|`). A `pipedFrom` segment that names no
+// path reads stdin, not the filesystem - so a no-operand search there opens no
+// file and must not be judged as a recursive sweep of ".".
+interface ShellSegment {
+  words: ShellWord[];
+  pipedFrom: boolean;
+}
+
+function shellSegments(command: string): ShellSegment[] {
+  const segments: ShellSegment[] = [];
   let current: ShellWord[] = [];
+  let pipedFrom = false; // the first segment is never downstream of a pipe
   for (const token of shellTokens(command)) {
     if ("sep" in token) {
-      if (current.length > 0) segments.push(current);
+      if (current.length > 0) segments.push({ words: current, pipedFrom });
       current = [];
+      pipedFrom = token.pipe; // the NEXT segment reads a pipe iff this sep is `|`
     } else {
       current.push(token);
     }
   }
-  if (current.length > 0) segments.push(current);
+  if (current.length > 0) segments.push({ words: current, pipedFrom });
   return segments;
 }
 
@@ -463,6 +492,7 @@ function judgeGrepLike(
   words: ShellWord[],
   scope: PreparedScope,
   bases: readonly string[],
+  readsStdin: boolean,
 ): ScopeVerdict | null {
   let patternSeen = false;
   let rootSeen = false;
@@ -486,14 +516,17 @@ function judgeGrepLike(
     const v = judgePathAccess(w, "search-root", scope, bases);
     if (v !== null) return v;
   }
-  if (!rootSeen) return judgePathAccess(".", "search-root", scope, bases);
-  return null;
+  // No path operand: a downstream pipe segment reads stdin and opens no file
+  // (allow). Only a first-segment `grep pat` keeps the conservative "." reading.
+  if (rootSeen || readsStdin) return null;
+  return markDefaulted(judgePathAccess(".", "search-root", scope, bases));
 }
 
 function judgeRipgrep(
   words: ShellWord[],
   scope: PreparedScope,
   bases: readonly string[],
+  readsStdin: boolean,
 ): ScopeVerdict | null {
   let patternSeen = false;
   let rootSeen = false;
@@ -525,8 +558,10 @@ function judgeRipgrep(
     const v = judgePathAccess(w, "search-root", scope, bases);
     if (v !== null) return v;
   }
-  if (!rootSeen && !constrainedToCurrent) return judgePathAccess(".", "search-root", scope, bases);
-  return null;
+  // Same stdin reasoning as judgeGrepLike; the `!constrainedToCurrent` guard
+  // (a `-g`/`--glob` that pins the search to the current unit) is preserved.
+  if (rootSeen || constrainedToCurrent || readsStdin) return null;
+  return markDefaulted(judgePathAccess(".", "search-root", scope, bases));
 }
 
 function judgeFind(
@@ -542,7 +577,7 @@ function judgeFind(
     const v = judgePathAccess(w, "search-root", scope, bases);
     if (v !== null) return v;
   }
-  if (!rootSeen) return judgePathAccess(".", "search-root", scope, bases);
+  if (!rootSeen) return markDefaulted(judgePathAccess(".", "search-root", scope, bases));
   return null;
 }
 
@@ -571,7 +606,9 @@ function judgeSimpleFileCommand(
     const v = judgePathAccess(w, mode, scope, bases);
     if (v !== null) return v;
   }
-  if (!sawOperand && mode === "search-root") return judgePathAccess(".", "search-root", scope, bases);
+  if (!sawOperand && mode === "search-root") {
+    return markDefaulted(judgePathAccess(".", "search-root", scope, bases));
+  }
   return null;
 }
 
@@ -591,7 +628,7 @@ function judgeGenericCommand(
 
 function judgeCommandText(text: string, scope: PreparedScope): ScopeVerdict | null {
   let bases = scope.bases;
-  for (const segment of shellSegments(text)) {
+  for (const { words: segment, pipedFrom } of shellSegments(text)) {
     if (segment.length === 0) continue;
     const cmd = commandBasename(segment[0].text);
     if (cmd === "cd") {
@@ -606,9 +643,9 @@ function judgeCommandText(text: string, scope: PreparedScope): ScopeVerdict | nu
 
     const v =
       cmd === "grep" || cmd === "egrep" || cmd === "fgrep"
-        ? judgeGrepLike(segment, scope, bases)
+        ? judgeGrepLike(segment, scope, bases, pipedFrom)
         : cmd === "rg" || cmd === "ripgrep"
-          ? judgeRipgrep(segment, scope, bases)
+          ? judgeRipgrep(segment, scope, bases, pipedFrom)
           : cmd === "find"
             ? judgeFind(segment, scope, bases)
             : cmd === "ls"
@@ -660,11 +697,11 @@ export function evaluateReviewerScope(
   // Pathless Grep recurses from cwd. Pathless Glob does too unless the pattern
   // itself explicitly constrains the search to the current unit/exempt file.
   if (toolName === "Grep" && !sawSearchRoot && !globConstrainedToCurrent) {
-    const v = judgePathAccess(".", "search-root", scope);
+    const v = markDefaulted(judgePathAccess(".", "search-root", scope));
     if (v !== null) return v;
   }
   if (toolName === "Glob" && !sawSearchRoot && sawGlob && !globConstrainedToCurrent) {
-    const v = judgePathAccess(".", "search-root", scope);
+    const v = markDefaulted(judgePathAccess(".", "search-root", scope));
     if (v !== null) return v;
   }
   return { block: false };
@@ -690,9 +727,14 @@ export function parseDispatchRecord(raw: string): ReviewerDispatch | null {
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // scope, the offending target, and the sanctioned alternative, so the
 // reviewer self-corrects without retrying the same call.
-export function blockReason(target: string, dispatch: ReviewerDispatch): string {
+export function blockReason(target: string, dispatch: ReviewerDispatch, defaulted = false): string {
+  const defaultNote = defaulted
+    ? ` (this command names no path, so "${target}" is the implicit recursive search ` +
+      `root it falls back to - not a path you typed; give it an explicit in-scope path ` +
+      `or pipe its input instead)`
+    : "";
   return (
-    `This review cannot open "${target}" because it belongs to another unit; the current ` +
+    `This review cannot open "${target}"${defaultNote} because it belongs to another unit; the current ` +
     `review covers ${dispatch.unit}. Use the files supplied with the review and the files ` +
     `under this unit's construction path. If the design depends on another unit, note that ` +
     `integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
@@ -819,8 +861,11 @@ export async function run(input: string): Promise<number> {
         "claimed-checkout",
         unitScope.unit,
       );
+      const defaultNote = scopedVerdict.defaulted
+        ? " (an implicit search root the command falls back to with no path, not a path you typed)"
+        : "";
       process.stderr.write(
-        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}".\n`,
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}.\n`,
       );
       return 2;
     }
@@ -929,7 +974,7 @@ export async function run(input: string): Promise<number> {
     dispatch.unit,
   );
 
-  process.stderr.write(`${blockReason(verdict.target ?? "", dispatch)}\n`);
+  process.stderr.write(`${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`);
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 
