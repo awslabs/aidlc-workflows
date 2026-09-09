@@ -41,6 +41,7 @@ import {
   reviewDraftRelativePath,
   reviewRecordRelativePath,
   SUMMARY_AUTHORIZATION_FIELD,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryAttemptFloors,
   summaryAttemptIdentity,
@@ -477,6 +478,28 @@ describe("t332 summary authorization id", () => {
     expect(stale.refusal?.code).toBe("SUMMARY_ARTIFACT_UNAUTHORIZED");
     writeArtifact(proj, artifact, "# regenerated in the new attempt\n");
     expect(evidence(proj).ok).toBe(true);
+  });
+
+  test("a thematic break before the Assumption Confirmation section leaves the confirmed-content digest unchanged (#1074)", () => {
+    const summary = [
+      `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+      "",
+      "We will build the widget. Assumption: the tax number is present.",
+      "",
+    ].join("\n");
+    const assumption = ["## Assumption Confirmation", "", "Confirmed.", ""].join(
+      "\n",
+    );
+    // Appending the sanctioned section with a leading blank-delimited `---`
+    // (a thematic break, not a setext underline) must hash the same as without
+    // it — the rule is presentation, not confirmed content.
+    expect(
+      summaryConfirmationContentHash(`${summary}\n---\n\n${assumption}`),
+    ).toBe(summaryConfirmationContentHash(`${summary}${assumption}`));
+    // Control: a thematic break inside the CONFIRMED body still changes the digest.
+    expect(
+      summaryConfirmationContentHash(`a\n\n---\n\nb\n\n${summary}`),
+    ).not.toBe(summaryConfirmationContentHash(`a\n\nb\n\n${summary}`));
   });
 });
 

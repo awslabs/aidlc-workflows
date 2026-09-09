@@ -7580,6 +7580,27 @@ function visibleHeading(
 // Hash the normalized semantic questions content the human confirmed. The
 // shared protocol does not impose names on pre-checkpoint sections, while
 // follow-up Q<n> sections after an assumption decision remain hashable.
+// A thematic break (`---`, `***`, `___`) placed before the sanctioned
+// `## Assumption Confirmation` heading is presentation, not confirmed content.
+// It must fall inside the excluded range so appending that section — with or
+// without a leading rule — leaves the confirmed-content digest unchanged.
+const ASSUMPTION_THEMATIC_BREAK = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
+function assumptionExclusionStart(lines: string[], headingLine: number): number {
+  let i = headingLine - 1;
+  while (i >= 0 && lines[i].trim() === "") i--;
+  // Only a blank-delimited rule is a thematic break; a rule immediately under
+  // text is a setext underline and must not be swept into the exclusion.
+  if (
+    i >= 0 &&
+    ASSUMPTION_THEMATIC_BREAK.test(lines[i]) &&
+    (i === 0 || lines[i - 1].trim() === "")
+  ) {
+    return i;
+  }
+  return headingLine;
+}
+
 export function summaryConfirmationContentHash(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
@@ -7634,7 +7655,7 @@ export function summaryConfirmationContentHash(content: string): string {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }
       postSummaryAssumptionSeen = true;
-      openExcludedAssumption = line;
+      openExcludedAssumption = assumptionExclusionStart(visibleLines, line);
       continue;
     }
 
