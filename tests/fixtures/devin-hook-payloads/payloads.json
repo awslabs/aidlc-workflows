@@ -28,7 +28,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "bun .devin/tools/aidlc-utility.ts status" },
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-utility.ts status"
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_exec_planApprovalGuard_bareNext": {
@@ -38,7 +40,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "bun .devin/tools/aidlc-orchestrate.ts next" },
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-orchestrate.ts next"
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_exec_planApprovalGuard_nextWithRedirect": {
@@ -48,7 +52,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "bun .devin/tools/aidlc-orchestrate.ts next 2>/dev/null" },
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-orchestrate.ts next 2>/dev/null"
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_exec_planApprovalGuard_nextWith2And1": {
@@ -58,7 +64,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "bun .devin/tools/aidlc-orchestrate.ts next 2>&1 | cat" },
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-orchestrate.ts next 2>&1 | cat"
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_exec_planApprovalGuard_nextWithWorkdir": {
@@ -68,7 +76,10 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "bun .devin/tools/aidlc-orchestrate.ts next", "workdir": "/tmp/devin-test/proj/subdir" },
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-orchestrate.ts next",
+      "workdir": "/tmp/devin-test/proj/subdir"
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_exec_planApprovalGuard_gitAdd": {
@@ -78,7 +89,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "git add -A" },
+    "tool_input": {
+      "command": "git add -A"
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_exec_planApprovalGuard_gitCommit": {
@@ -88,7 +101,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "git commit -m \"checkpoint\"" },
+    "tool_input": {
+      "command": "git commit -m \"checkpoint\""
+    },
     "tool_use_id": "call_0"
   },
   "preToolUse_edit": {
@@ -98,7 +113,11 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "edit",
-    "tool_input": { "file_path": "/tmp/devin-test/proj/src/index.ts", "old_string": "foo", "new_string": "bar" },
+    "tool_input": {
+      "file_path": "/tmp/devin-test/proj/src/index.ts",
+      "old_string": "foo",
+      "new_string": "bar"
+    },
     "tool_use_id": "call_1"
   },
   "preToolUse_run_subagent": {
@@ -108,7 +127,11 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "run_subagent",
-    "tool_input": { "title": "reviewer", "task": "review the code", "profile": "subagent_explore" },
+    "tool_input": {
+      "title": "reviewer",
+      "task": "review the code",
+      "profile": "subagent_explore"
+    },
     "tool_use_id": "call_2"
   },
   "preToolUse_ask_user_question": {
@@ -118,7 +141,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PreToolUse",
     "tool_name": "ask_user_question",
-    "tool_input": { "questions": [] },
+    "tool_input": {
+      "questions": []
+    },
     "tool_use_id": "call_3"
   },
   "postToolUse_exec": {
@@ -128,7 +153,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "exec",
-    "tool_input": { "command": "bun .devin/tools/aidlc-orchestrate.ts next" },
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-orchestrate.ts next"
+    },
     "tool_response": "ok",
     "tool_use_id": "call_0"
   },
@@ -139,7 +166,11 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "edit",
-    "tool_input": { "file_path": "/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/notes.md", "old_string": "x", "new_string": "y" },
+    "tool_input": {
+      "file_path": "/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/notes.md",
+      "old_string": "x",
+      "new_string": "y"
+    },
     "tool_response": "ok",
     "tool_use_id": "call_1"
   },
@@ -150,7 +181,11 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "edit",
-    "tool_input": { "file_path": "/tmp/devin-test/proj/src/index.ts", "old_string": "x", "new_string": "y" },
+    "tool_input": {
+      "file_path": "/tmp/devin-test/proj/src/index.ts",
+      "old_string": "x",
+      "new_string": "y"
+    },
     "tool_response": "ok",
     "tool_use_id": "call_2"
   },
@@ -161,7 +196,10 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "write",
-    "tool_input": { "file_path": "/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/diary.md", "content": "# Diary\n" },
+    "tool_input": {
+      "file_path": "/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/diary.md",
+      "content": "# Diary\n"
+    },
     "tool_response": "ok",
     "tool_use_id": "call_3"
   },
@@ -172,7 +210,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "apply_patch",
-    "tool_input": { "command": "*** Add File: /tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/artifact.md\n+content\n" },
+    "tool_input": {
+      "command": "*** Add File: /tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/artifact.md\n+content\n"
+    },
     "tool_response": "ok",
     "tool_use_id": "call_4"
   },
@@ -183,7 +223,9 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "apply_patch",
-    "tool_input": { "command": "*** Add File: /tmp/devin-test/proj/src/main.ts\n+content\n" },
+    "tool_input": {
+      "command": "*** Add File: /tmp/devin-test/proj/src/main.ts\n+content\n"
+    },
     "tool_response": "ok",
     "tool_use_id": "call_5"
   },
@@ -194,7 +236,14 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "todo_write",
-    "tool_input": { "todos": [{ "content": "stage 1", "status": "in_progress" }] },
+    "tool_input": {
+      "todos": [
+        {
+          "content": "stage 1",
+          "status": "in_progress"
+        }
+      ]
+    },
     "tool_response": "ok",
     "tool_use_id": "call_6"
   },
@@ -205,7 +254,11 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "run_subagent",
-    "tool_input": { "title": "worker", "task": "do work", "profile": "subagent_general" },
+    "tool_input": {
+      "title": "worker",
+      "task": "do work",
+      "profile": "subagent_general"
+    },
     "tool_response": "done",
     "tool_use_id": "call_7"
   },
@@ -216,7 +269,22 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "ask_user_question",
-    "tool_input": { "questions": [{ "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
+    "tool_input": {
+      "questions": [
+        {
+          "question": "approve?",
+          "header": "gate",
+          "options": [
+            {
+              "label": "yes"
+            },
+            {
+              "label": "no"
+            }
+          ]
+        }
+      ]
+    },
     "tool_response": "{\"approve\":\"yes\"}",
     "tool_use_id": "call_8"
   },
@@ -227,8 +295,28 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "ask_user_question",
-    "tool_input": { "questions": [{ "id": "approve", "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
-    "tool_response": { "success": true, "output": "{\"answers\":{\"approve\":{\"answers\":[\"yes\"]}}}", "error": null },
+    "tool_input": {
+      "questions": [
+        {
+          "id": "approve",
+          "question": "approve?",
+          "header": "gate",
+          "options": [
+            {
+              "label": "yes"
+            },
+            {
+              "label": "no"
+            }
+          ]
+        }
+      ]
+    },
+    "tool_response": {
+      "success": true,
+      "output": "{\"answers\":{\"approve\":{\"answers\":[\"yes\"]}}}",
+      "error": null
+    },
     "tool_use_id": "call_8b"
   },
   "postToolUse_askUserQuestion_devinNativeShape": {
@@ -238,8 +326,28 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "ask_user_question",
-    "tool_input": { "questions": [{ "id": "approve", "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
-    "tool_response": { "success": true, "output": "{\"answers\":{\"approve?\":[{\"selected\":[\"yes\"],\"custom_text\":\"\"}]}}", "error": null },
+    "tool_input": {
+      "questions": [
+        {
+          "id": "approve",
+          "question": "approve?",
+          "header": "gate",
+          "options": [
+            {
+              "label": "yes"
+            },
+            {
+              "label": "no"
+            }
+          ]
+        }
+      ]
+    },
+    "tool_response": {
+      "success": true,
+      "output": "{\"answers\":{\"approve?\":[{\"selected\":[\"yes\"],\"custom_text\":\"\"}]}}",
+      "error": null
+    },
     "tool_use_id": "call_8c"
   },
   "postToolUse_askUserQuestion_devinOtherShape": {
@@ -249,8 +357,28 @@
     "cwd": "/tmp/devin-test/proj",
     "hook_event_name": "PostToolUse",
     "tool_name": "ask_user_question",
-    "tool_input": { "questions": [{ "id": "approve", "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
-    "tool_response": { "success": true, "output": "{\"answers\":{\"approve?\":[{\"selected\":[\"Other\"],\"custom_text\":\"yes, but add a test\"}]}}", "error": null },
+    "tool_input": {
+      "questions": [
+        {
+          "id": "approve",
+          "question": "approve?",
+          "header": "gate",
+          "options": [
+            {
+              "label": "yes"
+            },
+            {
+              "label": "no"
+            }
+          ]
+        }
+      ]
+    },
+    "tool_response": {
+      "success": true,
+      "output": "{\"answers\":{\"approve?\":[{\"selected\":[\"Other\"],\"custom_text\":\"yes, but add a test\"}]}}",
+      "error": null
+    },
     "tool_use_id": "call_8d"
   },
   "postCompaction": {
@@ -268,5 +396,63 @@
     "hook_event_name": "Stop",
     "stop_hook_active": false
   },
-  "malformed": "not valid json{{"
+  "malformed": "not valid json{{",
+  "postToolUse_askUserQuestion_unrecognizedShape": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "prompt_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": {
+      "questions": [
+        {
+          "id": "approve",
+          "question": "approve?",
+          "header": "gate",
+          "options": [
+            {
+              "label": "yes"
+            },
+            {
+              "label": "no"
+            }
+          ]
+        }
+      ]
+    },
+    "tool_response": {
+      "success": true,
+      "output": "{\"selected\":\"yes\"}",
+      "error": null
+    },
+    "tool_use_id": "chatcmpl-tool-unrecognized"
+  },
+  "postToolUse_askUserQuestion_cancelled": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "prompt_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": {
+      "questions": [
+        {
+          "id": "approve",
+          "question": "approve?",
+          "header": "gate",
+          "options": [
+            {
+              "label": "yes"
+            },
+            {
+              "label": "no"
+            }
+          ]
+        }
+      ]
+    },
+    "tool_response": {
+      "success": false,
+      "output": "",
+      "error": "user dismissed"
+    },
+    "tool_use_id": "chatcmpl-tool-cancelled"
+  }
 }

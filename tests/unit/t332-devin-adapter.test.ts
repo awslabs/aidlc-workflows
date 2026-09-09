@@ -472,6 +472,50 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test("13e: record-human-turn with unrecognized answer shape but success:true mints a HUMAN_TURN", () => {
+    // S08 fix: Devin 3000.6.14 may deliver an ask_user_question PostToolUse
+    // tool_response whose inner `output` JSON doesn't match the expected
+    // {answers:...} shape (the shape was never captured interactively — only
+    // the cancel case was captured on -p runs). Pre-fix, the adapter skipped
+    // the HUMAN_TURN mint whenever hasExplicitHumanSelection returned false,
+    // even for real answers — breaking every gate after the first question.
+    // Post-fix, a success:true response is a positive answer signal: mint
+    // regardless of whether the inner shape is recognized.
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_unrecognizedShape as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13f: record-human-turn with cancelled ask_user_question (success:false) does NOT mint a HUMAN_TURN", () => {
+    // S08 fix: a dismissed/cancelled question has success:false — the adapter
+    // must still skip the HUMAN_TURN mint for genuine cancellations.
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_cancelled as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("13d: record-human-turn with Devin native shape writes a Plan Approval response when a challenge is seeded", () => {
     // The end-to-end path that was actually blocked: a human answers an
     // ask_user_question with a Plan Approval choice, the adapter forwards it to

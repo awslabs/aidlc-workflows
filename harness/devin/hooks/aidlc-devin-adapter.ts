@@ -152,6 +152,31 @@ function normalizeToolResponse(toolResponse: unknown): string | null {
   return null;
 }
 
+// Distinguish a cancelled/dismissed ask_user_question from an answered one
+// whose response shape the parser does not recognize. The adapter must only
+// SKIP the HUMAN_TURN mint for genuine cancellations; an unrecognized answer
+// shape still means the user interacted, and the gate fails closed without a
+// HUMAN_TURN (the S08 bug on Devin 3000.6.14).
+//
+// Cancellation signals, in priority order:
+//   1. tool_response.success === false — Devin marks a dismissed widget
+//   2. the `output` string is a cancellation phrase (isNonAnswer)
+// A `success: true` response is a positive answer signal — mint regardless of
+// whether the inner answer shape is recognized. No `success` field falls
+// through to the text check.
+function isAskUserQuestionCancellation(devin: DevinHookInput): boolean {
+  const tr = devin.tool_response;
+  if (tr === null || tr === undefined) return false;
+  if (typeof tr === "object" && !Array.isArray(tr)) {
+    const obj = tr as Record<string, unknown>;
+    if (obj.success === false) return true;
+    if (obj.success === true) return false;
+  }
+  const json = normalizeToolResponse(tr);
+  if (json === null) return false;
+  return isNonAnswer(json);
+}
+
 function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
   const offered = new Map<string, Set<string>>();
   if (toolInput === null || typeof toolInput !== "object") return offered;
@@ -483,14 +508,18 @@ export async function run(
     }
 
     case "record-human-turn": {
-      // For ask_user_question PostToolUse with no explicit human selection,
-      // skip. Otherwise forward {hook_event_name:"UserPromptSubmit",
-      // session_id?, prompt: <text>} to the core record-human-turn hook.
-      // The text is devin.prompt (Devin UserPromptSubmit carries `prompt`).
+      // For ask_user_question PostToolUse, skip ONLY for genuine cancellations
+      // (success:false or cancellation text). An unrecognized answer shape
+      // still means the user interacted — the PostToolUse firing is evidence
+      // of that — and the gate fails closed without a HUMAN_TURN (the S08 bug
+      // on Devin 3000.6.14: the parser couldn't recognize the real interactive
+      // tool_response shape, so it skipped the mint and every later gate
+      // refused). For UserPromptSubmit and all other events, always forward.
       // Advisory, no stdout.
       if (
         tool === "ask_user_question" &&
-        !hasExplicitHumanSelection(devin.tool_response, devin.tool_input)
+        !hasExplicitHumanSelection(devin.tool_response, devin.tool_input) &&
+        isAskUserQuestionCancellation(devin)
       ) {
         return 0;
       }

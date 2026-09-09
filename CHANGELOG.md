@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.3] - 2026-09-09
+
+Fixes the S08 gate-receipt bug on the Devin CLI harness: `ask_user_question` approval gates refused every answer after the first with "no human reply has arrived after this question" because the Devin adapter skipped the `HUMAN_TURN` audit mint whenever it could not parse the `tool_response` shape. The interactive Devin 3000.6.14 `tool_response` shape was never captured (only the headless `-p` cancel case was), so the parser's `hasExplicitHumanSelection` returned false on real answers and the gate failed closed. The adapter now mints a `HUMAN_TURN` for any `ask_user_question` PostToolUse that is not a genuine cancellation (`success:false` or cancellation text), treating the hook firing itself as evidence the user interacted. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.3` / `install.ps1 -Version 2.8.3`. No migration; existing workflow records resume normally.
+
+* Devin adapter `record-human-turn` case: skip only for genuine cancellations (`tool_response.success === false` or cancellation phrase in `output`), not for unrecognized answer shapes. A `success:true` response mints a `HUMAN_TURN` regardless of whether the inner JSON shape matches the expected `{answers:...}` envelope.
+* New `isAskUserQuestionCancellation` helper in `harness/devin/hooks/aidlc-devin-adapter.ts` distinguishes dismissed widgets from answered ones with unrecognized response shapes.
+* Test fixtures `postToolUse_askUserQuestion_unrecognizedShape` (success:true, unrecognized JSON) and `postToolUse_askUserQuestion_cancelled` (success:false) added to `tests/fixtures/devin-hook-payloads/payloads.json`; test cases 13e and 13f in `tests/unit/t332-devin-adapter.test.ts` assert the mint and skip respectively.
+
 ## [2.8.2] - 2026-09-09
 
 Adds the **Devin CLI** harness — the eighth distribution from one harness-neutral core. Devin CLI (cognition.ai) now runs the full AI-DLC lifecycle natively: the 14 personas dispatch via the `run_subagent` tool, a `hooks.v1.json` adapter wires the 17 framework hooks, and `.devin/rules/aidlc.md` auto-loads the method pointer into ambient context on session start. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`; configure a project with `aidlc config --harness devin`. No migration for existing harnesses.
