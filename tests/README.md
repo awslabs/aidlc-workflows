@@ -101,6 +101,9 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
+# Run one deterministic unit shard. CI uses four isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/4
+
 # Verbose / debug output
 bash tests/run-tests.sh --verbose
 bash tests/run-tests.sh --debug   # streams output and writes SDK/TUI NDJSON traces

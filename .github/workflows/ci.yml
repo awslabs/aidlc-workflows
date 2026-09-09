@@ -52,8 +52,8 @@ jobs:
       - name: Run contract checks
         run: bun run check
 
-  test:
-    name: Tests (smoke + unit)
+  test_smoke:
+    name: Tests (smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -70,16 +70,57 @@ jobs:
       - name: Build the harness projections
         run: bun scripts/package.ts
 
+      - name: Run smoke tier
+        run: bun tests/run-tests.ts --smoke
+
+  test_unit:
+    name: Tests (unit shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Each shard receives an independent checkout. Tests stay serial inside
+      # the shard, so packaging tests may regenerate dist/ without racing tests
+      # that read the generated trees.
+      - name: Build the harness projections
+        run: bun scripts/package.ts
+
       # t244 syntax-checks the generated zsh completion script with `zsh -n`;
       # ubuntu-latest does not ship zsh, so install it to keep that assertion
-      # exercising the real shell instead of skipping.
+      # exercising the real shell instead of skipping. Installing it in every
+      # shard keeps assignment changes independent of runner provisioning.
       - name: Install zsh (t244 completion syntax check)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
 
-      # smoke + unit are the deterministic, credential-free tiers (no AWS /
-      # Bedrock / live Claude). The runner exits non-zero on any failed file.
-      - name: Run smoke + unit tiers
-        run: bun tests/run-tests.ts --smoke --unit --parallel 8
+      - name: Run unit shard
+        run: bun tests/run-tests.ts --unit --shard ${{ matrix.shard }}/4
+
+  # Preserve the existing required-check name while the work runs in isolated
+  # jobs. A matrix failure collapses test_unit.result to failure.
+  test:
+    name: Tests (smoke + unit)
+    if: ${{ always() }}
+    needs: [test_smoke, test_unit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require smoke and every unit shard
+        env:
+          SMOKE_RESULT: ${{ needs.test_smoke.result }}
+          UNIT_RESULT: ${{ needs.test_unit.result }}
+        run: |
+          test "$SMOKE_RESULT" = "success"
+          test "$UNIT_RESULT" = "success"
 
   test-deep:
     name: Tests (integration + e2e, deterministic)
