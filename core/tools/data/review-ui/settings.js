@@ -98,15 +98,18 @@ function modelsPage() {
     // just that one (--reset cannot combine with other flags), so the option is
     // offered only while it is true - Reset below clears the layer.
     const dial = recorded?.groups?.[group.id] || "";
+    // With no dial in this layer the option names what applies instead: the
+    // default (inherit), or the preset's / shipped pin and its level.
     const source = groupSource(policy, group.id, group.effort);
-    const effective = group.effort === INHERIT ? "inherits" : group.effort;
+    const noDial = group.effort === INHERIT
+      ? "Inherit from default"
+      : `${source ? source[0].toUpperCase() + source.slice(1) : "Effective"} (${group.effort})`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" ${dial ? `title="Recorded ${scope === "project" ? "in the project" : "for you"}; Reset below returns every group to inherit"` : ""}>
-        ${dial ? "" : `<option value="" selected>Inherit from default</option>`}
+      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" title="${dial ? `Recorded ${scope === "project" ? "in the project" : "for you"}; Reset below removes it` : "What this group runs at without a dial of its own"}">
+        ${dial ? "" : `<option value="" selected>${escapeHtml(noDial)}</option>`}
         ${efforts.map((level) => `<option value="${level}" ${dial === level ? "selected" : ""}>${level}</option>`).join("")}
       </select>
-      <span class="settings-source" title="What this group runs at, and why">${dial ? "" : `${escapeHtml(effective)}${source ? ` · ${escapeHtml(source)}` : ""}`}</span>
     </div>`;
   };
   return `<h3>Models &amp; effort</h3>

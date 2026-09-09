@@ -314,8 +314,9 @@ the run will use.
 The cog at the bottom of the left rail opens Settings. **Models & effort** reads
 top to bottom: the **default effort** (your own harness setting — what *inherit*
 means; change it there or with `/effort`), the **preset**, then each **group**
-of agents either *Inherit from default* or pinned to a level, with where that
-value comes from beside it, and the **exceptions** — one agent pinned to its
+of agents — the select names what applies without a dial of its own (*Inherit
+from default*, *Preset thorough (xhigh)*, *Shipped default (medium)*) or the
+level you pin — and the **exceptions** — one agent pinned to its
 own effort or model (*Add…*). Every change is applied immediately through the
 same `aidlc config models` command the terminal uses, so the transaction,
 refresh guard, and doctor checks are identical, and it applies to runs started
