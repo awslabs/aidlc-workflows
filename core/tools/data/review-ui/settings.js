@@ -32,6 +32,11 @@ let page = "models";
 const scope = "project";
 let busy = false;
 let addingException = false;
+// The harness's model catalogue (GET /api/models): fetched once when Settings
+// opens, so the picker offers real names, not ids to type.
+let catalogue = null; // { models: [{id, name, description}], current } | null
+let catalogueState = "idle"; // idle · loading · ready · failed
+let catalogueError = "";
 
 export function init() {
   root = document.getElementById("settings");
@@ -50,6 +55,20 @@ export function open(target = "models") {
   root.hidden = false;
   render();
   root.querySelector(".settings-nav .on")?.focus();
+  if (catalogueState === "idle" && store.workflow?.runner_default_model_editable) loadCatalogue();
+}
+
+async function loadCatalogue(refresh = false) {
+  catalogueState = "loading";
+  render();
+  try {
+    catalogue = await api.get("/api/models", refresh ? { refresh: "1" } : undefined);
+    catalogueState = "ready";
+  } catch (error) {
+    catalogueState = "failed";
+    catalogueError = error.message;
+  }
+  render();
 }
 
 export function close() {
@@ -189,26 +208,47 @@ function unsetLabel(current) {
 }
 
 // The session's model: the harness's own `model` setting, which every agent
-// without a pin uses. The picker offers what the runner's agent listed at its
-// last session, the current value, and a free-text id for anything else.
+// without a pin uses. Your harness default (from its own settings files) is the
+// first choice, named; the rest is the harness's real catalogue - the same list
+// its own model picker shows. Choosing another is an AI-DLC override for this
+// project, for you; choosing the first clears it.
+function modelName(id) {
+  const entry = catalogue?.models?.find((model) => model.id === id);
+  if (entry) return entry.name;
+  // A setting may be an alias ("fable") the catalogue spells as an id ("claude-fable-5").
+  const alias = catalogue?.models?.find((model) => model.id.toLowerCase().includes(String(id).toLowerCase()));
+  return alias ? alias.name : id;
+}
+
 function modelRow(workflow) {
-  const current = workflow.runner_default_model;
+  const current = workflow.runner_default_model; // {value, source} | null
   const editable = workflow.runner_default_model_editable;
-  const known = workflow.runner_models || [];
   const local = current?.source === LOCAL_SETTINGS;
-  const options = known.map((entry) => ({ value: entry.id, label: entry.name === entry.id ? entry.id : `${entry.name} · ${entry.id}` }));
-  if (local && !options.some((entry) => entry.value === current.value)) options.unshift({ value: current.value, label: current.value });
-  return `<div class="settings-row"><span class="l">Model<small>${current
-    ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(current.source)}</code>) - what every agent without a model pin uses.`
-    : `No settings file names a model; ${escapeHtml(harnessName(workflow))} picks - what every agent without a model pin uses.`}</small></span>
-    ${editable
-      ? `<select data-default-model aria-label="Model" title="Written to ${LOCAL_SETTINGS}; the first option is what applies with no entry there">
-          <option value="" ${local ? "" : "selected"}>${escapeHtml(unsetLabel(current))}</option>
-          ${options.map((entry) => `<option value="${escapeHtml(entry.value)}" ${local && current.value === entry.value ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")}
-          <option value="__other">Other model id…</option>
-        </select>`
-      : `<span class="c"><b>${current ? escapeHtml(current.value) : "harness default"}</b></span>`}
-  </div>`;
+  const harnessDefault = local ? null : current; // what applies with no override of ours
+  const defaultLabel = harnessDefault
+    ? `${modelName(harnessDefault.value)} · your ${harnessName(workflow)} default`
+    : catalogue?.current ? `${modelName(catalogue.current)} · your ${harnessName(workflow)} default` : `your ${harnessName(workflow)} default`;
+  const small = local
+    ? `Overridden for this project, for you (<code>${escapeHtml(LOCAL_SETTINGS)}</code>). Every agent without a model pin uses it.`
+    : harnessDefault
+      ? `Your ${escapeHtml(harnessName(workflow))} default, from <code>${escapeHtml(harnessDefault.source)}</code>. Every agent without a model pin uses it; pick another to override it for this project.`
+      : `${escapeHtml(harnessName(workflow))} picks; pick one to set it for this project.`;
+  let control;
+  if (!editable) {
+    control = `<span class="c"><b>${escapeHtml(current ? modelName(current.value) : "harness default")}</b></span>`;
+  } else if (catalogueState === "loading" || catalogueState === "idle") {
+    control = `<span class="c settings-loading">Asking ${escapeHtml(harnessName(workflow))} for its models…</span>`;
+  } else if (catalogueState === "failed") {
+    control = `<span class="c"><b>${escapeHtml(current ? modelName(current.value) : "harness default")}</b> <button type="button" class="btn" data-models-retry title="${escapeHtml(catalogueError)}">Retry</button></span>`;
+  } else {
+    const models = catalogue?.models || [];
+    control = `<select data-default-model aria-label="Model">
+      <option value="" ${local ? "" : "selected"}>${escapeHtml(defaultLabel)}</option>
+      ${models.map((model) => `<option value="${escapeHtml(model.id)}" ${local && current.value === model.id ? "selected" : ""} ${model.description ? `title="${escapeHtml(model.description)}"` : ""}>${escapeHtml(model.name)}</option>`).join("")}
+      ${local && !models.some((model) => model.id === current.value) ? `<option value="${escapeHtml(current.value)}" selected>${escapeHtml(current.value)}</option>` : ""}
+    </select>`;
+  }
+  return `<div class="settings-row"><span class="l">Model<small>${small}</small></span>${control}</div>`;
 }
 
 function harnessName(workflow) {
@@ -234,18 +274,15 @@ function bind() {
   root.querySelector("[data-close]")?.addEventListener("click", close);
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
   for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change({ action: "preset", preset: button.dataset.preset }));
+  root.querySelector("[data-models-retry]")?.addEventListener("click", () => loadCatalogue(true));
   root.querySelector("[data-default-model]")?.addEventListener("change", async (event) => {
-    let model = event.target.value;
-    if (model === "__other") {
-      model = (window.prompt("Model alias or id (for example opus, sonnet, or a full model id):", "") || "").trim();
-      if (!model) return render();
-    }
+    const model = event.target.value;
     if (busy) return;
     busy = true;
     render();
     try {
       await api.post("/api/default-model", { model: model || null });
-      setNotice("Default model updated in your harness settings; runs started from now on use it.", "info");
+      setNotice(model ? "Model set for this project; runs started from now on use it." : "Back to your harness default; runs started from now on use it.", "info");
       store.emit("wants-refresh");
     } catch (error) {
       setNotice(`Could not change the default model: ${error.message}`, "error");

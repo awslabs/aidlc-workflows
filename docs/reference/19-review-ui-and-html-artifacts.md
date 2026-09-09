@@ -193,9 +193,15 @@ re-asked; not race-free, and not claimed to be. A backend without a writer
 answers 409. The model is the same shape: `runner_default_model` /
 `runner_default_model_editable` and `POST /api/default-model {model|null}`
 (`claudeDefaultSessionModel` / `writeClaudeDefaultSessionModel`, the `model`
-key). `runner_models` lists what the runner's agent offered at its most recent
-`session/new` (`models.availableModels`, kept on the run record), so the picker
-names real choices once a run has happened.
+key). `GET /api/models` is the harness's model catalogue: the Claude adapter
+publishes it as the `model` config option of `session/new` (values are the
+aliases the `model` setting accepts - `fable`, `opus`, … - with names,
+descriptions, and `currentValue`, the alias a session resolves to); the ACP
+`models.availableModels` spelling is read too. The daemon takes it from a live
+run's `session/new` when one has happened, else asks with one throwaway session
+(`probeModels`, a few seconds), and caches it as `models.json` beside the
+project's other daemon files; `?refresh=1` asks again. The picker offers the
+harness default first, by name, then the catalogue; nothing is typed.
 
 **Agent effort is project policy.** The workflow payload carries
 `models_policy` (`modelsPolicyView` in `aidlc-review-ui-workflow.ts`): the
@@ -552,6 +558,7 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `POST /api/run/cancel` | Cookie/header | `{intent}` — `session/cancel` the live turn (pending inputs resolve cancelled); an idle run is closed |
 | `DELETE /api/intents?id=` | Cookie/header | Withdraws a pending request; 404 when none |
 | `POST /api/spaces` | Cookie/header | Body `{name}` (lowercase letters, digits, dashes). Runs the same `space-create` move as the terminal; 409 when it exists |
+| `GET /api/models` | Cookie/header | The harness's model catalogue `{models: [{id, name, description}], current, fetched_at}`, cached; `?refresh=1` asks the agent again. 409 without a runner, 502 when the agent does not report models |
 | `POST /api/default-model` | Cookie/header | Body `{model: <alias or id>\|null}`. Writes the harness's personal default model through the runner profile (Claude: `model` in `.claude/settings.local.json`); 400 for a malformed id, 409 when the backend has no writer |
 | `POST /api/default-effort` | Cookie/header | Body `{level: low\|medium\|high\|xhigh\|null}`. Writes the harness's personal default effort through the runner profile (Claude: `effortLevel` in `.claude/settings.local.json`); 400 for an unknown level, 409 when the backend has no writer or the file is not a JSON object |
 | `POST /api/models-policy` | Cookie/header | Body `{scope: project\|local, action: preset\|group\|agent\|reset, preset?, group?, effort?, agent?, model?}`. Runs `aidlc config models` with the matching flags and `--yes`; 400 for an unknown scope, preset, group, effort, agent name, or model id (nothing written); returns `{ok, scope, change, notes, models_policy}` with the refreshed view |

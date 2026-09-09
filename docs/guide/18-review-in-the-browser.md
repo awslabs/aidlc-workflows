@@ -315,8 +315,10 @@ The cog at the bottom of the left rail opens Settings. **Models & effort** reads
 top to bottom: the **model** and **default effort** — your own harness settings,
 what every unpinned agent uses and what *inherit* means; on Claude the browser
 edits both in place (`model` and `effortLevel` in `.claude/settings.local.json`,
-the latter the same value `/effort` sets; the model picker lists what the
-runner's agent offered at its last session, plus any id you type), elsewhere it
+the latter the same value `/effort` sets). The model picker is Claude's own
+list — the same names its `/model` picker shows, asked of the agent once and
+cached — with your Claude default (from `~/.claude/settings.json`) as the first
+choice; picking another overrides it for this project, for you. Elsewhere it
 names the file — the **preset**, then each **group**
 of agents — the select names what applies without a dial of its own (*Inherit
 from default*, *Preset thorough (xhigh)*, *Shipped default (medium)*) or the

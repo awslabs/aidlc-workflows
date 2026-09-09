@@ -18,7 +18,7 @@ import {
   type Stats,
 } from "node:fs";
 import { networkInterfaces } from "node:os";
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
 import {
   activeSpace,
@@ -44,7 +44,7 @@ import {
   validScopes,
 } from "./aidlc-lib.ts";
 import { inferScopeFromText } from "./aidlc-utility.ts";
-import { AcpError, acpBackendForHarness, resolveAcpLaunch, SESSION_EFFORT_LEVELS, splitPinned, vendorAcpDir, vendoredAcpBin, type AcpLaunch, type SessionEffort } from "./aidlc-review-ui-acp.ts";
+import { AcpError, acpBackendForHarness, resolveAcpLaunch, SESSION_EFFORT_LEVELS, splitPinned, vendorAcpDir, vendoredAcpBin, probeModels, type AcpLaunch, type AcpModelChoice, type SessionEffort } from "./aidlc-review-ui-acp.ts";
 import { RunBusyError, RunManager } from "./aidlc-review-ui-runs.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -83,6 +83,7 @@ import {
   type ServerInfo,
   ensureReviewUiDaemon,
   serverLogPath,
+  reviewUiProjectHome,
   ENV_REVIEW_UI,
 } from "./aidlc-review-ui-shared.ts";
 import {
@@ -1588,6 +1589,68 @@ async function defaultEffortResponse(projectDir: string, request: Request, launc
   return json({ ok: true, default_effort: written });
 }
 
+// ---- The harness's model catalogue -----------------------------------------
+//
+// Settings' model picker lists what the harness itself offers - asked of the
+// runner's agent once (probeModels) and cached beside the daemon's other
+// project files, refreshed on request. A run's own session/new refreshes it
+// for free.
+
+interface ModelCatalogue {
+  version: 1;
+  fetched_at: string;
+  models: AcpModelChoice[];
+  /** The model a session resolved to when the catalogue was fetched (the harness default, or the local override then in force). */
+  current: string | null;
+}
+
+function modelCataloguePath(projectDir: string): string {
+  return join(reviewUiProjectHome(projectDir), "models.json");
+}
+
+function readModelCatalogue(projectDir: string): ModelCatalogue | null {
+  try {
+    const parsed = JSON.parse(readFileSync(modelCataloguePath(projectDir), "utf-8")) as ModelCatalogue;
+    return parsed?.version === 1 && Array.isArray(parsed.models) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeModelCatalogue(projectDir: string, catalogue: ModelCatalogue): void {
+  const path = modelCataloguePath(projectDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(catalogue, null, 2)}\n`, { mode: 0o600 });
+}
+
+let modelProbe: Promise<ModelCatalogue> | null = null;
+
+async function modelsResponse(projectDir: string, url: URL, launch: AcpLaunch | null, runs: RunManager, log: (line: string) => void): Promise<Response> {
+  const refresh = url.searchParams.get("refresh") === "1";
+  const cached = refresh ? null : readModelCatalogue(projectDir);
+  if (cached) return json(cached);
+  if (!launch) throw new HttpError(409, "no agent runner on this machine, so the harness's model list cannot be asked for");
+  // A live run has already learned the list; no probe needed.
+  const known = refresh ? null : runs.knownModels();
+  if (known?.length) {
+    const catalogue: ModelCatalogue = { version: 1, fetched_at: new Date().toISOString(), models: known, current: null };
+    writeModelCatalogue(projectDir, catalogue);
+    return json(catalogue);
+  }
+  modelProbe ??= probeModels(launch, projectDir, log)
+    .then((result) => {
+      const catalogue: ModelCatalogue = { version: 1, fetched_at: new Date().toISOString(), models: result.models, current: result.current };
+      writeModelCatalogue(projectDir, catalogue);
+      return catalogue;
+    })
+    .finally(() => { modelProbe = null; });
+  try {
+    return json(await modelProbe);
+  } catch (error) {
+    throw new HttpError(502, `the agent did not report its models: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** The personal default model - the harness's `model` setting - written by the runner profile like the effort. */
 async function defaultModelResponse(projectDir: string, request: Request, launch: AcpLaunch | null, publishState: () => void): Promise<Response> {
   if (!launch?.setDefaultModel) throw new HttpError(409, "this harness keeps its default model in a file the review UI does not write; change it there");
@@ -1897,6 +1960,7 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "POST" && url.pathname === "/api/models-policy") return await modelsPolicyResponse(projectDir, request, publishState);
           if (request.method === "POST" && url.pathname === "/api/default-effort") return await defaultEffortResponse(projectDir, request, runnerLaunch, publishState);
           if (request.method === "POST" && url.pathname === "/api/default-model") return await defaultModelResponse(projectDir, request, runnerLaunch, publishState);
+          if (request.method === "GET" && url.pathname === "/api/models") return await modelsResponse(projectDir, url, runnerLaunch, runs, (line) => process.stderr.write(`${line}\n`));
           if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir, selectionFromUrl(url)).intent, runnerRequirement);
           const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
           if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);

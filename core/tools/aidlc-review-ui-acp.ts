@@ -54,16 +54,33 @@ export interface AcpModelChoice {
   description: string | null;
 }
 
-function parseModelChoices(value: unknown): AcpModelChoice[] | null {
-  const list = (value as { availableModels?: unknown } | null)?.availableModels;
-  if (!Array.isArray(list)) return null;
+/**
+ * The model list a session/new result carries, in either spelling: the ACP
+ * `models.availableModels` (modelId/name/description) or the Claude adapter's
+ * `configOptions` entry `id: "model"` (value/name/description, `currentValue`),
+ * whose values are the aliases the harness's own `model` setting accepts.
+ */
+function parseModels(result: { models?: unknown; configOptions?: unknown }): { models: AcpModelChoice[] | null; current: string | null } {
   const choices: AcpModelChoice[] = [];
-  for (const entry of list) {
-    const record = entry as { modelId?: unknown; name?: unknown; description?: unknown };
-    if (typeof record?.modelId !== "string" || !record.modelId) continue;
-    choices.push({ id: record.modelId, name: typeof record.name === "string" && record.name ? record.name : record.modelId, description: typeof record.description === "string" ? record.description : null });
+  const models = result.models as { availableModels?: unknown; currentModelId?: unknown } | null;
+  if (Array.isArray(models?.availableModels)) {
+    for (const entry of models!.availableModels as Array<Record<string, unknown>>) {
+      if (typeof entry?.modelId !== "string" || !entry.modelId) continue;
+      choices.push({ id: entry.modelId, name: typeof entry.name === "string" && entry.name ? entry.name : entry.modelId, description: typeof entry.description === "string" ? entry.description : null });
+    }
+    return { models: choices, current: typeof models!.currentModelId === "string" && models!.currentModelId ? models!.currentModelId : null };
   }
-  return choices;
+  const option = Array.isArray(result.configOptions)
+    ? (result.configOptions as Array<Record<string, unknown>>).find((entry) => entry?.id === "model")
+    : undefined;
+  if (option && Array.isArray(option.options)) {
+    for (const entry of option.options as Array<Record<string, unknown>>) {
+      if (typeof entry?.value !== "string" || !entry.value) continue;
+      choices.push({ id: entry.value, name: typeof entry.name === "string" && entry.name ? entry.name : entry.value, description: typeof entry.description === "string" ? entry.description : null });
+    }
+    return { models: choices, current: typeof option.currentValue === "string" && option.currentValue ? option.currentValue : null };
+  }
+  return { models: null, current: null };
 }
 
 /** How a backend takes a session effort: an ACP config option after `session/new`, a launch flag, or not at all. */
@@ -540,11 +557,13 @@ export class AcpClient {
     return (result ?? {}) as AcpInitializeResult;
   }
 
-  async newSession(): Promise<{ sessionId: string; models: AcpModelChoice[] | null }> {
-    const result = (await this.request("session/new", { cwd: this.cwd, mcpServers: [] }, ACP_HANDSHAKE_TIMEOUT_MS)) as { sessionId?: unknown; models?: unknown };
+  async newSession(): Promise<{ sessionId: string; models: AcpModelChoice[] | null; currentModelId: string | null }> {
+    const result = (await this.request("session/new", { cwd: this.cwd, mcpServers: [] }, ACP_HANDSHAKE_TIMEOUT_MS)) as { sessionId?: unknown; models?: unknown; configOptions?: unknown };
     if (typeof result?.sessionId !== "string" || !result.sessionId) throw new AcpError("session/new returned no sessionId");
-    return { sessionId: result.sessionId, models: parseModelChoices(result.models) };
+    const parsed = parseModels(result);
+    return { sessionId: result.sessionId, models: parsed.models, currentModelId: parsed.current };
   }
+
 
   /**
    * Resume a session the agent persisted. The adapter replays the transcript as
@@ -862,3 +881,27 @@ export function cursorPlanToElicitation(params: unknown): {
     },
   };
 }
+
+/**
+ * What models the harness offers, and which one a session resolves to right
+ * now: asked of the agent itself with one throwaway session/new (the same list
+ * the harness's own model picker shows - names, descriptions, the provider's
+ * availability and the user's allowlist), then closed. Several seconds; the
+ * caller caches it.
+ */
+export async function probeModels(launch: AcpLaunch, cwd: string, log?: (line: string) => void): Promise<{ models: AcpModelChoice[]; current: string | null }> {
+  const client = new AcpClient(launch, cwd, {
+    onUpdate: () => undefined,
+    onPermission: async () => ({ outcome: "cancelled" }),
+    onElicitation: async () => ({ action: "cancel" }),
+    onStderr: (line) => log?.(`[models] ${line}`),
+  });
+  try {
+    await client.start();
+    const session = await client.newSession();
+    return { models: session.models ?? [], current: session.currentModelId };
+  } finally {
+    client.close();
+  }
+}
+

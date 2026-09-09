@@ -35,3 +35,5 @@
 .settings-block .settings-h { margin-bottom: 2px; }
 .settings-pin { display: inline-block; margin-left: 8px; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 999px; font-size: 12px; color: var(--ink); white-space: nowrap; }
 .settings-personal { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--panel); }
+.settings-loading { color: var(--muted); font-style: italic; }
+.settings-row select[data-default-model] { max-width: 320px; }
