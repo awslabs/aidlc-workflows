@@ -324,23 +324,24 @@ project (`aidlc.settings.json`); one card is always lit, the shipped default
 (*Balanced*, tagged *default*) when nothing is recorded, so there is nothing to
 reset: to go back, pick the default card.
 
-**Advanced**, a fold at the bottom (open by itself while you have an
-override), is *your own effort per group*. Each group's first option is what
-the team's preset gives it — *Balanced · medium*, *Thorough · default* — and the
-levels beneath are yours: pick one and it applies on this machine only
-(`aidlc.settings.local.json`, not committed; an *overridden* mark sits beside
-the row, with a one-word legend beneath the groups, and teammates keep the
-team's value); pick the first option again to go back.
-Agents the team's policy pins to their own effort are listed there read-only;
-pins are set and removed from the terminal (`aidlc config models --agent`).
+**Advanced**, a fold at the bottom (open by itself while you have a change of
+your own), is *change a group's effort just for you*. Each group's first option
+is what the team's preset gives it — *Team: Balanced · medium*, *Team: Thorough
+· default* — and the levels beneath are yours: pick one and it applies on this
+machine only (`aidlc.settings.local.json`, not committed; a mark sits beside the
+row and a legend beneath the groups reads *Overridden*; teammates keep
+the team's value); pick the first option again to go back. Agents the team's
+policy gives their own level are listed there read-only (*Set individually*);
+that is set and removed from the terminal (`aidlc config models --agent`).
 Every change goes through the same `aidlc config models` command the terminal
 uses, so the transaction, refresh guard, and doctor checks are identical, and
 it applies to runs started afterwards. Going back to the team's value for one
 group is the one exception: the command has no per-dial unset, so the daemon
 rebuilds your personal layer — reset, then re-record what else it held, each
 step validated with `--dry-run` first — which is why that move exists for your
-own layer only, never the committed one. Each row carries one short caption;
-which file a control writes, and where a value comes from, is in its tooltip.
+own layer only, never the committed one. Each row carries one short plain-English
+caption (*The model all agents use*); which file a control writes, and where a
+value comes from, is in its tooltip.
 **About** lists this review UI's version, address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the

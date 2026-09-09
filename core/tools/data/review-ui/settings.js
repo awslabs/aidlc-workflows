@@ -21,9 +21,9 @@ const PAGES = [
   { id: "about", label: "About" },
 ];
 const PRESETS = [
-  { id: "thorough", label: "Thorough", summary: "Reviewers xhigh · everyone else inherits" },
-  { id: "balanced", label: "Balanced", summary: "Reviewers medium · the shipped baseline" },
-  { id: "minimal", label: "Minimal", summary: "Reviewers medium · writers low" },
+  { id: "thorough", label: "Thorough", summary: "Reviewers: xhigh · everyone else: default" },
+  { id: "balanced", label: "Balanced", summary: "Reviewers: medium · everyone else: default" },
+  { id: "minimal", label: "Minimal", summary: "Reviewers: medium · writers: low" },
 ];
 const SESSION_LEVELS = ["low", "medium", "high", "xhigh"];
 // Nothing recorded means the shipped tiers, which are the Balanced shape.
@@ -119,7 +119,7 @@ function modelsPage() {
 
     <div class="settings-block">
       ${modelRow(workflow)}
-      <div class="settings-row"><span class="l">Default effort<small>What agents inherit when nothing pins them</small></span>
+      <div class="settings-row"><span class="l">Default effort<small>How hard agents think, unless set below</small></span>
         ${workflow.runner_default_effort_editable
           ? `<select data-default-effort aria-label="Default effort" title="${escapeHtml(fallback ? `Your ${harnessName(workflow)} setting - ${fallback.source}` : `No ${harnessName(workflow)} setting names an effort; the model's own default applies`)}">
               <option value="" ${local ? "" : "selected"}>${escapeHtml(fallback && !local ? `Default (${fallback.level})` : "Default")}</option>
@@ -133,11 +133,11 @@ function modelsPage() {
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${teamPreset(policy) === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}${!policy?.team?.preset && entry.id === SHIPPED_PRESET ? ` <span class="settings-tag">default</span>` : ""}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <p class="settings-note">How hard each group of agents thinks · team policy, committed</p>
+      <p class="settings-note">Team-wide · saved with the project</p>
     </div>
 
     <div class="settings-block settings-advanced">
-      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span><small>Your own effort per group</small></button>
+      <button type="button" class="settings-disclosure" data-advanced aria-expanded="${advancedOpen}">${icon(advancedOpen ? "chevronDown" : "chevronRight", { size: 12 })}<span>Advanced</span><small>Change a group's effort just for you</small></button>
       ${advancedOpen ? advancedSection(workflow) : ""}
     </div>`;
 }
@@ -154,8 +154,8 @@ function advancedSection(workflow) {
     // only); picking the first option again removes it.
     const team = group.effort;
     const mine = policy.recorded?.local?.groups?.[group.id] || "";
-    const from = policy.recorded?.project?.groups?.[group.id] ? "Team" : presetLabel || "Default";
-    const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
+    const from = policy.recorded?.project?.groups?.[group.id] ? "custom" : presetLabel || "Default";
+    const teamLabel = `Team: ${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
       ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden">${icon("errorCircle", { size: 15 })}</span>` : ""}
@@ -168,7 +168,7 @@ function advancedSection(workflow) {
   const overridden = teamGroups.some((group) => policy?.recorded?.local?.groups?.[group.id]);
   return `<div class="settings-block">
       ${policy ? teamGroups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
-      ${teamPins.length ? `<div class="settings-row"><span class="l">Pinned agents<small>Held at their own effort by the team's policy</small></span>
+      ${teamPins.length ? `<div class="settings-row"><span class="l">Set individually<small>Agents the team gave their own level</small></span>
         <span class="c">${teamPins.map((entry) => `<span class="settings-pin">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")}</span></div>` : ""}
       ${overridden ? `<p class="settings-legend"><span class="settings-overridden">${icon("errorCircle", { size: 13 })}</span> Overridden</p>` : ""}
     </div>
@@ -237,7 +237,7 @@ function modelRow(workflow) {
       ${local && !models.some((model) => model.id === current.value) ? `<option value="${escapeHtml(current.value)}" selected>${escapeHtml(current.value)}</option>` : ""}
     </select>`;
   }
-  return `<div class="settings-row"><span class="l">Model<small>What every agent runs on</small></span>${control}</div>`;
+  return `<div class="settings-row"><span class="l">Model<small>The model all agents use</small></span>${control}</div>`;
 }
 
 function harnessName(workflow) {
@@ -272,7 +272,7 @@ function bind() {
     render();
     try {
       await api.post("/api/default-model", { model: model || null });
-      setNotice(model ? "Model set for this project; runs started from now on use it." : "Back to your harness default; runs started from now on use it.", "info");
+      setNotice(model ? "Model saved. Your next runs use it." : "Back to your default model.", "info");
       store.emit("wants-refresh");
     } catch (error) {
       setNotice(`Could not change the default model: ${error.message}`, "error");
@@ -287,7 +287,7 @@ function bind() {
     render();
     try {
       await api.post("/api/default-effort", { level: event.target.value || null });
-      setNotice("Default effort updated in your harness settings; runs started from now on inherit it.", "info");
+      setNotice("Default effort saved. Your next runs use it.", "info");
       store.emit("wants-refresh");
     } catch (error) {
       setNotice(`Could not change the default effort: ${error.message}`, "error");
@@ -309,8 +309,8 @@ async function change(scope, body) {
   try {
     await api.post("/api/models-policy", { scope, ...body });
     setNotice(scope === "local"
-      ? "Your override is saved for this machine; runs started from now on use it."
-      : "Team policy updated - commit aidlc.settings.json and .claude/agents/.", "info");
+      ? "Saved on this computer. Your next runs use it."
+      : "Team preset updated. Commit the settings changes to share it.", "info");
     store.emit("wants-refresh");
   } catch (error) {
     setNotice(`Could not change the policy: ${error.message}`, "error");
