@@ -15,10 +15,6 @@
 .settings-block { padding: 10px 0 6px; border-top: 1px solid var(--line); }
 .settings-block:first-of-type { border-top: 0; }
 .settings-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.settings-toggle { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; }
-.settings-toggle button { padding: 4px 10px; font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--muted); border-right: 1px solid var(--line2); }
-.settings-toggle button:last-child { border-right: 0; }
-.settings-toggle button[aria-checked="true"] { background: var(--ink); color: #fff; }
 .settings-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .settings-row .l { flex: 1; }
 .settings-row .l small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
@@ -38,3 +34,4 @@
 .settings-foot .settings-note { flex: 1; margin: 0; }
 .settings-block .settings-h { margin-bottom: 2px; }
 .settings-pin { display: inline-block; margin-left: 8px; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 999px; font-size: 12px; color: var(--ink); white-space: nowrap; }
+.settings-personal { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--panel); }

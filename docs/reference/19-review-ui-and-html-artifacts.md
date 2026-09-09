@@ -209,6 +209,8 @@ policy through `POST /api/models-policy`, which runs the public
 `--agent --effort [--model]`, or `--reset`, with `--project` or `--local` and
 `--yes` - the binary when compiled, the dispatcher file under bun, always with
 `--project-dir`. The daemon never writes the settings or agent files itself.
+The route accepts both scopes; the shipped Settings page sends `project` only
+and shows a recorded `local` layer read-only (it greys out the groups it pins).
 
 **Nudge (daemon-side forwarding loop).** When a turn ends with no pending input,
 the pointer at `none`, and the state file's Current Stage still `[-]` in

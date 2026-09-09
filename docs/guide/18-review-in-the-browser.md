@@ -322,13 +322,15 @@ level you pin — and the **exceptions** — one agent pinned to its
 own effort or model (*Add…*). Every change is applied immediately through the
 same `aidlc config models` command the terminal uses, so the transaction,
 refresh guard, and doctor checks are identical, and it applies to runs started
-afterwards. The footer chooses the layer — **Project** (`aidlc.settings.json`
-and the agent files; commit them) or **Only me** (`aidlc.settings.local.json`,
-this machine) — and **Reset** clears that layer. There is no per-dial undo:
+afterwards. The browser edits the **team's** policy — the committed
+`aidlc.settings.json` and agent files (commit them); a personal override for
+your machine is a terminal move (`aidlc config models … --local`), and when one
+exists the page says what it pins and greys out those groups. **Reset** clears
+the team's layer. There is no per-dial undo:
 `config models` has no unset and `--reset` cannot be combined with other flags,
 so removing one dial would mean reset-then-replay across processes, which is not
-atomic for your settings; the browser offers *Inherit from default* only while
-it is true, and Reset otherwise. **About** lists this review UI's version,
+atomic for your settings; the browser offers the no-dial option only while it is
+true, and Reset otherwise. **About** lists this review UI's version,
 address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the
