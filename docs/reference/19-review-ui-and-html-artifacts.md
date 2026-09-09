@@ -224,13 +224,16 @@ public `aidlc config models` command - `--preset`, `--<group>-effort`,
 `--agent --effort [--model]`, or `--reset`, with `--project` or `--local` and
 `--yes` - the binary when compiled, the dispatcher file under bun, always with
 `--project-dir`. The daemon never writes the settings or agent files itself.
-The preset and exceptions go to `project` (the team's committed layer); a
-group's effort under Advanced goes to `local` (the personal layer). Removing one
-personal dial (`clear-group`, `local` only) has no single command behind it:
-the daemon rebuilds the personal layer - `--reset --local`, then every other
-entry it recorded, each replay step proven with `--dry-run` before the reset -
-under the route's mutation lock; a crash between steps leaves the layer holding
-what landed, which is why the move is offered for the personal layer only.
+The preset goes to `project` (the team's committed layer); a group's effort
+under Advanced goes to `local` (the personal layer). Removing one personal dial
+(`clear-group`, `local` only) has no single command behind it: the daemon
+rebuilds the personal layer - `--reset --local`, then every other entry it
+recorded, each replay step proven with `--dry-run` before the reset - under the
+route's mutation lock; a crash between steps leaves the layer holding what
+landed, which is why the move is offered for the personal layer only. The
+route's `agent` and `reset` actions remain for API callers; the shipped Settings
+page sends neither (pins are terminal-set and shown read-only; there is no
+reset button - the shipped default card is always offered).
 
 **Nudge (daemon-side forwarding loop).** When a turn ends with no pending input,
 the pointer at `none`, and the state file's Current Stage still `[-]` in

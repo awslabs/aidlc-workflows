@@ -311,42 +311,36 @@ the run will use.
 
 ### Settings
 
-The cog at the bottom of the left rail opens Settings. **Models & effort** reads
-top to bottom: the **model** and **default effort** — your own harness settings,
-what every unpinned agent uses and what *inherit* means; on Claude the browser
-edits both in place (`model` and `effortLevel` in `.claude/settings.local.json`,
-the latter the same value `/effort` sets). The model picker is Claude's own
-list — the same names its `/model` picker shows, asked of the agent once and
-cached — with your Claude default (from `~/.claude/settings.json`) as the first
-choice; picking another overrides it for this project, for you. Elsewhere it
-names the file. Then the **preset** — the team's policy, committed with the
-project (`aidlc.settings.json`): *Thorough*, *Balanced*, or *Minimal* sets each
-group's effort for everyone.
+The cog at the bottom of the left rail opens Settings. **Models & Effort** is
+one page, in the order you would use it. First your **defaults** — the
+**model** every agent runs on and the **default effort** they inherit — your own
+harness settings; on Claude the browser edits both in place (`model` and
+`effortLevel` in `.claude/settings.local.json`, the latter the same value
+`/effort` sets). The model picker is Claude's own list — the names its `/model`
+picker shows, asked of the agent once and cached — with your Claude default
+(from `~/.claude/settings.json`) as the first choice. Then the **preset** —
+*Thorough*, *Balanced*, or *Minimal* — the team's policy, committed with the
+project (`aidlc.settings.json`); one card is always lit, the shipped default
+(*Balanced*, tagged *default*) when nothing is recorded, so there is nothing to
+reset: to go back, pick the default card.
 
-**Advanced**, a fold at the bottom of the same page (open by itself while you
-override the team on this machine), is the fine grain, and everything it lists
-is the **team's** view — the committed project layer over the shipped
-defaults, no personal layer. **Groups** lists each group of agents (its members
-in the tooltip) with the team's value first — *Team · xhigh*, *Team · default*;
-where it comes from is the tooltip — and the levels beneath it: pick one and it
-is **your** override, on this machine only (`aidlc.settings.local.json`, not
-committed; a *yours* pill marks the row and teammates keep the team's value);
-pick the team option again to return to it. **Exceptions** pins one agent to its own effort — and, from the same model
-list as the Model row, its own model — for the whole team (*Add…*). Anything personal set from the terminal that has no control
-here — a `--local` preset or agent pin, or a `--global` entry for every project
-on this machine — is named in a note beneath, never shown as the team's.
-**Clear my overrides** removes your overrides for this project (the local
-layer; a `--global` entry stays, terminal-managed); **Reset team policy**
-removes the project's preset, dials, and exceptions. Each row carries one short
-caption (*What every agent runs on*, the agents in a group); which file a
-control writes, and where a value comes from, is in its tooltip. Every change goes through the same `aidlc config models` command the
-terminal uses, so the transaction, refresh guard, and doctor checks are
-identical, and it applies to runs started afterwards. Returning one group to the
-team is the one exception: the command has no per-dial unset, so the daemon
+**Advanced**, a fold at the bottom (open by itself while you have an
+override), is *your own effort per group*. Each group's first option is what
+the team's preset gives it — *Balanced · medium*, *Thorough · default* — and the
+levels beneath are yours: pick one and it applies on this machine only
+(`aidlc.settings.local.json`, not committed; a *yours* pill marks the row and
+teammates keep the team's value); pick the first option again to go back.
+Agents the team's policy pins to their own effort are listed there read-only;
+pins are set and removed from the terminal (`aidlc config models --agent`).
+Every change goes through the same `aidlc config models` command the terminal
+uses, so the transaction, refresh guard, and doctor checks are identical, and
+it applies to runs started afterwards. Going back to the team's value for one
+group is the one exception: the command has no per-dial unset, so the daemon
 rebuilds your personal layer — reset, then re-record what else it held, each
 step validated with `--dry-run` first — which is why that move exists for your
-own layer only, never the committed one. **About** lists this review UI's
-version, address, and runner.
+own layer only, never the committed one. Each row carries one short caption;
+which file a control writes, and where a value comes from, is in its tooltip.
+**About** lists this review UI's version, address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the
 SessionStart hook binds the agent's session), so you can Start a second intent
