@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-09
+
+Restore the native Code Generation Plan Approval prerequisites that 2.8.0 rewrote to `aidlc engine` commands but the plan-approval guard still recognized only in their Bun form. **Upgrade:** run `aidlc update`, or use `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. No project migration is required.
+
+* Native projects can run the required `testing-posture render`, `testing-posture fingerprint`, `log decision`, and `log answer` engine commands before Plan Approval on the seven supported harnesses, including the Windows `aidlc.exe` spelling. The guard still blocks generation, system routes, unrelated engine mutations, and arbitrary project test execution until approval is current.
+* Plan Approval mutation refusals now state that approval is not current instead of describing an unapproved plan as already approved.
+
 ## [2.8.1] - 2026-09-08
 
 Fix defects found while exercising the 2.8.0 native install: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, `aidlc update` on an already-current install failed its integrity check under a normal shell umask, and every native GitHub Copilot and Cursor hook was dead because the 2.8.0 packager projected those adapters onto the one-argument core-hook route. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`. Copilot and Cursor projects configured by 2.8.0 work as soon as the binary is updated: their existing `aidlc engine hook <harness>-adapter ...` wiring is accepted, and the 2.8.0 Copilot adapter still installed in the project (whose core-hook calls are the bare `aidlc hook <name>`) is accepted too. `aidlc config` in the project then rewrites the wiring to the canonical `aidlc engine adapter <harness> ...` spelling and installs the current adapter — Cursor's merged `.cursor/hooks.json` collapses every earlier AI-DLC spelling of an entry (bun-era and 2.8.0) into the one shipped entry instead of leaving duplicates that keep executing, and Copilot's `.github/hooks/aidlc.json` is regenerated.

@@ -61,6 +61,7 @@ import {
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -932,6 +933,41 @@ describe("t265b hook lifecycle", () => {
           BASH("bun .claude/tools/aidlc-testing-posture.ts render"),
         ).code,
       ).toBe(0);
+      for (const command of [
+        "aidlc engine testing-posture resolve",
+        "aidlc engine testing-posture render",
+        'aidlc engine testing-posture fingerprint --unit "todo-core"',
+        "aidlc engine testing-posture fingerprint --stage-level",
+        "aidlc engine testing-posture verify --stage-level",
+        "aidlc engine log decision --stage code-generation --checkpoint plan-approval",
+        "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
+        "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
+        "aidlc.exe engine testing-posture render",
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+      for (const command of [
+        "aidlc engine testing-posture begin --stage-level",
+        "aidlc engine log decision --stage code-generation --checkpoint summary-confirmation",
+        "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation",
+        "aidlc engine log review --stage code-generation",
+        "aidlc engine state advance",
+        "aidlc system lifecycle uninstall --yes",
+        "./aidlc engine testing-posture render",
+        "PATH=. aidlc engine testing-posture render",
+        "env PATH=. aidlc engine testing-posture render",
+        "bun --version",
+        "bun test src/app.test.ts",
+      ]) {
+        const blocked = runHook(proj, BASH(command));
+        expect(blocked.code, command).toBe(2);
+        expect(blocked.stderr, command).toContain(
+          "do not have a current matching approval",
+        );
+        expect(blocked.stderr, command).not.toContain(
+          "are fingerprinted and approved",
+        );
+      }
       expect(
         runHook(
           proj,
@@ -1630,6 +1666,41 @@ describe("t265c registrations", () => {
     );
     expect(stage).toContain("AIDLC-UNIT: <directive.unit>");
     expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+  });
+
+  test("all native projections emit the Plan Approval prerequisite commands", () => {
+    const expectedCommands = [
+      "aidlc engine testing-posture render",
+      "aidlc engine testing-posture fingerprint --unit",
+      "aidlc engine testing-posture fingerprint --stage-level",
+      "aidlc engine log decision --stage code-generation",
+      "aidlc engine log answer --stage code-generation",
+    ];
+
+    for (const harness of HARNESS_MATRIX) {
+      const stage = readFileSync(
+        join(
+          REPO_ROOT,
+          "dist-release",
+          harness.name,
+          harness.capabilities.harnessDir,
+          "aidlc-common",
+          "stages",
+          "construction",
+          "code-generation.md",
+        ),
+        "utf-8",
+      );
+      for (const command of expectedCommands) {
+        expect(stage, `${harness.name}: ${command}`).toContain(command);
+      }
+      expect(stage, harness.name).not.toContain(
+        `bun ${harness.capabilities.harnessDir}/tools/aidlc-testing-posture.ts`,
+      );
+      expect(stage, harness.name).not.toContain(
+        `bun ${harness.capabilities.harnessDir}/tools/aidlc-log.ts`,
+      );
+    }
   });
 
   test("claude: settings.json wires the guard on the Task matcher", () => {
