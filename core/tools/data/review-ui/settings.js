@@ -325,7 +325,7 @@ async function change(scope, body) {
   render();
   try {
     await api.post("/api/models-policy", { scope, ...body });
-    setFlash(scope === "project" ? "Saved. Commit the settings changes to share them." : "Saved", "saved");
+    setFlash(scope === "project" ? "Saved. Commit to share." : "Saved", "saved");
     store.emit("wants-refresh");
   } catch (error) {
     setFlash(error.message, "error");
