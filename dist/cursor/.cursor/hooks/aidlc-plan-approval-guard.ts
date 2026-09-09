@@ -80,7 +80,6 @@ import {
   evaluateCodeGenerationApproval,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
-import { shellCommandInvocations } from "./aidlc-review-freeze.ts";
 
 export {
   questionsFileApproved,
@@ -754,13 +753,21 @@ export async function run(input: string): Promise<number> {
     // `2>&1` and similar redirects take the opaque-shell path (the parser
     // reports an extra command). For framework-tool invocations, the exemption
     // already trusts the command; an opaque shell wrapper around a trusted
-    // command should not trap it. Re-resolve the invocation to check.
-    const isFrameworkBash =
-      toolName === "Bash" &&
-      typeof toolInput.command === "string" &&
-      shellCommandInvocations(toolInput.command).some(
-        (inv) => isFrameworkToolInvocation(projectDir, cwd, inv.name, inv.args),
-      );
+    // command should not trap it. Re-resolve the invocation to check. The
+    // dynamic import is lazy: only needed when an opaque shell is detected,
+    // so a stubbed review-freeze (tests) does not crash the guard at module
+    // load time.
+    let isFrameworkBash = false;
+    if (mutation.opaqueShell && toolName === "Bash" && typeof toolInput.command === "string") {
+      try {
+        const { shellCommandInvocations } = await import("./aidlc-review-freeze.ts");
+        isFrameworkBash = shellCommandInvocations(toolInput.command).some(
+          (inv) => isFrameworkToolInvocation(projectDir, cwd, inv.name, inv.args),
+        );
+      } catch {
+        isFrameworkBash = false;
+      }
+    }
     if (
       !guardedDispatch &&
       realTargets.length === 0 &&
