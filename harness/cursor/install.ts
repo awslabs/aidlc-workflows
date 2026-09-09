@@ -907,20 +907,27 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
     for (const entry of shippedEntries) {
       const command = isObject(entry) && typeof entry.command === "string" ? entry.command : null;
       const target = command === null ? null : cursorAdapterTarget(command);
-      const existingIndex =
-        command === null
-          ? -1
-          : merged.findIndex(
-              (candidate) => {
-                if (!isObject(candidate) || typeof candidate.command !== "string") return false;
-                return candidate.command === command ||
-                  (target !== null && cursorAdapterTarget(candidate.command) === target);
-              },
-            );
       // A command or adapter-target match identifies an AI-DLC-owned hook
-      // entry. Replace it so wiring and failClosed metadata upgrade together.
-      if (existingIndex === -1) merged.push(entry);
-      else merged[existingIndex] = entry;
+      // entry. A project refreshed across releases may carry several spellings
+      // of the same target (bun-era, 2.8.0 `engine hook`, canonical); every
+      // one of them is replaced by the single shipped entry, in the position
+      // of the first, so wiring and failClosed metadata upgrade together and
+      // no stale variant keeps executing beside the current one.
+      const owned = command === null
+        ? []
+        : merged.flatMap((candidate, index) => {
+          if (!isObject(candidate) || typeof candidate.command !== "string") return [];
+          return candidate.command === command ||
+              (target !== null && cursorAdapterTarget(candidate.command) === target)
+            ? [index]
+            : [];
+        });
+      if (owned.length === 0) {
+        merged.push(entry);
+        continue;
+      }
+      merged[owned[0]] = entry;
+      for (const index of owned.slice(1).reverse()) merged.splice(index, 1);
     }
     mergedHooks[event] = merged;
   }

@@ -1817,7 +1817,15 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
   return publicCommandError(argv[0]);
 }
 
-export function resolveAction(argv: string[]): Action {
+export function resolveAction(rawArgv: string[]): Action {
+  // The 2.8.0 Copilot adapter spawned its core hooks as `aidlc hook <name>`
+  // (no `engine` namespace). That adapter lives in every native Copilot project
+  // configured by 2.8.0 and is project-owned, so `aidlc update` alone cannot
+  // replace it. Accept the spelling as an alias of `aidlc engine hook <name>`
+  // so those projects recover on update; `aidlc config` installs the adapter
+  // that uses the canonical route. main() applies the same normalization
+  // before route policy.
+  const argv = rawArgv[0] === "hook" ? ["engine", ...rawArgv] : rawArgv;
   const clean: string[] = [];
   const globalFlags: string[] = [];
   let projectDir: string | undefined;
@@ -2805,7 +2813,10 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
   }
 }
 
-export async function main(argv: string[]): Promise<void> {
+export async function main(rawArgv: string[]): Promise<void> {
+  // Legacy `aidlc hook <name>` (see resolveAction) is canonicalized before
+  // route policy so stdin buffering, pinning, and dispatch see `engine hook`.
+  const argv = rawArgv[0] === "hook" ? ["engine", ...rawArgv] : rawArgv;
   process.exitCode = 0;
   bufferedStdin = null;
   configureColor(argv);

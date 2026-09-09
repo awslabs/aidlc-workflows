@@ -339,8 +339,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     try {
       const cursorDir = join(project, ".cursor");
       mkdirSync(cursorDir, { recursive: true });
-      // A project's own preToolUse hook sits beside the 2.8.0 AI-DLC entry; only
-      // the AI-DLC entry is owned and may be replaced.
+      // A project refreshed across releases carries BOTH legacy spellings of
+      // the AI-DLC guards entry (bun-era copy channel, then 2.8.0 native), with
+      // a project-owned hook between them. Only the AI-DLC entries are owned:
+      // both collapse into one canonical entry at the first one's position and
+      // the project's hook is untouched.
       const userEntry = { command: "bun scripts/my-guard.ts guards", failClosed: false };
       writeFileSync(
         join(cursorDir, "hooks.json"),
@@ -348,6 +351,10 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           version: 1,
           hooks: {
             preToolUse: [
+              {
+                command: "bun .cursor/hooks/aidlc-cursor-adapter.ts guards",
+                failClosed: true,
+              },
               userEntry,
               {
                 command: "aidlc engine hook cursor-adapter guards",
@@ -372,11 +379,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         hooks: Record<string, Array<{ command: string; failClosed?: boolean }>>;
       };
       expect(hooks.hooks.preToolUse).toEqual([
-        userEntry,
         {
           command: "aidlc engine adapter cursor guards",
           failClosed: true,
         },
+        userEntry,
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

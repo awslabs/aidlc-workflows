@@ -2603,6 +2603,44 @@ describe("t230 dispatcher hook routing", () => {
     },
   );
 
+  test.skipIf(process.platform === "win32")(
+    "a Copilot project configured by 2.8.0 recovers on binary update alone",
+    () => {
+      // The project keeps BOTH pieces 2.8.0 wrote: the wiring spelling
+      // `engine hook copilot-adapter <target>` and the byte-exact 2.8.0 adapter,
+      // whose compiled-mode child calls are the bare `aidlc hook <name>`.
+      // Neither is touched by `aidlc update`, so the updated dispatcher must
+      // accept both for the core hook to run.
+      const projectDir = makeProject();
+      cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(projectDir, ".aidlc"), {
+        recursive: true,
+      });
+      cpSync(
+        join(REPO_ROOT, "tests", "fixtures", "copilot-adapter-2.8.0", "aidlc-copilot-adapter.ts"),
+        join(projectDir, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"),
+      );
+      const executable = join(projectDir, "aidlc-native-stub");
+      writeFileSync(
+        executable,
+        `#!/bin/sh\nexec ${JSON.stringify(BUN)} ${JSON.stringify(DISPATCHER)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const res = viaDispatcher(
+        ["engine", "hook", "copilot-adapter", "validate-state"],
+        projectDir,
+        { AIDLC_COMPILED_EXECUTABLE: executable },
+        JSON.stringify({ hook_event_name: "PreCompact", cwd: projectDir, session_id: "t230-280" }),
+      );
+
+      expect(res.exitCode).toBe(0);
+      expect(res.stderr.toString("utf-8")).toBe("");
+      expect(
+        existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
+          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+      ).toBe(true);
+    },
+  );
+
   test("--project-dir overrides cwd and payload project for hook, statusline, and adapter", () => {
     const cwdProject = makeProject();
     const targetProject = makeProject();
