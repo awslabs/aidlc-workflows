@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-09
+
+Restore native Cursor and GitHub Copilot hook dispatch after the 2.8.0 installer routed their adapters through the core-hook calling convention. **Upgrade:** `aidlc update` alone restores hooks in Cursor and Copilot projects configured by 2.8.0 because their existing `engine hook <harness>-adapter` wiring is now accepted; re-running `aidlc config` in the project rewrites the wiring to the canonical `aidlc engine adapter <harness> ...` spelling and replaces the old entry instead of duplicating it.
+
+* Cursor IDE `failClosed` `preToolUse` hooks now emit `{"permission":"allow"}` on allowed tools instead of returning no output and denying every tool; deny decisions continue to emit Cursor permission-deny JSON.
+* GitHub Copilot hooks no longer fail every event with `undefined is not an object (evaluating 'input.length')` and exit 1; adapter routing and its inner core-hook subprocesses now use the native dispatcher contracts.
+
 ## [2.8.1] - 2026-09-08
 
 Fix two defects found while exercising the 2.8.0 native install on Linux and Windows: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, and `aidlc update` on an already-current install failed its integrity check under a normal shell umask. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`; no project changes are required, and `aidlc config` refreshes projects when convenient.

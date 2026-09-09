@@ -857,6 +857,23 @@ function stringArray(value: unknown, label: string): string[] {
   return value as string[];
 }
 
+function cursorAdapterTarget(command: string): string | null {
+  const normalized = command.trim();
+  const match = /\s([a-z0-9-]+)$/.exec(normalized);
+  if (!match) return null;
+  const invocation = normalized.slice(0, match.index);
+  if (
+    invocation === "aidlc engine hook cursor-adapter" ||
+    invocation === "aidlc engine adapter cursor" ||
+    /^bun\s+(?:"[^"]*\/hooks\/aidlc-cursor-adapter\.ts"|'[^']*\/hooks\/aidlc-cursor-adapter\.ts'|\S*\/hooks\/aidlc-cursor-adapter\.ts)$/.test(
+      invocation,
+    )
+  ) {
+    return match[1];
+  }
+  return null;
+}
+
 function mergeHooks(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -889,15 +906,19 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
     const merged = [...((projectEntries as unknown[] | undefined) ?? [])];
     for (const entry of shippedEntries) {
       const command = isObject(entry) && typeof entry.command === "string" ? entry.command : null;
+      const target = command === null ? null : cursorAdapterTarget(command);
       const existingIndex =
         command === null
           ? -1
           : merged.findIndex(
-              (candidate) => isObject(candidate) && candidate.command === command,
+              (candidate) => {
+                if (!isObject(candidate) || typeof candidate.command !== "string") return false;
+                return candidate.command === command ||
+                  (target !== null && cursorAdapterTarget(candidate.command) === target);
+              },
             );
-      // A command match identifies an AI-DLC-owned hook entry. Replace it with
-      // the refreshed shipped object so security metadata such as failClosed
-      // upgrades instead of being frozen at the first installed version.
+      // A command or adapter-target match identifies an AI-DLC-owned hook
+      // entry. Replace it so wiring and failClosed metadata upgrade together.
       if (existingIndex === -1) merged.push(entry);
       else merged[existingIndex] = entry;
     }

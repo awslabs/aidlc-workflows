@@ -2443,6 +2443,24 @@ describe("t230 dispatcher hook routing", () => {
     }
   });
 
+  test("Copilot adapter routing resolves its native adapter", () => {
+    const copilot = resolveAction([
+      "engine",
+      "adapter",
+      "copilot",
+      "guard-tool-call",
+    ]);
+    expect(copilot).toMatchObject({
+      type: "adapter",
+      harness: "copilot",
+      target: "guard-tool-call",
+      extraArgs: [],
+    });
+    if (copilot.type === "adapter") {
+      expect(copilot.path.endsWith("aidlc-copilot-adapter.ts")).toBe(true);
+    }
+  });
+
   test("hook validate-state dispatches to run(input) and writes heartbeat", () => {
     const projectDir = makeProject();
     const res = viaDispatcher( ["engine", "hook", "validate-state"], projectDir, {}, "{}");

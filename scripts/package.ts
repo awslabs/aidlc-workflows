@@ -1139,7 +1139,7 @@ function rewriteNativeInvocations(
       (_match, delegate: string) => trustedCommand(delegate),
     );
     value = value.replace(hookPattern, (_match, hook: string) => {
-      if (hook === "kiro-adapter" || hook === "codex-adapter") {
+      if (hook.endsWith("-adapter")) {
         return trustedCommand(`adapter ${m.name}`);
       }
       if (hook === "statusline") return trustedCommand("statusline");

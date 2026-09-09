@@ -1104,10 +1104,11 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  copilot: ".aidlc",
   cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
@@ -1119,6 +1120,7 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 
 function adapterFile(harness: AdapterHarness): string {
   if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
   return "aidlc-kiro-adapter.ts";
 }
@@ -1563,6 +1565,19 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     const name = argv[1];
     if (!name) return nounError("hook", undefined);
     if (!isSafeName(name)) return nounError("hook", name);
+    if (name === "cursor-adapter" || name === "copilot-adapter") {
+      const harness: AdapterHarness = name === "cursor-adapter" ? "cursor" : "copilot";
+      const target = argv[2];
+      if (!target) return nounError("adapter", undefined);
+      if (!isSafeName(target)) return nounError("adapter", target);
+      return {
+        type: "adapter",
+        harness,
+        target,
+        extraArgs: argv.slice(3),
+        path: resolveHookPath(adapterFile(harness), harness),
+      };
+    }
     return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
   }
   if (route.routeOnly === "statusline") {
