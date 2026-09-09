@@ -358,13 +358,37 @@ function wrapContext(coreStdout: string, eventName: string): string {
   return coreStdout;
 }
 
+function allowUpdatedInput(coreStdout: string): string {
+  try {
+    const parsed = JSON.parse(coreStdout) as {
+      hookSpecificOutput?: {
+        hookEventName?: unknown;
+        permissionDecision?: unknown;
+        updatedInput?: unknown;
+      };
+    };
+    const output = parsed.hookSpecificOutput;
+    if (
+      output?.hookEventName === "PreToolUse" &&
+      output.updatedInput !== undefined &&
+      output.permissionDecision === undefined
+    ) {
+      output.permissionDecision = "allow";
+      return `${JSON.stringify(parsed)}\n`;
+    }
+  } catch {
+    // Unparseable core output is not a successful input rewrite.
+  }
+  return coreStdout;
+}
+
 function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
-  return `${JSON.stringify({
+  return allowUpdatedInput(`${JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       updatedInput,
     },
-  })}\n`;
+  })}\n`);
 }
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
@@ -638,12 +662,14 @@ switch (target) {
 
   case "deliver-stage-rules": {
     // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
-    // contract as Claude. The core hook recognizes spawn_agent and appends the
-    // exact active-stage bundle to message/items without adapter re-shaping.
+    // contract as Claude, plus an explicit allow decision for rewritten input.
+    // The core hook recognizes spawn_agent and appends the exact active-stage
+    // bundle to message/items; the adapter completes the Codex envelope.
     const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rawInput);
     const answeredCode = r.code === 2 ? 2 : 0;
-    persistResponse(r.stdout, answeredCode, r.stderr);
-    if (r.stdout) process.stdout.write(r.stdout);
+    const stdout = r.code === 2 ? r.stdout : allowUpdatedInput(r.stdout);
+    persistResponse(stdout, answeredCode, r.stderr);
+    if (stdout) process.stdout.write(stdout);
     if (r.code === 2) {
       process.stderr.write(r.stderr);
       return 2;
