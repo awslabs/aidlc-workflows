@@ -956,6 +956,8 @@ describe("t265b hook lifecycle", () => {
         "./aidlc engine testing-posture render",
         "PATH=. aidlc engine testing-posture render",
         "env PATH=. aidlc engine testing-posture render",
+        "PATH=.; aidlc engine testing-posture render",
+        "printf '%s\\n' '--checkpoint summary-confirmation' | xargs aidlc engine log decision --stage code-generation --checkpoint plan-approval",
         "bun --version",
         "bun test src/app.test.ts",
       ]) {

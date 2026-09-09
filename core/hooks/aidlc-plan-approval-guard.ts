@@ -594,9 +594,10 @@ function isFrameworkToolInvocation(
   name: string,
   args: string[],
   executableResolutionChanged = false,
+  dataDriven = false,
 ): boolean {
   if (isNativePlanApprovalPrerequisite(name, args)) {
-    return !executableResolutionChanged;
+    return !executableResolutionChanged && !dataDriven;
   }
   if (normalizedCommandName(name) !== "bun") return false;
   if (
@@ -642,6 +643,7 @@ function shellInvocationNeedsApproval(
     name: string;
     args: string[];
     executable?: string;
+    dataDriven?: boolean;
     executableResolutionChanged?: boolean;
   },
   hasConcreteTargets: boolean,
@@ -678,6 +680,7 @@ function shellInvocationNeedsApproval(
       invocation.executable ?? invocation.name,
       invocation.args,
       invocation.executableResolutionChanged,
+      invocation.dataDriven,
     )
   ) {
     return false;
@@ -740,12 +743,15 @@ async function mutationIntent(
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
-    const { shellCommandInvocationDetails, shellWriteTargets } = await import(
-      "./aidlc-review-freeze.ts"
-    );
+    const {
+      shellCommandAltersExecutableResolution,
+      shellCommandInvocationDetails,
+      shellWriteTargets,
+    } = await import("./aidlc-review-freeze.ts");
     targets = shellWriteTargets(command, cwd);
     opaqueShell =
       shellUsesDynamicEvaluation(command) ||
+      shellCommandAltersExecutableResolution(command) ||
       shellCommandInvocationDetails(command).some((invocation) =>
         shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0)
       );
