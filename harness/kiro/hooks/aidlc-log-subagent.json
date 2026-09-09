@@ -4,14 +4,14 @@
     {
       "name": "aidlc-log-subagent-open",
       "trigger": "PreToolUse",
-      "matcher": "^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$",
+      "matcher": "^(subagent|subagent_.+|invoke_sub_agent|orchestrate_subagent)$",
       "description": "Opens the delegation window so a specialist agent's own tool calls can be attributed to it.",
       "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro log-subagent" }
     },
     {
       "name": "aidlc-log-subagent",
       "trigger": "PostToolUse",
-      "matcher": "^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$",
+      "matcher": "^(subagent|subagent_.+|invoke_sub_agent|orchestrate_subagent)$",
       "description": "Records in the audit log when a specialist agent finishes its part of a stage.",
       "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro log-subagent" }
     }

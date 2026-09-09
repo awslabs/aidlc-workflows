@@ -90,9 +90,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   that tree, such as `.agents/skills/aidlc/SKILL.md`.
 - `frontmatterAdditions` (optional) - per-file YAML lines appended to a
   core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
-  field that must not ship to other harnesses (kiro injects
-  `tools: ["read", "write", "shell"]` into its delegation-target agent files -
-  the IDE reads subagent tool grants from the `.md` frontmatter). Declared as
+  field that must not ship to other harnesses. No shipped row uses it today - the
+  Kiro row did while it injected `tools:` into its delegation targets, and dropped
+  the injection when those grants turned out to be optional. Declared as
   manifest data so core stays single-source; the packager errors on a typo'd
   path, a missing frontmatter block, or a key core already declares.
 - `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).

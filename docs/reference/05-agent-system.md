@@ -33,10 +33,14 @@ tier: judgment                      # judgment | balanced | templated (see Agent
 | `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
 | `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in the ignored local `dist/<harness>/` tree and versioned release runtime. |
 
-Kiro projects this core contract differently: it removes
-`disallowedTools`, adds `tools: ["read", "write", "shell"]`, and adds
-capability-scoped `permissions.rules`. Omitting `subagent` from `tools:` carries
-the same no-nested-delegation constraint in the IDE's native vocabulary.
+Kiro projects this core contract by removal alone: it drops `disallowedTools`,
+which only Claude understands and which Kiro would fail closed on, and adds
+nothing. A Kiro agent needs neither a `tools:` grant nor a `permissions` block to
+be dispatchable - both are optional, and the 14 shipped personas carry neither.
+The capability frontmatter lives on the CONDUCTOR (`agents/aidlc.md`), which is
+where the match-scoped shell grant, the delegation trust list and the `resources`
+a custom agent does not auto-load all belong. A persona has no `subagent` grant to
+omit, so it cannot nest a delegation.
 
 ### Markdown Body Sections
 

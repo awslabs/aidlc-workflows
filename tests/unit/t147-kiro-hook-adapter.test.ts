@@ -215,6 +215,40 @@ function closeDelegationWindow(projectDir: string, agent: string): void {
   });
 }
 
+// A CREW dispatch: one event naming several personas in `stages[].role`. It opens
+// one window per persona, and one close must release all of them.
+function openCrewWindow(projectDir: string, agents: string[]): void {
+  const r = runAdapter(projectDir, "log-subagent", crewPayload(projectDir, agents, "PreToolUse"));
+  expect(r.code, `open crew window ${agents.join("+")}`).toBe(0);
+}
+
+function closeCrewWindow(projectDir: string, agents: string[]): void {
+  runAdapter(projectDir, "log-subagent", {
+    ...crewPayload(projectDir, agents, "PostToolUse"),
+    tool_response: "crew done",
+  });
+}
+
+function crewPayload(
+  projectDir: string,
+  agents: string[],
+  event: "PreToolUse" | "PostToolUse",
+): Record<string, unknown> {
+  return {
+    hook_event_name: event,
+    cwd: projectDir,
+    tool_name: "subagent",
+    tool_input: {
+      task: "crew",
+      stages: agents.map((agent, index) => ({
+        name: `stage_${index}`,
+        role: agent,
+        prompt_template: "{task}",
+      })),
+    },
+  };
+}
+
 function runDispatchCore(
   projectDir: string,
   payload: unknown,
@@ -1023,6 +1057,84 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       ).toBe(2);
       closeDelegationWindow(dir, "aidlc-design-agent");
       expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9: the 0.x notice fires only on the legacy channel, and reads neither", () => {
+    const dir = scratchProject(false);
+    try {
+      // A supported host carries no USER_PROMPT: the notice must not interrupt a
+      // session it cannot diagnose.
+      const modern = runAdapter(dir, "legacy-ide-notice", "");
+      expect(modern.code).toBe(0);
+      expect(modern.stderr).toBe("");
+
+      // A 0.x host delivers the payload in USER_PROMPT. Exit 2 stops the turn.
+      const legacy = runAdapter(dir, "legacy-ide-notice", "", [], {
+        USER_PROMPT: JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+      });
+      expect(legacy.code).toBe(2);
+      expect(legacy.stderr).toContain("no longer supports this version of Kiro IDE");
+      expect(legacy.stderr).toContain("Kiro CLI");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d3: one crew dispatch is one window, however many personas it named", () => {
+    // Regression: openDelegation appends one open per persona under the same
+    // dispatch key, and a close used to cancel only the most recent - so a
+    // two-persona crew left one open inflight until the 6h TTL and the lifecycle
+    // guard kept refusing the MAIN session's own verbs after the crew finished.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      const crew = ["aidlc-developer-agent", "aidlc-quality-agent"];
+      openCrewWindow(dir, crew);
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code, "crew inflight").toBe(2);
+      closeCrewWindow(dir, crew);
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "one close releases every persona that dispatch named",
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
+    // Regression: with two DIFFERENT personas inflight the adapter used to forward
+    // an empty identity, so the core guard passed the call through - the exact gap
+    // the persona axis exists to close. It resolves the ambiguity from the dispatch
+    // record instead.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-architecture-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      openDelegationWindow(dir, "aidlc-developer-agent");
+      const r = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "read_file",
+        tool_input: { path: "construction/sibling-unit/design.md" },
+      });
+      expect(r.code, "two personas inflight must not disable the guard").toBe(2);
+      expect(r.stderr).toContain("This review cannot open");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

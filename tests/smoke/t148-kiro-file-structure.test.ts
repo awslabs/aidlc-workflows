@@ -105,8 +105,11 @@ describe("t148 dist/kiro file structure", () => {
     // Neither half of the agent-v1 generation may come back alongside this one.
     expect(readdirSync(join(K, "agents")).filter((f) => f.endsWith(".json")))
       .toEqual([]);
-    expect(readdirSync(join(K, "hooks")).filter((f) => f.endsWith(".kiro.hook")))
-      .toEqual([]);
+    // The pre-1.0 wiring generation is retired except for one file: it is the only
+    // channel an unsupported Kiro IDE 0.x reads, and it does not fire on a
+    // supported one, so it carries the "please upgrade" notice and nothing else.
+    expect(readdirSync(join(K, "hooks")).filter((f) => f.endsWith(".kiro.hook")).sort())
+      .toEqual(["aidlc-legacy-ide-notice.kiro.hook"]);
   });
 
   test("ships always-included active-memory steering", () => {

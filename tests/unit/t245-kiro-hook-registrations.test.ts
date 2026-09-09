@@ -50,26 +50,22 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   matcher: string | null;
   adapterTarget: string;
 }> = [
-  // SessionStart is IDE-only and AgentSpawn is CLI-only, and one row serves both.
+  { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
+  { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
+  { file: "aidlc-log-subagent.json", trigger: "PreToolUse", matcher: "^(subagent|subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
+  { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "^(subagent|subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
+  { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
+  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "rebuild-stage-graph" },
+  { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
+  { file: "aidlc-review-freeze.json", trigger: "PreToolUse", matcher: "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|execute_bash|execute_pwsh|shell)$", adapterTarget: "review-freeze" },
+  { file: "aidlc-reviewer-scope.json", trigger: "PreToolUse", matcher: "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|read|fs_read|read_file|read_files|execute_bash|execute_pwsh|shell)$", adapterTarget: "reviewer-scope" },
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   { file: "aidlc-session-start.json", trigger: "AgentSpawn", matcher: null, adapterTarget: "session-start" },
-  { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
-  { file: "aidlc-terminal-command.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "verb-intercept" },
-  { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "terminal-command-guard" },
-  { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
-  { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
-  { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
-  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "rebuild-stage-graph" },
-  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "sync-workflow-state" },
-  // Both edges of a delegation: the PreToolUse one opens the window that gives a
-  // delegate's own tool calls an identity the payload does not carry.
-  { file: "aidlc-log-subagent.json", trigger: "PreToolUse", matcher: "^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
-  { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
-  { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
-  // Blocking guards. PreToolUse is the only trigger that can refuse these calls.
-  { file: "aidlc-review-freeze.json", trigger: "PreToolUse", matcher: "^(fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|execute_bash|execute_pwsh|shell)$", adapterTarget: "review-freeze" },
   { file: "aidlc-state-transition-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "state-transition-guard" },
-  { file: "aidlc-reviewer-scope.json", trigger: "PreToolUse", matcher: "^(fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|read|fs_read|read_file|read_files|execute_bash|execute_pwsh|shell)$", adapterTarget: "reviewer-scope" },
+  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "^(execute_bash|todo_list)$", adapterTarget: "sync-workflow-state" },
+  { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "terminal-command-guard" },
+  { file: "aidlc-terminal-command.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "verb-intercept" },
+  { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "^(write|fs_write|create_file|str_replace|fs_append|apply_patch|edit_file)$", adapterTarget: "audit-and-sensors" },
 ];
 
 // Legacy .kiro.hook files that MUST be present (coexistence with pre-1.0 IDE).
@@ -169,10 +165,22 @@ describe("t245 Kiro hook registrations (manifest schema contract)", () => {
   // `.kiro.hook` files still shipped alongside the manifests. That generation is
   // retired with the row merge, and the upgrade instructions below now delete
   // them rather than ship them.
-  test("no legacy .kiro.hook registration ships", () => {
+  test("exactly one legacy .kiro.hook ships, and it is the 0.x notice", () => {
+    // The pre-1.0 wiring generation is retired, with one deliberate exception:
+    // that format is the ONLY channel an unsupported Kiro IDE 0.x reads, and it
+    // does not fire on a supported one - so it is both the delivery mechanism and
+    // the version check for the "please upgrade" notice. Any OTHER legacy file
+    // reappearing is the regression this pins.
     for (const dir of [AUTHORED_HOOKS, DIST_HOOKS]) {
-      expect(readdirSync(dir).filter((f) => f.endsWith(".kiro.hook"))).toEqual([]);
+      expect(readdirSync(dir).filter((f) => f.endsWith(".kiro.hook")).sort())
+        .toEqual(["aidlc-legacy-ide-notice.kiro.hook"]);
     }
+    const notice = JSON.parse(
+      readFileSync(join(DIST_HOOKS, "aidlc-legacy-ide-notice.kiro.hook"), "utf-8"),
+    ) as { when?: { type?: string }; then?: { command?: string } };
+    // promptSubmit is the only event 0.12 delivers, so the notice must ride it.
+    expect(notice.when?.type).toBe("promptSubmit");
+    expect(notice.then?.command).toContain("engine adapter kiro legacy-ide-notice");
   });
 
   test("upgrade instructions remove retired hook registrations before overlaying the new tree", () => {

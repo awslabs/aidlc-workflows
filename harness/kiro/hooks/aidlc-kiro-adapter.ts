@@ -75,7 +75,7 @@
 //                  session-end | verb-intercept | terminal-command-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
@@ -97,6 +97,7 @@ import {
   readPlanApprovalLegacyWindows,
   readActiveDirectiveMarker,
   resolveProjectDirFromHook,
+  reviewerDispatchPath,
   sanitizeHarnessPlainText,
   writePlanApprovalLegacyWindow,
   writePlanApprovalViolation,
@@ -1437,23 +1438,52 @@ if (target === "reviewer-scope") {
   //   enforcing anyway would refuse a call that may belong to the other one -
   //   a false refusal that stalls the workflow.
   //
-  // So this guard declines rather than guesses. It is NOT "erring toward
-  // refusing", and an earlier version of this comment claimed that while the code
-  // did the opposite. What it must not do is decline SILENTLY, so the ambiguity is
-  // recorded where --doctor can surface it.
+  // Under ambiguity this guard used to pass the call through with an empty
+  // identity, which is exactly the enforcement gap the persona axis exists to
+  // close - a delegate could read outside its review while a second one happened
+  // to be inflight. So resolve the ambiguity instead: read the dispatch record the
+  // core hook itself reads, and if the reviewer it names is among the inflight
+  // personas, that is the identity to forward. The window says a delegate is
+  // acting and the record says which delegate this guard is for.
+  //
+  // The residual cost is a possible FALSE refusal: another delegate reaching
+  // outside the reviewed artifact during the same window is refused as if it were
+  // the reviewer. That is the direction to err in - this guard only bounds reads
+  // and writes outside one artifact, and a refusal is recoverable where a missed
+  // violation is not. It is recorded either way.
   const latched = inflightDelegates(
     ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
   );
-  if (latched.length > 1) {
-    recordHookDrop(
-      projectDir,
-      "kiro-adapter",
-      `reviewer-scope: ${latched.length} delegates inflight (${
-        latched.join(", ")
-      }) — the acting persona cannot be determined, so read-scope was not enforced`,
-    );
+  let registeredAgent = latched.length === 1 ? latched[0] : "";
+  if (registeredAgent === "" && latched.length > 1) {
+    let dispatchedReviewer = "";
+    try {
+      const record = JSON.parse(
+        readFileSync(reviewerDispatchPath(projectDir), "utf-8"),
+      ) as { reviewer?: unknown };
+      if (typeof record.reviewer === "string") dispatchedReviewer = record.reviewer.trim();
+    } catch {
+      dispatchedReviewer = ""; // no record: the core hook fails open on its own
+    }
+    if (dispatchedReviewer !== "" && latched.includes(dispatchedReviewer)) {
+      registeredAgent = dispatchedReviewer;
+      recordHookDrop(
+        projectDir,
+        "kiro-adapter",
+        `reviewer-scope: ${latched.length} delegates inflight (${
+          latched.join(", ")
+        }) — attributed to the dispatched reviewer "${dispatchedReviewer}"; a call from another delegate is refused as if it were the reviewer's`,
+      );
+    } else {
+      recordHookDrop(
+        projectDir,
+        "kiro-adapter",
+        `reviewer-scope: ${latched.length} delegates inflight (${
+          latched.join(", ")
+        }) and none is the dispatched reviewer — read-scope not enforced`,
+      );
+    }
   }
-  const registeredAgent = latched.length === 1 ? latched[0] : "";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "reviewer-scope"]
@@ -1530,6 +1560,35 @@ if (target === "deliver-stage-rules") {
     );
   }
   return 0;
+}
+
+// --- legacy-ide-notice: the one thing an unsupported host must still hear ---
+//
+// Wired by aidlc-legacy-ide-notice.kiro.hook, and that channel IS the version
+// check: `.kiro.hook` manifests do not fire on a current Kiro IDE (measured - 0
+// firings against a five-manifest control), so a firing means a 0.x host. The
+// alternative to shipping this one legacy file is silence on 0.x, which is the
+// failure this notice exists to end.
+//
+// Reads NEITHER channel. A 0.x host opens stdin and never closes it, so a read
+// here would hang before the message could be printed - `core/tools/aidlc.ts`
+// skips its own buffered read for this target for the same reason, and this target
+// is deliberately absent from INPUT_TARGETS.
+//
+// Belt and braces on top of the channel: USER_PROMPT is how 0.12 delivered the
+// hook payload, so a non-empty one confirms the legacy channel. A host that
+// carries none is not the host this notice is for, and it exits 0 rather than
+// interrupting a session it cannot diagnose.
+if (target === "legacy-ide-notice") {
+  if ((process.env.USER_PROMPT ?? "").trim().length === 0) return 0;
+  process.stderr.write(
+    "AI-DLC no longer supports this version of Kiro IDE.\n\n" +
+      "Update Kiro IDE, or run this project with Kiro CLI instead - one AI-DLC " +
+      "install serves both. The workflow record under aidlc/ is unaffected and " +
+      "resumes where it stopped once you are on a supported version.\n\n" +
+      "See docs/guide/harnesses/kiro.md for the supported versions.\n",
+  );
+  return 2; // Kiro reject contract: exit 2 + stderr stops the turn.
 }
 
 if (target === "state-transition-guard") {
@@ -1758,8 +1817,15 @@ function delegationLedgerPath(sessionId: string): string {
 // dispatch matcher once, so it does not happen today - the stray entry expires by
 // TTL, and until then the error is "a delegate is believed inflight", which fails
 // toward refusing rather than toward letting a lifecycle verb through.
+// `group` is what makes ONE DISPATCH one window. A crew dispatch names several
+// personas, so it appends several opens under the same dispatch key; without a
+// group id a single close cancelled only the most recent of them and the rest sat
+// inflight until the TTL, which kept the lifecycle guard refusing the main
+// session's own verbs. A close now cancels the whole most-recent group for that
+// key - and two IDENTICAL dispatches still need two closes, because they are two
+// groups.
 type DelegationRecord =
-  | { op: "open"; agent: string; key: string; ts: number }
+  | { op: "open"; agent: string; key: string; group: string; ts: number }
   | { op: "close"; key: string; ts: number };
 
 function readDelegationLedger(sessionId: string): DelegationRecord[] {
@@ -1784,7 +1850,12 @@ function readDelegationLedger(sessionId: string): DelegationRecord[] {
     if (key === "") continue;
     if (parsed.op === "open") {
       const agent = typeof parsed.agent === "string" ? parsed.agent.trim() : "";
-      if (agent !== "") out.push({ op: "open", agent, key, ts });
+      // A record written before groups existed replays as its own group, so an
+      // in-flight upgrade cannot strand it.
+      const group = typeof parsed.group === "string" && parsed.group !== ""
+        ? parsed.group
+        : `${key}:${ts}`;
+      if (agent !== "") out.push({ op: "open", agent, key, group, ts });
     } else if (parsed.op === "close") {
       out.push({ op: "close", key, ts });
     }
@@ -1823,9 +1894,10 @@ function openDelegation(sessionId: string, input: KiroHookInput, agents: string[
   if (named.length === 0) return;
   const key = delegationKey(input);
   const ts = Date.now();
+  const group = `${ts.toString(36)}-${randomUUID()}`;
   appendDelegationRecords(
     sessionId,
-    named.map((agent) => ({ op: "open" as const, agent, key, ts })),
+    named.map((agent) => ({ op: "open" as const, agent, key, group, ts })),
   );
 }
 
@@ -1833,26 +1905,33 @@ function closeDelegation(sessionId: string, input: KiroHookInput): void {
   appendDelegationRecords(sessionId, [
     { op: "close", key: delegationKey(input), ts: Date.now() },
   ]);
-  compactDelegationLedger(sessionId);
 }
 
 /** Opens that no close has cancelled and that have not expired. */
-function liveDelegationOpens(sessionId: string): Array<{ agent: string; key: string; ts: number }> {
+function liveDelegationOpens(
+  sessionId: string,
+): Array<{ agent: string; key: string; group: string; ts: number }> {
   const now = Date.now();
-  const opens: Array<{ agent: string; key: string; ts: number }> = [];
+  const opens: Array<{ agent: string; key: string; group: string; ts: number }> = [];
   for (const record of readDelegationLedger(sessionId)) {
     if (record.op === "open") {
       if (now - record.ts > DELEGATION_TTL_MS) continue;
-      opens.push({ agent: record.agent, key: record.key, ts: record.ts });
+      opens.push({ agent: record.agent, key: record.key, group: record.group, ts: record.ts });
       continue;
     }
-    // Cancel the most recent matching open: a delegate that opened later is the
-    // one still running if the earlier one already reported.
+    // Cancel the most recent GROUP for this key - every persona that dispatch
+    // named, not just the last one appended. A later group is the one still
+    // running if an earlier identical dispatch already reported.
+    let group: string | null = null;
     for (let i = opens.length - 1; i >= 0; i--) {
       if (opens[i].key === record.key) {
-        opens.splice(i, 1);
+        group = opens[i].group;
         break;
       }
+    }
+    if (group === null) continue;
+    for (let i = opens.length - 1; i >= 0; i--) {
+      if (opens[i].group === group) opens.splice(i, 1);
     }
   }
   return opens;
@@ -1863,20 +1942,13 @@ function inflightDelegates(sessionId: string): string[] {
   return [...new Set(liveDelegationOpens(sessionId).map((open) => open.agent))];
 }
 
-// Truncate only when nothing is inflight. Rewriting a ledger that still has live
-// opens would race an append; with none live the file is provably replaceable by
-// empty, so an unbounded session cannot grow it forever.
-function compactDelegationLedger(sessionId: string): void {
-  try {
-    const path = delegationLedgerPath(sessionId);
-    if (!existsSync(path)) return;
-    if (liveDelegationOpens(sessionId).length > 0) return;
-    writeFileSync(path, "", "utf-8");
-  } catch {
-    // Compaction is housekeeping; failing it changes no decision.
-  }
-}
-
+// There is deliberately NO compaction. The obvious form - decide nothing is
+// inflight, then truncate - is a check-then-act race: an append landing between
+// the two is erased, and a lost open means a delegate's calls stop being
+// attributed. An earlier version of this file claimed the race could not happen
+// "when nothing is inflight", which was wrong: nothing prevents another adapter
+// process from opening a window in that gap. Records are small and expire by TTL,
+// so an unbounded ledger costs disk rather than correctness.
 
 // Recover the delegated agent's identity from the hook payload.
 //

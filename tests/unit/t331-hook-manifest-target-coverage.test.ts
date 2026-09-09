@@ -122,14 +122,22 @@ const REQUIRED: Array<{
 // they translate is a name the guard can act on, so a matcher that omits it drops
 // the call silently.
 const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: string }> = [
+  // The canonicalizers are the source of truth for what a guard can act on, so
+  // these lists mirror them. `write` and `read` belong here: the payload fixture
+  // calls them the defensive adapter vocabulary and the adapter translates both -
+  // a matcher that omits a name the adapter handles is a bypass the type checker
+  // cannot see.
   {
     target: "review-freeze",
     tools: [
+      "write",
       "fs_write",
       "create_file",
       "str_replace",
       "fs_append",
       "delete_file",
+      "apply_patch",
+      "edit_file",
       "execute_bash",
       "execute_pwsh",
       "shell",
@@ -137,12 +145,26 @@ const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: stri
     why: "every tool that can mutate a frozen artifact, terminal spellings included",
   },
   {
+    target: "audit-and-sensors",
+    tools: ["write", "fs_write", "create_file", "str_replace", "fs_append", "apply_patch", "edit_file"],
+    why: "every write spelling the audit hook records; a delete is not an artifact write",
+  },
+  {
+    target: "sync-workflow-state",
+    tools: ["execute_bash", "todo_list"],
+    why: "the CLI reports the stage slug on a todo_list create; the IDE path is the shell event",
+  },
+  {
     target: "reviewer-scope",
     tools: [
+      "write",
       "fs_write",
       "str_replace",
       "delete_file",
+      "read",
+      "fs_read",
       "read_file",
+      "read_files",
       "execute_bash",
       // Every terminal spelling the adapter canonicalizes. A matcher that names
       // one the canonicalizer does not translate is worse than omitting it: the
@@ -150,12 +172,20 @@ const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: stri
       "execute_pwsh",
       "shell",
     ],
-    why: "reads count, and every terminal spelling the canonicalizer knows",
+    why: "reads count, and every write and terminal spelling the canonicalizer knows",
   },
   {
     target: "log-subagent",
-    tools: ["subagent_aidlc-architect-agent", "invoke_sub_agent", "orchestrate_subagent"],
-    why: "all three shapes a delegation arrives under",
+    tools: [
+      // FOUR shapes, not three: plain `subagent` is the crew spelling the payload
+      // fixture actually carries, and it was missing from the matcher while the
+      // adapter treated it as a dispatch - so the window opened and never closed.
+      "subagent",
+      "subagent_aidlc-architect-agent",
+      "invoke_sub_agent",
+      "orchestrate_subagent",
+    ],
+    why: "every shape a delegation arrives under",
   },
 ];
 
