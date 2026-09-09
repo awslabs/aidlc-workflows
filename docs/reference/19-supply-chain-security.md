@@ -15,8 +15,11 @@ the release unless all of these conditions hold:
 - the tag target is contained in `main`;
 - the tag equals `v` plus the version in `core/tools/aidlc-version.ts`.
 
-The version bump, README badge, and changelog entry are reviewed in the release
-PR before the tag is created. The workflow does not modify source files.
+Feature, fix, documentation, refactor, and test PRs do not update release
+metadata. The release-preparation PR summarizes the user-visible changes merged
+since the previous release and updates the version, README badge, and changelog
+entry together before the tag is created. The workflow does not modify source
+files.
 
 ## Build and validation
 
