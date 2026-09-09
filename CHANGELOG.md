@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.8] - 2026-09-09
+
+Fixes a Devin adapter issue where `ask_user_question` Plan Approval responses were not recorded, blocking the plan-approval receipt with "Plan Approval requires the actual offered choice from this prompt and session." Devin 3000.6.14 prefixes the `tool_response.output` string with `"User answered your questions:\n"` before the JSON payload, so `JSON.parse` failed on the prefix and the adapter extracted an empty response text — the `recordPlanApprovalHumanResponse` function was never called with the choice text, and no response file was written. The adapter's `normalizeToolResponse` now extracts the JSON object starting at the first `{` when the string has a non-JSON prefix. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.8` / `install.ps1 -Version 2.8.8`. No migration; existing workflow records resume normally.
+
+* New `extractJsonFromString` helper in `aidlc-devin-adapter.ts`: if the string is pure JSON, returns it as-is; if it has a non-JSON prefix, extracts the JSON starting at the first `{`.
+* `normalizeToolResponse` now calls `extractJsonFromString` on both the direct string and the `output` field, so `"User answered your questions:\n{...}"` is parsed correctly.
+
 ## [2.8.7] - 2026-09-09
 
 Fixes a plan-approval guard false-positive where `cd` in shell commands made the shell opaque during code-generation. The `cd` command was missing from `READ_ONLY_SHELL_COMMANDS` — it changes directory but doesn't modify files — so `shellInvocationNeedsApproval` returned true for it, making every `cd ... && <read-only-cmd>` command opaque and trapping it in the guard. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.7` / `install.ps1 -Version 2.8.7`. No migration; existing workflow records resume normally.

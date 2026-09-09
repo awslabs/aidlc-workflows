@@ -143,18 +143,31 @@ interface DevinHookInput {
 // Normalize Devin's PostToolUse tool_response into the JSON string the
 // selection parsers expect. Devin delivers {success, output, error}; the
 // answer payload is JSON-encoded inside `output`. If the caller already
-// passed a string (test fixtures, codex), pass it through.
+// passed a string (test fixtures, codex), pass it through. Devin 3000.6.14
+// prefixes the JSON with "User answered your questions:\n" — extract the
+// JSON object starting at the first `{` so JSON.parse succeeds.
 function normalizeToolResponse(toolResponse: unknown): string | null {
-  if (typeof toolResponse === "string") return toolResponse;
+  if (typeof toolResponse === "string") return extractJsonFromString(toolResponse);
   if (
     toolResponse !== null &&
     typeof toolResponse === "object" &&
     !Array.isArray(toolResponse)
   ) {
     const obj = toolResponse as Record<string, unknown>;
-    if (typeof obj.output === "string") return obj.output;
+    if (typeof obj.output === "string") return extractJsonFromString(obj.output);
   }
   return null;
+}
+
+// If the string is pure JSON, return it as-is. If it has a non-JSON prefix
+// (e.g. "User answered your questions:\n{...}"), extract the JSON starting
+// at the first `{` and return that substring.
+function extractJsonFromString(s: string): string {
+  const trimmed = s.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return trimmed;
+  const braceIdx = s.indexOf("{");
+  if (braceIdx > 0) return s.slice(braceIdx);
+  return s;
 }
 
 // Distinguish a cancelled/dismissed ask_user_question from an answered one
