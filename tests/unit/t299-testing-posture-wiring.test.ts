@@ -581,6 +581,31 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     expect(specialized.contract_sha256).not.toBe(first.contract_sha256);
   });
 
+  test("parseTestingContract repairs JSON with actual newlines in string values (Devin write-tool corruption)", () => {
+    // Devin 3000.6.14's write tool interprets \n escape sequences in tool
+    // content as actual newlines. When the orchestrator pastes the rendered
+    // Testing Contract JSON into code-generation-plan.md, the \n in
+    // applicable_notes[].text becomes real newlines, producing invalid JSON.
+    // parseTestingContract must repair this and still match the contract hash.
+    const contract = resolve({
+      org: ORG,
+      team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+    });
+    const rendered = renderTestingContract(contract);
+    // Simulate the Devin write-tool corruption: replace \n (JSON escape
+    // sequence, literal backslash-n) inside string values with actual newlines.
+    // We do this by replacing the two-character sequence \n with a real newline
+    // only inside the JSON fence (not the markdown structure).
+    const jsonStart = rendered.indexOf("```json\n") + "```json\n".length;
+    const jsonEnd = rendered.lastIndexOf("\n```");
+    const jsonBlock = rendered.slice(jsonStart, jsonEnd);
+    const corruptedJson = jsonBlock.replace(/\\n/g, "\n");
+    const corruptedRendered =
+      rendered.slice(0, jsonStart) + corruptedJson + rendered.slice(jsonEnd);
+    // The repaired parse must still produce the original contract.
+    expect(parseTestingContract(`# Plan\n\n${corruptedRendered}`)).toEqual(contract);
+  });
+
   test("approval fingerprint binds content, target, intent, and stage attempt", () => {
     const hash = `sha256:${"a".repeat(64)}`;
     const baseline = approvalFingerprint("plan", "instructions", hash, AUTHORITY);

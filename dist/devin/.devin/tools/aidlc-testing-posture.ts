@@ -1027,23 +1027,68 @@ function rawMarkdownSection(content: string, heading: string): string {
   return found ? body.join("\n") : "";
 }
 
+// Repair JSON that has actual newlines/tabs inside string values. Some
+// harness write tools (Devin 3000.6.14) interpret \n escape sequences in
+// tool content as actual newlines, corrupting JSON strings. This function
+// walks the JSON text and replaces raw control characters inside string
+// values with their JSON escape sequences, making the JSON parseable again.
+// The parsed object is identical to what JSON.parse would have produced
+// from the original (uncorrupted) JSON, so the contract hash still matches.
+function repairJsonControlChars(json: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (escaped) {
+      result += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      result += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      result += ch;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\n") { result += "\\n"; continue; }
+      if (ch === "\r") { result += "\\r"; continue; }
+      if (ch === "\t") { result += "\\t"; continue; }
+    }
+    result += ch;
+  }
+  return result;
+}
+
 export function parseTestingContract(plan: string): TestingPostureContract | null {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
   const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
   if (!match) return null;
-  try {
-    const parsed = JSON.parse(match[1]) as TestingPostureContract;
-    if (
-      parsed.version !== 1 ||
-      !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
-    ) {
-      return null;
+  const raw = match[1];
+  // Try strict JSON.parse first; if it fails, attempt to repair control
+  // characters that a harness write tool may have introduced into string
+  // values (Devin 3000.6.14 converts \n escape sequences to newlines).
+  for (const candidate of [raw, repairJsonControlChars(raw)]) {
+    try {
+      const parsed = JSON.parse(candidate) as TestingPostureContract;
+      if (
+        parsed.version !== 1 ||
+        !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
+      ) {
+        continue;
+      }
+      const { contract_sha256: recorded, ...body } = parsed;
+      if (hashObject(body) === recorded) return parsed;
+    } catch {
+      // try next candidate
     }
-    const { contract_sha256: recorded, ...body } = parsed;
-    return hashObject(body) === recorded ? parsed : null;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 // --- The Plan Approval content projection -------------------------------------

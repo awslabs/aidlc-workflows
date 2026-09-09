@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.4] - 2026-09-09
+
+Fixes a Testing Contract JSON parsing failure on the Devin CLI harness: when the orchestrator pasted the rendered `## Testing Contract` JSON block into `code-generation-plan.md` using Devin's `write` tool, the `\n` escape sequences in `applicable_notes[].text` were interpreted as actual newlines, producing invalid JSON. The `parseTestingContract` function then failed with "no valid ## Testing Contract JSON block", blocking the `begin` command and stalling code generation. The parser now repairs raw control characters inside JSON string values before calling `JSON.parse`, so the parsed object (and its contract hash) match the original. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.4` / `install.ps1 -Version 2.8.4`. No migration; existing workflow records resume normally.
+
+* New `repairJsonControlChars` helper in `core/tools/aidlc-testing-posture.ts` walks JSON text and replaces raw newlines/tabs/carriage-returns inside string values with their JSON escape sequences. The parsed object is identical to what `JSON.parse` would have produced from the uncorrupted JSON, so the contract hash still matches.
+* `parseTestingContract` now tries strict `JSON.parse` first, then falls back to `repairJsonControlChars` if that throws — preserving backward compatibility with harnesses whose write tools don't corrupt escape sequences.
+* Test case in `tests/unit/t299-testing-posture-wiring.test.ts` simulates the Devin write-tool corruption and verifies the repaired parse still matches the original contract.
+
 ## [2.8.3] - 2026-09-09
 
 Fixes the S08 gate-receipt bug on the Devin CLI harness: `ask_user_question` approval gates refused every answer after the first with "no human reply has arrived after this question" because the Devin adapter skipped the `HUMAN_TURN` audit mint whenever it could not parse the `tool_response` shape. The interactive Devin 3000.6.14 `tool_response` shape was never captured (only the headless `-p` cancel case was), so the parser's `hasExplicitHumanSelection` returned false on real answers and the gate failed closed. The adapter now mints a `HUMAN_TURN` for any `ask_user_question` PostToolUse that is not a genuine cancellation (`success:false` or cancellation text), treating the hook firing itself as evidence the user interacted. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.3` / `install.ps1 -Version 2.8.3`. No migration; existing workflow records resume normally.
