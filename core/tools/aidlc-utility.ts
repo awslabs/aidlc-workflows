@@ -6649,6 +6649,7 @@ function handleIntent(
   projectDir: string,
   positional: string[],
   flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string> = new Set(),
 ): void {
   const asJson = flags.json === "true";
   const showAll = flags.all === "true";
@@ -6662,7 +6663,7 @@ function handleIntent(
     return;
   }
   if (verbOrTarget === "archive" || verbOrTarget === "unarchive") {
-    handleIntentLifecycle(projectDir, verbOrTarget, positional[2], flags);
+    handleIntentLifecycle(projectDir, verbOrTarget, positional[2], flags, missingValueFlags);
     return;
   }
   const target = verbOrTarget === "switch" ? positional[2] : verbOrTarget;
@@ -6784,8 +6785,14 @@ function handleIntentLifecycle(
   verb: IntentLifecycleVerb,
   target: string | undefined,
   flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
 ): void {
   if (!target) die(`Usage: aidlc-utility intent ${verb} <name>`);
+  // A bare or blank `--reason` would otherwise land in the audit shard as the
+  // flag's boolean placeholder ("Reason: true") - a usage error, not a reason.
+  if (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === "")) {
+    die(`intent ${verb} refused: --reason requires a nonblank value.`);
+  }
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
@@ -9047,7 +9054,7 @@ export async function main(argv: string[]): Promise<void> {
       handleIntentCreate(projectDir, flags);
       break;
     case "intent":
-      handleIntent(projectDir, positional, flags);
+      handleIntent(projectDir, positional, flags, missingValueFlags);
       break;
     case "space":
       handleSpace(projectDir, positional, flags);

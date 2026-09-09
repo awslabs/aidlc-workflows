@@ -1061,6 +1061,14 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(unknown.status).not.toBe(0);
     expect(unknown.out).toContain("Unknown intent");
     expect(unknown.out).toContain("Do not start a new workflow");
+    // A bare or blank --reason is a usage error, never a "Reason: true" audit row.
+    for (const argv of [["intent", "archive", b, "--reason"], ["intent", "archive", b, "--reason", "  "]]) {
+      const bare = util(argv);
+      expect(bare.status).not.toBe(0);
+      expect(bare.out).toContain("--reason requires a nonblank value");
+      expect(registryStatus(b)).toBe("in-flight");
+      expect(auditText(b)).not.toContain("WORKFLOW_ARCHIVED");
+    }
     // A completed intent is already terminal.
     expect(updateIntentStatus(proj, a, "complete")).toBe(true);
     const completed = util(["intent", "archive", a]);
@@ -1105,6 +1113,9 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     const d = JSON.parse(r.stdout.toString().trim());
     expect(d.kind).toBe("error");
     expect(d.message).toContain("Cannot park the workflow");
+    // The relayed refusal names the public command, not the internal tool.
+    expect(d.message).toContain("/aidlc intent unarchive <name>");
+    expect(d.message).not.toContain("aidlc-utility");
     expect(d.message).toContain("Archived");
     expect(stateStatus(only)).toBe("Archived");
   });

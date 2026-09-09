@@ -1806,7 +1806,7 @@ function handlePark(_args: string[]): void {
     if (status === "Archived") {
       error(
         "Workflow is Archived - nothing to park. Bring it back first with " +
-          "`aidlc-utility intent unarchive <name>`.",
+          "`/aidlc intent unarchive <name>`.",
       );
     }
     const currentSlug = getField(content, "Current Stage") ?? "";

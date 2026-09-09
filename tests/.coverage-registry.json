@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 946,
+    "total": 951,
     "enumeratedByClass": {
-      "function": 643,
-      "audit": 95,
+      "function": 646,
+      "audit": 97,
       "scope": 11,
       "stage": 33,
       "hook": 18,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 383,
-      "audit": 53,
+      "function": 386,
+      "audit": 55,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -973,6 +973,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "WORKFLOW_ARCHIVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKFLOW_COMPLETED",
       "minMechanism": "none",
       "coveredBy": [
@@ -1007,6 +1019,18 @@
         {
           "file": "tests/e2e/t54-workflow-audit-completeness.test.ts",
           "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKFLOW_UNARCHIVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1298,6 +1322,18 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ARCHIVED_INTENT_STATUS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1855,6 +1891,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearActiveIntentCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3351,6 +3399,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isArchivedIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
