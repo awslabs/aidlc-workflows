@@ -126,6 +126,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "grep",
   "head",
   "ls",
+  "mkdir",
   "more",
   "printf",
   "pwd",
@@ -573,6 +574,10 @@ function isFrameworkToolInvocation(
   ) {
     return false;
   }
+  // `bun -e '<code>'` and `bun --eval '<code>'` run inline JavaScript that
+  // can write files (e.g. Bun.write), so they are NOT recognized as trusted
+  // framework-tool invocations. The orchestrator should use `bun <script>`
+  // (a framework tool file) for read-only checks instead of `bun -e`.
   let scriptIndex = 0;
   if (args[0] === "run") scriptIndex = 1;
   const script = args[scriptIndex];
@@ -618,6 +623,13 @@ function shellInvocationNeedsApproval(
   if (name === "uniq") {
     const operands = invocation.args.filter((arg) => !arg.startsWith("-"));
     return operands.length >= 2;
+  }
+  // `sed` without `-i`/`--in-place` is read-only (just prints to stdout).
+  // `sed` with `-i` modifies files in-place, so it needs approval.
+  if (name === "sed") {
+    return invocation.args.some(
+      (arg) => arg === "-i" || arg === "--in-place" || arg.startsWith("--in-place="),
+    );
   }
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {

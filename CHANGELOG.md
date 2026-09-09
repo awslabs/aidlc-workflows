@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.9] - 2026-09-09
+
+Fixes three plan-approval guard false-positives that blocked the orchestrator during code-generation plan creation. `sed` without `-i`/`--in-place` (read-only pattern printing) was treated as a mutation command because it's in `TRACKED_SHELL_MUTATORS` — the guard now checks for `-i`/`--in-place` and treats `sed` without them as read-only. `mkdir` (creates directories, doesn't modify files) was missing from `READ_ONLY_SHELL_COMMANDS` — added. `bun -e` remains opaque (it can write files via `Bun.write`), so the orchestrator should use `bun <script>` for framework checks instead. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.9` / `install.ps1 -Version 2.8.9`. No migration; existing workflow records resume normally.
+
+* `sed` in `shellInvocationNeedsApproval`: returns true only when `-i`/`--in-place` is present; without those flags, `sed` is read-only (prints to stdout).
+* `mkdir` added to `READ_ONLY_SHELL_COMMANDS`.
+* Comment added to `isFrameworkToolInvocation` documenting that `bun -e` is intentionally NOT trusted (can write files via inline JavaScript).
+
 ## [2.8.8] - 2026-09-09
 
 Fixes a Devin adapter issue where `ask_user_question` Plan Approval responses were not recorded, blocking the plan-approval receipt with "Plan Approval requires the actual offered choice from this prompt and session." Devin 3000.6.14 prefixes the `tool_response.output` string with `"User answered your questions:\n"` before the JSON payload, so `JSON.parse` failed on the prefix and the adapter extracted an empty response text — the `recordPlanApprovalHumanResponse` function was never called with the choice text, and no response file was written. The adapter's `normalizeToolResponse` now extracts the JSON object starting at the first `{` when the string has a non-JSON prefix. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.8` / `install.ps1 -Version 2.8.8`. No migration; existing workflow records resume normally.
