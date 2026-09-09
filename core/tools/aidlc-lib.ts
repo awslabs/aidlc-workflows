@@ -10643,6 +10643,28 @@ export function parseReviewSection(
   const findings: ReviewFinding[] = [];
   for (const line of table.slice(2)) {
     const cells = splitMarkdownRow(line);
+    // Validate row arity against the header before reading positionally. A row
+    // with the wrong cell count shifts every later column, so a positional read
+    // would silently return "" for a missing cell and later throw a misdirecting
+    // "invalid finding status" that names the wrong cause. Name the offending
+    // column instead so the failure points at the fix.
+    if (cells.length !== headers.length) {
+      const rowId = cells[index.get("ID") ?? 0]?.trim() || "?";
+      if (cells.length < headers.length) {
+        const missing = headers
+          .slice(cells.length)
+          .map((name) => JSON.stringify(name))
+          .join(", ");
+        throw new Error(
+          `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}: missing ${missing}`,
+        );
+      }
+      throw new Error(
+        `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}: ${
+          cells.length - headers.length
+        } unexpected extra cell(s)`,
+      );
+    }
     const value = (name: string): string =>
       cells[index.get(name) ?? -1]?.trim() ?? "";
     const id = value("ID");

@@ -355,6 +355,46 @@ describe("t304 executable review brief scenarios", () => {
     );
   });
 
+  test("a findings row with the wrong cell count names the missing column, not a bogus status", () => {
+    // Header declares six columns; this row omits one so every later cell
+    // shifts left and Status resolves to "". The parser must name the missing
+    // column rather than throwing the misdirecting "invalid finding status \"\"".
+    const shortRow =
+      "| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | New |";
+    let thrown: Error | undefined;
+    try {
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [shortRow]),
+        "aidlc/requirements.md",
+      );
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown!.message).toContain("R-05");
+    expect(thrown!.message).toContain("row has 5 cells, header declares 6");
+    expect(thrown!.message).toContain('missing "Status"');
+    expect(thrown!.message).not.toContain("invalid finding status");
+
+    // A row with too many cells is refused just as clearly.
+    const longRow =
+      "| R-06 | Minor | aidlc/requirements.md > FR-1 | Extra | Fix it | New | surplus |";
+    expect(() =>
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [longRow]),
+        "aidlc/requirements.md",
+      )
+    ).toThrow("row has 7 cells, header declares 6");
+
+    // A well-formed row still parses.
+    expect(
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [ROW_NEW]),
+        "aidlc/requirements.md",
+      )!.findings.map((finding) => finding.id),
+    ).toEqual(["R-01"]);
+  });
+
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
     const { proj, artifacts } = perUnitReviewProject(
       "functional-design",
