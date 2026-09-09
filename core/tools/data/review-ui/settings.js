@@ -158,17 +158,19 @@ function advancedSection(workflow) {
     const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden by you" title="Overridden by you, on this machine; the team runs at ${escapeHtml(team === INHERIT ? "the default" : team)}">${icon("errorCircle", { size: 15 })}</span>` : ""}
+      ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden">${icon("errorCircle", { size: 15 })}</span>` : ""}
       <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" title="${mine ? "Your effort for this group; the first option goes back to the team's" : "The team's effort for this group; pick a level to use your own"}">
         <option value="" ${mine ? "" : "selected"}>${escapeHtml(teamLabel)}</option>
         ${efforts.map((level) => `<option value="${level}" ${mine === level ? "selected" : ""}>${level}</option>`).join("")}
       </select>
     </div>`;
   };
+  const overridden = teamGroups.some((group) => policy?.recorded?.local?.groups?.[group.id]);
   return `<div class="settings-block">
       ${policy ? teamGroups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       ${teamPins.length ? `<div class="settings-row"><span class="l">Pinned agents<small>Held at their own effort by the team's policy</small></span>
         <span class="c">${teamPins.map((entry) => `<span class="settings-pin">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")}</span></div>` : ""}
+      ${overridden ? `<p class="settings-legend"><span class="settings-overridden">${icon("errorCircle", { size: 13 })}</span> overridden</p>` : ""}
     </div>
     ${personalNote(policy)}`;
 }

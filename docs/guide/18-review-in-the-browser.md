@@ -328,8 +328,9 @@ reset: to go back, pick the default card.
 override), is *your own effort per group*. Each group's first option is what
 the team's preset gives it — *Balanced · medium*, *Thorough · default* — and the
 levels beneath are yours: pick one and it applies on this machine only
-(`aidlc.settings.local.json`, not committed; an ⓘ-style *overridden* mark sits
-beside the row and teammates keep the team's value); pick the first option again to go back.
+(`aidlc.settings.local.json`, not committed; an *overridden* mark sits beside
+the row, with a one-word legend beneath the groups, and teammates keep the
+team's value); pick the first option again to go back.
 Agents the team's policy pins to their own effort are listed there read-only;
 pins are set and removed from the terminal (`aidlc config models --agent`).
 Every change goes through the same `aidlc config models` command the terminal

@@ -41,3 +41,4 @@
 .settings-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 10.5px; font-weight: 500; vertical-align: 1px; }
 .settings-overridden { display: inline-flex; align-items: center; color: var(--accent); }
 .settings-overridden svg { display: block; }
+.settings-legend { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--muted); font-size: 12px; }
