@@ -94,6 +94,10 @@ function modelsPage() {
     // just that one (--reset cannot combine with other flags), so the option is
     // offered only while it is true - Reset below clears the layer.
     const dial = recorded?.groups?.[group.id] || "";
+    // "Only me" sits above "Project": while it records a dial for this group,
+    // the project's control cannot change what runs, so it is shown disabled
+    // with that fact rather than a label that reads as the project's own.
+    const overriding = scope === "project" ? policy?.recorded?.local?.groups?.[group.id] || "" : "";
     // With no dial in this layer the option names what applies instead: the
     // default (inherit), or the preset's / shipped pin and its level.
     const source = groupSource(policy, group.id, group.effort);
@@ -102,9 +106,9 @@ function modelsPage() {
       : `${source ? source[0].toUpperCase() + source.slice(1) : "Effective"} (${group.effort})`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" title="${dial ? `Recorded ${scope === "project" ? "in the project" : "for you"}; Reset below removes it` : "What this group runs at without a dial of its own"}">
-        ${dial ? "" : `<option value="" selected>${escapeHtml(noDial)}</option>`}
-        ${efforts.map((level) => `<option value="${level}" ${dial === level ? "selected" : ""}>${level}</option>`).join("")}
+      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" ${overriding ? "disabled" : ""} title="${overriding ? `Only me pins this group to ${escapeHtml(overriding)} on this machine; switch to Only me to change it` : dial ? `Recorded ${scope === "project" ? "in the project" : "for you"}; Reset below removes it` : "What this group runs at without a dial of its own"}">
+        ${overriding ? `<option value="" selected>Only me (${escapeHtml(overriding)})</option>` : dial ? "" : `<option value="" selected>${escapeHtml(noDial)}</option>`}
+        ${overriding ? "" : efforts.map((level) => `<option value="${level}" ${dial === level ? "selected" : ""}>${level}</option>`).join("")}
       </select>
     </div>`;
   };

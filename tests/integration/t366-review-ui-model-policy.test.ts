@@ -150,6 +150,15 @@ describe("t366 review UI model policy settings", () => {
 
     const recorded = JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8")) as { models: Record<string, unknown> };
     expect(recorded.models).toMatchObject({ preset: "thorough", groups: { "writing-up": { effort: "low" } }, agents: { architect: { effort: "xhigh" } } });
+
+    // A model pin is stored per harness (`model: { claude: ... }`); the recorded view resolves it for this one.
+    const pinned = await api("POST", "/api/models-policy", { scope: "project", action: "agent", agent: "operations", effort: "high", model: "claude-sonnet-5" });
+    expect(pinned.status, JSON.stringify(pinned.body)).toBe(200);
+    view = pinned.body.models_policy as ModelsPolicyView;
+    expect(view.recorded.project?.agents.operations).toEqual({ effort: "high", model: "claude-sonnet-5" });
+    expect(view.exceptions.find((entry) => entry.agent === "operations")).toMatchObject({ effort: "high", model: "claude-sonnet-5" });
+    const stored = JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8")) as { models: { agents: Record<string, { model?: unknown }> } };
+    expect(stored.models.agents.operations.model).toEqual({ claude: "claude-sonnet-5" });
   }, 30_000);
 
   test("the personal default effort is written into the harness's own settings, keeping every other key", async () => {

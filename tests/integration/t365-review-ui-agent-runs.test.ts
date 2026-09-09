@@ -342,6 +342,23 @@ describe("t365 review UI agent runs", () => {
     await startDaemon();
   }, 90_000);
 
+  test("the personal default effort is read and written through the runner profile", async () => {
+    const settings = join(project, ".claude", "settings.local.json");
+    writeFileSync(settings, `${JSON.stringify({ permissions: { allow: ["Bash(ls:*)"] } }, null, 2)}\n`);
+    let workflow = (await api("GET", "/api/workflow")).body as { runner_default_effort: unknown; runner_default_effort_editable: boolean };
+    expect(workflow.runner_default_effort_editable).toBe(true);
+    expect((await api("POST", "/api/default-effort", { level: "turbo" })).status).toBe(400);
+    const set = await api("POST", "/api/default-effort", { level: "high" });
+    expect(set.status, JSON.stringify(set.body)).toBe(200);
+    expect(set.body.default_effort).toEqual({ level: "high", source: ".claude/settings.local.json" });
+    expect(JSON.parse(readFileSync(settings, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] }, effortLevel: "high" });
+    workflow = (await api("GET", "/api/workflow")).body as typeof workflow;
+    expect(workflow.runner_default_effort).toEqual({ level: "high", source: ".claude/settings.local.json" });
+    expect((await api("POST", "/api/default-effort", { level: null })).status).toBe(200);
+    expect(JSON.parse(readFileSync(settings, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
+    rmSync(settings);
+  }, 30_000);
+
   test("without a runner Start records a request instead", async () => {
     await stopDaemon();
     await startDaemon({ AIDLC_REVIEW_RUNNER: "0" });

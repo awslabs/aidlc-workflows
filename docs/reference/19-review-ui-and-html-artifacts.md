@@ -185,8 +185,12 @@ Kiro's single `chat.modelDefaults` `output_config.effort` in `.kiro/settings/cli
 option reads *default (model default)*. `runner_default_effort_editable` is true
 when the profile can also write it: `POST /api/default-effort {level|null}`
 runs the profile's `setDefaultEffort` - Claude's `writeClaudeDefaultSessionEffort`
-merges the one key into `.claude/settings.local.json` with an atomic rename and
-keeps every other key; a backend without a writer answers 409.
+merges the one key into `.claude/settings.local.json` (every other key kept,
+re-based if the file changed while the merge was computed, then renamed into
+place). Claude Code writes that file too and no lock is shared, so a Claude
+write landing between the check and the rename is lost - one permission grant,
+re-asked; not race-free, and not claimed to be. A backend without a writer
+answers 409.
 
 **Agent effort is project policy.** The workflow payload carries
 `models_policy` (`modelsPolicyView` in `aidlc-review-ui-workflow.ts`): the

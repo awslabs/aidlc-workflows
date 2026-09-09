@@ -182,7 +182,7 @@ export interface ModelsPolicyView {
   efforts: readonly string[];
 }
 
-function recordedLayer(projectDir: string, target: SettingsTarget): ModelsPolicyView["recorded"][SettingsTarget] {
+function recordedLayer(projectDir: string, target: SettingsTarget, harness: string): ModelsPolicyView["recorded"][SettingsTarget] {
   const models = readSettingsTarget(projectDir, target)?.models as {
     preset?: string;
     groups?: Partial<Record<ModelGroup, { effort?: string }>>;
@@ -193,7 +193,10 @@ function recordedLayer(projectDir: string, target: SettingsTarget): ModelsPolicy
   for (const [group, value] of Object.entries(models.groups ?? {})) if (value?.effort) groups[group as ModelGroup] = value.effort;
   const agents: Record<string, { effort: string | null; model: string | null }> = {};
   for (const [agent, value] of Object.entries(models.agents ?? {})) {
-    agents[agent] = { effort: value?.effort ?? null, model: typeof value?.model === "string" ? value.model : null };
+    // Settings record an agent's model per harness: `model: { claude: "..." }`.
+    const model = value?.model;
+    const forHarness = model && typeof model === "object" ? (model as Record<string, unknown>)[harness] : model;
+    agents[agent] = { effort: value?.effort ?? null, model: typeof forHarness === "string" ? forHarness : null };
   }
   return { preset: models.preset ?? null, groups, agents };
 }
@@ -241,9 +244,9 @@ export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
     exceptions,
     honesty: effective.some((item) => item.unexpressed.length > 0) ? HARNESS_HONESTY[harness].message : null,
     recorded: {
-      global: recordedLayer(projectDir, "global"),
-      project: recordedLayer(projectDir, "project"),
-      local: recordedLayer(projectDir, "local"),
+      global: recordedLayer(projectDir, "global", harness),
+      project: recordedLayer(projectDir, "project", harness),
+      local: recordedLayer(projectDir, "local", harness),
     },
     efforts: MODEL_EFFORTS,
   };

@@ -88,34 +88,51 @@ export function claudeDefaultSessionEffort(projectDir: string, home: string = ho
 /**
  * Set (or, with null, remove) Claude's personal default effort: the `effortLevel`
  * key of `.claude/settings.local.json` - the file the harness itself reads first,
- * so a terminal `/effort` and this agree. Every other key is kept as it was;
- * the write is a single atomic rename, because Claude Code writes this file too
- * (permission grants). Throws when the file exists but is not a JSON object.
+ * so a terminal `/effort` and this agree. Every other key is kept as it was.
+ *
+ * Claude Code writes this file too (permission grants), and there is no lock
+ * both writers honour, so this is NOT race-free: the merge is re-based if the
+ * file changed while it was computed, but a write landing between that check
+ * and the rename is overwritten. The exposure is one grant saved in that
+ * instant, which Claude then asks for again; the key this writes is never
+ * lost because the human sees the result immediately. Throws when the file
+ * exists but is not a JSON object.
  */
 export function writeClaudeDefaultSessionEffort(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null {
   const path = join(projectDir, ".claude", "settings.local.json");
-  let settings: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(".claude/settings.local.json is not a JSON object");
-    settings = parsed as Record<string, unknown>;
+  // Re-base guard, not a CAS (a pathname cannot be swapped atomically against
+  // a check): if the file changed while the merge was computed, start over.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const before = existsSync(path) ? readFileSync(path, "utf-8") : null;
+    let settings: Record<string, unknown> = {};
+    if (before !== null) {
+      const parsed: unknown = JSON.parse(before);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(".claude/settings.local.json is not a JSON object");
+      settings = parsed as Record<string, unknown>;
+    }
+    if (level === null) delete settings.effortLevel;
+    else settings.effortLevel = level;
+    const tmp = `${path}.${process.pid}.${attempt}.tmp`;
+    const fd = openSync(tmp, "wx");
+    try {
+      writeFileSync(fd, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+    } finally {
+      closeSync(fd);
+    }
+    const now = existsSync(path) ? readFileSync(path, "utf-8") : null;
+    if (now !== before) {
+      unlinkSync(tmp);
+      continue;
+    }
+    try {
+      renameSync(tmp, path);
+    } catch (error) {
+      try { unlinkSync(tmp); } catch { /* the rename failed; nothing of ours to keep */ }
+      throw error;
+    }
+    return claudeDefaultSessionEffort(projectDir);
   }
-  if (level === null) delete settings.effortLevel;
-  else settings.effortLevel = level;
-  const tmp = `${path}.${process.pid}.tmp`;
-  const fd = openSync(tmp, "wx");
-  try {
-    writeFileSync(fd, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    renameSync(tmp, path);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* the rename failed; nothing of ours to keep */ }
-    throw error;
-  }
-  return claudeDefaultSessionEffort(projectDir);
+  throw new Error(".claude/settings.local.json kept changing underneath; try again");
 }
 
 /**
