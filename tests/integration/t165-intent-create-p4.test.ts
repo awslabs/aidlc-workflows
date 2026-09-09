@@ -1069,6 +1069,15 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
       expect(registryStatus(b)).toBe("in-flight");
       expect(auditText(b)).not.toContain("WORKFLOW_ARCHIVED");
     }
+    // Only archive records a reason: unarchive refuses the flag outright.
+    expect(util(["intent", "archive", b]).status).toBe(0);
+    const reasoned = util(["intent", "unarchive", b, "--reason", "back on the roadmap"]);
+    expect(reasoned.status).not.toBe(0);
+    expect(reasoned.out).toContain("--reason is only accepted by intent archive");
+    expect(registryStatus(b)).toBe("archived");
+    expect(auditText(b)).not.toContain("WORKFLOW_UNARCHIVED");
+    expect(util(["intent", "unarchive", b]).status).toBe(0);
+    expect(registryStatus(b)).toBe("in-flight");
     // A completed intent is already terminal.
     expect(updateIntentStatus(proj, a, "complete")).toBe(true);
     const completed = util(["intent", "archive", a]);

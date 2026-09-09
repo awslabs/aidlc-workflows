@@ -6788,10 +6788,16 @@ function handleIntentLifecycle(
   missingValueFlags: ReadonlySet<string>,
 ): void {
   if (!target) die(`Usage: aidlc-utility intent ${verb} <name>`);
+  // Only `archive` records a reason. Refusing it on `unarchive` keeps a user
+  // from believing a reason was audited when nothing captures it.
+  const reasonGiven = flags.reason !== undefined || missingValueFlags.has("reason");
+  if (verb === "unarchive" && reasonGiven) {
+    die("intent unarchive refused: --reason is only accepted by intent archive.");
+  }
   // A bare or blank `--reason` would otherwise land in the audit shard as the
   // flag's boolean placeholder ("Reason: true") - a usage error, not a reason.
   if (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === "")) {
-    die(`intent ${verb} refused: --reason requires a nonblank value.`);
+    die("intent archive refused: --reason requires a nonblank value.");
   }
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
