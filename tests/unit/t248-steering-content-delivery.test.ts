@@ -4,7 +4,7 @@
 // bounded load-steering directives before run-stage; optional persona/knowledge
 // remains path-loaded with actionable warnings.
 
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import {
@@ -50,10 +50,6 @@ const REVIEWER_AGENTS = [
   "aidlc-product-lead-agent",
 ] as const;
 
-// The default also governs afterAll removal of every staged project, which
-// exceeds bun's 5s hook default.
-setDefaultTimeout(120_000);
-
 type RuleContent = { path: string; text: string };
 type WireDirective = {
   kind: string;
@@ -88,9 +84,10 @@ function project(): string {
   return proj;
 }
 
+// Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-});
+}, 120_000);
 
 function invoke(
   proj: string,
