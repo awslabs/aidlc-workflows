@@ -158,6 +158,7 @@ const manifest: HarnessManifest = {
           // upgrade must recognize it as ours and replace it, not treat it as
           // user-owned content.
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
+          "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
         ],
       },
     },
