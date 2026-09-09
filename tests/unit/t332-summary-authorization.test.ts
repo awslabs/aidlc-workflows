@@ -493,14 +493,74 @@ describe("t332 summary authorization id", () => {
     // Appending the sanctioned section with a leading blank-delimited `---`
     // (a thematic break, not a setext underline) must hash the same as without
     // it — the rule is presentation, not confirmed content.
-    expect(
-      summaryConfirmationContentHash(`${summary}\n---\n\n${assumption}`),
-    ).toBe(summaryConfirmationContentHash(`${summary}${assumption}`));
+    for (const rule of ["---", "***", "___", "   ----   "]) {
+      const separated = `${summary}\n${rule}\n\n${assumption}`;
+      expect(summaryConfirmationContentHash(separated)).toBe(
+        summaryConfirmationContentHash(`${summary}${assumption}`),
+      );
+      expect(summaryConfirmationContentHash(separated.replaceAll("\n", "\r\n"))).toBe(
+        summaryConfirmationContentHash(`${summary}${assumption}`),
+      );
+    }
     // Control: a thematic break inside the CONFIRMED body still changes the digest.
     expect(
       summaryConfirmationContentHash(`a\n\n---\n\nb\n\n${summary}`),
     ).not.toBe(summaryConfirmationContentHash(`a\n\nb\n\n${summary}`));
+    expect(() => summaryConfirmationContentHash(
+      `${summary}\nSemantic heading\n---\n\n${assumption}`,
+    )).toThrow("unsupported Setext H2");
   });
+
+  test("appending separated assumptions preserves the receipt and keeps follow-up answers confirmed", () => {
+    const proj = project();
+    const { questions, artifact } = paths(proj);
+    confirm(proj, questions);
+    writeArtifact(proj, artifact);
+    const confirmed = readFileSync(questions, "utf-8");
+    const appended = `${confirmed}\n---\n\n## Assumption Confirmation\n\nConfirmed.\n`;
+    writeFileSync(questions, appended);
+    expect(evidence(proj).ok).toBe(true);
+
+    writeFileSync(questions, `${appended}\n## Q2\n\n[Answer]: Disable TLS.\n`);
+    const stale = evidence(proj);
+    expect(stale.ok).toBe(false);
+    if (stale.ok) throw new Error("expected refusal");
+    expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
+  });
+
+  for (const { name, block } of [
+    { name: "fenced JSON", block: '```json\n{"tls_required":true}\n```' },
+    { name: "indented code", block: '    {"tls_required":true}' },
+    { name: "HTML preformatted text", block: '<pre>\n{"tls_required":true}\n</pre>' },
+  ]) {
+    test(`changes to ${name} before assumptions invalidate a real summary receipt`, () => {
+      const proj = project();
+      const { questions, artifact } = paths(proj);
+      const body = `${questionsBody("")}\n---\n\n${block}\n\n## Assumption Confirmation\n\nConfirmed.\n`;
+      writeFileSync(questions, body);
+      const decision = run(
+        [
+          "decision", "--stage", STAGE, "--checkpoint", "summary-confirmation",
+          "--questions-file", questions, "--decision", "Does this all look correct?",
+        ],
+        proj,
+      );
+      expect(decision.status, decision.stderr).toBe(0);
+      appendAuditEntry("HUMAN_TURN", {}, proj);
+      const confirmed = body.replace("[Answer]: \n", "[Answer]: Looks correct\n");
+      writeFileSync(questions, confirmed);
+      const recorded = answer(proj, questions, "Looks correct");
+      expect(recorded.status, recorded.stderr).toBe(0);
+      writeArtifact(proj, artifact);
+      expect(evidence(proj).ok).toBe(true);
+
+      writeFileSync(questions, confirmed.replace('"tls_required":true', '"tls_required":false'));
+      const stale = evidence(proj);
+      expect(stale.ok).toBe(false);
+      if (stale.ok) throw new Error("expected refusal");
+      expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
+    });
+  }
 });
 
 describe("t332 authorization scope resolution", () => {

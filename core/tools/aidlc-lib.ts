@@ -7655,7 +7655,9 @@ export function summaryConfirmationContentHash(content: string): string {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }
       postSummaryAssumptionSeen = true;
-      openExcludedAssumption = assumptionExclusionStart(visibleLines, line);
+      // Heading visibility blanks code blocks. Only actual source whitespace
+      // may be crossed when excluding an adjacent thematic break.
+      openExcludedAssumption = assumptionExclusionStart(lines, line);
       continue;
     }
 
