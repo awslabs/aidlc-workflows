@@ -158,7 +158,7 @@ function advancedSection(workflow) {
     const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      ${mine ? `<span class="settings-pin" title="Yours, this machine only; the team runs at ${escapeHtml(team === INHERIT ? "the default" : team)}">yours</span>` : ""}
+      ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden by you" title="Overridden by you, on this machine; the team runs at ${escapeHtml(team === INHERIT ? "the default" : team)}">${icon("errorCircle", { size: 15 })}</span>` : ""}
       <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" title="${mine ? "Your effort for this group; the first option goes back to the team's" : "The team's effort for this group; pick a level to use your own"}">
         <option value="" ${mine ? "" : "selected"}>${escapeHtml(teamLabel)}</option>
         ${efforts.map((level) => `<option value="${level}" ${mine === level ? "selected" : ""}>${level}</option>`).join("")}

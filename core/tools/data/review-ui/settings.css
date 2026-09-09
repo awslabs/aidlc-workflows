@@ -28,7 +28,6 @@
 .settings-presets button:disabled { opacity: .5; }
 .settings-note { margin: 4px 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 .settings-row select[data-group] { width: 200px; }
-.settings-exceptions-summary { max-width: 260px; white-space: normal; text-align: right; color: var(--muted); }
 .settings-block .settings-h { margin-bottom: 2px; }
 .settings-pin { display: inline-block; margin-left: 8px; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 999px; font-size: 12px; color: var(--ink); white-space: nowrap; }
 .settings-personal { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--panel); }
@@ -40,3 +39,5 @@
 .settings-advanced .settings-block + .settings-block { border-top: 1px solid var(--line); padding-top: 10px; }
 .settings-disclosure small { font-weight: 400; color: var(--muted); font-size: 12px; }
 .settings-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 10.5px; font-weight: 500; vertical-align: 1px; }
+.settings-overridden { display: inline-flex; align-items: center; color: var(--accent); }
+.settings-overridden svg { display: block; }
