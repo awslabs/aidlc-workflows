@@ -1779,11 +1779,16 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
 
       // Before approval the Windows shell tool is blocked exactly like
       // execute_bash: exit 2, and NOT with the opaque "target path" prose — it
-      // takes the recovery-shell path.
+      // takes the recovery-shell path. A { command } payload (not empty args)
+      // reaches the branches shellTool() actually changes; empty args short-
+      // circuit through opaqueMutation before that code runs.
       const preApproval = runIde(
         dir,
         "plan-approval-guard",
-        JSON.stringify({ toolName: "execute_pwsh", toolArgs: {} }),
+        JSON.stringify({
+          toolName: "execute_pwsh",
+          toolArgs: { command: "bun .kiro/tools/aidlc-orchestrate.ts next" },
+        }),
       );
       expect(preApproval.code).toBe(2);
       expect(preApproval.stderr).not.toContain(
@@ -1837,12 +1842,18 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
 
       // After approval the Windows shell tool is permitted, exactly like
-      // execute_bash — the AI-DLC loop can advance.
+      // execute_bash — the AI-DLC loop can advance. This is the case that
+      // actually regressed: with { command } in the approved window the
+      // pre-fix adapter exits 2 and only exits 0 once execute_pwsh is a
+      // shellTool(). Empty args would exit 0 either way and never prove it.
       expect(
         runIde(
           dir,
           "plan-approval-guard",
-          JSON.stringify({ toolName: "execute_pwsh", toolArgs: {} }),
+          JSON.stringify({
+            toolName: "execute_pwsh",
+            toolArgs: { command: "bun .kiro/tools/aidlc-orchestrate.ts next" },
+          }),
         ).code,
       ).toBe(0);
     } finally {
