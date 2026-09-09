@@ -15,6 +15,7 @@ import { setNotice, store } from "./store.js";
 
 const PAGES = [
   { id: "models", label: "Models & effort" },
+  { id: "advanced", label: "Advanced" },
   { id: "about", label: "About" },
 ];
 const PRESETS = [
@@ -26,10 +27,9 @@ const SESSION_LEVELS = ["low", "medium", "high", "xhigh"];
 
 let root = null;
 let page = "models";
-// The browser edits the team's policy - the committed project layer. A personal
-// override (`aidlc config models --local`) stays a terminal move; when one
-// exists the page says so, because it changes what runs on this machine.
-const scope = "project";
+// Two layers are edited here. The preset and the exceptions are the team's
+// policy - the committed project layer. A group's effort under Advanced is
+// yours: the personal `local` layer, this machine only, over the team's value.
 let busy = false;
 let addingException = false;
 // The harness's model catalogue (GET /api/models): fetched once when Settings
@@ -84,7 +84,7 @@ function render() {
     </nav>
     <section class="settings-page ${busy ? "busy" : ""}">
       <button type="button" class="settings-close" data-close aria-label="Close settings">${icon("dismiss", { size: 14 })}</button>
-      ${page === "models" ? modelsPage() : aboutPage()}
+      ${page === "models" ? modelsPage() : page === "advanced" ? advancedPage() : aboutPage()}
     </section>
   </div>`;
   bind();
@@ -92,50 +92,12 @@ function render() {
 
 const INHERIT = "inherit";
 
-// Where a group's effective effort comes from, for the note beside it.
-function groupSource(policy, id, effective) {
-  const recorded = policy.recorded;
-  if (recorded.local?.groups?.[id]) return "only me";
-  if (recorded.project?.groups?.[id]) return "project";
-  if (recorded.global?.groups?.[id]) return "this machine";
-  if (effective === INHERIT) return "";
-  return policy.preset ? `preset ${policy.preset}` : "shipped default";
-}
-
 function modelsPage() {
   const workflow = store.workflow || {};
   const policy = workflow.models_policy;
   const fallback = workflow.runner_default_effort;
-  const efforts = policy?.efforts || ["low", "medium", "high", "xhigh"];
-  const exceptions = policy?.exceptions || [];
-  const agentsForPicker = policy ? policy.groups.flatMap((group) => group.agents).sort() : [];
-  const recorded = policy?.recorded?.[scope];
-  const groupRow = (group) => {
-    // The select shows this layer's dial. "Inherit from default" is the state
-    // of having none; once a dial is recorded the command has no way to remove
-    // just that one (--reset cannot combine with other flags), so the option is
-    // offered only while it is true - Reset below clears the layer.
-    const dial = recorded?.groups?.[group.id] || "";
-    // "Only me" sits above "Project": while it records a dial for this group,
-    // the project's control cannot change what runs, so it is shown disabled
-    // with that fact rather than a label that reads as the project's own.
-    const overriding = policy?.recorded?.local?.groups?.[group.id] || "";
-    // With no dial in this layer the option names what applies instead: the
-    // default (inherit), or the preset's / shipped pin and its level.
-    const source = groupSource(policy, group.id, group.effort);
-    const noDial = group.effort === INHERIT
-      ? "Inherit from default"
-      : `${source ? source[0].toUpperCase() + source.slice(1) : "Effective"} (${group.effort})`;
-    return `<div class="settings-row">
-      <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" ${overriding ? "disabled" : ""} title="${overriding ? `Your machine pins this group to ${escapeHtml(overriding)} (aidlc.settings.local.json); the team's value does not apply here` : dial ? "Recorded in the project; Reset below removes it" : "What this group runs at without a dial of its own"}">
-        ${overriding ? `<option value="" selected>Yours (${escapeHtml(overriding)})</option>` : dial ? "" : `<option value="" selected>${escapeHtml(noDial)}</option>`}
-        ${overriding ? "" : efforts.map((level) => `<option value="${level}" ${dial === level ? "selected" : ""}>${level}</option>`).join("")}
-      </select>
-    </div>`;
-  };
   return `<h3>Models &amp; effort</h3>
-    <p class="settings-sub">How hard each group of agents thinks.</p>
+    <p class="settings-sub">Which model the agents run on, and how hard they think.</p>
 
     <div class="settings-block">
       <div class="settings-h">Default</div>
@@ -153,18 +115,59 @@ function modelsPage() {
     </div>
 
     <div class="settings-block">
-      <div class="settings-h">Preset</div>
+      <div class="settings-h">Preset<small>team policy</small></div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
-      <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${policy?.preset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
+      <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${policy?.team?.preset === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
+      <p class="settings-note">The preset sets each group's effort for the whole team; it is committed with the project (<code>aidlc.settings.json</code>). ${policy?.recorded?.local ? "You override part of it on this machine - see " : "Per-group and per-agent settings are under "}<button type="button" class="linkish" data-page="advanced">Advanced</button>.</p>
+    </div>`;
+}
+
+// Where a group's team value comes from, for the option that names it.
+function teamSource(policy, id, effort) {
+  if (policy.recorded.project?.groups?.[id]) return "project";
+  if (policy.recorded.global?.groups?.[id]) return "this machine";
+  if (effort === INHERIT) return "";
+  return policy.team.preset ? `preset ${policy.team.preset}` : "shipped default";
+}
+
+function advancedPage() {
+  const workflow = store.workflow || {};
+  const policy = workflow.models_policy;
+  const efforts = policy?.efforts || ["low", "medium", "high", "xhigh"];
+  const exceptions = policy?.exceptions || [];
+  const agentsForPicker = policy ? policy.groups.flatMap((group) => group.agents).sort() : [];
+  const groupRow = (group) => {
+    // First option: the team's value for this group and where it comes from.
+    // Picking a level records your own dial in aidlc.settings.local.json (this
+    // machine only); picking the team option again removes it.
+    const team = policy.team.groups[group.id];
+    const mine = policy.recorded.local?.groups?.[group.id] || "";
+    const source = teamSource(policy, group.id, team);
+    const teamLabel = team === INHERIT ? "Team · inherits the default" : `Team · ${team}${source ? ` (${source})` : ""}`;
+    return `<div class="settings-row">
+      <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
+      ${mine ? `<span class="settings-pin" title="Set here, on this machine (aidlc.settings.local.json); the team runs at ${escapeHtml(team)}">yours</span>` : ""}
+      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" title="${mine ? "Your override on this machine; the first option returns to the team's value" : "The team's value; pick a level to override it on this machine only"}">
+        <option value="" ${mine ? "" : "selected"}>${escapeHtml(teamLabel)}</option>
+        ${efforts.map((level) => `<option value="${level}" ${mine === level ? "selected" : ""}>${level}</option>`).join("")}
+      </select>
+    </div>`;
+  };
+  return `<h3>Advanced</h3>
+    <p class="settings-sub">Effort per group of agents, and agents pinned on their own.</p>
+
+    <div class="settings-block">
+      <div class="settings-h">Groups<small>team value · your override</small></div>
+      ${policy ? policy.groups.map(groupRow).join("") : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
+      <p class="settings-note">Your overrides live in <code>aidlc.settings.local.json</code> - this machine only, not committed. Teammates keep the team's values.</p>
     </div>
 
     <div class="settings-block">
-      <div class="settings-h">Groups</div>
-      ${policy ? policy.groups.map(groupRow).join("") : ""}
+      <div class="settings-h">Exceptions<small>team policy</small></div>
       <div class="settings-row">
-        <span class="l">Exceptions<small>One agent pinned to its own effort or model</small></span>
+        <span class="l">Pinned agents<small>One agent held at its own effort or model, for the whole team</small></span>
         <span class="c settings-exceptions-summary">${exceptions.length
-          ? exceptions.map((entry) => `<span class="settings-pin" title="Unpin from the terminal, or Reset">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")
+          ? exceptions.map((entry) => `<span class="settings-pin" title="Unpin from the terminal, or Reset team policy">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")
           : "none"}</span>
         <button type="button" class="btn" data-add-exception ${policy ? "" : "disabled"}>${addingException ? "Cancel" : "Add…"}</button>
       </div>
@@ -178,22 +181,23 @@ function modelsPage() {
 
     ${personalNote(policy)}
     <div class="settings-foot">
-      <span class="settings-note">Team policy, committed with the project (<code>aidlc.settings.json</code>, <code>.claude/agents/</code>). Changes apply to runs started afterwards.</span>
-      <button type="button" class="btn" data-reset ${policy?.recorded?.project ? "" : "disabled"} title="Remove every preset, dial, and exception recorded in the project">Reset</button>
+      <span class="settings-note">Team policy is committed with the project (<code>aidlc.settings.json</code>, <code>.claude/agents/</code>). Changes apply to runs started afterwards.</span>
+      <button type="button" class="btn" data-reset-local ${policy?.recorded?.local ? "" : "disabled"} title="Remove every override recorded on this machine">Clear my overrides</button>
+      <button type="button" class="btn" data-reset ${policy?.recorded?.project ? "" : "disabled"} title="Remove every preset, dial, and exception recorded in the project">Reset team policy</button>
     </div>`;
 }
 
-// A personal layer set from the terminal overrides the team's values on this
-// machine; name what it pins so the greyed-out controls above make sense.
+// A personal preset or agent pin set from the terminal has no control above;
+// name it, because it changes what runs on this machine.
 function personalNote(policy) {
   const local = policy?.recorded?.local;
   if (!local) return "";
   const parts = [
     ...(local.preset ? [`preset ${local.preset}`] : []),
-    ...Object.entries(local.groups).map(([group, effort]) => `${group} ${effort}`),
     ...Object.entries(local.agents).map(([agent, value]) => `${agent} ${value.effort || ""}${value.model ? ` ${value.model}` : ""}`.trim()),
   ];
-  return `<p class="settings-note settings-personal">On this machine you override the team: ${escapeHtml(parts.join(" · "))} (<code>aidlc.settings.local.json</code>, set from the terminal with <code>aidlc config models … --local</code>).</p>`;
+  if (!parts.length) return "";
+  return `<p class="settings-note settings-personal">Also on this machine, from the terminal (<code>aidlc config models … --local</code>): ${escapeHtml(parts.join(" · "))}. Clear my overrides removes these too.</p>`;
 }
 
 const LOCAL_SETTINGS = ".claude/settings.local.json";
@@ -273,7 +277,7 @@ function aboutPage() {
 function bind() {
   root.querySelector("[data-close]")?.addEventListener("click", close);
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
-  for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change({ action: "preset", preset: button.dataset.preset }));
+  for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change("project", { action: "preset", preset: button.dataset.preset }));
   root.querySelector("[data-models-retry]")?.addEventListener("click", () => loadCatalogue(true));
   root.querySelector("[data-default-model]")?.addEventListener("change", async (event) => {
     const model = event.target.value;
@@ -307,7 +311,8 @@ function bind() {
     }
   });
   for (const select of root.querySelectorAll("[data-group]")) select.addEventListener("change", () => {
-    if (select.value) change({ action: "group", group: select.dataset.group, effort: select.value });
+    const group = select.dataset.group;
+    change("local", select.value ? { action: "group", group, effort: select.value } : { action: "clear-group", group });
   });
   root.querySelector("[data-add-exception]")?.addEventListener("click", () => { addingException = !addingException; render(); root.querySelector("[data-exception-form] select")?.focus(); });
   root.querySelector("[data-exception-form]")?.addEventListener("submit", (event) => {
@@ -315,21 +320,27 @@ function bind() {
     const form = new FormData(event.target);
     const model = String(form.get("model") || "").trim();
     addingException = false;
-    change({ action: "agent", agent: String(form.get("agent")), effort: String(form.get("effort")), ...(model ? { model } : {}) });
+    change("project", { action: "agent", agent: String(form.get("agent")), effort: String(form.get("effort")), ...(model ? { model } : {}) });
   });
   root.querySelector("[data-reset]")?.addEventListener("click", () => {
     if (!window.confirm("Reset the team's model policy? Every preset, dial, and exception recorded in the project is removed.")) return;
-    change({ action: "reset" });
+    change("project", { action: "reset" });
+  });
+  root.querySelector("[data-reset-local]")?.addEventListener("click", () => {
+    if (!window.confirm("Clear your overrides? Everything recorded for this machine is removed; the team's values apply again.")) return;
+    change("local", { action: "reset" });
   });
 }
 
-async function change(body) {
+async function change(scope, body) {
   if (busy) return;
   busy = true;
   render();
   try {
     await api.post("/api/models-policy", { scope, ...body });
-    setNotice("Team policy updated - commit aidlc.settings.json and .claude/agents/.", "info");
+    setNotice(scope === "local"
+      ? "Your override is saved for this machine; runs started from now on use it."
+      : "Team policy updated - commit aidlc.settings.json and .claude/agents/.", "info");
     store.emit("wants-refresh");
   } catch (error) {
     setNotice(`Could not change the policy: ${error.message}`, "error");

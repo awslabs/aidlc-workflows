@@ -211,17 +211,23 @@ exceptions, and the harness honesty note when the policy asks for something the
 harness drops - resolved with `resolveModelPolicy` from `aidlc config models`'
 recorded settings and the shipped agent tiers, exactly as `config models --show`
 does. `models_command` names the command that changes it; `recorded` gives what
-each settings layer (`global`, `project`, `local`) holds, and `efforts` the
-vocabulary. There is no per-intent effort: a run's agents use the project
-policy, and only the session effort is chosen at Start. Settings
-(`settings.js`, the rail's bottom cog) shows the default effort read-only and edits the
-policy through `POST /api/models-policy`, which runs the public
-`aidlc config models` command - `--preset`, `--<group>-effort`,
+each settings layer (`global`, `project`, `local`) holds, `efforts` the
+vocabulary, and `team` the policy resolved without the `local` layer (the
+preset and each group's effort a teammate gets - what "back to team" means).
+There is no per-intent effort: a run's agents use the project policy, and only
+the session effort is chosen at Start. Settings (`settings.js`, the rail's
+bottom cog) edits the policy through `POST /api/models-policy`, which runs the
+public `aidlc config models` command - `--preset`, `--<group>-effort`,
 `--agent --effort [--model]`, or `--reset`, with `--project` or `--local` and
 `--yes` - the binary when compiled, the dispatcher file under bun, always with
 `--project-dir`. The daemon never writes the settings or agent files itself.
-The route accepts both scopes; the shipped Settings page sends `project` only
-and shows a recorded `local` layer read-only (it greys out the groups it pins).
+The preset and exceptions go to `project` (the team's committed layer); a
+group's effort under Advanced goes to `local` (the personal layer). Removing one
+personal dial (`clear-group`, `local` only) has no single command behind it:
+the daemon rebuilds the personal layer - `--reset --local`, then every other
+entry it recorded, each replay step proven with `--dry-run` before the reset -
+under the route's mutation lock; a crash between steps leaves the layer holding
+what landed, which is why the move is offered for the personal layer only.
 
 **Nudge (daemon-side forwarding loop).** When a turn ends with no pending input,
 the pointer at `none`, and the state file's Current Stage still `[-]` in
@@ -561,7 +567,7 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /api/models` | Cookie/header | The harness's model catalogue `{models: [{id, name, description}], current, fetched_at}`, cached; `?refresh=1` asks the agent again. 409 without a runner, 502 when the agent does not report models |
 | `POST /api/default-model` | Cookie/header | Body `{model: <alias or id>\|null}`. Writes the harness's personal default model through the runner profile (Claude: `model` in `.claude/settings.local.json`); 400 for a malformed id, 409 when the backend has no writer |
 | `POST /api/default-effort` | Cookie/header | Body `{level: low\|medium\|high\|xhigh\|null}`. Writes the harness's personal default effort through the runner profile (Claude: `effortLevel` in `.claude/settings.local.json`); 400 for an unknown level, 409 when the backend has no writer or the file is not a JSON object |
-| `POST /api/models-policy` | Cookie/header | Body `{scope: project\|local, action: preset\|group\|agent\|reset, preset?, group?, effort?, agent?, model?}`. Runs `aidlc config models` with the matching flags and `--yes`; 400 for an unknown scope, preset, group, effort, agent name, or model id (nothing written); returns `{ok, scope, change, notes, models_policy}` with the refreshed view |
+| `POST /api/models-policy` | Cookie/header | Body `{scope: project\|local, action: preset\|group\|agent\|reset\|clear-group, preset?, group?, effort?, agent?, model?}`. Runs `aidlc config models` with the matching flags and `--yes`; `clear-group` (scope `local` only, else 400) rebuilds the personal layer without that group's dial; 400 for an unknown scope, preset, group, effort, agent name, or model id (nothing written); returns `{ok, scope, change, notes, models_policy}` with the refreshed view |
 | `POST /api/decision` | Cookie/header | Active intent only. Exact body `{stage,unit,revision,decision:"approve"|"request-changes",notes?}`; validate exact current target and `awaiting-approval`, write `decision-NNN.json`, append browser `HUMAN_TURN`, return `{file}`. Stale or closed gates return 409 |
 | `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after watched record changes |
 

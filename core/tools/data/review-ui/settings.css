@@ -37,3 +37,5 @@
 .settings-personal { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--panel); }
 .settings-loading { color: var(--muted); font-style: italic; }
 .settings-row select[data-default-model] { max-width: 320px; }
+.settings-h small { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); }
+.settings-page .linkish { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }

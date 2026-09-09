@@ -319,23 +319,26 @@ the latter the same value `/effort` sets). The model picker is Claude's own
 list — the same names its `/model` picker shows, asked of the agent once and
 cached — with your Claude default (from `~/.claude/settings.json`) as the first
 choice; picking another overrides it for this project, for you. Elsewhere it
-names the file — the **preset**, then each **group**
-of agents — the select names what applies without a dial of its own (*Inherit
-from default*, *Preset thorough (xhigh)*, *Shipped default (medium)*) or the
-level you pin — and the **exceptions** — one agent pinned to its
-own effort or model (*Add…*). Every change is applied immediately through the
-same `aidlc config models` command the terminal uses, so the transaction,
-refresh guard, and doctor checks are identical, and it applies to runs started
-afterwards. The browser edits the **team's** policy — the committed
-`aidlc.settings.json` and agent files (commit them); a personal override for
-your machine is a terminal move (`aidlc config models … --local`), and when one
-exists the page says what it pins and greys out those groups. **Reset** clears
-the team's layer. There is no per-dial undo:
-`config models` has no unset and `--reset` cannot be combined with other flags,
-so removing one dial would mean reset-then-replay across processes, which is not
-atomic for your settings; the browser offers the no-dial option only while it is
-true, and Reset otherwise. **About** lists this review UI's version,
-address, and runner.
+names the file. Then the **preset** — the team's policy, committed with the
+project (`aidlc.settings.json`): *Thorough*, *Balanced*, or *Minimal* sets each
+group's effort for everyone.
+
+**Advanced** is the fine grain. **Groups** lists each group of agents with the
+team's value first — *Team · xhigh (preset thorough)*, *Team · inherits the
+default* — and the levels beneath it: pick one and it is **your** override, on
+this machine only (`aidlc.settings.local.json`, not committed; a *yours* pill
+marks the row and teammates keep the team's value); pick the team option again
+to return to it. **Exceptions** pins one agent to its own effort or model for the
+whole team (*Add…*). **Clear my overrides** removes everything recorded for this
+machine; **Reset team policy** removes the project's preset, dials, and
+exceptions. Every change goes through the same `aidlc config models` command the
+terminal uses, so the transaction, refresh guard, and doctor checks are
+identical, and it applies to runs started afterwards. Returning one group to the
+team is the one exception: the command has no per-dial unset, so the daemon
+rebuilds your personal layer — reset, then re-record what else it held, each
+step validated with `--dry-run` first — which is why that move exists for your
+own layer only, never the committed one. **About** lists this review UI's
+version, address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the
 SessionStart hook binds the agent's session), so you can Start a second intent

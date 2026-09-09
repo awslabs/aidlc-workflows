@@ -180,18 +180,31 @@ describe("t366 review UI model policy settings", () => {
     rmSync(local);
   }, 30_000);
 
-  test("the local layer overrides the committed one for this machine only, and reset clears just that layer", async () => {
+  test("the local layer overrides the committed one for this machine only; the team view keeps the team's value; one dial can be cleared, then the layer", async () => {
     expect((await api("POST", "/api/models-policy", { scope: "local", action: "group", group: "reviewing", effort: "medium" })).status).toBe(200);
+    expect((await api("POST", "/api/models-policy", { scope: "local", action: "group", group: "deciding", effort: "low" })).status).toBe(200);
     let view = await policy();
     expect(group(view, "reviewing").effort).toBe("medium");
-    expect(view.recorded.local?.groups.reviewing).toBe("medium");
+    expect(view.recorded.local?.groups).toEqual({ reviewing: "medium", deciding: "low" });
     expect(view.recorded.project?.preset).toBe("thorough");
+    // What a teammate gets: the committed preset and the project's own dial (writing-up, above), the personal dials left out.
+    expect(view.team).toEqual({ preset: "thorough", groups: { deciding: "inherit", reviewing: "xhigh", "writing-up": "low" } });
     expect(agentEffort("product-lead")).toBe("medium");
+
+    // Back to the team's value for one group: the personal layer is rebuilt without that dial, keeping the other.
+    expect((await api("POST", "/api/models-policy", { scope: "project", action: "clear-group", group: "reviewing" })).status).toBe(400);
+    expect((await api("POST", "/api/models-policy", { scope: "local", action: "clear-group", group: "reviewing" })).status).toBe(200);
+    view = await policy();
+    expect(view.recorded.local?.groups).toEqual({ deciding: "low" });
+    expect(group(view, "reviewing").effort).toBe("xhigh");
+    expect(agentEffort("product-lead")).toBe("xhigh");
+    // Clearing a dial that is not there changes nothing.
+    expect((await api("POST", "/api/models-policy", { scope: "local", action: "clear-group", group: "reviewing" })).status).toBe(200);
+    expect((await policy()).recorded.local?.groups).toEqual({ deciding: "low" });
 
     expect((await api("POST", "/api/models-policy", { scope: "local", action: "reset" })).status).toBe(200);
     view = await policy();
     expect(view.recorded.local).toBeNull();
-    expect(group(view, "reviewing").effort).toBe("xhigh");
-    expect(agentEffort("product-lead")).toBe("xhigh");
-  }, 30_000);
+    expect(group(view, "deciding").effort).toBe("inherit");
+  }, 60_000);
 });

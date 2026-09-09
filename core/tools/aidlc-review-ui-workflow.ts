@@ -43,7 +43,7 @@ import {
   resolveModelPolicy,
   type ModelGroup,
 } from "./aidlc-model-policy.ts";
-import { invalidateSettingsCache, modelPolicyForHarness, readSettingsTarget, resolveAidlcSettings, type SettingsTarget } from "./aidlc-settings.ts";
+import { invalidateSettingsCache, modelPolicyForHarness, readSettingsTarget, resolveAidlcSettings, resolveAidlcSettingsWithOverride, type SettingsTarget } from "./aidlc-settings.ts";
 import { resolveTierCap } from "./aidlc-tiers.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
@@ -180,6 +180,12 @@ export interface ModelsPolicyView {
   recorded: Record<SettingsTarget, { preset: string | null; groups: Partial<Record<ModelGroup, string>>; agents: Record<string, { effort: string | null; model: string | null }> } | null>;
   /** The effort vocabulary the policy accepts, for pickers. */
   efforts: readonly string[];
+  /**
+   * The team's policy alone - machine and project layers, the personal `local`
+   * layer left out: what a teammate without overrides gets, and what "back to
+   * team" means for each group.
+   */
+  team: { preset: string | null; groups: Record<ModelGroup, string> };
 }
 
 function recordedLayer(projectDir: string, target: SettingsTarget, harness: string): ModelsPolicyView["recorded"][SettingsTarget] {
@@ -215,6 +221,15 @@ export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
   const effective = Object.entries(tiers)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, tier]) => resolveModelPolicy(policy, name, tier, harness, cap));
+  const teamPolicy = modelPolicyForHarness(resolveAidlcSettingsWithOverride(projectDir, "local", null).models, harness);
+  const teamGroups = {} as Record<ModelGroup, string>;
+  for (const id of Object.keys(MODEL_GROUPS) as ModelGroup[]) {
+    const efforts = [...new Set(Object.entries(tiers)
+      .map(([name, tier]) => resolveModelPolicy(teamPolicy, name, tier, harness, cap))
+      .filter((item) => item.group === id && item.layer !== "agent-exception")
+      .map((item) => item.effort ?? "inherit"))];
+    teamGroups[id] = efforts.length === 1 ? efforts[0] : efforts.join(" / ");
+  }
   const shortName = (agent: string): string => agent.replace(/^aidlc-/, "").replace(/-agent$/, "");
   const groups = (Object.keys(MODEL_GROUPS) as ModelGroup[]).map((id) => {
     const members = effective.filter((item) => item.group === id && item.layer !== "agent-exception");
@@ -249,6 +264,7 @@ export function modelsPolicyView(projectDir: string): ModelsPolicyView | null {
       local: recordedLayer(projectDir, "local", harness),
     },
     efforts: MODEL_EFFORTS,
+    team: { preset: teamPolicy?.preset ?? null, groups: teamGroups },
   };
 }
 

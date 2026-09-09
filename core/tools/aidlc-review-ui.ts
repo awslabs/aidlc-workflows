@@ -1487,7 +1487,13 @@ type ModelPolicyChange =
   | { action: "preset"; preset: (typeof MODEL_POLICY_PRESETS)[number] }
   | { action: "group"; group: (typeof MODEL_POLICY_GROUPS)[number]; effort: (typeof MODEL_POLICY_EFFORTS)[number] }
   | { action: "agent"; agent: string; effort: (typeof MODEL_POLICY_EFFORTS)[number]; model?: string }
-  | { action: "reset" };
+  | { action: "reset" }
+  // Removing one personal group dial: the command has no per-dial unset and
+  // --reset cannot combine with other flags, so the personal layer is rebuilt
+  // - reset, then replay what else it recorded - each step a command of its own.
+  // Personal only: that layer is this machine's and re-set in seconds; the
+  // committed team layer is never rebuilt this way.
+  | { action: "clear-group"; group: (typeof MODEL_POLICY_GROUPS)[number] };
 
 function parseModelPolicyChange(body: unknown): { scope: (typeof MODEL_POLICY_SCOPES)[number]; change: ModelPolicyChange } {
   if (!body || typeof body !== "object") throw new HttpError(400, "invalid body");
@@ -1516,18 +1522,34 @@ function parseModelPolicyChange(body: unknown): { scope: (typeof MODEL_POLICY_SC
     }
     case "reset":
       return { scope: scope as never, change: { action: "reset" } };
+    case "clear-group":
+      if (scope !== "local") throw new HttpError(400, "clear-group applies to the personal (local) layer only");
+      return { scope: "local", change: { action: "clear-group", group: oneOf(record.group, MODEL_POLICY_GROUPS, "group") as never } };
     default:
-      throw new HttpError(400, "action must be one of preset, group, agent, reset");
+      throw new HttpError(400, "action must be one of preset, group, agent, reset, clear-group");
   }
 }
 
-function modelPolicyArgv(change: ModelPolicyChange): string[] {
+function modelPolicyArgv(change: Exclude<ModelPolicyChange, { action: "clear-group" }>): string[] {
   switch (change.action) {
     case "preset": return ["--preset", change.preset];
     case "group": return [`--${change.group}-effort`, change.effort];
     case "agent": return ["--agent", change.agent, "--effort", change.effort, ...(change.model ? ["--model", change.model] : [])];
     case "reset": return ["--reset"];
   }
+}
+
+/** The personal layer rebuilt without one group dial: reset, then every other entry it recorded. Empty when the dial is not there. */
+function clearingSequence(recorded: NonNullable<ReturnType<typeof modelsPolicyView>>["recorded"]["local"], group: string): string[][] {
+  if (!recorded || recorded.groups[group as keyof typeof recorded.groups] === undefined) return [];
+  const steps: string[][] = [["--reset"]];
+  if (recorded.preset) steps.push(["--preset", recorded.preset]);
+  for (const [other, effort] of Object.entries(recorded.groups)) if (other !== group && effort) steps.push([`--${other}-effort`, effort]);
+  for (const [agent, value] of Object.entries(recorded.agents)) {
+    if (!value.effort) throw new HttpError(409, `${agent} is pinned to a model without an effort; clear it from the terminal`);
+    steps.push(["--agent", agent, "--effort", value.effort, ...(value.model ? ["--model", value.model] : [])]);
+  }
+  return steps;
 }
 
 
@@ -1557,13 +1579,25 @@ let policyMutation: Promise<unknown> = Promise.resolve();
 
 async function modelsPolicyResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
   const { scope, change } = parseModelPolicyChange(await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES));
-  const run = policyMutation.then(() => runConfigModels(projectDir, [...modelPolicyArgv(change), `--${scope}`, "--yes"]));
+  const run = policyMutation.then(() => applyModelPolicyChange(projectDir, scope, change));
   policyMutation = run.catch(() => undefined);
   const output = await run;
   publishState();
   // "Outstanding actions" the CLI prints are advisory follow-ups for the human.
   const notes = [...new Set(output.split("\n").filter((line) => /^\s{2}\S/.test(line)).map((line) => line.trim()))].slice(0, 6);
   return json({ ok: true, scope, change, notes, models_policy: modelsPolicyView(projectDir) });
+}
+
+function applyModelPolicyChange(projectDir: string, scope: (typeof MODEL_POLICY_SCOPES)[number], change: ModelPolicyChange): string {
+  if (change.action !== "clear-group") return runConfigModels(projectDir, [...modelPolicyArgv(change), `--${scope}`, "--yes"]);
+  const steps = clearingSequence(modelsPolicyView(projectDir)?.recorded.local ?? null, change.group).map((step) => [...step, "--local", "--yes"]);
+  // Prove every replay step is accepted (--dry-run writes nothing) before the
+  // reset, so a refusal cannot leave the layer half rebuilt. What remains is a
+  // crash between steps: the personal layer then holds only what landed.
+  for (const step of steps.slice(1)) runConfigModels(projectDir, [...step, "--dry-run"]);
+  let output = "";
+  for (const step of steps) output += `${runConfigModels(projectDir, step)}\n`;
+  return output;
 }
 
 /**
