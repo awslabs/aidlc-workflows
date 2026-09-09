@@ -10643,20 +10643,19 @@ export function parseReviewSection(
   const findings: ReviewFinding[] = [];
   for (const line of table.slice(2)) {
     const cells = splitMarkdownRow(line);
-    // Validate row arity against the header before reading positionally. A row
-    // with the wrong cell count shifts every later column, so a positional read
-    // would silently return "" for a missing cell and later throw a misdirecting
-    // "invalid finding status" that names the wrong cause. Name the offending
-    // column instead so the failure points at the fix.
+    // Check arity before positional reads: a missing cell can shift later
+    // values left, but its intended column cannot be recovered reliably.
+    // Show the expected order and offer a hint when a trailing status fits.
     if (cells.length !== headers.length) {
       const rowId = cells[index.get("ID") ?? 0]?.trim() || "?";
       if (cells.length < headers.length) {
-        const missing = headers
-          .slice(cells.length)
-          .map((name) => JSON.stringify(name))
-          .join(", ");
+        const lastCell = cells.at(-1) ?? "";
+        const hint = headers.at(-1) === "Status" && validReviewFindingStatus(lastCell)
+          ? `The last cell ${JSON.stringify(lastCell)} looks like Status; check earlier cells for a missing value or "|" separator`
+          : 'Check for a missing cell or "|" separator';
         throw new Error(
-          `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}: missing ${missing}`,
+          `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}. ` +
+            `Expected columns: ${headers.join(" | ")}. ${hint}`,
         );
       }
       throw new Error(
