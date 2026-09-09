@@ -68,13 +68,18 @@ function loadRegistry(path: string): {
 }
 
 function loadAgents(): Array<{ file: string; doc: AgentDoc }> {
+  // Agent configs ship as Markdown; frontmatter and a JSON config are equivalent
+  // to Kiro, so the grant model is read out of the frontmatter block.
   return readdirSync(AGENTS_DIR)
-    .filter((file) => file.endsWith(".json"))
+    .filter((file) => file.endsWith(".md"))
     .sort()
-    .map((file) => ({
-      file,
-      doc: JSON.parse(readFileSync(join(AGENTS_DIR, file), "utf-8")) as AgentDoc,
-    }));
+    .map((file) => {
+      const block = /^---\n([\s\S]*?)\n---\n/.exec(
+        readFileSync(join(AGENTS_DIR, file), "utf-8"),
+      );
+      if (block === null) throw new Error(`${file}: no frontmatter`);
+      return { file, doc: Bun.YAML.parse(block[1]) as AgentDoc };
+    });
 }
 
 function stringTools(values: unknown[] | undefined): string[] {
@@ -170,13 +175,13 @@ describe("t281 Kiro CLI dynamic agent grant model", () => {
       expect(doc.includeMcpJson, `${file} includeMcpJson`).toBe(true);
       const grants = stringTools(doc.tools).filter((tool) => tool.startsWith("@")).sort();
       expect(grants, `${file} MCP grants`).toEqual([...EXPECTED_GRANTS].sort());
-      expect(Object.hasOwn(doc, "$schema"), `${file} schema`).toBe(false);
     }
 
+    // `$schema` is not asserted either way: it points an editor at the agent-v1
+    // JSON schema, and these configs ship as Markdown frontmatter.
     const conductorTools = stringTools(conductor!.doc.tools);
     expect(conductor!.doc.includeMcpJson).toBeUndefined();
     expect(conductorTools.filter((tool) => tool.startsWith("@"))).toEqual([]);
-    expect(Object.hasOwn(conductor!.doc, "$schema")).toBe(true);
   });
 
   test("every @server tool grant names a declared registry server", () => {

@@ -22,6 +22,102 @@ import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import { TRUSTED_COMMAND_PREFIX } from "../../core/tools/aidlc-command.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
+// The 14 delegation targets. Kiro resolves a delegate's capabilities from its
+// own agent config, so each persona carries its grants; the conductor
+// (agents/aidlc.md) is authored separately and deliberately carries none of them.
+const DELEGATION_AGENTS = [
+  "aidlc-architect-agent",
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-aws-platform-agent",
+  "aidlc-compliance-agent",
+  "aidlc-composer-agent",
+  "aidlc-delivery-agent",
+  "aidlc-design-agent",
+  "aidlc-developer-agent",
+  "aidlc-devsecops-agent",
+  "aidlc-operations-agent",
+  "aidlc-pipeline-deploy-agent",
+  "aidlc-product-agent",
+  "aidlc-product-lead-agent",
+  "aidlc-quality-agent",
+] as const;
+
+// The two reviewing personas write their verdict into the workflow record, so
+// they pre-approve fs_write; the rest ask for it.
+const FS_WRITE_AUTOAPPROVED = new Set([
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-product-lead-agent",
+]);
+
+// The composer owns the scope grid rather than a space, so its write scope is
+// the scope tree instead of aidlc/spaces/**.
+function personaWritePaths(agent: string): string[] {
+  return agent === "aidlc-composer-agent"
+    ? [`      - '.kiro/scopes/**'`, `      - '.kiro/tools/data/scope-grid.json'`]
+    : [`      - 'aidlc/spaces/**'`];
+}
+
+// A reviewing persona reads the record it judges and nothing agent-specific; the
+// others preload their own brief and knowledge shard.
+function personaResources(agent: string): string[] {
+  const shared = [
+    `  - 'file://.kiro/knowledge/aidlc-shared/*.md'`,
+    `  - 'file://aidlc/spaces/default/memory/**/*.md'`,
+  ];
+  if (FS_WRITE_AUTOAPPROVED.has(agent)) return shared;
+  return [
+    `  - 'file://.kiro/agents/${agent}.md'`,
+    agent === "aidlc-composer-agent"
+      ? `  - 'file://.kiro/scopes/*.md'`
+      : `  - 'file://.kiro/knowledge/${agent}/*.md'`,
+    ...shared,
+  ];
+}
+
+// Persona frontmatter. Kiro treats Markdown frontmatter and a JSON agent config
+// as equivalent, so this is the same grant model the row shipped as agent JSON
+// before the two Kiro rows merged — minus the per-persona hook registrations,
+// which the workspace hooks plus the delegation ledger now supply.
+//
+// `allowedCommands`/`deniedCommands` are Rust `regex` patterns anchored
+// full-string by Kiro; `deniedCommands` is evaluated first and beats any allow.
+// The allowlist is deliberately project-relative: a grant for any
+// `/…/.kiro/tools/*.ts` would pre-approve running a file from a world-writable
+// directory. See tests/unit/t252 for the behavioural contract.
+function personaFrontmatter(agent: string): string[] {
+  return [
+    "includeMcpJson: true",
+    "tools:",
+    "  - fs_read",
+    "  - fs_write",
+    "  - execute_bash",
+    "  - thinking",
+    "  - '@context7'",
+    "  - '@aws-mcp'",
+    "  - '@aws-pricing'",
+    "  - '@aws-iac'",
+    "  - '@aws-serverless'",
+    "allowedTools:",
+    "  - fs_read",
+    ...(FS_WRITE_AUTOAPPROVED.has(agent) ? ["  - fs_write"] : []),
+    "  - thinking",
+    "toolsSettings:",
+    "  execute_bash:",
+    "    allowedCommands:",
+    `      - 'bun (run )?["'']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts["'']?( .*)?'`,
+    `      - 'date -u( .*)?'`,
+    "    deniedCommands:",
+    `      - '([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?'`,
+    `      - '([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?'`,
+    `      - '([^\\s]*/)?git( -[^\\s]+( ("[^"]*"|''[^'']*''|[^\\s]+))?)* push( .*)?'`,
+    "  fs_write:",
+    "    allowedPaths:",
+    ...personaWritePaths(agent),
+    "resources:",
+    ...personaResources(agent),
+  ];
+}
+
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro",
@@ -139,6 +235,15 @@ const manifest: HarnessManifest = {
     // harness/, and lands at the project root.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
+
+  // Kiro resolves a delegated persona's capabilities from that persona's own
+  // frontmatter. These grants are autoapprovals: an unmatched operation still
+  // asks rather than being denied. No persona receives a subagent tool, so
+  // nested delegation stays unavailable.
+  frontmatterAdditions: DELEGATION_AGENTS.map((agent) => ({
+    file: `agents/${agent}.md`,
+    lines: personaFrontmatter(agent),
+  })),
 
   // AGENTS.md renders from the shared skeleton with Kiro's fills, at the project
   // root (outside .kiro/). The {{HARNESS_DIR}} → .kiro substitution + rules/ →

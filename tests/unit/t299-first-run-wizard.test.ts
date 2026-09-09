@@ -218,7 +218,10 @@ describe("t299 first-run setup wizard", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Customize setup - 6 steps");
-    expect(result.stdout).toContain("Kiro IDE        (not probed)");
+    // Kiro is one roster row and is probed like every other harness (`kiro-cli`),
+    // so no entry carries the "(not probed)" tag any more.
+    expect(result.stdout).toMatch(/^ *\d+\. Kiro *$/m);
+    expect(result.stdout).not.toContain("not probed");
     for (let step = 1; step <= 6; step++) {
       expect(result.stdout).toContain(`Step ${step} of 6`);
     }

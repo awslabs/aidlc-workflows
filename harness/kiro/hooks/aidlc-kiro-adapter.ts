@@ -854,7 +854,11 @@ interface TerminalLatch extends TerminalResult {
 }
 
 function promptTerminalInvocation(prompt: string): TerminalInvocation {
-  const expanded = prompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
+  // Accept the native dispatcher anchor and the legacy filename shape so the
+  // seam keeps working across both invocation channels.
+  const expanded = prompt.match(
+    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ([^`\n]*)`/,
+  );
   const rawInvocation = expanded
     ? expanded[1]
     : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
@@ -935,7 +939,7 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   try {
     const result = Bun.spawnSync(
       executable
-        ? [executable, ...compiledArgs]
+        ? [executable, "engine", ...compiledArgs]
         : [
             process.execPath,
             join(".kiro", "tools", toolFile),
@@ -1077,15 +1081,179 @@ function terminalRefusal(result: TerminalResult): string {
   );
 }
 
+// --- Roll-forward marker family (aidlc/.aidlc-*) ---
+//
+// These three markers are the CROSS-PROCESS half of the seam. The engine
+// done-guard (aidlc-orchestrate.ts) and the doctor bundle read them from a
+// separate process that knows nothing about Kiro's session id, so they live at
+// fixed project-relative paths. The per-session turn/latch.json files above are
+// the harness-local shell-refusal dedup and are not a substitute for these.
+function bumpFlatTurn(): number {
+  try {
+    mkdirSync(join(projectDir, "aidlc"), { recursive: true });
+    const cp = join(projectDir, "aidlc", ".aidlc-turn-counter");
+    const turn = existsSync(cp)
+      ? (Number.parseInt(readFileSync(cp, "utf-8").trim(), 10) || 0) + 1
+      : 1;
+    writeFileSync(cp, `${turn}\n`, "utf-8");
+    return turn;
+  } catch {
+    return 0; // turn-clock best-effort; a failure fails the seam open
+  }
+}
+
+function writeReadOnlyLatch(turn: number, flag: string, source: string): void {
+  try {
+    mkdirSync(join(projectDir, "aidlc"), { recursive: true });
+    writeFileSync(
+      join(projectDir, "aidlc", ".aidlc-readonly-latch"),
+      `${JSON.stringify({ turn, flag, source, ts: Date.now() })}\n`,
+      "utf-8",
+    );
+  } catch {
+    // Latch best-effort; without it the backstop simply fails open.
+  }
+}
+
+function writeForwardingLatch(
+  turn: number,
+  invocation: TerminalInvocation,
+): void {
+  try {
+    mkdirSync(join(projectDir, "aidlc"), { recursive: true });
+    writeFileSync(
+      join(projectDir, "aidlc", ".aidlc-forwarding-latch"),
+      `${JSON.stringify({ turn, raw: invocation.raw, args: invocation.args })}\n`,
+      "utf-8",
+    );
+  } catch {
+    // Forwarding backstop best-effort.
+  }
+}
+
+function clearForwardingLatch(): void {
+  rmSync(join(projectDir, "aidlc", ".aidlc-forwarding-latch"), { force: true });
+}
+
+// A next carrying one of these is an explicit engine read, so the seam can run
+// it off-band with the exact recovered argv instead of asking the model to
+// reconstruct the call.
+const PRE_DISPATCH_FLAGS = new Set([
+  "--config",
+  "--stage",
+  "--phase",
+  "--resume",
+  "--depth",
+  "--test-strategy",
+  "--single",
+  "--new-intent",
+  "--new-scope",
+  "--report",
+]);
+
+function shouldPreDispatchNext(args: string[]): boolean {
+  if (args[0] === "compose") return true;
+  if (args.some((arg) => PRE_DISPATCH_FLAGS.has(arg))) return true;
+  // A scope choice is unambiguous only before a workflow exists. Over an active
+  // intent, scope + freeform text may be new work and must stay with the
+  // conductor's offer/confirm classification.
+  return args.includes("--scope") && !existsSync(stateFilePath(projectDir));
+}
+
+function preDispatchNext(args: string[]): string | null {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  try {
+    const run = Bun.spawnSync(
+      executable
+        ? [executable, "engine", "orchestrate", "next", ...args]
+        : [
+            process.execPath,
+            join(".kiro", "tools", "aidlc-orchestrate.ts"),
+            "next",
+            ...args,
+          ],
+      { cwd: projectDir, stdout: "pipe", stderr: "pipe", env: projectEnv },
+    );
+    const directive = decodeHarnessPlainText(run.stdout).trim();
+    return run.exitCode === 0 && directive.length > 0 ? directive : null;
+  } catch {
+    return null; // advisory; the forwarding latch remains the floor
+  }
+}
+
 if (target === "verb-intercept") {
+  // The whole turn's only job here is to deterministically handle a terminal
+  // command or an explicit engine read; anything else falls through to the
+  // conductor untouched (exit 0, no output → Kiro proceeds to the LLM normally).
+  // Advisory: any failure fails open.
   const sessionId = terminalSessionId();
-  const turn = bumpTurn(sessionId);
+  const sessionTurn = bumpTurn(sessionId);
+  // Turn-clock: bump EVERY time this seam fires (it fires once per turn, and
+  // BEFORE the command === null exit, so a bare-next turn still advances the
+  // clock and a prior turn's latch goes stale). The latches below stamp THIS
+  // value; the engine done-guard and the preToolUse backstop fire only when the
+  // latch's turn === the current counter — turn-scoped, no time window, no wedge.
+  const turn = bumpFlatTurn();
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args);
-  if (command === null) return 0;
+  if (command === null) {
+    if (
+      invocation.raw.length > 0 && shouldPreDispatchNext(invocation.args)
+    ) {
+      const directive = preDispatchNext(invocation.args);
+      if (directive !== null) {
+        clearForwardingLatch();
+        if (invocation.args[0] === "--config") {
+          writeReadOnlyLatch(
+            turn,
+            invocation.args.join(" ").replace(/^--/, ""),
+            "config-alias",
+          );
+        }
+        process.stdout.write(
+          "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
+            "run the exact first `aidlc-orchestrate.ts next` invocation with " +
+            "every user argument preserved. Treat the JSON below as the " +
+            "authoritative directive and act on it now. Do NOT call `next` " +
+            "again for this invocation.\n\n" +
+            `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`,
+        );
+        return 0;
+      }
+    }
+    // Kiro occasionally drops the entire expanded $ARGUMENTS vector and runs a
+    // bare next even though both the agent prompt and the skill say verbatim.
+    // Keep the intended first call in a turn-bound latch; guard-tool-call
+    // compares the shell-normalized argv and rejects a lossy call. A correct
+    // first next consumes the latch, so later loop iterations in this turn are
+    // bare.
+    if (invocation.raw.length > 0) {
+      writeForwardingLatch(turn, invocation);
+      process.stdout.write(
+        "SYSTEM (deterministic argument forwarding): Your immediate first tool " +
+          "call must be exactly the engine call below. Preserve every argument; " +
+          "do not run a bare `next`.\n\n" +
+          `{{INVOKE}} engine orchestrate next ${invocation.raw}\n`,
+      );
+    }
+    return 0; // non-terminal command — the conductor handles the directive
+  }
   const result = runTerminalCommand(command);
   if (result === null) return 0;
-  writeTerminalLatch(sessionId, turn, invocation, result);
+  // Arm the read-only/nav latch with the CURRENT turn counter so the engine
+  // done-guard and the preToolUse backstop know a bare advancing `next` THIS
+  // SAME turn is the spurious roll-forward. Every classified terminal family
+  // arms it, plugin utilities included.
+  const forwarded =
+    command.args ?? (command.arg !== undefined ? [command.arg] : []);
+  writeReadOnlyLatch(
+    turn,
+    command.source === "read-only-flag"
+      ? command.subcommand
+      : (command.display ?? [command.subcommand, ...forwarded].join(" ")),
+    command.source,
+  );
+  writeTerminalLatch(sessionId, sessionTurn, invocation, result);
   process.stdout.write(terminalContext(result));
   return 0;
 }

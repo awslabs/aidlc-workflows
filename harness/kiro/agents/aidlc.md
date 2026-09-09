@@ -35,9 +35,11 @@ permissions:
         - "aidlc/spaces/**"
         - "{{HARNESS_DIR}}/sensors/**"
         - "aidlc/.aidlc-compose-pending"
-# `permissions` has no subagent capability, so delegation trust stays where the
-# schema puts it: toolsSettings.subagent ("Approval prompts blocking - add the
-# agent to `trustedAgents`", Sub-agents/Troubleshooting). Every stage the engine
+# `permissions` gates the subagent capability as a whole; WHICH agents may be
+# spawned and which of them skip the approval prompt is a separate axis, and the
+# schema puts that in toolsSettings.subagent ("Control which agents can be spawned
+# and which run without approval prompts using `toolsSettings.subagent`",
+# Custom agents / Configuring sub-agent access). Every stage the engine
 # routes to delegates to one of these, so an unlisted persona stalls the workflow
 # on an approval prompt the conductor cannot answer. Named rather than globbed:
 # the field takes globs, but `aidlc-*` would also pre-trust whatever a dropped-in

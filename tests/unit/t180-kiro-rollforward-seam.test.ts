@@ -94,12 +94,20 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
       "utf-8",
     );
+    const start = source.indexOf('if (target === "state-transition-guard")');
     const branch = source.slice(
-      source.indexOf('if (target === "state-transition-guard")'),
-      source.indexOf("// --- plan-approval-guard"),
+      start,
+      source.indexOf("\nif (target === ", start + 1),
     );
-    expect(branch).toContain("AIDLC_COMPILED_EXECUTABLE");
-    expect(branch).toContain('[executable, "engine", "hook", "state-transition-guard"]');
+    // The branch dispatches through runCoreHook, the single place that builds the
+    // compiled `engine hook <name>` argv for every guard on this row.
+    expect(branch).toContain('runCoreHook("state-transition-guard"');
+    const helper = source.slice(
+      source.indexOf("function runCoreHook("),
+      source.indexOf("const INPUT_TARGETS"),
+    );
+    expect(helper).toContain("AIDLC_COMPILED_EXECUTABLE");
+    expect(helper).toContain('[executable, "engine", "hook", hook]');
   });
 
   test("1: read-only flag (--status) bumps counter to 1 and stamps the read-only-flag latch", () => {
@@ -233,7 +241,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
           { AIDLC_COMPILED_EXECUTABLE: executable },
         );
         expect(r.code, command).toBe(0);
-        const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
+        const relayed = r.stdout.match(/--- OUTPUT(?: \(exit \d+\))? ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
         expect(relayed, command).toBe(`engine ${command}`);
       }
     } finally {
@@ -275,7 +283,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       // "unknown subcommand" error rather than against the wrong-tool error it
       // exists to catch -- a test that passed for the wrong reason until the
       // tool arrived, then failed for the wrong reason too.
-      const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1] ?? "";
+      const relayed = r.stdout.match(/--- OUTPUT(?: \(exit \d+\))? ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1] ?? "";
       expect(relayed).not.toMatch(/unknown subcommand/i);
       expect(relayed).not.toMatch(/Usage: aidlc-utility/i);
     } finally {
@@ -307,7 +315,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
           { AIDLC_COMPILED_EXECUTABLE: executable },
         );
         expect(r.code, command).toBe(0);
-        const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
+        const relayed = r.stdout.match(/--- OUTPUT(?: \(exit \d+\))? ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
         expect(relayed, command).toBe(`engine ${command}`);
       }
     } finally {

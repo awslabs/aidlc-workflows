@@ -155,14 +155,28 @@ describe("t308 hook registration matchers select captured fixture tool names", (
     }
   });
 
-  test("Kiro IDE matcher-bearing manifests reach observed tool names", () => {
+  // Every manifest that filters by tool name. Named rather than counted, so that
+  // adding a matcher-bearing hook has to be a deliberate edit here — a bare count
+  // would let one silently replace another.
+  const KIRO_MATCHER_MANIFESTS = [
+    "aidlc-log-subagent.json",
+    "aidlc-rebuild-stage-graph.json",
+    "aidlc-review-freeze.json",
+    "aidlc-reviewer-scope.json",
+    "aidlc-state-transition-guard.json",
+    "aidlc-sync-workflow-state.json",
+    "aidlc-terminal-command-guard.json",
+    "aidlc-write-audit-log.json",
+  ];
+
+  test("Kiro matcher-bearing manifests reach observed tool names", () => {
     const hooksDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "hooks");
     const registrations: KiroIdeMatcherRegistration[] = [];
     for (const file of readdirSync(hooksDir).filter(
       (entry) => entry.startsWith("aidlc-") && entry.endsWith(".json"),
     )) {
       const document = readJson(join(hooksDir, file));
-      expect(document.version, `${file} must use the Kiro IDE v2 manifest`).toBe("v1");
+      expect(document.version, `${file} must use the Kiro v2 manifest`).toBe("v1");
       const hooks = document.hooks;
       expect(Array.isArray(hooks), `${file} hooks must be an array`).toBe(true);
       for (const hook of hooks as unknown[]) {
@@ -179,7 +193,9 @@ describe("t308 hook registration matchers select captured fixture tool names", (
       }
     }
 
-    expect(new Set(registrations.map((registration) => registration.file)).size).toBe(5);
+    expect(
+      [...new Set(registrations.map((registration) => registration.file))].sort(),
+    ).toEqual(KIRO_MATCHER_MANIFESTS);
     for (const registration of registrations) {
       expect(
         selectedPatternNames(registration.matcher, KIRO_IDE_OBSERVED_TOOLS),
