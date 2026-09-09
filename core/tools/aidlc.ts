@@ -1573,6 +1573,23 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     const name = argv[1];
     if (!name) return nounError("hook", undefined);
     if (!isSafeName(name)) return nounError("hook", name);
+    // 2.8.0 projected the Cursor and Copilot adapters onto this one-argument
+    // route (`aidlc engine hook cursor-adapter <target>`), and that wiring is
+    // project-owned, so `aidlc update` alone cannot rewrite it. Resolve those
+    // two shipped spellings to the adapter action they meant.
+    if (name === "cursor-adapter" || name === "copilot-adapter") {
+      const harness: AdapterHarness = name === "cursor-adapter" ? "cursor" : "copilot";
+      const target = argv[2];
+      if (!target) return nounError("adapter", undefined);
+      if (!isSafeName(target)) return nounError("adapter", target);
+      return {
+        type: "adapter",
+        harness,
+        target,
+        extraArgs: argv.slice(3),
+        path: resolveHookPath(adapterFile(harness), harness),
+      };
+    }
     return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
   }
   if (route.routeOnly === "statusline") {

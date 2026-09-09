@@ -1094,6 +1094,15 @@ function rewriteNativeInvocations(
     "worktree",
     "workspace-sync",
   ].join("|");
+  // The authored subprocess adapters, each backed by an `aidlc engine adapter
+  // <harness>` dispatcher route. Only these project onto that route; any other
+  // hook file keeps the generic one-argument `engine hook <name>` rewrite.
+  const adapterHookNames: Record<string, true> = {
+    "kiro-adapter": true,
+    "codex-adapter": true,
+    "cursor-adapter": true,
+    "copilot-adapter": true,
+  };
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;
   const toolPattern = new RegExp(
@@ -1117,7 +1126,7 @@ function rewriteNativeInvocations(
       "gi",
     );
     value = value.replace(escapedJsonHook, (_match, hook: string) => {
-      if (hook.endsWith("-adapter")) return trustedCommand(`adapter ${m.name}`);
+      if (adapterHookNames[hook]) return trustedCommand(`adapter ${m.name}`);
       return hook === "statusline"
         ? trustedCommand("statusline")
         : trustedCommand(`hook ${hook}`);
@@ -1153,7 +1162,7 @@ function rewriteNativeInvocations(
       (_match, delegate: string) => trustedCommand(delegate),
     );
     value = value.replace(hookPattern, (_match, hook: string) => {
-      if (hook.endsWith("-adapter")) return trustedCommand(`adapter ${m.name}`);
+      if (adapterHookNames[hook]) return trustedCommand(`adapter ${m.name}`);
       if (hook === "statusline") return trustedCommand("statusline");
       return trustedCommand(`hook ${hook}`);
     });
