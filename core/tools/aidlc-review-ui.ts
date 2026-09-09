@@ -44,7 +44,7 @@ import {
   validScopes,
 } from "./aidlc-lib.ts";
 import { inferScopeFromText } from "./aidlc-utility.ts";
-import { AcpError, acpBackendForHarness, resolveAcpLaunch, SESSION_EFFORT_LEVELS, splitPinned, vendorAcpDir, vendoredAcpBin, type SessionEffort } from "./aidlc-review-ui-acp.ts";
+import { AcpError, acpBackendForHarness, resolveAcpLaunch, SESSION_EFFORT_LEVELS, splitPinned, vendorAcpDir, vendoredAcpBin, type AcpLaunch, type SessionEffort } from "./aidlc-review-ui-acp.ts";
 import { RunBusyError, RunManager } from "./aidlc-review-ui-runs.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -1565,6 +1565,29 @@ async function modelsPolicyResponse(projectDir: string, request: Request, publis
   return json({ ok: true, scope, change, notes, models_policy: modelsPolicyView(projectDir) });
 }
 
+/**
+ * The personal default effort - what a run thinks at when Start pins nothing.
+ * Written into the harness's own settings by its profile (Claude:
+ * `.claude/settings.local.json` `effortLevel`); a backend whose settings the
+ * browser does not own answers 409 and the UI shows the source instead.
+ */
+async function defaultEffortResponse(projectDir: string, request: Request, launch: AcpLaunch | null, publishState: () => void): Promise<Response> {
+  if (!launch?.setDefaultEffort) throw new HttpError(409, "this harness keeps its default effort in a file the review UI does not write; change it there");
+  const body = (await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES)) as { level?: unknown } | null;
+  const level = body?.level ?? null;
+  if (level !== null && (typeof level !== "string" || !(SESSION_EFFORT_LEVELS as readonly string[]).includes(level))) {
+    throw new HttpError(400, `level must be null or one of ${SESSION_EFFORT_LEVELS.join(", ")}`);
+  }
+  let written: ReturnType<NonNullable<AcpLaunch["setDefaultEffort"]>>;
+  try {
+    written = launch.setDefaultEffort(projectDir, level as SessionEffort | null);
+  } catch (error) {
+    throw new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
+  publishState();
+  return json({ ok: true, default_effort: written });
+}
+
 interface AnswersLanded {
   stage: string;
   questionsFile: string;
@@ -1822,6 +1845,7 @@ async function serve(projectDir: string): Promise<void> {
             payload.runner_requirement = runs.available ? null : runnerRequirement;
             payload.runner_effort = runnerLaunch?.effort !== undefined;
             payload.runner_default_effort = runnerLaunch?.defaultEffort?.(projectDir) ?? null;
+            payload.runner_default_effort_editable = Boolean(runnerLaunch?.setDefaultEffort);
             // Agent effort is project policy, not a per-intent choice: show what
             // this project runs at and where to change it.
             try {
@@ -1852,6 +1876,7 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "DELETE" && url.pathname === "/api/intents") return withdrawIntentRequestResponse(projectDir, url, publishState);
           if (request.method === "POST" && url.pathname === "/api/spaces") return await createSpaceResponse(projectDir, request, publishState);
           if (request.method === "POST" && url.pathname === "/api/models-policy") return await modelsPolicyResponse(projectDir, request, publishState);
+          if (request.method === "POST" && url.pathname === "/api/default-effort") return await defaultEffortResponse(projectDir, request, runnerLaunch, publishState);
           if (request.method === "GET" && url.pathname === "/api/run") return runViewResponse(runs, url, stateContext(projectDir, selectionFromUrl(url)).intent, runnerRequirement);
           const runAction = /^\/api\/run\/(prompt|permission|question|cancel)$/.exec(url.pathname);
           if (request.method === "POST" && runAction) return await runActionResponse(runs, runAction[1], request);

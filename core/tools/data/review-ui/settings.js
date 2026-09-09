@@ -22,11 +22,7 @@ const PRESETS = [
   { id: "balanced", label: "Balanced", summary: "Reviewers medium · the shipped baseline" },
   { id: "minimal", label: "Minimal", summary: "Reviewers medium · writers low" },
 ];
-const GROUPS = [
-  { id: "deciding", label: "Deciding" },
-  { id: "reviewing", label: "Reviewing" },
-  { id: "writing-up", label: "Writing up" },
-];
+const SESSION_LEVELS = ["low", "medium", "high", "xhigh"];
 
 let root = null;
 let page = "models";
@@ -117,7 +113,16 @@ function modelsPage() {
 
     <div class="settings-block">
       <div class="settings-h">Default</div>
-      <div class="settings-row"><span class="l">Default effort<small>${fallback ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(fallback.source)}</code>) - what “inherit” means. Change it there${fallback.source.startsWith(".claude") ? " or with <code>/effort</code>" : ""}.` : "No settings file names an effort; the model's own default applies - what “inherit” means."}</small></span><span class="c"><b>${fallback ? escapeHtml(fallback.level) : "model default"}</b></span></div>
+      <div class="settings-row"><span class="l">Default effort<small>${fallback
+        ? `Your ${escapeHtml(harnessName(workflow))} setting (<code>${escapeHtml(fallback.source)}</code>) - what “inherit” means${fallback.source.startsWith(".claude") ? ", the same value <code>/effort</code> sets" : ""}.`
+        : "No settings file names an effort; the model's own default applies - what “inherit” means."}</small></span>
+        ${workflow.runner_default_effort_editable
+          ? `<select data-default-effort aria-label="Default effort">
+              <option value="" ${fallback ? "" : "selected"}>model default</option>
+              ${SESSION_LEVELS.map((level) => `<option value="${level}" ${fallback?.level === level ? "selected" : ""}>${level}</option>`).join("")}
+            </select>`
+          : `<span class="c"><b>${fallback ? escapeHtml(fallback.level) : "model default"}</b></span>`}
+      </div>
     </div>
 
     <div class="settings-block">
@@ -178,6 +183,21 @@ function bind() {
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
   for (const button of root.querySelectorAll("[data-scope]")) button.addEventListener("click", () => { scope = button.dataset.scope; render(); });
   for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change({ action: "preset", preset: button.dataset.preset }));
+  root.querySelector("[data-default-effort]")?.addEventListener("change", async (event) => {
+    if (busy) return;
+    busy = true;
+    render();
+    try {
+      await api.post("/api/default-effort", { level: event.target.value || null });
+      setNotice("Default effort updated in your harness settings; runs started from now on inherit it.", "info");
+      store.emit("wants-refresh");
+    } catch (error) {
+      setNotice(`Could not change the default effort: ${error.message}`, "error");
+    } finally {
+      busy = false;
+      render();
+    }
+  });
   for (const select of root.querySelectorAll("[data-group]")) select.addEventListener("change", () => {
     if (select.value) change({ action: "group", group: select.dataset.group, effort: select.value });
   });

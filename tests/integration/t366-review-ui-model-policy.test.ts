@@ -9,11 +9,12 @@
 // refused with 400 and write nothing; an unauthenticated call is 401.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serverInfoPath, type ServerInfo } from "../../core/tools/aidlc-review-ui-shared.ts";
 import type { ModelsPolicyView } from "../../core/tools/aidlc-review-ui-workflow.ts";
+import { writeClaudeDefaultSessionEffort } from "../../core/tools/aidlc-review-ui-acp.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const DAEMON = join(ROOT, "core", "tools", "aidlc-review-ui.ts");
@@ -149,6 +150,25 @@ describe("t366 review UI model policy settings", () => {
 
     const recorded = JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8")) as { models: Record<string, unknown> };
     expect(recorded.models).toMatchObject({ preset: "thorough", groups: { "writing-up": { effort: "low" } }, agents: { architect: { effort: "xhigh" } } });
+  }, 30_000);
+
+  test("the personal default effort is written into the harness's own settings, keeping every other key", async () => {
+    // The runner is off in this daemon (no launch), so the write is refused: 409, nothing created.
+    const refused = await api("POST", "/api/default-effort", { level: "high" });
+    expect(refused.status).toBe(409);
+    expect(existsSync(join(project, ".claude", "settings.local.json"))).toBe(false);
+
+    // The Claude profile's writer itself: merge one key into settings.local.json atomically.
+    const local = join(project, ".claude", "settings.local.json");
+    writeFileSync(local, `${JSON.stringify({ permissions: { allow: ["Bash(ls:*)"] }, effortLevel: "medium" }, null, 2)}\n`);
+    expect(writeClaudeDefaultSessionEffort(project, "xhigh")).toEqual({ level: "xhigh", source: ".claude/settings.local.json" });
+    expect(JSON.parse(readFileSync(local, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] }, effortLevel: "xhigh" });
+    expect(writeClaudeDefaultSessionEffort(project, null)?.source ?? null).not.toBe(".claude/settings.local.json");
+    expect(JSON.parse(readFileSync(local, "utf-8"))).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
+    writeFileSync(local, "[]\n");
+    expect(() => writeClaudeDefaultSessionEffort(project, "low")).toThrow(/not a JSON object/);
+    expect(readFileSync(local, "utf-8")).toBe("[]\n");
+    rmSync(local);
   }, 30_000);
 
   test("the local layer overrides the committed one for this machine only, and reset clears just that layer", async () => {

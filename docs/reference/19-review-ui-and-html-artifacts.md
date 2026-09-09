@@ -182,7 +182,11 @@ and the file that says so - Claude's `effortLevel` from `.claude/settings.local.
 over `.claude/settings.json` over `~/.claude/settings.json` (`claudeDefaultSessionEffort`),
 Kiro's single `chat.modelDefaults` `output_config.effort` in `.kiro/settings/cli.json`
 (`kiroDefaultSessionEffort`); null when no file names one, and the composer's
-option reads *default (model default)*.
+option reads *default (model default)*. `runner_default_effort_editable` is true
+when the profile can also write it: `POST /api/default-effort {level|null}`
+runs the profile's `setDefaultEffort` - Claude's `writeClaudeDefaultSessionEffort`
+merges the one key into `.claude/settings.local.json` with an atomic rename and
+keeps every other key; a backend without a writer answers 409.
 
 **Agent effort is project policy.** The workflow payload carries
 `models_policy` (`modelsPolicyView` in `aidlc-review-ui-workflow.ts`): the
@@ -537,6 +541,7 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `POST /api/run/cancel` | Cookie/header | `{intent}` — `session/cancel` the live turn (pending inputs resolve cancelled); an idle run is closed |
 | `DELETE /api/intents?id=` | Cookie/header | Withdraws a pending request; 404 when none |
 | `POST /api/spaces` | Cookie/header | Body `{name}` (lowercase letters, digits, dashes). Runs the same `space-create` move as the terminal; 409 when it exists |
+| `POST /api/default-effort` | Cookie/header | Body `{level: low\|medium\|high\|xhigh\|null}`. Writes the harness's personal default effort through the runner profile (Claude: `effortLevel` in `.claude/settings.local.json`); 400 for an unknown level, 409 when the backend has no writer or the file is not a JSON object |
 | `POST /api/models-policy` | Cookie/header | Body `{scope: project\|local, action: preset\|group\|agent\|reset, preset?, group?, effort?, agent?, model?}`. Runs `aidlc config models` with the matching flags and `--yes`; 400 for an unknown scope, preset, group, effort, agent name, or model id (nothing written); returns `{ok, scope, change, notes, models_policy}` with the refreshed view |
 | `POST /api/decision` | Cookie/header | Active intent only. Exact body `{stage,unit,revision,decision:"approve"|"request-changes",notes?}`; validate exact current target and `awaiting-approval`, write `decision-NNN.json`, append browser `HUMAN_TURN`, return `{file}`. Stale or closed gates return 409 |
 | `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after watched record changes |

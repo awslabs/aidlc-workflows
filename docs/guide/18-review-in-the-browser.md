@@ -312,8 +312,10 @@ the run will use.
 ### Settings
 
 The cog at the bottom of the left rail opens Settings. **Models & effort** reads
-top to bottom: the **default effort** (your own harness setting — what *inherit*
-means; change it there or with `/effort`), the **preset**, then each **group**
+top to bottom: the **default effort** — your own harness setting, what *inherit*
+means; on Claude the browser edits it in place (`effortLevel` in
+`.claude/settings.local.json`, the same value `/effort` sets), elsewhere it names
+the file — the **preset**, then each **group**
 of agents — the select names what applies without a dial of its own (*Inherit
 from default*, *Preset thorough (xhigh)*, *Shipped default (medium)*) or the
 level you pin — and the **exceptions** — one agent pinned to its

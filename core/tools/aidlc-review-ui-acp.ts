@@ -25,7 +25,7 @@
 // adding one is a profile row, not a branch elsewhere.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -86,6 +86,39 @@ export function claudeDefaultSessionEffort(projectDir: string, home: string = ho
 }
 
 /**
+ * Set (or, with null, remove) Claude's personal default effort: the `effortLevel`
+ * key of `.claude/settings.local.json` - the file the harness itself reads first,
+ * so a terminal `/effort` and this agree. Every other key is kept as it was;
+ * the write is a single atomic rename, because Claude Code writes this file too
+ * (permission grants). Throws when the file exists but is not a JSON object.
+ */
+export function writeClaudeDefaultSessionEffort(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null {
+  const path = join(projectDir, ".claude", "settings.local.json");
+  let settings: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(".claude/settings.local.json is not a JSON object");
+    settings = parsed as Record<string, unknown>;
+  }
+  if (level === null) delete settings.effortLevel;
+  else settings.effortLevel = level;
+  const tmp = `${path}.${process.pid}.tmp`;
+  const fd = openSync(tmp, "wx");
+  try {
+    writeFileSync(fd, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(tmp, path);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* the rename failed; nothing of ours to keep */ }
+    throw error;
+  }
+  return claudeDefaultSessionEffort(projectDir);
+}
+
+/**
  * Kiro's session effort when `--effort` is not passed: the `output_config.effort`
  * of `chat.modelDefaults` in the project's `.kiro/settings/cli.json`, when the
  * defaults name exactly one model (the shipped file does). Null otherwise.
@@ -112,6 +145,8 @@ export interface AcpLaunch {
   effort?: EffortControl;
   /** What a session runs at when Start pins nothing, or null when the harness's own model default applies. */
   defaultEffort?(projectDir: string): DefaultSessionEffort | null;
+  /** Change that default in the harness's own settings, when the file's shape is ours to write. */
+  setDefaultEffort?(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null;
 }
 
 export interface AcpBackendProfile {
@@ -133,6 +168,8 @@ export interface AcpBackendProfile {
   effort?: EffortControl;
   /** The session effort when nothing is pinned, read from the harness's settings; null = its model default. */
   defaultEffort?(projectDir: string): DefaultSessionEffort | null;
+  /** Writes that default into the harness's settings; absent when the browser does not own that file's shape. */
+  setDefaultEffort?(projectDir: string, level: SessionEffort | null): DefaultSessionEffort | null;
 }
 
 /** `<toolsDir>/vendor/acp`: where `vendor-agent` installs the pinned adapter. */
@@ -169,6 +206,7 @@ export const ACP_BACKENDS: readonly AcpBackendProfile[] = [
     // live: values default/low/medium/high/xhigh/max).
     effort: { kind: "config", configId: "effort" },
     defaultEffort: (projectDir) => claudeDefaultSessionEffort(projectDir),
+    setDefaultEffort: (projectDir, level) => writeClaudeDefaultSessionEffort(projectDir, level),
     // Zed's adapter over the Agent SDK. The SDK needs the local `claude`
     // executable and does not search PATH for it, so it travels in the env.
     resolve(env, which, vendored) {
@@ -265,12 +303,12 @@ export function resolveAcpLaunch(harness: string | null, env: NodeJS.ProcessEnv 
   if (override) {
     const extra: Record<string, string> = {};
     if (profile.backend === "claude" && env.CLAUDE_CODE_EXECUTABLE) extra.CLAUDE_CODE_EXECUTABLE = env.CLAUDE_CODE_EXECUTABLE;
-    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort };
+    return { backend: profile.backend, command: override.split(/\s+/), env: extra, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort, setDefaultEffort: profile.setDefaultEffort };
   }
   // A vendored adapter (vendor-agent) beats PATH and bunx: it is the pinned
   // copy an offline host carries.
   const resolved = profile.resolve(env, which, vendoredAcpBin(toolsDir, profile));
-  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort } : null;
+  return resolved ? { backend: profile.backend, ...resolved, startPrompt: profile.startPrompt, effort: profile.effort, defaultEffort: profile.defaultEffort, setDefaultEffort: profile.setDefaultEffort } : null;
 }
 
 /** The launch with a session effort applied where the backend takes it as a flag. */
