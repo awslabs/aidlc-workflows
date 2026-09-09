@@ -14,7 +14,7 @@
 import { api } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./diff.js";
-import { setNotice, store } from "./store.js";
+import { store } from "./store.js";
 
 const PAGES = [
   { id: "models", label: "Models & Effort" },
@@ -43,6 +43,22 @@ let page = "models";
 // project layer. A group's effort under Advanced is yours: the personal `local`
 // layer, this machine only, over the team's value.
 let busy = false;
+// Feedback stays inside the modal, next to the control that changed: a brief
+// "Saved" that fades, or an error that stays until the next change. The app's
+// notice banner sits behind the modal, where it would go unseen.
+let flash = null; // { key, text, kind: "saved" | "error" } | null
+let flashTimer = null;
+function setFlash(key, text, kind) {
+  clearTimeout(flashTimer);
+  flash = { key, text, kind };
+  if (kind === "saved") flashTimer = setTimeout(() => { flash = null; render(); }, 2500);
+}
+function flashFor(key) {
+  if (!flash || flash.key !== key) return "";
+  return flash.kind === "saved"
+    ? `<span class="settings-flash saved">${icon("checkmark", { size: 12 })}${escapeHtml(flash.text)}</span>`
+    : `<span class="settings-flash error">${escapeHtml(flash.text)}</span>`;
+}
 // Advanced - your own effort per group - is the bottom of the Models &
 // effort page, folded until asked for; it opens by itself when you override the
 // team on this machine, so that is never hidden.
@@ -89,6 +105,8 @@ async function loadCatalogue(refresh = false) {
 }
 
 export function close() {
+  clearTimeout(flashTimer);
+  flash = null;
   root.hidden = true;
   root.innerHTML = "";
 }
@@ -119,7 +137,7 @@ function modelsPage() {
 
     <div class="settings-block">
       ${modelRow(workflow)}
-      <div class="settings-row"><span class="l">Default effort<small>How hard agents think, unless set below</small></span>
+      <div class="settings-row"><span class="l">Default effort<small>How hard agents think, unless set below</small></span>${flashFor("effort")}
         ${workflow.runner_default_effort_editable
           ? `<select data-default-effort aria-label="Default effort" title="${escapeHtml(fallback ? `Your ${harnessName(workflow)} setting - ${fallback.source}` : `No ${harnessName(workflow)} setting names an effort; the model's own default applies`)}">
               <option value="" ${local ? "" : "selected"}>${escapeHtml(fallback && !local ? `Default (${fallback.level})` : "Default")}</option>
@@ -133,7 +151,7 @@ function modelsPage() {
       <div class="settings-h">Preset</div>
       ${policy ? "" : `<p class="settings-note">No installed harness this daemon can read a policy for.</p>`}
       <div class="settings-presets">${PRESETS.map((entry) => `<button type="button" role="radio" aria-checked="${teamPreset(policy) === entry.id}" data-preset="${entry.id}" ${policy ? "" : "disabled"}><b>${entry.label}${!policy?.team?.preset && entry.id === SHIPPED_PRESET ? ` <span class="settings-tag">default</span>` : ""}</b><small>${escapeHtml(entry.summary)}</small></button>`).join("")}</div>
-      <p class="settings-note">How AI-DLC balances quality, speed, and cost. Saved in the repo for everyone.</p>
+      ${flash?.key === "preset" ? `<p class="settings-note">${flashFor("preset")}</p>` : `<p class="settings-note">How AI-DLC balances quality, speed, and cost. Saved in the repo for everyone.</p>`}
     </div>
 
     <div class="settings-block settings-advanced">
@@ -158,6 +176,7 @@ function advancedSection(workflow) {
     const teamLabel = `${from} · ${team === INHERIT ? "default" : team}`;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
+      ${flashFor(`group:${group.id}`)}
       ${mine ? `<span class="settings-overridden" role="img" aria-label="Overridden">${icon("errorCircle", { size: 15 })}</span>` : ""}
       <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort">
         <option value="" ${mine ? "" : "selected"}>${escapeHtml(teamLabel)}</option>
@@ -237,7 +256,7 @@ function modelRow(workflow) {
       ${local && !models.some((model) => model.id === current.value) ? `<option value="${escapeHtml(current.value)}" selected>${escapeHtml(current.value)}</option>` : ""}
     </select>`;
   }
-  return `<div class="settings-row"><span class="l">Default model<small>The model all agents use</small></span>${control}</div>`;
+  return `<div class="settings-row"><span class="l">Default model<small>The model all agents use</small></span>${flashFor("model")}${control}</div>`;
 }
 
 function harnessName(workflow) {
@@ -262,7 +281,7 @@ function aboutPage() {
 function bind() {
   root.querySelector("[data-close]")?.addEventListener("click", close);
   for (const button of root.querySelectorAll("[data-page]")) button.addEventListener("click", () => { page = button.dataset.page; render(); });
-  for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change("project", { action: "preset", preset: button.dataset.preset }));
+  for (const button of root.querySelectorAll("[data-preset]")) button.addEventListener("click", () => change("preset", "project", { action: "preset", preset: button.dataset.preset }));
   root.querySelector("[data-models-retry]")?.addEventListener("click", () => loadCatalogue(true));
   root.querySelector("[data-advanced]")?.addEventListener("click", () => { advancedOpen = !advancedOpen; render(); });
   root.querySelector("[data-default-model]")?.addEventListener("change", async (event) => {
@@ -272,10 +291,10 @@ function bind() {
     render();
     try {
       await api.post("/api/default-model", { model: model || null });
-      setNotice(model ? "Model saved. Your next runs use it." : "Back to your default model.", "info");
+      setFlash("model", "Saved", "saved");
       store.emit("wants-refresh");
     } catch (error) {
-      setNotice(`Could not change the default model: ${error.message}`, "error");
+      setFlash("model", error.message, "error");
     } finally {
       busy = false;
       render();
@@ -287,10 +306,10 @@ function bind() {
     render();
     try {
       await api.post("/api/default-effort", { level: event.target.value || null });
-      setNotice("Default effort saved. Your next runs use it.", "info");
+      setFlash("effort", "Saved", "saved");
       store.emit("wants-refresh");
     } catch (error) {
-      setNotice(`Could not change the default effort: ${error.message}`, "error");
+      setFlash("effort", error.message, "error");
     } finally {
       busy = false;
       render();
@@ -298,22 +317,20 @@ function bind() {
   });
   for (const select of root.querySelectorAll("[data-group]")) select.addEventListener("change", () => {
     const group = select.dataset.group;
-    change("local", select.value ? { action: "group", group, effort: select.value } : { action: "clear-group", group });
+    change(`group:${group}`, "local", select.value ? { action: "group", group, effort: select.value } : { action: "clear-group", group });
   });
 }
 
-async function change(scope, body) {
+async function change(key, scope, body) {
   if (busy) return;
   busy = true;
   render();
   try {
     await api.post("/api/models-policy", { scope, ...body });
-    setNotice(scope === "local"
-      ? "Saved on this computer. Your next runs use it."
-      : "Preset saved. Commit the settings changes to share it.", "info");
+    setFlash(key, scope === "project" ? "Saved. Commit the settings changes to share them." : "Saved", "saved");
     store.emit("wants-refresh");
   } catch (error) {
-    setNotice(`Could not change the policy: ${error.message}`, "error");
+    setFlash(key, error.message, "error");
   } finally {
     busy = false;
     render();

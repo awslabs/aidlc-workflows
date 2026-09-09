@@ -342,7 +342,10 @@ rebuilds your personal layer — reset, then re-record what else it held, each
 step validated with `--dry-run` first — which is why that move exists for your
 own layer only, never the committed one. Each row carries one short plain-English
 caption (*The model all agents use*); which file a control writes, and where a
-value comes from, is in its tooltip.
+value comes from, is in its tooltip. Feedback stays in the dialog: a brief
+*Saved* beside the control that changed (after a preset, *Saved. Commit the
+settings changes to share them.*), or the error in its place until the next
+change.
 **About** lists this review UI's version, address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the
