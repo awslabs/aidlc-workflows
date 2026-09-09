@@ -21,9 +21,9 @@
 //   clear   → SESSION_STARTED
 //   compact → no emission (PreCompact already fired)
 //
-// After the session event, a bounded best-effort commit-provenance sweep
-// (runAnchor in reconcile mode) anchors recent manual commits that landed
-// reviewed claims. See docs/reference/20-commit-provenance.md.
+// After the session event, an OPT-IN bounded best-effort commit-provenance sweep
+// (runAnchor in reconcile mode, AIDLC_SESSION_ANCHOR=1) anchors recent manual
+// commits that landed reviewed claims. See docs/reference/20-commit-provenance.md.
 //
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
@@ -226,19 +226,24 @@ if (eventType) {
   }
 }
 
-// --- Commit-provenance anchor sweep -------------------------------------------
+// --- Commit-provenance anchor sweep (OPT-IN) ----------------------------------
 //
-// Humans commit manually, mostly between sessions, so commit-time capture can
-// never be the anchoring path — the next session start is. Sweep a bounded
-// first-parent window of recent history and append SOURCE_COMMITTED anchors
-// for commits that land reviewed claims; dedupe against prior anchors and
+// OFF by default, and deliberately so. Anchors are enrichment: `attest resolve`
+// recomputes attribution from committed receipts + evidence and never reads a
+// SOURCE_COMMITTED row, so nothing in the resolver degrades when the sweep never
+// runs. That makes an implicit audit-record write on every session start pure
+// cost — startup work plus a mutation of the append-only trail that the user did
+// not ask for. Writing to the audit trail is an explicit act; `aidlc attest
+// anchor --reconcile` is that act.
+//
+// Set AIDLC_SESSION_ANCHOR=1 to opt in. Humans commit manually, mostly between
+// sessions, so a session start is the only automatic observation point that
+// exists; a team that wants the audit trail to name landed commits without
+// remembering a command can turn this on. Dedupe against prior anchors and
 // SWARM_SOURCE_MERGED receipts lives inside runAnchor, so re-running every
-// session is idempotent. Anchors are enrichment only — `attest resolve`
-// recomputes attribution from committed receipts + evidence and never reads
-// them — so a failed or skipped sweep self-heals on the next session start.
-// The eventType gate above keeps this off compact resumes and rebind probes.
-// See docs/reference/20-commit-provenance.md §6.
-if (eventType && process.env.AIDLC_SKIP_SESSION_ANCHOR !== "1") {
+// session is idempotent, and the eventType gate keeps it off compact resumes
+// and rebind probes. See docs/reference/20-commit-provenance.md §7.
+if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
   try {
     runAnchor(projectDir, { reconcile: true, maxCommits: 25 });
   } catch {

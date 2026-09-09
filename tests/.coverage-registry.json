@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 954,
+    "total": 957,
     "enumeratedByClass": {
-      "function": 647,
+      "function": 650,
       "audit": 96,
       "scope": 11,
       "stage": 33,
@@ -4290,6 +4290,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseAuditShardEvents",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseBoltDag",
       "minMechanism": "none",
       "coveredBy": [
@@ -5855,6 +5862,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceEvidenceRelPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewedSourceRef",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7200,6 +7214,13 @@
     {
       "unitClass": "function",
       "unitId": "function:unitSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitStageRecordRelPath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

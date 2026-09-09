@@ -9037,6 +9037,29 @@ export interface AuditShardEvent {
 // can preserve append order only within one shard; equal second-precision
 // timestamps across shards are causally unordered and must not be resolved by
 // filename position when authority or attempt freshness depends on the result.
+// Split ONE shard's bytes into events, preserving append position. Factored out
+// of readAuditShardEvents so a reader whose shard bytes do not come from the
+// working tree shares this parser rather than reimplementing the block grammar:
+// aidlc-attest.ts reads shards out of a git tree (`git cat-file`) to resolve a
+// commit against the record as that commit carried it. Two copies of the
+// `\n---\n` split and the Event/Timestamp filter would be free to drift, and a
+// drifted audit parser silently changes which receipt counts as newest.
+export function parseAuditShardEvents(
+  content: string,
+  shard: string,
+  shardIndex: number,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  for (let pos = 0; pos < blocks.length; pos++) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const timestamp = auditBlockField(blocks[pos], "Timestamp");
+    if (!event || !timestamp) continue;
+    rows.push({ block: blocks[pos], event, pos, shard, shardIndex, timestamp });
+  }
+  return rows;
+}
+
 export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
@@ -9065,20 +9088,7 @@ export function readAuditShardEvents(
       unreadableShards?.push(shards[shardIndex]);
       continue; // vanished or refused shard; growth during read is tolerated
     }
-    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
-    for (let pos = 0; pos < blocks.length; pos++) {
-      const event = auditBlockField(blocks[pos], "Event");
-      const timestamp = auditBlockField(blocks[pos], "Timestamp");
-      if (!event || !timestamp) continue;
-      rows.push({
-        block: blocks[pos],
-        event,
-        pos,
-        shard: shards[shardIndex],
-        shardIndex,
-        timestamp,
-      });
-    }
+    rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
   }
   return rows;
 }
@@ -17338,6 +17348,27 @@ export function sourceBaselineAuditFields(
   };
 }
 
+/** Record-relative, posix-separated location of a unit's stage record files. One
+ *  grammar for both readers: the filesystem readers join it onto a record dir,
+ *  and the git-tree reader in aidlc-attest.ts appends it to a tree path, so a
+ *  layout change cannot move one reader without moving the other. */
+export function unitStageRecordRelPath(
+  unit: string,
+  stageSlug: string,
+  fileName: string,
+): string {
+  return `construction/${unit}/${stageSlug}/${fileName}`;
+}
+
+/** Record-relative path of a unit's committed reviewed-listing evidence. */
+export function reviewedSourceEvidenceRelPath(
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return unitStageRecordRelPath(unit, stageSlug, `reviewed-source-${hash12}.tsv`);
+}
+
 /** Committed per-unit reviewed-listing evidence beside source-manifest.json. */
 export function reviewedSourceEvidencePath(
   recordDirPath: string,
@@ -17345,7 +17376,10 @@ export function reviewedSourceEvidencePath(
   stageSlug: string,
   hash12: string,
 ): string {
-  return join(recordDirPath, "construction", unit, stageSlug, `reviewed-source-${hash12}.tsv`);
+  return join(
+    recordDirPath,
+    ...reviewedSourceEvidenceRelPath(unit, stageSlug, hash12).split("/"),
+  );
 }
 
 /** Write a content-addressed unit listing snapshot including its manifest header. */

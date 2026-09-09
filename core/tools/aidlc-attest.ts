@@ -5,15 +5,40 @@
 //   resolve — READ-ONLY reverse lookup: which reviewed unit owns each changed
 //     path of a diff/commit, and does the committed content match what the
 //     reviewer approved? Attribution is a pure function of repository content:
-//     committed REVIEW_COMPLETED receipts (audit shards) carry a Unit Source
-//     Fingerprint that is the sha256 of the committed evidence file
-//     construction/<unit>/<stage>/reviewed-source-<hash12>.tsv (manifest
-//     header + claim-restricted path→OID listing). No commit hooks, no
-//     commit-message trailers, no pushed refs are consulted, so a bare CI
-//     clone resolves manual commits exactly as well as tool-made ones.
+//     REVIEW_COMPLETED receipts (audit shards) carry a Unit Source Fingerprint
+//     that is the sha256 of the evidence file
+//     construction/<unit>/<stage>/reviewed-source-<hash12>.tsv (manifest header
+//     + claim-restricted path→OID listing). No commit hooks, no commit-message
+//     trailers, no pushed refs are consulted, so a bare clone resolves manual
+//     commits exactly as well as tool-made ones.
 //   anchor — append SOURCE_COMMITTED audit events recording that a commit was
 //     observed to land reviewed claims. Enrichment ONLY: resolve never reads
 //     anchors, so a commit that was never anchored still resolves.
+//
+// WHAT THIS PROVES, AND WHAT IT DOES NOT. resolve answers an INTEGRITY question:
+// do the bytes that landed equal the bytes some receipt in the record approved?
+// It does NOT answer an AUTHENTICITY question: was that receipt produced by a
+// review that actually happened? Receipts, manifests, and evidence are ordinary
+// files in the repository, so anyone who can write to the repository can write a
+// receipt — including in the same change set as the source it approves. A report
+// is therefore informational unless the caller supplies a trust anchor that the
+// author of the change cannot forge. Two are available here:
+//   --record-ref <ref>       read the record from a ref the verifier controls
+//                            (a protected branch, a records-only ref) instead of
+//                            from the commit under test
+//   --require-trust signed   demand that the relied-upon evidence exists and
+//                            every file of it arrived in a signed commit
+// `trust` in the report always states which anchor was actually in force, so a
+// report can never look stronger than the evidence behind it. The full threat
+// model — assets, adversaries, and the guarantee boundary — is
+// docs/reference/20-commit-provenance.md §2.
+//
+// DETERMINISM. The record is read from a git tree, not from the checkout: by
+// default the queried head's tree, or `--record-ref`'s. So the same (base, head)
+// pair resolves identically in every clone and at every later date, which is the
+// property that makes a stored report meaningful. The working tree is read only
+// when the record provably cannot live in the queried repository (a multi-root
+// workspace whose roof is not the repo), and `trust.recordSource` says so.
 //
 // Path statuses:
 //   verified      reviewed state equals head state for the path (same entry,
@@ -22,8 +47,8 @@
 //   drifted       covered by a reviewed claim but head differs from reviewed
 //   unattested    no unit's claims cover the path
 //   unverifiable  covered, but the receipt or its evidence cannot bind content
-//                 (unbindable fingerprint, missing or hash-mismatched bytes, or
-//                 evidence that exists only in the gitignored local snapshot)
+//                 (unbindable fingerprint, or missing/hash-mismatched bytes in
+//                 the record source being read)
 //   indeterminate covered, but two same-timestamp READY receipts make "newest"
 //                 causally unordered — in different shards, or in different
 //                 records claiming the same path (fail closed both ways)
@@ -31,9 +56,8 @@
 //                 the harness shell dirs of a workspace-shell-carrying repo)
 //
 // Report `warnings` name conditions that can distort a report without changing
-// any single path's classification — repository byte-form conversion, and an
-// intent record whose working-tree state differs from the queried commit (the
-// record is read from the working tree, not from head's tree).
+// any single path's classification — today repository byte-form conversion, and
+// a fallback to working-tree records.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -45,23 +69,27 @@ import {
   auditBlockField,
   errorMessage,
   gitCommitSourceListing,
-  intentsDir,
+  type IntentRegistryEntry,
   isGitRepoDir,
   listIntents,
   listSpaces,
   normalizeManifestSourcePath,
+  parseAuditShardEvents,
   parseUnitSourceListing,
   readAuditShardEvents,
   recordDir,
+  recordDirMatches,
   repoDir,
   resolveProjectDir,
-  reviewedSourceEvidencePath,
+  reviewedSourceEvidenceRelPath,
   type SourceClaimModel,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   sourcePathIsExcluded,
   sourcePathKey,
+  spacesRoot,
   UNBINDABLE_FINGERPRINT,
+  unitStageRecordRelPath,
   type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
 
@@ -83,6 +111,68 @@ export const FAILABLE_STATUSES = [
   "indeterminate",
 ] as const;
 
+/** How strong the report's basis is, weakest first. Each level implies the one
+ *  before it, so `--require-trust <level>` is a single comparison.
+ *
+ *  informational  the record was read from the working tree: the report cannot
+ *                 be reproduced by anyone else, so it is a local diagnostic
+ *  reproducible   the record was read from a git tree, so any clone of that tree
+ *                 computes this exact report — but the tree may be the commit
+ *                 under test, which means the change may have authored the very
+ *                 receipts it is judged against (`trust.selfAttested`)
+ *  independent    reproducible, and the queried range does not touch the record:
+ *                 the receipts existed before the change under test
+ *  signed         independent, and at least one relied-upon evidence file exists
+ *                 with every one of them arriving in a commit git reports a good
+ *                 signature for
+ *
+ *  Note what the ladder deliberately does NOT claim: no level proves a human
+ *  reviewed anything. `signed` proves a key held by someone authorised to push
+ *  vouched for the commit that carried the receipt; who that key belongs to is
+ *  the verifier's keyring's business, not this tool's. */
+export const TRUST_LEVELS = [
+  "informational",
+  "reproducible",
+  "independent",
+  "signed",
+] as const;
+
+export type TrustLevel = (typeof TRUST_LEVELS)[number];
+
+/** Git's `%G?` codes accepted as a good signature. `U` is a valid signature from
+ *  a key the local keyring does not trust — accepted because a verifier that has
+ *  not imported the reviewers' keys would otherwise be unable to reach `signed`
+ *  at all, and key trust is a policy the keyring owns. Configure the keyring to
+ *  make the distinction meaningful; `trust.signatures` reports the raw codes. */
+const GOOD_SIGNATURE_CODES = new Set(["G", "U"]);
+
+export interface TrustReport {
+  /** Achieved level — the strongest one this report actually satisfies. */
+  level: TrustLevel;
+  /** `--require-trust`, or null when the caller demanded nothing. */
+  required: TrustLevel | null;
+  /** False only when `required` outranks `level`; drives exit 3 alongside `--fail-on`. */
+  satisfied: boolean;
+  /** Where receipts, manifests, and evidence were read from. */
+  recordSource: "commit" | "worktree";
+  /** The tree-ish they were read from, and its resolved commit; null for worktree. */
+  recordRef: string | null;
+  recordCommit: string | null;
+  /** True when `--record-ref` named the record source, i.e. the verifier chose it
+   *  rather than inheriting the commit under test. */
+  recordPinned: boolean;
+  /** Record paths the queried range itself adds or modifies. Non-empty means the
+   *  change under test carries its own receipts — the normal shape of an AI-DLC
+   *  change, and precisely why `independent` needs a separate record source. */
+  recordPathsChangedInRange: string[];
+  /** True when the receipts this report relies on could have been written by the
+   *  change it is judging — the honest reason a self-contained report can never
+   *  rise above `reproducible`. */
+  selfAttested: boolean;
+  /** `%G?` per relied-upon evidence file, keyed by the commit that last wrote it. */
+  signatures: Array<{ unit: string; commit: string | null; code: string }>;
+}
+
 export interface PathReport {
   path: string;
   status: PathStatus;
@@ -101,8 +191,15 @@ export interface UnitReport {
   receiptTimestamp: string;
   reviewer: string | null;
   fingerprint: string;
+  /** Where the evidence was read: repository-relative in commit-tree mode,
+   *  project-relative in working-tree mode (`trust.recordSource` disambiguates). */
   evidence: string | null;
   evidenceSource: "committed" | "local" | null;
+  /** Commit that last wrote this unit's evidence file at or before the record
+   *  source, and git's `%G?` verdict for it. Both null in working-tree mode (no
+   *  commit to name) or when the unit binds no committed evidence. */
+  evidenceCommit: string | null;
+  evidenceSignature: string | null;
   claimsSource: "manifest" | "evidence-only" | "manifest-unverified" | null;
   bypasses: string[];
   problem?: string;
@@ -121,9 +218,8 @@ export interface ResolveReport {
   units: UnitReport[];
   summary: Record<PathStatus, number>;
   failOn: string[];
-  /** Where receipts, manifests, and evidence were read from. Today always the
-   *  working tree — see `warnings` when that differs from the queried commit. */
-  recordSource: "worktree";
+  /** What the report's basis actually was — read this before believing it. */
+  trust: TrustReport;
   /** Conditions that can distort the whole report; never fail the gate by themselves. */
   warnings: string[];
 }
@@ -155,6 +251,9 @@ export interface ResolveOptions {
   diff?: string;
   commit?: string;
   failOn?: string[];
+  /** Tree-ish to read the intent record from. Default: the queried head. */
+  recordRef?: string;
+  requireTrust?: string;
 }
 
 export interface AnchorOptions {
@@ -228,6 +327,250 @@ function changedPaths(dir: string, base: string | null, head: string): string[] 
   return [...new Set(diffed.stdout.split("\0").filter((path) => path.length > 0))];
 }
 
+/** The commit that last wrote `path` at or before `ref`, with git's `%G?` code
+ *  for it. `code` is `"-"` when no commit touches the path at all. */
+function lastWriterSignature(
+  dir: string,
+  ref: string,
+  path: string,
+): { commit: string | null; code: string } {
+  const logged = git(dir, ["log", "-1", "--format=%H%x00%G?", ref, "--", path]);
+  const row = logged.stdout.trim();
+  if (logged.status !== 0 || row.length === 0) return { commit: null, code: "-" };
+  const [commit, code] = row.split("\0");
+  return {
+    commit: /^[0-9a-f]{40,64}$/.test(commit ?? "") ? commit : null,
+    code: code === undefined || code.length === 0 ? "-" : code,
+  };
+}
+
+// --- Reading the intent record: from a git tree, or from the working tree ------
+//
+// Attribution must be a function of committed content alone, so the record has to
+// be read the same way the source side is: out of a tree object. `RecordView` is
+// the seam — one interface, two backings — so buildOwnershipIndex cannot
+// accidentally reach the filesystem when it was asked for a commit.
+
+interface RecordIntent {
+  dirName: string;
+  repos: string[];
+}
+
+interface RecordView {
+  kind: "commit" | "worktree";
+  /** The tree-ish read, and its commit; both null for the working tree. */
+  ref: string | null;
+  commit: string | null;
+  spaces(): string[];
+  intents(space: string): RecordIntent[];
+  /** One intent's audit events across all shards. Both backings share
+   *  parseAuditShardEvents, so `pos`/`shardIndex` — which decide which receipt is
+   *  newest on a timestamp tie — carry the same meaning either way. */
+  auditEvents(space: string, dirName: string): AuditShardEvent[];
+  /** Bytes at a record-relative path, or null when the record has no such file. */
+  readRecordFile(space: string, dirName: string, relPath: string): Buffer | null;
+  /** The commit that last wrote a record file at this view's ref, with git's
+   *  `%G?` code for it. Null when the view has no commit history to consult
+   *  (the working tree), which caps trust at `informational`. */
+  lastWriter(
+    space: string,
+    dirName: string,
+    relPath: string,
+  ): { commit: string | null; code: string } | null;
+  /** Human label for the report's `evidence` field and problem strings. */
+  label(space: string, dirName: string, relPath: string): string;
+}
+
+/** Read many blobs in one `git cat-file --batch` pass rather than one spawn per
+ *  file: a record with a dozen intents has hundreds of candidate blobs, and on
+ *  Windows the spawn cost dominates everything else this tool does. */
+function readBlobs(dir: string, oids: readonly string[]): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  const unique = [...new Set(oids)];
+  if (unique.length === 0) return out;
+  const batch = spawnSync("git", ["-C", dir, "cat-file", "--batch"], {
+    input: `${unique.join("\n")}\n`,
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  if (batch.status !== 0 || !Buffer.isBuffer(batch.stdout)) return out;
+  const stdout: Buffer = batch.stdout;
+  let at = 0;
+  while (at < stdout.length) {
+    const eol = stdout.indexOf(0x0a, at);
+    if (eol === -1) break;
+    const header = stdout.subarray(at, eol).toString("utf-8");
+    at = eol + 1;
+    const parts = header.split(" ");
+    // `<oid> missing` / `<oid> ambiguous` carry no payload to skip past.
+    if (parts.length < 3) continue;
+    const size = Number(parts[2]);
+    if (!Number.isSafeInteger(size) || size < 0) break;
+    out.set(parts[0], stdout.subarray(at, at + size));
+    at += size + 1; // git writes a trailing newline after the payload
+  }
+  return out;
+}
+
+/** The record as `sha` carries it. Every path/oid comes from one `ls-tree`, so
+ *  the view is a snapshot: nothing it returns can change under a concurrent
+ *  checkout, and two clones of `sha` build identical ownership indexes. */
+function treeRecordView(
+  repoQueryDir: string,
+  spacesPrefix: string,
+  ref: string,
+  sha: string,
+): RecordView {
+  const listed = git(repoQueryDir, [
+    "ls-tree",
+    "-r",
+    "-z",
+    "--full-tree",
+    sha,
+    "--",
+    `${spacesPrefix}/`,
+  ]);
+  if (listed.status !== 0) {
+    throw new Error(`cannot list the intent record under ${spacesPrefix}/ at ${ref} (${sha})`);
+  }
+  // `<mode> SP <type> SP <oid> TAB <path>` per NUL-terminated record. Only blobs
+  // can be record files; a gitlink or a nested tree entry is not readable here.
+  const blobs = new Map<string, string>();
+  for (const entry of listed.stdout.split("\0")) {
+    if (entry.length === 0) continue;
+    const tab = entry.indexOf("\t");
+    if (tab === -1) continue;
+    const [, type, oid] = entry.slice(0, tab).split(" ");
+    if (type !== "blob" || oid === undefined) continue;
+    blobs.set(entry.slice(tab + 1), oid);
+  }
+  const contents = readBlobs(repoQueryDir, [...blobs.values()]);
+  const read = (repoPath: string): Buffer | null => {
+    const oid = blobs.get(repoPath);
+    return oid === undefined ? null : contents.get(oid) ?? null;
+  };
+  const intentsPrefix = (space: string) => `${spacesPrefix}/${space}/intents`;
+  const recordPath = (space: string, dirName: string, relPath: string) =>
+    `${intentsPrefix(space)}/${dirName}/${relPath}`;
+
+  return {
+    kind: "commit",
+    ref,
+    commit: sha,
+    spaces() {
+      const names = new Set<string>();
+      for (const path of blobs.keys()) {
+        const tail = path.slice(spacesPrefix.length + 1);
+        const slash = tail.indexOf("/");
+        if (slash > 0) names.add(tail.slice(0, slash));
+      }
+      return [...names].sort();
+    },
+    intents(space) {
+      const prefix = `${intentsPrefix(space)}/`;
+      const dirs = new Set<string>();
+      for (const path of blobs.keys()) {
+        if (!path.startsWith(prefix)) continue;
+        const tail = path.slice(prefix.length);
+        const slash = tail.indexOf("/");
+        // A file directly under intents/ (intents.json) is not a record dir.
+        if (slash > 0) dirs.add(tail.slice(0, slash));
+      }
+      // Same registry→dir join rule the working-tree reader uses (listIntents),
+      // so `repos` resolves identically on both backings; a dir with no registry
+      // row is an orphan and carries no recorded repos.
+      const registryBytes = read(`${intentsPrefix(space)}/intents.json`);
+      let registry: IntentRegistryEntry[] = [];
+      if (registryBytes !== null) {
+        try {
+          const parsed: unknown = JSON.parse(registryBytes.toString("utf-8"));
+          if (Array.isArray(parsed)) registry = parsed as IntentRegistryEntry[];
+        } catch {
+          registry = [];
+        }
+      }
+      return [...dirs].sort().map((dirName) => ({
+        dirName,
+        repos: registry.find((entry) => recordDirMatches(entry, dirName))?.repos ?? [],
+      }));
+    },
+    auditEvents(space, dirName) {
+      const prefix = `${recordPath(space, dirName, "audit")}/`;
+      const names: string[] = [];
+      for (const path of blobs.keys()) {
+        if (!path.startsWith(prefix)) continue;
+        const name = path.slice(prefix.length);
+        if (!name.includes("/") && name.endsWith(".md")) names.push(name);
+      }
+      // Basename ascending, matching auditShards() — shardIndex must mean the
+      // same thing here as it does for the filesystem reader.
+      names.sort();
+      const rows: AuditShardEvent[] = [];
+      for (let shardIndex = 0; shardIndex < names.length; shardIndex++) {
+        const content = read(`${prefix}${names[shardIndex]}`)?.toString("utf-8") ?? "";
+        rows.push(...parseAuditShardEvents(content, `${prefix}${names[shardIndex]}`, shardIndex));
+      }
+      return rows;
+    },
+    readRecordFile(space, dirName, relPath) {
+      return read(recordPath(space, dirName, relPath));
+    },
+    lastWriter(space, dirName, relPath) {
+      return lastWriterSignature(repoQueryDir, sha, recordPath(space, dirName, relPath));
+    },
+    label(space, dirName, relPath) {
+      return recordPath(space, dirName, relPath);
+    },
+  };
+}
+
+/** The record as this checkout holds it. Used only when the record provably
+ *  cannot be read from the queried repo's tree, and by `anchor`, which appends to
+ *  this very record and so has nothing to gain from a frozen snapshot. */
+function worktreeRecordView(projectDir: string): RecordView {
+  return {
+    kind: "worktree",
+    ref: null,
+    commit: null,
+    spaces() {
+      return listSpaces(projectDir).map((space) => space.name);
+    },
+    intents(space) {
+      const out: RecordIntent[] = [];
+      for (const info of listIntents(projectDir, space)) {
+        if (info.dirName === null) continue;
+        out.push({ dirName: info.dirName, repos: info.repos ?? [] });
+      }
+      return out;
+    },
+    auditEvents(space, dirName) {
+      // Delegate to the shared reader so shard ordering, symlink refusal, and
+      // append-only read semantics stay in exactly one place.
+      return readAuditShardEvents(projectDir, dirName, space);
+    },
+    readRecordFile(space, dirName, relPath) {
+      const record = recordDir(projectDir, dirName, space);
+      if (record === null) return null;
+      try {
+        return readFileSync(join(record, ...relPath.split("/")));
+      } catch {
+        return null;
+      }
+    },
+    lastWriter() {
+      // A working-tree file has no commit that "wrote" it — the bytes on disk may
+      // never have been committed at all. Refusing to guess is what keeps a
+      // worktree-backed report pinned to `informational`.
+      return null;
+    },
+    label(space, dirName, relPath) {
+      const record = recordDir(projectDir, dirName, space);
+      return record === null
+        ? relPath
+        : posixRelative(projectDir, join(record, ...relPath.split("/")));
+    },
+  };
+}
+
 // --- Repo query resolution ---
 
 interface RepoQuery {
@@ -298,6 +641,11 @@ interface UnitOwnership {
   evidenceListing: WorkspaceSourceListing | null;
   evidencePath: string | null;
   evidenceSource: "committed" | "local" | null;
+  /** Commit that introduced the relied-upon evidence file, and git's `%G?` code
+   *  for it. Both null when the view cannot attribute a commit (worktree) or the
+   *  unit binds no committed evidence — either way the unit cannot reach `signed`. */
+  evidenceCommit: string | null;
+  evidenceSignature: string | null;
   problem: string | null;
 }
 
@@ -372,23 +720,20 @@ function parseManifestClaims(
   return { claims, prefixes };
 }
 
+/** All attribution comes from `view`, never from the filesystem directly: that is
+ *  what makes a report on (base, head) reproducible from the commit alone. */
 function buildOwnershipIndex(
-  projectDir: string,
+  view: RecordView,
   spaceFilter: string | undefined,
   intentFilter: string | undefined,
 ): OwnershipIndex {
   const ownerships: UnitOwnership[] = [];
   const intents: IntentAnchors[] = [];
-  const spaces = spaceFilter !== undefined
-    ? [spaceFilter]
-    : listSpaces(projectDir).map((space) => space.name);
+  const spaces = spaceFilter !== undefined ? [spaceFilter] : view.spaces();
   for (const space of spaces) {
-    for (const info of listIntents(projectDir, space)) {
-      if (info.dirName === null) continue;
+    for (const info of view.intents(space)) {
       if (intentFilter !== undefined && info.dirName !== intentFilter) continue;
-      const record = recordDir(projectDir, info.dirName, space);
-      if (record === null) continue;
-      const events = readAuditShardEvents(projectDir, info.dirName, space);
+      const events = view.auditEvents(space, info.dirName);
 
       const anchors: IntentAnchors = {
         space,
@@ -457,6 +802,7 @@ function buildOwnershipIndex(
         let evidencePath: string | null = null;
         let evidenceSource: "committed" | "local" | null = null;
         let manifestSha: string | null = null;
+        let evidenceRel: string | null = null;
         if (fingerprint === UNBINDABLE_FINGERPRINT) {
           problem = "review receipt carries no source binding (unbindable fingerprint)";
         } else {
@@ -465,31 +811,29 @@ function buildOwnershipIndex(
             problem = "review receipt carries a malformed Unit Source Fingerprint";
           } else {
             const hash12 = hex.slice(0, 12);
-            const candidates: Array<{ path: string; source: "committed" | "local" }> = [
-              {
-                path: reviewedSourceEvidencePath(record, unit, stage, hash12),
-                source: "committed",
-              },
-              {
-                // Pre-dual-write records only wrote the gitignored per-machine copy.
-                path: join(record, ".aidlc-source-review", stage, `unit-${unit}-${hash12}.tsv`),
-                source: "local",
-              },
+            const candidates: Array<{ rel: string; source: "committed" | "local" }> = [
+              { rel: reviewedSourceEvidenceRelPath(unit, stage, hash12), source: "committed" },
             ];
+            if (view.kind === "worktree") {
+              // Pre-dual-write records only wrote the gitignored per-machine copy,
+              // which by definition is not in any tree — only a working-tree view
+              // can even see it, and then only as a diagnostic (below).
+              candidates.push({
+                rel: `.aidlc-source-review/${stage}/unit-${unit}-${hash12}.tsv`,
+                source: "local",
+              });
+            }
             for (const candidate of candidates) {
-              let bytes: Buffer;
-              try {
-                bytes = readFileSync(candidate.path);
-              } catch {
-                continue;
-              }
+              const label = view.label(space, info.dirName, candidate.rel);
+              const bytes = view.readRecordFile(space, info.dirName, candidate.rel);
+              if (bytes === null) continue;
               if (createHash("sha256").update(bytes).digest("hex") !== hex) {
-                problem = `evidence at ${posixRelative(projectDir, candidate.path)} does not hash to the receipt fingerprint`;
+                problem = `evidence at ${label} does not hash to the receipt fingerprint`;
                 continue;
               }
               const parsed = parseUnitSourceListing(bytes.toString("utf-8"));
               if (parsed === null) {
-                problem = `evidence at ${posixRelative(projectDir, candidate.path)} is not a parseable unit source listing`;
+                problem = `evidence at ${label} is not a parseable unit source listing`;
                 continue;
               }
               if (candidate.source === "local") {
@@ -498,7 +842,7 @@ function buildOwnershipIndex(
                 // `verified` where every clone (and CI) says `unverifiable`. Keep it
                 // as a diagnostic pointer only — never as verification bytes, and
                 // never at the cost of a committed-evidence problem already found.
-                evidencePath = candidate.path;
+                evidencePath = label;
                 evidenceSource = "local";
                 problem =
                   problem === null
@@ -510,24 +854,28 @@ function buildOwnershipIndex(
               }
               evidenceListing = parsed.listing;
               manifestSha = parsed.manifestSha256;
-              evidencePath = candidate.path;
+              evidencePath = label;
+              evidenceRel = candidate.rel;
               evidenceSource = candidate.source;
               problem = null;
               break;
             }
             if (evidenceListing === null && problem === null) {
-              problem = "reviewed-source evidence not found (record may predate committed evidence)";
+              problem =
+                `reviewed-source evidence not found at ` +
+                `${view.label(space, info.dirName, candidates[0].rel)}; the record may predate ` +
+                `committed evidence, or the evidence may not be committed at the record source — ` +
+                `re-review the unit to write it into the record`;
             }
           }
         }
 
-        const recordedRepos = info.repos ?? [];
-        let manifestBytes: Buffer | null = null;
-        try {
-          manifestBytes = readFileSync(join(record, "construction", unit, stage, "source-manifest.json"));
-        } catch {
-          manifestBytes = null;
-        }
+        const recordedRepos = info.repos;
+        const manifestBytes = view.readRecordFile(
+          space,
+          info.dirName,
+          unitStageRecordRelPath(unit, stage, "source-manifest.json"),
+        );
         let claims: SourceClaimModel | null = null;
         let claimsSource: UnitOwnership["claimsSource"] = null;
         if (
@@ -549,6 +897,13 @@ function buildOwnershipIndex(
           if (claims !== null) claimsSource = "manifest-unverified";
         }
 
+        // Who vouched for the evidence this unit is judged against. Only the
+        // committed file matters: a local snapshot is never verification bytes.
+        const writer =
+          evidenceRel !== null && evidenceSource === "committed"
+            ? view.lastWriter(space, info.dirName, evidenceRel)
+            : null;
+
         ownerships.push({
           unit,
           space,
@@ -565,6 +920,8 @@ function buildOwnershipIndex(
           evidenceListing,
           evidencePath,
           evidenceSource,
+          evidenceCommit: writer?.commit ?? null,
+          evidenceSignature: writer?.code ?? null,
           problem,
         });
       }
@@ -719,28 +1076,120 @@ function byteFormWarning(query: RepoQuery, head: string): string | null {
   );
 }
 
-/** Receipts and evidence come from the working tree, not from head's tree, so a
- *  checkout whose record differs from the queried commit resolves against
- *  different receipts than a clone of that commit would. */
-function recordDriftWarning(
+/** Repo-relative posix location of the spaces root inside the queried repo, or
+ *  null when the record lies outside it (a multi-root workspace queried with
+ *  `--repo`: the roof holds `aidlc/`, the repo is a child of the roof). */
+function spacesPrefixInRepo(projectDir: string, query: RepoQuery): string | null {
+  const rel = posixRelative(query.dir, spacesRoot(projectDir));
+  if (rel.length === 0 || rel === ".." || rel.startsWith("../") || rel.startsWith("/")) {
+    return null;
+  }
+  return rel;
+}
+
+/** Pick the record backing for a resolve, preferring the git tree so the report
+ *  is a function of committed content. Falls back to the working tree only when
+ *  the record cannot be in the queried repository at all, and always says which. */
+function resolveRecordView(
+  projectDir: string,
+  query: RepoQuery,
+  recordRef: string | undefined,
+  head: string,
+): { view: RecordView; warnings: string[] } {
+  const prefix = spacesPrefixInRepo(projectDir, query);
+  if (prefix === null) {
+    if (recordRef !== undefined) {
+      throw new Error(
+        `--record-ref cannot be honoured: the intent record lives at ${spacesRoot(projectDir)}, ` +
+          `outside the queried repository ${query.dir}, so no tree of that repository contains it`,
+      );
+    }
+    return {
+      view: worktreeRecordView(projectDir),
+      warnings: [
+        `the intent record lives outside the queried repository, so receipts, manifests, and ` +
+          `evidence were read from the working tree; this report is a local diagnostic and cannot ` +
+          `be reproduced from ${head} alone (trust.level is informational)`,
+      ],
+    };
+  }
+  const ref = recordRef ?? head;
+  const sha = resolveCommitish(query.dir, ref);
+  if (sha === null) {
+    throw new Error(`cannot resolve ${recordRef === undefined ? "head" : "--record-ref"} ${JSON.stringify(ref)} in ${query.dir}`);
+  }
+  const view = treeRecordView(query.dir, prefix, ref, sha);
+  const warnings: string[] = [];
+  if (view.spaces().length === 0) {
+    // Silence here would read as "nothing is attested" when the truth is "the
+    // record was never committed" — the same output for opposite causes.
+    warnings.push(
+      `no intent record is committed under ${prefix}/ at ${ref} (${sha.slice(0, 12)}), so no path ` +
+        `can be attributed; if this repository keeps records elsewhere, name that ref with --record-ref`,
+    );
+  }
+  return { view, warnings };
+}
+
+/** Derive how strong the report's basis is, and whether it clears the bar the
+ *  caller demanded. Never upgrades on assumption: every level above
+ *  `informational` corresponds to something checked against git. */
+function computeTrust(
+  view: RecordView,
   query: RepoQuery,
   projectDir: string,
-  space: string | undefined,
   head: string,
-): string | null {
-  if (!query.carriesShell) return null; // record lives outside the queried repo
-  const rel = posixRelative(projectDir, intentsDir(projectDir, space)).split("/")[0];
-  if (rel.length === 0 || rel === ".." || rel.startsWith("../")) return null;
-  const changed = git(query.dir, ["diff", "--quiet", head, "--", rel]).status !== 0;
-  const untracked =
-    git(query.dir, ["ls-files", "--others", "--exclude-standard", "--", rel]).stdout.trim()
-      .length > 0;
-  if (!changed && !untracked) return null;
-  return (
-    `the intent record under ${rel}/ differs between the working tree and ${head}; ` +
-    `receipts, manifests, and evidence were read from the working tree, so a clone ` +
-    `of ${head} may classify these paths differently`
-  );
+  paths: readonly string[],
+  reliedUpon: readonly UnitOwnership[],
+  required: TrustLevel | null,
+  recordPinned: boolean,
+): TrustReport {
+  const prefix = spacesPrefixInRepo(projectDir, query);
+  const recordPathsChangedInRange =
+    prefix === null ? [] : paths.filter((path) => path.startsWith(`${prefix}/`)).sort();
+
+  // Does the record we read already contain this change's own record edits? If
+  // the pinned ref does not descend from head, the receipts predate the change.
+  const recordIncludesChange =
+    view.commit === null ||
+    view.commit === head ||
+    git(query.dir, ["merge-base", "--is-ancestor", head, view.commit]).status === 0;
+  const selfAttested =
+    view.kind === "worktree" ||
+    (recordIncludesChange && recordPathsChangedInRange.length > 0);
+
+  const signatures = reliedUpon.map((owner) => ({
+    unit: `${owner.space}/${owner.intent}/${owner.unit}`,
+    commit: owner.evidenceCommit,
+    code: owner.evidenceSignature ?? "-",
+  }));
+
+  let level: TrustLevel;
+  if (view.kind !== "commit") level = "informational";
+  else if (selfAttested) level = "reproducible";
+  else if (
+    // At least one relied-upon file, all of them signed. The length check is what
+    // stops a change that attests NOTHING from reporting `signed` on a vacuous
+    // "every" — no evidence is no basis, however good the record source is.
+    signatures.length > 0 &&
+    signatures.every((entry) => GOOD_SIGNATURE_CODES.has(entry.code))
+  ) {
+    level = "signed";
+  } else level = "independent";
+
+  return {
+    level,
+    required,
+    satisfied:
+      required === null || TRUST_LEVELS.indexOf(level) >= TRUST_LEVELS.indexOf(required),
+    recordSource: view.kind,
+    recordRef: view.ref,
+    recordCommit: view.commit,
+    recordPinned,
+    recordPathsChangedInRange,
+    selfAttested,
+    signatures,
+  };
 }
 
 export function runResolve(
@@ -758,6 +1207,15 @@ export function runResolve(
   }
   if (options.diff !== undefined && options.commit !== undefined) {
     throw new Error("pass either --diff <base>..<head> or a single <commit>, not both");
+  }
+  let requireTrust: TrustLevel | null = null;
+  if (options.requireTrust !== undefined) {
+    if (!(TRUST_LEVELS as readonly string[]).includes(options.requireTrust)) {
+      throw new Error(
+        `--require-trust accepts one of ${TRUST_LEVELS.join(",")}, got ${JSON.stringify(options.requireTrust)}`,
+      );
+    }
+    requireTrust = options.requireTrust as TrustLevel;
   }
   const query = resolveRepoQuery(
     projectDir,
@@ -810,7 +1268,8 @@ export function runResolve(
     throw new Error(`cannot reconstruct the source listing of ${head} in ${query.dir}`);
   }
 
-  const { ownerships } = buildOwnershipIndex(projectDir, options.space, options.intent);
+  const record = resolveRecordView(projectDir, query, options.recordRef, head);
+  const { ownerships } = buildOwnershipIndex(record.view, options.space, options.intent);
   const pathReports = paths.sort().map((path) => classifyPath(path, query, ownerships, headListing));
 
   const summary: Record<PathStatus, number> = {
@@ -840,6 +1299,9 @@ export function runResolve(
     if (owner !== undefined) involved.set(ownerKey, { owner, pathsResolved: 1 });
   }
 
+  const reliedUpon = [...involved.values()]
+    .map(({ owner }) => owner)
+    .sort(compareOwners);
   const units: UnitReport[] = [...involved.values()]
     .sort((a, b) => compareOwners(a.owner, b.owner))
     .map(({ owner, pathsResolved }) => ({
@@ -851,8 +1313,10 @@ export function runResolve(
       receiptTimestamp: owner.timestamp,
       reviewer: owner.reviewer,
       fingerprint: owner.fingerprint,
-      evidence: owner.evidencePath === null ? null : posixRelative(projectDir, owner.evidencePath),
+      evidence: owner.evidencePath,
       evidenceSource: owner.evidenceSource,
+      evidenceCommit: owner.evidenceCommit,
+      evidenceSignature: owner.evidenceSignature,
       claimsSource: owner.claimsSource,
       bypasses: owner.bypasses,
       ...(owner.problem === null ? {} : { problem: owner.problem }),
@@ -860,10 +1324,20 @@ export function runResolve(
       fullyLanded: unitFullyLanded(owner, query, headListing),
     }));
 
-  const warnings = [
-    byteFormWarning(query, head),
-    recordDriftWarning(query, projectDir, options.space, head),
-  ].filter((warning): warning is string => warning !== null);
+  const trust = computeTrust(
+    record.view,
+    query,
+    projectDir,
+    head,
+    paths,
+    reliedUpon,
+    requireTrust,
+    options.recordRef !== undefined,
+  );
+
+  const warnings = [byteFormWarning(query, head), ...record.warnings].filter(
+    (warning): warning is string => warning !== null,
+  );
 
   const report: ResolveReport = {
     contract: 1,
@@ -876,11 +1350,16 @@ export function runResolve(
     units,
     summary,
     failOn,
-    recordSource: "worktree",
+    trust,
     warnings,
   };
   const failSet = new Set(failOn);
-  return { report, failed: pathReports.some((path) => failSet.has(path.status)) };
+  // An unmet trust bar fails the same way a failing path does: the caller asked
+  // for a guarantee this report cannot make, so reporting success would lie.
+  return {
+    report,
+    failed: pathReports.some((path) => failSet.has(path.status)) || !trust.satisfied,
+  };
 }
 
 // --- anchor ---
@@ -930,7 +1409,14 @@ export function runAnchor(
     rows = [[start, ...parentage.parents]];
   }
 
-  const { ownerships, intents } = buildOwnershipIndex(projectDir, options.space, options.intent);
+  // anchor writes into THIS checkout's record and dedupes against rows it may
+  // itself have appended moments ago, so the working tree is the correct — and
+  // only coherent — backing here. Anchors are enrichment, never attribution.
+  const { ownerships, intents } = buildOwnershipIndex(
+    worktreeRecordView(projectDir),
+    options.space,
+    options.intent,
+  );
   const anchorsByIntent = new Map(
     intents.map((entry) => [`${entry.space}\0${entry.intent}`, entry]),
   );
@@ -1036,6 +1522,7 @@ export function runAnchor(
 const USAGE = `Usage:
   aidlc attest resolve [<commit>|--commit <rev>] [--diff <base>..<head>]
                        [--repo <name>] [--space <name>] [--intent <dir>]
+                       [--record-ref <ref>] [--require-trust <level>]
                        [--fail-on <statuses>]
   aidlc attest anchor [--commit <rev>] [--reconcile] [--max-commits <n>]
                       [--repo <name>] [--space <name>] [--intent <dir>]
@@ -1046,14 +1533,38 @@ resolve  Read-only: attribute a diff/commit's changed paths to reviewed units
          excluded). --fail-on drifted,unattested exits 3 when matched.
 resolve <commit> (or --commit <rev>) resolves that commit's first-parent delta
          (default HEAD).
+  --record-ref <ref>
+         Read receipts, manifests, and evidence from <ref>'s tree instead of the
+         queried commit's. Point it at a ref the change under test cannot write
+         (a protected branch) so the change cannot supply its own approvals.
+  --require-trust <level>
+         Exit 3 unless the report's basis reaches <level>:
+           informational  record read from the working tree (local diagnostic)
+           reproducible   record read from a git tree, but the change may have
+                          authored the receipts judging it (trust.selfAttested)
+           independent    reproducible, and the range does not touch the record
+           signed         independent, with at least one relied-upon evidence
+                          file and every one of them arriving in a signed commit
+         This bounds how much the report can be trusted, not how much of the
+         change is attested — pair it with --fail-on for coverage.
 anchor   Append SOURCE_COMMITTED enrichment events for commits that landed
          reviewed claims (deduplicated; --reconcile walks first-parent
-         history, bounded by --max-commits, default 100).`;
+         history, bounded by --max-commits, default 100). resolve never reads
+         anchors, so anchoring is optional and never gates a report.`;
 
 /** Each verb accepts only its own flags: a flag the other verb owns is a usage
  *  error, never a silently ignored argument (`resolve --commit X` used to report
  *  HEAD while looking like it honoured X). */
-const RESOLVE_FLAGS = new Set(["diff", "commit", "repo", "space", "intent", "fail-on"]);
+const RESOLVE_FLAGS = new Set([
+  "diff",
+  "commit",
+  "repo",
+  "space",
+  "intent",
+  "fail-on",
+  "record-ref",
+  "require-trust",
+]);
 const ANCHOR_FLAGS = new Set(["commit", "reconcile", "max-commits", "repo", "space", "intent"]);
 
 function rejectForeignFlags(
@@ -1090,7 +1601,17 @@ export function main(argv: string[]): void {
 
   const flags: Record<string, string | boolean> = {};
   const positional: string[] = [];
-  const VALUE_FLAGS = new Set(["diff", "repo", "space", "intent", "fail-on", "commit", "max-commits"]);
+  const VALUE_FLAGS = new Set([
+    "diff",
+    "repo",
+    "space",
+    "intent",
+    "fail-on",
+    "commit",
+    "max-commits",
+    "record-ref",
+    "require-trust",
+  ]);
   const BOOLEAN_FLAGS = new Set(["reconcile"]);
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--")) {
@@ -1123,6 +1644,8 @@ export function main(argv: string[]): void {
           intent: flags.intent as string | undefined,
           diff: flags.diff as string | undefined,
           commit: (flags.commit as string | undefined) ?? positional[0],
+          recordRef: flags["record-ref"] as string | undefined,
+          requireTrust: flags["require-trust"] as string | undefined,
           failOn:
             flags["fail-on"] === undefined
               ? []

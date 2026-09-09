@@ -156,24 +156,25 @@ but do not yet have committed release versions.
 - Commit-level provenance is implemented as content-derived attribution:
   reviewed-source evidence is committed into the intent record and
   `aidlc attest resolve` maps any commit or diff range back to its owning
-  units, intents, and drift status — no hooks, trailers, or session state
+  units, intents, and drift status — receipts and evidence are read out of a
+  git tree, so no hooks, trailers, session state, or local record state are
   required (see [Commit Provenance](reference/20-commit-provenance.md)).
-  On top of that foundation, the session-start hook anchors recent manual
-  commits automatically (a bounded, idempotent `SOURCE_COMMITTED` sweep);
-  the explicit `attest anchor` verb remains for CI and deep backfills.
-- Two commit-provenance fidelity gaps stay open behind that foundation, both
+  Resolution reports integrity; authority over the record is the verifier's to
+  supply, via `--record-ref` (a record source the change cannot write) and
+  `--require-trust` (a gate on the report's own basis). `SOURCE_COMMITTED`
+  anchoring is enrichment and stays explicit (`attest anchor`), with an opt-in
+  session-start sweep behind `AIDLC_SESSION_ANCHOR=1`.
+- One commit-provenance fidelity gap stays open behind that foundation,
   reported in `resolve`'s `warnings[]` today (see
-  [Commit Provenance §8](reference/20-commit-provenance.md)):
+  [Commit Provenance §10](reference/20-commit-provenance.md)):
   **one byte form** — review evidence hashes working-tree bytes while commit
   listings read repository blobs, so LFS, `core.autocrlf`, working-tree
   encodings, and submodule gitlinks can report unchanged content as `drifted`.
   Reconciling them changes what the `Unit Source Fingerprint` is computed over,
   so it needs its own change with a migration story for existing receipts.
-  **Records read from the queried commit** — receipts, manifests, and evidence
-  come from the working tree, so a local `resolve <old-commit>` sees today's
-  record rather than that commit's. Reading them out of `head`'s tree is the fix
-  and is blocked for layouts where the record lives outside the queried repo
-  (multi-repo intents, a record at the workspace roof).
+  Beyond it, richer trust roots remain future work: per-approval signatures and
+  an identity policy for who may approve (today's `signed` level checks git's
+  commit-level `%G?` on the evidence writer, not a reviewer identity).
 
 ### Governed feedback loops
 

@@ -4,19 +4,24 @@
 // covers: audit:SOURCE_COMMITTED
 //
 // t312 - aidlc-attest commit provenance CLI. Attribution is a pure function of
-// repository content (committed REVIEW_COMPLETED receipts + committed
-// reviewed-source evidence), so plain `git add -A && git commit` runs made by
-// a human — no hooks, no trailers, no tool-mediated commit — must resolve.
+// COMMITTED content: receipts, manifests, and evidence are read out of a git
+// tree (the queried commit's, or `--record-ref`'s), never out of the checkout,
+// so the same (base, head) resolves identically in every clone and at every
+// later date. Plain `git add -A && git commit` runs made by a human — no hooks,
+// no trailers, no tool-mediated commit — must resolve.
+//
 // This suite drives real reviews through aidlc-log, then commits manually and
 // pins: resolve's six path statuses and exit codes (0 resolved / 1 usage /
-// 3 --fail-on match), evidence fallback order (committed then local, fail
-// closed when neither binds), cross-shard timestamp ties failing closed, and
-// anchor's SOURCE_COMMITTED enrichment (dedupe, SWARM_SOURCE_MERGED respect,
-// bounded --reconcile sweeps). The last case fires the REAL session-start
-// hook (the workflow's automatic anchoring path — commits happen between
-// sessions, so the next session start is when the sweep runs) and pins its
-// reconcile sweep, idempotence, the compact/probe gate, and the
-// AIDLC_SKIP_SESSION_ANCHOR switch.
+// 3 --fail-on or --require-trust match), the determinism property (a record
+// written but not committed attributes nothing; tampering the working tree
+// cannot move a verdict), the trust ladder (informational < reproducible <
+// independent < signed, plus `--record-ref` as the trust root that separates a
+// change from the receipts judging it), cross-shard timestamp ties failing
+// closed, and anchor's SOURCE_COMMITTED enrichment (dedupe,
+// SWARM_SOURCE_MERGED respect, bounded --reconcile sweeps). The last case fires
+// the REAL session-start hook and pins that its sweep is OPT-IN
+// (AIDLC_SESSION_ANCHOR=1) — off by default, so no session start silently
+// writes to the audit trail.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -189,22 +194,37 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const badFailOn = attest(["resolve", "--fail-on", "bogus"], project);
     expect(badFailOn.rc).toBe(1);
     expect(JSON.parse(badFailOn.stderr).error).toContain("--fail-on accepts a comma-separated subset of drifted,unattested,unverifiable,indeterminate");
+
+    const badTrust = attest(["resolve", "--require-trust", "bogus"], project);
+    expect(badTrust.rc).toBe(1);
+    expect(JSON.parse(badTrust.stderr).error).toContain("--require-trust accepts one of informational,reproducible,independent,signed");
+
+    // The trust flags belong to resolve alone: anchor writes to this checkout's
+    // record, so a record source it did not read is meaningless there.
+    const trustOnAnchor = attest(["anchor", "--record-ref", "main", "--require-trust", "signed"], project);
+    expect(trustOnAnchor.rc).toBe(1);
+    expect(JSON.parse(trustOnAnchor.stderr).error).toContain("anchor does not accept --record-ref, --require-trust");
+
+    expect(help.stdout).toContain("--record-ref <ref>");
+    expect(help.stdout).toContain("--require-trust <level>");
   }, 30000);
 
   test("resolve classifies manual commits: verified, drifted, unattested, excluded, squash-stable re-land", () => {
     const { project, record } = runtimeFixture();
+    // The reviewed change and the record that approves it land in one manual
+    // commit — the ordinary shape of an AI-DLC change.
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
     review(project, record, "alpha", [{ path: "app.ts" }]);
-    const c1 = git(project, ["rev-parse", "HEAD"]);
+    const c1 = commitAll(project, "reviewed change plus its record");
 
-    // The seed commit predates the review, but app.ts content is unchanged, so
-    // content-derived attribution verifies it — no hook ran at commit time.
+    // No hook ran at commit time: attribution comes from the receipt and the
+    // evidence file that this commit's own tree carries.
     let result = attest(["resolve", c1], project);
     expect(result.rc).toBe(0);
     let report = JSON.parse(result.stdout);
     expect(report.contract).toBe(1);
     expect(report.repo).toBeNull();
     expect(report.mode).toBe("commit");
-    expect(report.base).toBeNull(); // root commit resolves its full tree
     expect(report.head).toBe(c1);
     expect(pathStatus(report, "app.ts")).toMatchObject({ status: "verified", unit: "alpha", space: "default", intent: "fixture-intent" });
     expect(report.summary.verified).toBe(1);
@@ -228,9 +248,25 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(unit.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(unit.evidence).toMatch(/^aidlc\/spaces\/default\/intents\/fixture-intent\/construction\/alpha\/code-generation\/reviewed-source-[0-9a-f]{12}\.tsv$/);
 
+    // This commit carries its own receipts, so the report says so rather than
+    // implying more than it can: reproducible, self-attested (see the
+    // --record-ref case for how a verifier separates the two).
+    expect(report.trust).toMatchObject({
+      level: "reproducible",
+      required: null,
+      satisfied: true,
+      recordSource: "commit",
+      recordRef: c1,
+      recordCommit: c1,
+      recordPinned: false,
+      selfAttested: true,
+    });
+    expect(report.trust.recordPathsChangedInRange.length).toBeGreaterThan(0);
+
     // Manual drift commit: claimed path edited without re-review + a file no
-    // unit claims + the (excluded) record/audit churn, all in one `git add -A`.
-    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    // unit claims, in one `git add -A`. Nothing in the record changes, so the
+    // receipts judging this commit predate it — that is `independent`.
+    writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
     writeFileSync(join(project, "unclaimed.ts"), "export const u = 1;\n");
     const c2 = commitAll(project, "manual drift");
 
@@ -241,8 +277,12 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(report.base).toBe(c1);
     expect(pathStatus(report, "app.ts")?.status).toBe("drifted");
     expect(pathStatus(report, "unclaimed.ts")?.status).toBe("unattested");
-    expect(report.summary.excluded).toBeGreaterThan(0);
     expect(report.units[0].fullyLanded).toBe(false);
+    expect(report.trust).toMatchObject({
+      level: "independent",
+      selfAttested: false,
+      recordPathsChangedInRange: [],
+    });
 
     const failing = attest(["resolve", c2, "--fail-on", "drifted,unattested"], project);
     expect(failing.rc).toBe(3);
@@ -250,7 +290,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
 
     // Re-landing the reviewed content verifies again: attribution is content-
     // addressed, so squashes/rebases that preserve bytes cannot break it.
-    writeFileSync(join(project, "app.ts"), "export const app = 1;\n");
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
     const c3 = commitAll(project, "re-land reviewed state");
     result = attest(["resolve", c3, "--fail-on", "drifted"], project);
     expect(result.rc).toBe(0);
@@ -274,14 +314,130 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(report.head).toBe(c2);
     expect(pathStatus(report, "app.ts")?.status).toBe("drifted");
 
-    // Report-wide transparency fields: the record is read from the working tree,
-    // and byte-form conversion is announced rather than silently drifting paths.
-    expect(report.recordSource).toBe("worktree");
+    // Byte-form conversion is announced rather than silently drifting paths.
     expect(report.warnings).toEqual([]);
     git(project, ["config", "core.autocrlf", "true"]);
     report = JSON.parse(attest(["resolve", c2], project).stdout);
     expect(report.warnings.join("\n")).toContain("core.autocrlf=true");
     expect(report.warnings.join("\n")).toContain("can report drifted");
+  }, 60000);
+
+  test("resolve is deterministic: the record comes from the queried tree, not the checkout", () => {
+    const { project, record } = runtimeFixture();
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const c1 = commitAll(project, "reviewed change plus its record");
+    expect(pathStatus(JSON.parse(attest(["resolve", c1], project).stdout), "app.ts")?.status)
+      .toBe("verified");
+
+    // Reviewing MORE units afterwards, without committing, cannot retroactively
+    // change what c1 resolves to: the same (base, head) is stable as the record
+    // evolves, which is what makes a stored report meaningful.
+    writeFileSync(join(project, "lib.ts"), "export const lib = 1;\n");
+    const beforeExtraReview = attest(["resolve", c1], project).stdout;
+    review(project, record, "beta", [{ path: "lib.ts" }]);
+    expect(attest(["resolve", c1], project).stdout).toBe(beforeExtraReview);
+
+    // Nor can editing the checkout's committed evidence: the bytes that count
+    // are the blob in c1's tree, so tampering the working copy is inert.
+    const evidenceDir = join(record, "construction", "alpha", "code-generation");
+    const evidenceName = readdirSync(evidenceDir).find((name) => /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name)) as string;
+    writeFileSync(join(evidenceDir, evidenceName), "tampered\n");
+    expect(attest(["resolve", c1], project).stdout).toBe(beforeExtraReview);
+
+    // Committing the tamper DOES change the verdict, and only from that commit
+    // on: c1 keeps verifying, while the commit carrying broken evidence cannot
+    // bind content and fails closed.
+    writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
+    const c2 = commitAll(project, "tamper with committed evidence");
+    expect(pathStatus(JSON.parse(attest(["resolve", c1], project).stdout), "app.ts")?.status)
+      .toBe("verified");
+    const tampered = attest(["resolve", c2, "--fail-on", "unverifiable"], project);
+    expect(tampered.rc).toBe(3);
+    const report = JSON.parse(tampered.stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
+    expect(pathStatus(report, "app.ts")?.reason).toContain("does not hash to the receipt fingerprint");
+
+    // A record that exists on disk but was never committed attributes nothing,
+    // and says so instead of reporting a bare wall of `unattested`.
+    const fresh = mkdtempSync(join(tmpdir(), "aidlc-t312-clone-"));
+    dirs.push(fresh);
+    expect(spawnSync("git", ["clone", "-q", project, fresh], { encoding: "utf-8" }).status).toBe(0);
+    git(fresh, ["config", "user.email", "t@test"]);
+    git(fresh, ["config", "user.name", "t"]);
+    rmSync(join(fresh, "aidlc"), { recursive: true, force: true });
+    commitAll(fresh, "drop the record from this repository");
+    writeFileSync(join(fresh, "app.ts"), "export const app = 4;\n");
+    const c3 = commitAll(fresh, "a source change in a repository that keeps no record");
+    const recordless = JSON.parse(attest(["resolve", c3], fresh).stdout);
+    expect(recordless.warnings.join("\n")).toContain("no intent record is committed under aidlc/spaces/");
+    expect(recordless.trust.level).toBe("independent"); // reproducible + record untouched, but nothing signed
+  }, 60000);
+
+  test("--record-ref pins the trust root; --require-trust gates on it", () => {
+    const { project, record } = runtimeFixture();
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const approved = commitAll(project, "reviewed change plus its record");
+    // A ref only the verifier can move — the stand-in for a protected branch.
+    git(project, ["branch", "records", approved]);
+
+    // The adversarial shape from review: a change that edits source AND writes
+    // its own approving receipt in the same commit. Judged against itself it
+    // verifies, but the report refuses to call that better than `reproducible`.
+    writeFileSync(join(project, "app.ts"), "export const app = 99;\n");
+    review(project, record, "alpha", [{ path: "app.ts" }]);
+    const selfApproved = commitAll(project, "change plus a receipt for itself");
+
+    let report = JSON.parse(attest(["resolve", selfApproved], project).stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("verified");
+    expect(report.trust.level).toBe("reproducible");
+    expect(report.trust.selfAttested).toBe(true);
+    expect(report.trust.recordPathsChangedInRange.some((path: string) => path.startsWith("aidlc/spaces/"))).toBe(true);
+
+    // Demanding a basis the report cannot provide exits 3 — the same exit code
+    // as a failing path, because the caller asked for a guarantee it did not get.
+    const gated = attest(["resolve", selfApproved, "--require-trust", "independent"], project);
+    expect(gated.rc).toBe(3);
+    expect(JSON.parse(gated.stdout).trust).toMatchObject({
+      level: "reproducible",
+      required: "independent",
+      satisfied: false,
+    });
+    // A bar it does clear passes.
+    expect(attest(["resolve", selfApproved, "--require-trust", "reproducible"], project).rc).toBe(0);
+
+    // Reading the record from the ref the change cannot write strips the
+    // self-approval: only the earlier receipt counts, and the new bytes drift.
+    const pinned = attest(["resolve", selfApproved, "--record-ref", "records", "--require-trust", "independent"], project);
+    expect(pinned.rc).toBe(0);
+    report = JSON.parse(pinned.stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("drifted");
+    expect(report.trust).toMatchObject({
+      level: "independent",
+      required: "independent",
+      satisfied: true,
+      recordSource: "commit",
+      recordRef: "records",
+      recordCommit: approved,
+      recordPinned: true,
+      selfAttested: false,
+    });
+
+    // `signed` needs git to vouch for the commit that carried the evidence.
+    // Unsigned fixture commits report `-`, so the bar is not met.
+    const wantSigned = attest(["resolve", selfApproved, "--record-ref", "records", "--require-trust", "signed"], project);
+    expect(wantSigned.rc).toBe(3);
+    report = JSON.parse(wantSigned.stdout);
+    expect(report.trust.level).toBe("independent");
+    expect(report.trust.signatures).toEqual([
+      { unit: "default/fixture-intent/alpha", commit: approved, code: "N" }, // N = no signature
+    ]);
+    expect(report.units[0]).toMatchObject({ evidenceCommit: approved, evidenceSignature: "N" });
+
+    const unresolvable = attest(["resolve", "--record-ref", "no/such/ref"], project);
+    expect(unresolvable.rc).toBe(1);
+    expect(JSON.parse(unresolvable.stderr).error).toContain("cannot resolve --record-ref");
   }, 60000);
 
   test("resolve excludes the harness shell of a repo that carries the workspace shell", () => {
@@ -343,8 +499,9 @@ describe("t312 aidlc-attest resolve/anchor", () => {
 
   test("resolve verifies only committed evidence: the gitignored local snapshot never verifies", () => {
     const { project, record } = runtimeFixture();
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
     review(project, record, "alpha", [{ path: "app.ts" }]);
-    const c1 = git(project, ["rev-parse", "HEAD"]);
+    const c1 = commitAll(project, "reviewed change plus its record");
 
     const evidenceDir = join(record, "construction", "alpha", "code-generation");
     const evidenceName = readdirSync(evidenceDir).find((name) => /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name));
@@ -354,39 +511,42 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const hash12 = /^reviewed-source-([0-9a-f]{12})\.tsv$/.exec(evidenceName)?.[1] as string;
     const localPath = join(record, ".aidlc-source-review", "code-generation", `unit-alpha-${hash12}.tsv`);
 
-    // Committed evidence verifies; the local copy is byte-identical but ignored.
+    // Review dual-writes: the record carries committed evidence, and the machine
+    // keeps a byte-identical gitignored copy that resolution must never consult.
     expect(readFileSync(localPath)).toEqual(readFileSync(committedPath));
     let report = JSON.parse(attest(["resolve", c1], project).stdout);
     expect(pathStatus(report, "app.ts")?.status).toBe("verified");
     expect(report.units[0].evidenceSource).toBe("committed");
 
-    // Tampered committed evidence fails closed even though the intact local copy
-    // still hashes to the fingerprint: honouring gitignored bytes would make the
-    // verdict machine-dependent — `verified` here, `unverifiable` in every clone.
+    // Committed evidence that does not hash to the fingerprint fails closed —
+    // even though the intact local copy still does. Honouring gitignored bytes
+    // would make the verdict machine-dependent: `verified` here, `unverifiable`
+    // in every clone and every fresh checkout.
     writeFileSync(committedPath, "tampered\n");
-    const failing = attest(["resolve", c1, "--fail-on", "unverifiable"], project);
+    writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
+    const c2 = commitAll(project, "tamper with committed evidence");
+    expect(readFileSync(localPath)).not.toEqual(readFileSync(committedPath));
+    const failing = attest(["resolve", c2, "--fail-on", "unverifiable"], project);
     expect(failing.rc).toBe(3);
     report = JSON.parse(failing.stdout);
     expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
     expect(pathStatus(report, "app.ts")?.reason).toContain("does not hash to the receipt fingerprint");
-    expect(pathStatus(report, "app.ts")?.reason).toContain("no clone can read it");
-    expect(report.units[0].evidenceSource).toBe("local"); // located, reported, never trusted
+    expect(report.units[0].evidenceSource).toBeNull(); // nothing bound content
     expect(report.units[0].claimsSource).toBe("manifest-unverified"); // coverage survives via the manifest
 
-    // A pre-dual-write record (local copy only) is honestly unverifiable, and the
-    // reason names the re-review that would commit evidence.
+    // No committed evidence at all (a record written before evidence was
+    // committed) is honestly unverifiable, and the reason names the fix.
     rmSync(committedPath);
-    report = JSON.parse(attest(["resolve", c1], project).stdout);
-    expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
-    expect(pathStatus(report, "app.ts")?.reason).toContain("only in the gitignored machine-local snapshot");
-    expect(report.units[0].evidenceSource).toBe("local");
-
-    // Nothing left at all: still unverifiable, naming what is missing.
-    rmSync(localPath);
-    report = JSON.parse(attest(["resolve", c1], project).stdout);
+    writeFileSync(join(project, "app.ts"), "export const app = 4;\n");
+    const c3 = commitAll(project, "drop committed evidence entirely");
+    report = JSON.parse(attest(["resolve", c3], project).stdout);
     expect(pathStatus(report, "app.ts")?.status).toBe("unverifiable");
     expect(pathStatus(report, "app.ts")?.reason).toContain("reviewed-source evidence not found");
+    expect(pathStatus(report, "app.ts")?.reason).toContain("re-review the unit");
     expect(report.units[0].evidenceSource).toBeNull();
+    // The gitignored copy still hashes to the fingerprint and still changes
+    // nothing: it was never a verification input.
+    expect(existsSync(localPath)).toBe(true);
   }, 60000);
 
   test("resolve fails closed as indeterminate on cross-shard same-timestamp READY receipts", () => {
@@ -411,7 +571,8 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     writeFileSync(join(auditDir, "clone-a.md"), receipt);
     writeFileSync(join(auditDir, "clone-b.md"), receipt);
 
-    const c1 = git(project, ["rev-parse", "HEAD"]);
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    const c1 = commitAll(project, "two clones' shards land the same receipt second");
     const failing = attest(["resolve", c1, "--fail-on", "indeterminate"], project);
     expect(failing.rc).toBe(3);
     const report = JSON.parse(failing.stdout);
@@ -454,7 +615,8 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       writeFileSync(join(dir, "audit", "clone-a.md"), receipt(unit));
     }
 
-    const c1 = git(project, ["rev-parse", "HEAD"]);
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    const c1 = commitAll(project, "two records claim the same path at the same second");
     const failing = attest(["resolve", c1, "--fail-on", "indeterminate"], project);
     expect(failing.rc).toBe(3);
     const report = JSON.parse(failing.stdout);
@@ -472,7 +634,9 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       join(second, "audit", "clone-a.md"),
       receipt("beta").replace("10:00:00Z", "10:00:01Z"),
     );
-    const resolved = JSON.parse(attest(["resolve", c1], project).stdout);
+    writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
+    const c2 = commitAll(project, "one record's receipt is now newer");
+    const resolved = JSON.parse(attest(["resolve", c2], project).stdout);
     expect(pathStatus(resolved, "app.ts")).toMatchObject({ unit: "beta", intent: "rival-intent" });
     expect(pathStatus(resolved, "app.ts")?.status).toBe("unverifiable"); // fabricated fingerprint binds nothing
   }, 30000);
@@ -538,7 +702,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(JSON.parse(badBound.stderr).error).toContain("--max-commits must be a positive integer");
   }, 60000);
 
-  test("session-start hook anchors automatically: reconcile sweep, idempotent re-fire, compact and skip-switch gates", () => {
+  test("session-start anchoring is opt-in: silent by default, sweeps only under AIDLC_SESSION_ANCHOR=1", () => {
     const { project, record } = runtimeFixture();
     review(project, record, "alpha", [{ path: "app.ts" }]);
     const c1 = git(project, ["rev-parse", "HEAD"]); // seed commit; app.ts bytes are the reviewed bytes
@@ -560,13 +724,22 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const anchorRows = () =>
       readAllAuditShards(project).match(/\*\*Event\*\*: SOURCE_COMMITTED/g) ?? [];
 
-    // A real session start sweeps recent first-parent history: c3 and c1 land
-    // reviewed claims and get anchored, c2 does not. The hook's normal output
-    // contract (exit 0, additionalContext JSON) is untouched by the sweep.
+    // Starting a session writes NO anchor. Anchors are enrichment that `resolve`
+    // never reads, so a session start must not silently append to the
+    // append-only audit trail — the hook's normal output contract (exit 0,
+    // additionalContext JSON) is all it produces.
     expect(anchorRows().length).toBe(0);
     let fired = fireHook('{"source":"startup"}');
     expect(fired.rc).toBe(0);
     expect(typeof JSON.parse(fired.stdout.trim()).additionalContext).toBe("string");
+    expect(anchorRows().length).toBe(0);
+    expect(fireHook('{"source":"resume"}').rc).toBe(0);
+    expect(anchorRows().length).toBe(0);
+
+    // Opting in sweeps recent first-parent history: c3 and c1 land reviewed
+    // claims and get anchored, c2 does not.
+    fired = fireHook('{"source":"startup"}', { AIDLC_SESSION_ANCHOR: "1" });
+    expect(fired.rc).toBe(0);
     let audit = readAllAuditShards(project);
     expect(anchorRows().length).toBe(2);
     expect(audit).toContain(`**Commit**: ${c1}`);
@@ -575,21 +748,21 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(audit).toContain("**Observed**: reconciled");
 
     // Re-firing (a resume) re-scans but dedupes — no duplicate anchor rows.
-    fired = fireHook('{"source":"resume"}');
+    fired = fireHook('{"source":"resume"}', { AIDLC_SESSION_ANCHOR: "1" });
     expect(fired.rc).toBe(0);
     expect(anchorRows().length).toBe(2);
 
-    // New manual commit, but compact resumes and the kill switch never sweep.
+    // Compact resumes never sweep even when opted in: PreCompact already owns
+    // that transition, so the sweep would fire on a non-start.
     writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
     const c4 = commitAll(project, "post-sweep manual commit");
-    fireHook('{"source":"compact"}');
-    expect(anchorRows().length).toBe(2);
-    fireHook('{"source":"startup"}', { AIDLC_SKIP_SESSION_ANCHOR: "1" });
+    fireHook('{"source":"compact"}', { AIDLC_SESSION_ANCHOR: "1" });
     expect(anchorRows().length).toBe(2);
 
-    // The next real session start picks c4 up — commits made between sessions
-    // are anchored without any explicit `attest anchor` invocation.
+    // The next opted-in start picks c4 up; without the switch it stays put.
     fireHook('{"source":"startup"}');
+    expect(anchorRows().length).toBe(2);
+    fireHook('{"source":"startup"}', { AIDLC_SESSION_ANCHOR: "1" });
     audit = readAllAuditShards(project);
     expect(anchorRows().length).toBe(3);
     expect(audit).toContain(`**Commit**: ${c4}`);
