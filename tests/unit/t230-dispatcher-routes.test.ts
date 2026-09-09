@@ -2641,6 +2641,40 @@ describe("t230 dispatcher hook routing", () => {
     },
   );
 
+  test("bare `aidlc hook <name>` is accepted only for the 2.8.0 Copilot adapter's children", () => {
+    const projectDir = makeProject();
+    const input = JSON.stringify({ hook_event_name: "PreCompact", cwd: projectDir });
+    const health = () =>
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
+      existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last"));
+
+    // Ordinary callers: still the public unknown-command error, no hook runs.
+    const bare = viaDispatcher(["hook", "validate-state"], projectDir, {}, input);
+    expect(bare.exitCode).toBe(2);
+    expect(bare.stderr.toString("utf-8")).toContain("unknown command 'hook'");
+    expect(health()).toBe(false);
+
+    // Only one of the two context markers is not enough either.
+    const nameOnly = viaDispatcher(
+      ["hook", "validate-state"],
+      projectDir,
+      { AIDLC_HARNESS_NAME: "copilot" },
+      input,
+    );
+    expect(nameOnly.exitCode).toBe(2);
+    expect(health()).toBe(false);
+
+    // The env runAdapter() establishes for the copilot adapter's children.
+    const child = viaDispatcher(
+      ["hook", "validate-state"],
+      projectDir,
+      { AIDLC_HARNESS_NAME: "copilot", AIDLC_COMPILED_EXECUTABLE: DISPATCHER },
+      input,
+    );
+    expect(child.exitCode).toBe(0);
+    expect(health()).toBe(true);
+  });
+
   test("--project-dir overrides cwd and payload project for hook, statusline, and adapter", () => {
     const cwdProject = makeProject();
     const targetProject = makeProject();
