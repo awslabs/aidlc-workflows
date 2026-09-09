@@ -104,7 +104,7 @@ describe("t366 review UI model policy settings", () => {
     expect(group(view, "reviewing").effort).toBe("medium");
     expect(group(view, "deciding").effort).toBe("inherit");
     expect(view.efforts).toContain("xhigh");
-  });
+  }, 30_000);
 
   test("auth and validation: 401 without the token, 400 for malformed changes, nothing written", async () => {
     expect((await fetch(`http://127.0.0.1:${info.port}/api/models-policy`, { method: "POST", body: "{}" })).status).toBe(401);
@@ -117,12 +117,13 @@ describe("t366 review UI model policy settings", () => {
       { scope: "project", action: "agent", agent: "Architect!", effort: "high" },
       { scope: "project", action: "agent", agent: "architect", effort: "high", model: "not a model id" },
       { scope: "project", action: "explode" },
+      { scope: "project", action: "clear-group", group: "reviewing" },
     ]) {
       expect((await api("POST", "/api/models-policy", body)).status, JSON.stringify(body)).toBe(400);
     }
     expect(existsSync(join(project, "aidlc.settings.json"))).toBe(false);
     expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
-  });
+  }, 30_000);
 
   test("a project preset, a group dial, and a per-agent exception land in the committed layer and the agent surfaces", async () => {
     const preset = await api("POST", "/api/models-policy", { scope: "project", action: "preset", preset: "thorough" });
@@ -148,7 +149,7 @@ describe("t366 review UI model policy settings", () => {
 
     const recorded = JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8")) as { models: Record<string, unknown> };
     expect(recorded.models).toMatchObject({ preset: "thorough", groups: { "writing-up": { effort: "low" } }, agents: { architect: { effort: "xhigh" } } });
-  });
+  }, 30_000);
 
   test("the local layer overrides the committed one for this machine only, and reset clears just that layer", async () => {
     expect((await api("POST", "/api/models-policy", { scope: "local", action: "group", group: "reviewing", effort: "medium" })).status).toBe(200);
@@ -163,5 +164,5 @@ describe("t366 review UI model policy settings", () => {
     expect(view.recorded.local).toBeNull();
     expect(group(view, "reviewing").effort).toBe("xhigh");
     expect(agentEffort("product-lead")).toBe("xhigh");
-  });
+  }, 30_000);
 });

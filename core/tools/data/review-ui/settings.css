@@ -38,3 +38,4 @@
 .settings-foot { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .settings-foot .settings-note { flex: 1; margin: 0; }
 .settings-block .settings-h { margin-bottom: 2px; }
+.settings-pin { display: inline-block; margin-left: 8px; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 999px; font-size: 12px; color: var(--ink); white-space: nowrap; }

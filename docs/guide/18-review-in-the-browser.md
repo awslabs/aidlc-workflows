@@ -321,8 +321,11 @@ same `aidlc config models` command the terminal uses, so the transaction,
 refresh guard, and doctor checks are identical, and it applies to runs started
 afterwards. The footer chooses the layer — **Project** (`aidlc.settings.json`
 and the agent files; commit them) or **Only me** (`aidlc.settings.local.json`,
-this machine) — and **Reset** clears that layer; there is no per-dial undo,
-because the command has none. **About** lists this review UI's version,
+this machine) — and **Reset** clears that layer. There is no per-dial undo:
+`config models` has no unset and `--reset` cannot be combined with other flags,
+so removing one dial would mean reset-then-replay across processes, which is not
+atomic for your settings; the browser offers *Inherit from default* only while
+it is true, and Reset otherwise. **About** lists this review UI's version,
 address, and runner.
 
 **Several intents at once.** Each run is bound to its own intent (the

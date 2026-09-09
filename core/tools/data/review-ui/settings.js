@@ -18,9 +18,9 @@ const PAGES = [
   { id: "about", label: "About" },
 ];
 const PRESETS = [
-  { id: "thorough", label: "Thorough", summary: "Reviewers think hardest" },
-  { id: "balanced", label: "Balanced", summary: "The shipped reviewer baseline" },
-  { id: "minimal", label: "Minimal", summary: "Lighter reviews, brief write-ups" },
+  { id: "thorough", label: "Thorough", summary: "Reviewers xhigh · everyone else inherits" },
+  { id: "balanced", label: "Balanced", summary: "Reviewers medium · the shipped baseline" },
+  { id: "minimal", label: "Minimal", summary: "Reviewers medium · writers low" },
 ];
 const GROUPS = [
   { id: "deciding", label: "Deciding" },
@@ -91,16 +91,22 @@ function modelsPage() {
   const efforts = policy?.efforts || ["low", "medium", "high", "xhigh"];
   const exceptions = policy?.exceptions || [];
   const agentsForPicker = policy ? policy.groups.flatMap((group) => group.agents).sort() : [];
+  const recorded = policy?.recorded?.[scope];
   const groupRow = (group) => {
-    const inherits = group.effort === INHERIT;
+    // The select shows this layer's dial. "Inherit from default" is the state
+    // of having none; once a dial is recorded the command has no way to remove
+    // just that one (--reset cannot combine with other flags), so the option is
+    // offered only while it is true - Reset below clears the layer.
+    const dial = recorded?.groups?.[group.id] || "";
     const source = groupSource(policy, group.id, group.effort);
+    const effective = group.effort === INHERIT ? "inherits" : group.effort;
     return `<div class="settings-row">
       <span class="l">${escapeHtml(group.label)}<small>${escapeHtml(group.agents.join(", "))}</small></span>
-      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" ${inherits ? "" : `title="To return this group to inheriting, reset the layer below"`}>
-        ${inherits ? `<option value="" selected>Inherit from default</option>` : ""}
-        ${efforts.map((level) => `<option value="${level}" ${group.effort === level ? "selected" : ""}>${level}</option>`).join("")}
+      <select data-group="${group.id}" aria-label="${escapeHtml(group.label)} effort" ${dial ? `title="Recorded ${scope === "project" ? "in the project" : "for you"}; Reset below returns every group to inherit"` : ""}>
+        ${dial ? "" : `<option value="" selected>Inherit from default</option>`}
+        ${efforts.map((level) => `<option value="${level}" ${dial === level ? "selected" : ""}>${level}</option>`).join("")}
       </select>
-      <span class="settings-source">${source ? escapeHtml(source) : ""}</span>
+      <span class="settings-source" title="What this group runs at, and why">${dial ? "" : `${escapeHtml(effective)}${source ? ` · ${escapeHtml(source)}` : ""}`}</span>
     </div>`;
   };
   return `<h3>Models &amp; effort</h3>
@@ -122,7 +128,9 @@ function modelsPage() {
       ${policy ? policy.groups.map(groupRow).join("") : ""}
       <div class="settings-row">
         <span class="l">Exceptions<small>One agent pinned to its own effort or model</small></span>
-        <span class="c settings-exceptions-summary">${exceptions.length ? exceptions.map((entry) => `${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}`).join(", ") : "none"}</span>
+        <span class="c settings-exceptions-summary">${exceptions.length
+          ? exceptions.map((entry) => `<span class="settings-pin" title="Unpin from the terminal or Reset the layer">${escapeHtml(entry.agent)} · ${escapeHtml(entry.effort || "inherit")}${entry.model ? ` · ${escapeHtml(entry.model)}` : ""}</span>`).join("")
+          : "none"}</span>
         <button type="button" class="btn" data-add-exception ${policy ? "" : "disabled"}>${addingException ? "Cancel" : "Add…"}</button>
       </div>
       ${addingException ? `<form class="settings-exception-form" data-exception-form>

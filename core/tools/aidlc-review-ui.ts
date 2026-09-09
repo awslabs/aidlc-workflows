@@ -1529,6 +1529,7 @@ function modelPolicyArgv(change: ModelPolicyChange): string[] {
   }
 }
 
+
 /** argv for the public `config models` command: the binary when compiled, the dispatcher file under bun. */
 function configModelsCommand(projectDir: string, args: readonly string[]): string[] {
   const scoped = [...args, "--project-dir", projectDir];
@@ -1536,22 +1537,31 @@ function configModelsCommand(projectDir: string, args: readonly string[]): strin
     ?? [process.execPath, join(import.meta.dir, "aidlc.ts"), "config", "models", ...scoped];
 }
 
-async function modelsPolicyResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
-  const { scope, change } = parseModelPolicyChange(await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES));
-  const result = Bun.spawnSync({
-    cmd: configModelsCommand(projectDir, [...modelPolicyArgv(change), `--${scope}`, "--yes"]),
-    cwd: projectDir,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+function runConfigModels(projectDir: string, args: readonly string[]): string {
+  const result = Bun.spawnSync({ cmd: configModelsCommand(projectDir, args), cwd: projectDir, stdout: "pipe", stderr: "pipe" });
   const output = `${result.stdout.toString()}\n${result.stderr.toString()}`.trim();
   if (result.exitCode !== 0) {
     const detail = output.replace(/\s+/g, " ").slice(0, 400);
     throw new HttpError(result.exitCode === 2 ? 400 : 500, `config models refused: ${detail}`);
   }
+  return output;
+}
+
+// Policy mutations run one at a time; the command itself is one transaction
+// per call, and there is deliberately no per-entry clear here: `--reset`
+// cannot be combined with other flags, so removing one dial would mean reset
+// plus replay across processes - not atomic for the human's settings. Reset
+// clears a whole layer; the terminal does the rest.
+let policyMutation: Promise<unknown> = Promise.resolve();
+
+async function modelsPolicyResponse(projectDir: string, request: Request, publishState: () => void): Promise<Response> {
+  const { scope, change } = parseModelPolicyChange(await readJsonBody(request, MAX_INTENT_REQUEST_BODY_BYTES));
+  const run = policyMutation.then(() => runConfigModels(projectDir, [...modelPolicyArgv(change), `--${scope}`, "--yes"]));
+  policyMutation = run.catch(() => undefined);
+  const output = await run;
   publishState();
   // "Outstanding actions" the CLI prints are advisory follow-ups for the human.
-  const notes = output.split("\n").filter((line) => /^\s{2}\S/.test(line)).map((line) => line.trim()).slice(0, 6);
+  const notes = [...new Set(output.split("\n").filter((line) => /^\s{2}\S/.test(line)).map((line) => line.trim()))].slice(0, 6);
   return json({ ok: true, scope, change, notes, models_policy: modelsPolicyView(projectDir) });
 }
 
