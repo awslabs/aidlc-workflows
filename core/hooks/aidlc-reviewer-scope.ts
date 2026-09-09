@@ -319,7 +319,7 @@ function verdict(target: string): ScopeVerdict {
 // the path was implied rather than typed. A non-block or null verdict is
 // passed through untouched.
 function markDefaulted(v: ScopeVerdict | null): ScopeVerdict | null {
-  return v && v.block ? { ...v, defaulted: true } : v;
+  return v?.block ? { ...v, defaulted: true } : v;
 }
 
 function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | null {
@@ -402,7 +402,7 @@ function shellTokens(command: string): ShellToken[] {
   let text = "";
   let quoted = false;
   const pushWord = () => {
-    if (text.length > 0) tokens.push({ text, quoted });
+    if (text.length > 0 || quoted) tokens.push({ text, quoted });
     text = "";
     quoted = false;
   };
@@ -447,9 +447,8 @@ function shellTokens(command: string): ShellToken[] {
 }
 
 // A command segment plus whether it receives its stdin from a pipe (the
-// preceding separator was a single `|`). A `pipedFrom` segment that names no
-// path reads stdin, not the filesystem - so a no-operand search there opens no
-// file and must not be judged as a recursive sweep of ".".
+// preceding separator was a single `|`). The command's options still decide
+// whether it searches that stream or traverses files (e.g. `rg --files`).
 interface ShellSegment {
   words: ShellWord[];
   pipedFrom: boolean;
@@ -488,37 +487,115 @@ function firstOperand(words: ShellWord[]): number {
   return -1;
 }
 
+const GREP_VALUE_OPTIONS = new Set([
+  "--after-context", "--before-context", "--binary-files", "--context",
+  "--devices", "--directories", "--exclude", "--exclude-dir", "--exclude-from",
+  "--file", "--group-separator", "--include", "--include-dir", "--label",
+  "--max-count", "--regexp",
+]);
+const RG_VALUE_OPTIONS = new Set([
+  "--after-context", "--before-context", "--color", "--colors", "--context",
+  "--context-separator", "--dfa-size-limit", "--encoding", "--engine",
+  "--field-context-separator", "--field-match-separator", "--file", "--generate",
+  "--glob", "--hostname-bin", "--hyperlink-format", "--iglob", "--ignore-file",
+  "--max-columns", "--max-count", "--max-depth", "--max-filesize", "--path-separator",
+  "--pre", "--pre-glob", "--regex-size-limit", "--regexp", "--replace", "--sort",
+  "--sortr", "--threads", "--type", "--type-add", "--type-clear", "--type-not",
+]);
+
+// Parse options before deciding which positional word is a content pattern.
+// With -e/-f (even after an operand), every positional word names a file.
+// Short options may be bundled, and the rest of an argument-taking option's
+// word is its value: `-nefoo` is -n plus the pattern "foo", not more flags.
+function searchArguments(words: ShellWord[], ripgrep: boolean): {
+  paths: string[];
+  inputFiles: string[];
+  globs: string[];
+  searchesFiles: boolean;
+} {
+  const paths: string[] = [];
+  const inputFiles: string[] = [];
+  const globs: string[] = [];
+  let patternSupplied = false;
+  let listsFiles = false;
+  let recursive = false;
+  let stdinPatterns = false;
+  let optionsEnded = false;
+  const valueOptions = ripgrep ? RG_VALUE_OPTIONS : GREP_VALUE_OPTIONS;
+  const shortValueOptions = ripgrep ? "ABCEMdefgjmrtT" : "ABCDdefm";
+  const option = (name: string, value: string) => {
+    if (name === "-e" || name === "--regexp") {
+      patternSupplied = true;
+    } else if (name === "-f" || name === "--file") {
+      patternSupplied = true;
+      inputFiles.push(value);
+      stdinPatterns ||= value === "-";
+    } else if (name === "--exclude-from" || name === "--ignore-file") {
+      inputFiles.push(value);
+    } else if (ripgrep && (name === "-g" || name === "--glob" || name === "--iglob")) {
+      globs.push(value);
+    } else if (ripgrep && name === "--files") {
+      listsFiles = true;
+    } else if (!ripgrep) {
+      if (["-r", "-R", "--recursive", "--dereference-recursive"].includes(name)) {
+        recursive = true;
+      } else if (name === "-d" || name === "--directories") {
+        recursive = value === "recurse";
+      }
+    }
+  };
+
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].text;
+    if (!optionsEnded && w === "--") {
+      optionsEnded = true;
+    } else if (!optionsEnded && w.startsWith("--")) {
+      const equals = w.indexOf("=");
+      const name = equals === -1 ? w : w.slice(0, equals);
+      const value = equals !== -1
+        ? w.slice(equals + 1)
+        : valueOptions.has(name) ? (words[++i]?.text ?? "") : "";
+      option(name, value);
+    } else if (!optionsEnded && isOption(w)) {
+      for (let j = 1; j < w.length; j++) {
+        const takesValue = shortValueOptions.includes(w[j]);
+        const value = takesValue ? (w.slice(j + 1) || words[++i]?.text || "") : "";
+        option(`-${w[j]}`, value);
+        if (takesValue) break;
+      }
+    } else {
+      paths.push(w);
+    }
+  }
+  if (!patternSupplied && !listsFiles) paths.shift();
+  return {
+    paths,
+    inputFiles,
+    globs,
+    searchesFiles: ripgrep ? listsFiles || stdinPatterns : recursive,
+  };
+}
+
 function judgeGrepLike(
   words: ShellWord[],
   scope: PreparedScope,
   bases: readonly string[],
   readsStdin: boolean,
 ): ScopeVerdict | null {
-  let patternSeen = false;
-  let rootSeen = false;
-  for (let i = 1; i < words.length; i++) {
-    const w = words[i].text;
-    if (w === "-e" || w === "--regexp") {
-      i++; // content pattern
-      patternSeen = true;
-      continue;
-    }
-    if (w === "-f" || w === "--file") {
-      i++; // pattern file, not a searched construction artifact
-      continue;
-    }
-    if (isOption(w)) continue;
-    if (!patternSeen) {
-      patternSeen = true;
-      continue;
-    }
-    rootSeen = true;
-    const v = judgePathAccess(w, "search-root", scope, bases);
+  const args = searchArguments(words, false);
+  for (const file of args.inputFiles) {
+    if (file === "-") continue;
+    const v = judgePathAccess(file, "target", scope, bases);
     if (v !== null) return v;
   }
-  // No path operand: a downstream pipe segment reads stdin and opens no file
-  // (allow). Only a first-segment `grep pat` keeps the conservative "." reading.
-  if (rootSeen || readsStdin) return null;
+  for (const path of args.paths) {
+    if (path === "-") continue;
+    const v = judgePathAccess(path, "search-root", scope, bases);
+    if (v !== null) return v;
+  }
+  // GNU grep's recursive mode defaults to "." even with piped stdin. Plain
+  // filters can use the pipe; first-segment searches keep the conservative root.
+  if (args.paths.length > 0 || (readsStdin && !args.searchesFiles)) return null;
   return markDefaulted(judgePathAccess(".", "search-root", scope, bases));
 }
 
@@ -528,39 +605,27 @@ function judgeRipgrep(
   bases: readonly string[],
   readsStdin: boolean,
 ): ScopeVerdict | null {
-  let patternSeen = false;
-  let rootSeen = false;
-  let constrainedToCurrent = false;
-  for (let i = 1; i < words.length; i++) {
-    const w = words[i].text;
-    if (w === "-g" || w === "--glob") {
-      const glob = words[++i]?.text ?? "";
-      if (glob.length > 0) {
-        const v = judgePathAccess(glob, "target", scope, bases);
-        if (v !== null) return v;
-        constrainedToCurrent ||= patternLimitsToCurrentUnit(glob, scope);
-      }
-      continue;
-    }
-    if (w.startsWith("--glob=")) {
-      const glob = w.slice("--glob=".length);
-      const v = judgePathAccess(glob, "target", scope, bases);
-      if (v !== null) return v;
-      constrainedToCurrent ||= patternLimitsToCurrentUnit(glob, scope);
-      continue;
-    }
-    if (isOption(w)) continue;
-    if (!patternSeen) {
-      patternSeen = true;
-      continue;
-    }
-    rootSeen = true;
-    const v = judgePathAccess(w, "search-root", scope, bases);
+  const args = searchArguments(words, true);
+  for (const file of args.inputFiles) {
+    if (file === "-") continue;
+    const v = judgePathAccess(file, "target", scope, bases);
     if (v !== null) return v;
   }
-  // Same stdin reasoning as judgeGrepLike; the `!constrainedToCurrent` guard
-  // (a `-g`/`--glob` that pins the search to the current unit) is preserved.
-  if (rootSeen || constrainedToCurrent || readsStdin) return null;
+  let constrainedToCurrent = false;
+  for (const glob of args.globs) {
+    if (glob.length === 0) continue;
+    const v = judgePathAccess(glob, "target", scope, bases);
+    if (v !== null) return v;
+    constrainedToCurrent ||= patternLimitsToCurrentUnit(glob, scope);
+  }
+  for (const path of args.paths) {
+    if (path === "-") continue;
+    const v = judgePathAccess(path, "search-root", scope, bases);
+    if (v !== null) return v;
+  }
+  // --files traverses directories; -f - consumes the pipe as patterns and then
+  // searches files. Preserve the explicit current-unit glob exception.
+  if (args.paths.length > 0 || constrainedToCurrent || (readsStdin && !args.searchesFiles)) return null;
   return markDefaulted(judgePathAccess(".", "search-root", scope, bases));
 }
 
@@ -730,8 +795,7 @@ export function parseDispatchRecord(raw: string): ReviewerDispatch | null {
 export function blockReason(target: string, dispatch: ReviewerDispatch, defaulted = false): string {
   const defaultNote = defaulted
     ? ` (this command names no path, so "${target}" is the implicit recursive search ` +
-      `root it falls back to - not a path you typed; give it an explicit in-scope path ` +
-      `or pipe its input instead)`
+      `root it falls back to - not a path you typed; give it an explicit in-scope path)`
     : "";
   return (
     `This review cannot open "${target}"${defaultNote} because it belongs to another unit; the current ` +

@@ -214,8 +214,8 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       block: true,
     },
     // -- piped stdin-reading search (no path operand) --------------------------
-    // A search command downstream of a pipe reads stdin and opens no file, so a
-    // no-operand grep/rg there must NOT be judged as a recursive sweep of ".".
+    // An ordinary search downstream of a pipe filters stdin. Modes that still
+    // traverse files (recursive grep, rg --files/-f -) are covered below.
     // The first segment (an in-scope path) is allowed on its own merits.
     {
       name: "piped no-operand grep (2nd segment) reads stdin -> allowed",
@@ -425,6 +425,91 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Additional option parsing cases for the pipeline stdin exception.
+// ---------------------------------------------------------------------------
+
+describe("t221 piped search options preserve the reviewer boundary", () => {
+  const own = "construction/U03-scoring/nfr.md";
+  const sibling = "construction/U01-infra/private.md";
+  const pipe = `cat ${own} |`;
+  const judge = (command: string) =>
+    evaluateReviewerScope("Bash", { command }, DISPATCH, SCOPE_CONTEXT);
+
+  for (const command of ["grep", "rg"]) {
+    for (const options of [
+      "-e needle", "-eneedle", "-ne needle", "-neneedle",
+      "--regexp needle", "--regexp=needle", "-e ''",
+      "-f patterns.txt", "-fpatterns.txt", "-nfpatterns.txt", "--file=patterns.txt",
+      "-A 2 --regexp=needle",
+    ]) {
+      test(`${command} ${options}: check file operands while allowing stdin and current-unit files`, () => {
+        expect(judge(`${pipe} ${command} ${options} ${sibling}`)).toMatchObject({
+          block: true, target: sibling,
+        });
+        expect(judge(`${pipe} ${command} ${options} ${own}`).block).toBe(false);
+        expect(judge(`${pipe} ${command} ${options}`).block).toBe(false);
+      });
+    }
+    test(`${command}: pattern options can follow file operands`, () => {
+      expect(judge(`${pipe} ${command} ${sibling} --regexp=needle`)).toMatchObject({
+        block: true, target: sibling,
+      });
+    });
+    test(`${command}: a sibling pattern file is still a file read`, () => {
+      expect(judge(`${pipe} ${command} -f ${sibling}`)).toMatchObject({
+        block: true, target: sibling,
+      });
+      expect(judge(`${pipe} ${command} -f ${own}`).block).toBe(false);
+    });
+    test(`${command}: -- ends options and an empty quoted pattern stays a pattern`, () => {
+      expect(judge(`${pipe} ${command} '' ${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} -e needle -- -outside/${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} -- -needle`).block).toBe(false);
+      expect(judge(`${pipe} ${command} -e ${sibling}`).block).toBe(false);
+    });
+    test(`${command}: explicit sibling operands and input redirections still block`, () => {
+      expect(judge(`${pipe} ${command} needle ${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} needle < ${sibling}`).block).toBe(true);
+    });
+  }
+  for (const command of [
+    "rg --files", "rg -f -", "rg -f-", "rg --file=-",
+    "grep -rn needle", "grep -Rn needle", "grep --recursive needle",
+    "grep --dereference-recursive needle", "grep -d recurse needle",
+    "grep --directories=recurse needle",
+  ]) {
+    test(`${command} still traverses the implicit root after a pipe`, () => {
+      expect(judge(`${pipe} ${command}`)).toMatchObject({
+        block: true, target: ".", defaulted: true,
+      });
+      expect(judge(`${pipe} ${command} ${own}`).block).toBe(false);
+    });
+  }
+  test("rg filesystem modes preserve a current-unit glob constraint", () => {
+    for (const options of ["--files", "-f -"]) {
+      expect(judge(`${pipe} rg ${options} -g 'construction/U03-scoring/**'`).block).toBe(false);
+      expect(judge(`${pipe} rg ${options} --glob='construction/U01-infra/**'`).block).toBe(true);
+    }
+  });
+  test("option values are not parsed as more flags", () => {
+    expect(judge(`${pipe} grep -erecursive`).block).toBe(false);
+    expect(judge(`${pipe} rg -r replacement needle`).block).toBe(false);
+  });
+  test("grep/ripgrep aliases enforce the same option-supplied file operands", () => {
+    for (const command of ["egrep", "fgrep", "ripgrep"]) {
+      expect(judge(`${pipe} ${command} -eneedle ${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} -eneedle`).block).toBe(false);
+    }
+  });
+  test("a pipe does not exempt a later command after a chain or group separator", () => {
+    for (const separator of ["&&", "||", ";", "&"]) {
+      expect(judge(`${pipe} grep needle ${separator} rg needle`).block).toBe(true);
+    }
+    expect(judge("(rg needle)").block).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (b) Dispatch-record lifecycle - the SHIPPED hook as a subprocess.
 // ---------------------------------------------------------------------------
 
@@ -565,6 +650,23 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     });
     expect(firstSeg.code).toBe(2);
     expect(firstSeg.stderr).toContain("names no path");
+  });
+
+  test("piped filesystem modes and option-supplied sibling operands -> exit 2", () => {
+    const proj = scratchProject();
+    seedRecord(proj);
+    for (const command of [
+      "echo x | rg --files",
+      "echo x | rg -f -",
+      "echo x | grep -rn x",
+      "echo x | rg --regexp=x construction/U01-infra/private.md",
+      "echo x | grep -ex construction/U01-infra/private.md",
+      "echo x | grep -f patterns.txt construction/U01-infra/private.md",
+    ]) {
+      const result = runHook(proj, { ...SIBLING_SWEEP, tool_input: { command } });
+      expect(result.code, command).toBe(2);
+      expect(result.stderr).toContain("This review cannot open");
+    }
   });
 
   test("no record -> exit 0 even for a reviewer sibling sweep (nothing sound to enforce)", () => {
