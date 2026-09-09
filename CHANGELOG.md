@@ -1,6 +1,42 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.5] - 2026-09-08
+
+Fixes three facets of the plan-approval-guard trap that blocked the conductor
+at the code-generation boundary on Devin 3000.6.14. Shell redirects
+(`2>/dev/null`, `2>&1`) no longer defeat the framework-tool exemption;
+`tool_input.workdir` is now lifted into the top-level `cwd` so the guard
+resolves framework-tool script paths against the directory the conductor
+ran the command in; and `git add`/`git commit` of inception-phase artifacts
+is no longer blocked at the code-generation boundary. **Upgrade:** re-copy
+`dist/devin/` (and `dist/codex/` if you use codex) into your project, then
+fully restart Devin CLI.
+
+* plan-approval-guard: pseudo-device redirects (`/dev/null`, `/dev/stdout`,
+  `/dev/stderr`) are excluded from mutation-target detection, and opaque-shell
+  `2>&1` wrappers around framework-tool invocations no longer trap the
+  early-exit. Pre-fix, `bun .devin/tools/aidlc-orchestrate.ts next 2>/dev/null`
+  was blocked because the redirect produced a write target, preventing the
+  early-exit and falling through to the directive check.
+* devin + codex adapters: `tool_input.workdir` is now lifted into the
+  top-level `cwd` field before piping to the core plan-approval-guard, so
+  `isFrameworkToolInvocation` resolves framework-tool script paths against
+  the directory the conductor ran the command in. Pre-fix, a `bun
+  .devin/tools/aidlc-*.ts` command run from a subdirectory could fail the
+  framework-tool exemption because the guard resolved the script path
+  against the project root.
+* plan-approval-guard: `git add` and `git commit` are now allowed at the
+  code-generation boundary when the active directive is not a v2
+  code-generation run-stage. Pre-fix, all `git` commands (including
+  `git add`/`git commit` of inception-phase artifacts) were blocked because
+  `git` is not in `READ_ONLY_SHELL_COMMANDS` and `add`/`commit` are not in
+  `READ_ONLY_GIT_SUBCOMMANDS`. `git push`, `git reset --hard`, and other
+  mutating git subcommands are still blocked.
+* Tests: t265 +6 (redirect exclusion, 2>&1 opaque-shell, real-write
+  regression, git add/commit allowed, git push blocked), t332 +2 (workdir
+  lifted, no-workdir no-regression), t149 +1 (codex workdir parity).
+
 ## [2.7.4] - 2026-09-08
 
 Fixes two framework bugs that combined to block every path to recording a Plan Approval receipt on Devin 3000.6.14. The Devin/codex adapters now recognize Devin's native `ask_user_question` answer shape (keyed by question text, value is an array of `{selected, custom_text}` objects) alongside the existing Claude Code shape, so a human's `ask_user_question` answer mints a `HUMAN_TURN` audit event and writes the Plan Approval response file. The Stop hook now allows the stop before its engine probe when a pending Plan Approval challenge exists, so the probe can no longer delete the challenge before the pending-question carve-out protects it. **Upgrade:** re-copy `dist/devin/` (and `dist/codex/` if you use codex) into your project, then fully restart Devin CLI.

@@ -373,6 +373,28 @@ function rewriteStdinToolName(rawInput: string, devin: DevinHookInput): string {
   }
 }
 
+// Lift tool_input.workdir into the top-level cwd field the core
+// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:665).
+// The guard's isFrameworkToolInvocation resolves framework-tool script
+// paths against cwd (resolve(cwd, script) at line 487). Without this lift,
+// a `bun .devin/tools/aidlc-*.ts` command run from a subdirectory (Devin
+// passes the subdirectory as workdir) fails the framework-tool exemption
+// because the guard resolves the script path against the project root.
+function rewriteStdinCwd(rawInput: string, devin: DevinHookInput): string {
+  const workdir = devin.tool_input?.workdir;
+  if (typeof workdir !== "string" || !workdir) return rawInput;
+  try {
+    const parsed = JSON.parse(rawInput) as Record<string, unknown>;
+    if (typeof parsed.cwd !== "string" || !parsed.cwd) {
+      parsed.cwd = workdir;
+      return JSON.stringify(parsed);
+    }
+    return rawInput;
+  } catch {
+    return rawInput;
+  }
+}
+
 // --- apply_patch envelope parsing --------------------------------------------
 //
 // Same parser as the codex adapter: extracts *** Add|Update File: directives
@@ -617,14 +639,17 @@ export async function run(
 
     case "plan-approval-guard": {
       // PreToolUse: code-generation's plan-before-generation ordering.
-      // exec→Bash: pipe to the core guard (stderr variant).
+      // exec→Bash: pipe to the core guard (stderr variant). tool_input.workdir
+      //   is lifted into the top-level cwd first so the guard resolves
+      //   framework-tool script paths against the subdirectory (the cwd the
+      //   conductor actually ran the command from), not the project root.
       // edit/write/apply_patch→ fan out one Write per touched path.
       // run_subagent→ normalize to the core Task shape
       //   {PreToolUse, Task, {subagent_type, prompt}}. Only block for the
       //   developer agent target (mirror codex's early-allow for non-developer).
       // Block contract: exit 2 + stderr.
       if (tool === "exec") {
-        const rewritten = rewriteStdinToolName(rawInput, devin);
+        const rewritten = rewriteStdinCwd(rewriteStdinToolName(rawInput, devin), devin);
         const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rewritten);
         if (r.code === 2) {
           process.stderr.write(r.stderr);

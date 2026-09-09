@@ -80,6 +80,7 @@ import {
   evaluateCodeGenerationApproval,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
+import { shellCommandInvocations } from "./aidlc-review-freeze.ts";
 
 export {
   questionsFileApproved,
@@ -579,6 +580,19 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
+/**
+ * Compute the workspace mutation intent for a tool call: the concrete write
+ * targets, whether the shell command is opaque (dynamic evaluation or a
+ * mutation-capable invocation), and the raw shell command.
+ *
+ * `git add` and `git commit` are carved out as non-mutations: they checkpoint
+ * already-completed inception work (scope, codekb, intents, memory), not
+ * code-generation writes. The guard's purpose is to prevent code-generation
+ * before Plan Approval, not to prevent git checkpointing of inception
+ * artifacts. `git add`/`git commit` return an empty-target, non-opaque intent
+ * and take the early-exit path. This carve-out is scoped to the
+ * plan-approval-guard only — review-freeze is unaffected.
+ */
 async function mutationIntent(
   projectDir: string,
   toolName: string,
@@ -597,6 +611,28 @@ async function mutationIntent(
     const { shellCommandInvocations, shellWriteTargets } = await import(
       "./aidlc-review-freeze.ts"
     );
+    // `git add` and `git commit` of inception-phase artifacts (scope, codekb,
+    // intents, memory) are not code-generation writes. The guard's purpose is
+    // to prevent code-generation before Plan Approval, not to prevent git
+    // checkpointing of already-completed inception work. Treat `git add` and
+    // `git commit` as non-opaque (allow the early-exit) — the mutation-target
+    // detection already determines whether the command touches concrete files,
+    // and `git add`/`git commit` do not produce write targets via
+    // `shellWriteTargets`. The block happens in `shellInvocationNeedsApproval`,
+    // which returns true for `git add`/`git commit` because they are not in
+    // `READ_ONLY_GIT_SUBCOMMANDS`. This carve-out overrides that for the
+    // plan-approval-guard only — review-freeze is unaffected.
+    if (toolName === "Bash" && typeof command === "string") {
+      const invocations = shellCommandInvocations(command);
+      const isGitAddOrCommit = invocations.some(
+        (inv) =>
+          normalizedCommandName(inv.name) === "git" &&
+          ["add", "commit"].includes(gitSubcommand(inv.args) ?? ""),
+      );
+      if (isGitAddOrCommit) {
+        return { targets: [], opaqueShell: false, shellCommand: command };
+      }
+    }
     targets = shellWriteTargets(command, cwd);
     opaqueShell =
       shellUsesDynamicEvaluation(command) ||
@@ -703,7 +739,33 @@ export async function run(input: string): Promise<number> {
             opaqueShell: true,
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
-    if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
+    // Shell redirects to pseudo-devices (2>/dev/null, 2>&1, 1>/dev/null) produce
+    // write targets that defeat the framework-tool exemption: the guard sees
+    // targets.length > 0, skips the early-exit, and falls through to the
+    // directive check, which blocks bare `bun .devin/tools/aidlc-*.ts next`
+    // commands run with any redirect. Pseudo-device redirects are semantically
+    // no-ops (they discard or pass through output), so exclude them from the
+    // mutation-target count for the early-exit path. Real file redirects are
+    // still tracked.
+    const PSEUDO_DEVICES = new Set(["/dev/null", "/dev/stdout", "/dev/stderr"]);
+    const realTargets = mutation.targets.filter(
+      (t) => !PSEUDO_DEVICES.has(resolve(t)),
+    );
+    // `2>&1` and similar redirects take the opaque-shell path (the parser
+    // reports an extra command). For framework-tool invocations, the exemption
+    // already trusts the command; an opaque shell wrapper around a trusted
+    // command should not trap it. Re-resolve the invocation to check.
+    const isFrameworkBash =
+      toolName === "Bash" &&
+      typeof toolInput.command === "string" &&
+      shellCommandInvocations(toolInput.command).some(
+        (inv) => isFrameworkToolInvocation(projectDir, cwd, inv.name, inv.args),
+      );
+    if (
+      !guardedDispatch &&
+      realTargets.length === 0 &&
+      (!mutation.opaqueShell || isFrameworkBash)
+    ) {
       return 0;
     }
 

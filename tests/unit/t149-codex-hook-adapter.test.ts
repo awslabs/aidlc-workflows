@@ -609,6 +609,51 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("2e: plan-approval-guard lifts tool_input.workdir into the top-level cwd (Facet B parity)", () => {
+    // Facet B parity: the codex adapter's rewriteStdinCwd lifts
+    // tool_input.workdir into the top-level cwd the core guard reads
+    // (parsed.cwd at aidlc-plan-approval-guard.ts:701). The guard's
+    // isFrameworkToolInvocation resolves a `bun .codex/tools/aidlc-*.ts`
+    // script against cwd (resolve(cwd, script) at line 488); the
+    // framework-tool exemption succeeds only when that resolves into the
+    // project's .codex/tools. With the lift, cwd = the workdir; without it,
+    // an absent top-level cwd falls back to the project dir (where
+    // .codex/tools exists). So a workdir pointing at a directory with NO
+    // .codex/tools proves the lift happened: the exemption fails and the
+    // unapproved code-generation command blocks (exit 2). The control below
+    // pins that the same command is exempt (exit 0) when cwd resolves to the
+    // project dir — i.e. the block is caused by the cwd lift, not the command.
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const command = "bun .codex/tools/aidlc-orchestrate.ts next";
+
+      // Lifted: top-level cwd intentionally absent, workdir = a dir with no
+      // .codex/tools. The adapter must lift workdir into cwd, so the guard
+      // resolves the script against /tmp/subdir → exemption fails → block.
+      const lifted = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command, workdir: "/tmp/subdir" },
+      });
+      expect(lifted.code).toBe(2);
+      expect(lifted.stderr).toContain("Code generation cannot");
+
+      // Control: top-level cwd = the project dir, no workdir. The guard
+      // resolves the script against the project dir (.codex/tools exists)
+      // → exemption succeeds → allow (exit 0).
+      const control = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+      expect(control.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("2d: another spawn target is not blocked when its message mentions the developer agent", () => {
     const dir = scratchProject(true);
     try {

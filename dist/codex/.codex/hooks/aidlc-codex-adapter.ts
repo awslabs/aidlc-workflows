@@ -277,6 +277,28 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
   return "";
 }
 
+// Lift tool_input.workdir into the top-level cwd field the core
+// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:665).
+// The guard's isFrameworkToolInvocation resolves framework-tool script
+// paths against cwd (resolve(cwd, script) at line 487). Without this lift,
+// a `bun .codex/hooks/aidlc-*.ts` command run from a subdirectory (Codex
+// passes the subdirectory as workdir) fails the framework-tool exemption
+// because the guard resolves the script path against the project root.
+function rewriteStdinCwd(rawInput: string, codex: CodexHookInput): string {
+  const workdir = codex.tool_input?.workdir;
+  if (typeof workdir !== "string" || !workdir) return rawInput;
+  try {
+    const parsed = JSON.parse(rawInput) as Record<string, unknown>;
+    if (typeof parsed.cwd !== "string" || !parsed.cwd) {
+      parsed.cwd = workdir;
+      return JSON.stringify(parsed);
+    }
+    return rawInput;
+  } catch {
+    return rawInput;
+  }
+}
+
 export async function run(
   target: string,
   input: string,
@@ -755,13 +777,17 @@ switch (target) {
 
   case "plan-approval-guard": {
     // PreToolUse: code-generation's plan-before-generation ordering. Bash
-    // forwards directly; apply_patch fans out one Write call per touched path;
-    // spawn_agent is normalized to the core Task shape. The block contract is
-    // exit 2 + stderr, cached like reviewer-scope so duplicate delivery replays
-    // the block faithfully.
+    // forwards directly; tool_input.workdir is lifted into the top-level cwd
+    // first so the guard resolves framework-tool script paths against the
+    // subdirectory (the cwd the conductor actually ran the command from),
+    // not the project root. apply_patch fans out one Write call per touched
+    // path; spawn_agent is normalized to the core Task shape. The block
+    // contract is exit 2 + stderr, cached like reviewer-scope so duplicate
+    // delivery replays the block faithfully.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
-      const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rawInput);
+      const rewritten = rewriteStdinCwd(rawInput, codex);
+      const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rewritten);
       persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
       if (r.code === 2) {
         process.stderr.write(r.stderr);

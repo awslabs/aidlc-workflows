@@ -29,6 +29,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -51,7 +52,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { writePlanApprovalChallenge } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
+import { writeActiveDirectiveMarker, writePlanApprovalChallenge } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEVIN_TREE = join(REPO_ROOT, "dist", "devin", ".devin");
@@ -117,6 +118,26 @@ function scratchProject(withState: boolean): string {
     writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
   }
   return dir;
+}
+
+/** Seed the state into the code-generation stage with an unapproved active
+ *  directive, so the plan-approval-guard actually enforces (it fails open with
+ *  no state or a non-code-generation stage). Mirrors t149's helper. */
+function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
+  const state = readFileSync(seededStateFile(dir), "utf-8").replace(
+    /(- \*\*Current Stage\*\*:\s*)[^\n]+/,
+    `$1code-generation`,
+  );
+  writeFileSync(seededStateFile(dir), state, "utf-8");
+  writeActiveDirectiveMarker(dir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit,
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
+  mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
+    recursive: true,
+  });
 }
 
 /** Concatenate every audit shard (clone-id-name-agnostic read). */
@@ -600,6 +621,68 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       const r = runAdapter(dir, "state-transition-guard", payload);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("Stage status cannot be changed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- plan-approval-guard: Facet B — workdir lifted into cwd ---
+
+  test("17b: plan-approval-guard exec with tool_input.workdir lifts workdir into cwd (framework-tool exemption fails from subdir)", () => {
+    // Facet B: rewriteStdinCwd lifts tool_input.workdir into the top-level cwd
+    // field before piping to the core plan-approval-guard. The guard's
+    // isFrameworkToolInvocation resolves the script path against cwd
+    // (resolve(cwd, script) at guard line 487). When workdir is a subdirectory,
+    // the resolved path no longer matches the trusted tools dir
+    // (<projectDir>/.devin/tools), so the framework-tool exemption FAILS and
+    // the command is treated as an opaque shell mutation → blocked (exit 2).
+    // Without the lift, cwd defaults to projectDir and the exemption succeeds
+    // (exit 0) — a false exemption for a command actually running from a subdir.
+    // This asserts the EFFECT (exit 2 = the cwd lift happened), not just exit 0.
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const subdir = join(dir, "subdir");
+      mkdirSync(subdir, { recursive: true });
+      // Build a plan-approval-guard exec payload with tool_input.workdir set
+      // to a subdirectory and top-level cwd ABSENT (the lift condition).
+      const payload: Record<string, unknown> = {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec",
+        tool_input: {
+          command: "bun .devin/tools/aidlc-orchestrate.ts next",
+          workdir: subdir,
+        },
+      };
+      const r = runAdapter(dir, "plan-approval-guard", payload);
+      // With the lift: cwd = subdir → framework-tool exemption fails → blocked.
+      expect(r.code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("17c: plan-approval-guard exec with no workdir does not regress (cwd stays as-is, framework-tool exemption succeeds)", () => {
+    // No-regression: when tool_input.workdir is absent, rewriteStdinCwd is a
+    // no-op. The guard resolves the script path against the payload's cwd
+    // (here the project dir), the framework-tool exemption succeeds, and the
+    // command is allowed (exit 0). This must not change with the Facet B fix.
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      // Same command, NO workdir — the helper is a no-op.
+      const payload: Record<string, unknown> = {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "exec",
+        tool_input: {
+          command: "bun .devin/tools/aidlc-orchestrate.ts next",
+        },
+      };
+      const r = runAdapter(dir, "plan-approval-guard", payload);
+      // No workdir → no lift → cwd = project dir → framework-tool exemption
+      // succeeds → allowed (exit 0).
+      expect(r.code).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
