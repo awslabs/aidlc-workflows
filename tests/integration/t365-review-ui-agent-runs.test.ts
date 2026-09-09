@@ -192,18 +192,40 @@ describe("t365 review UI agent runs", () => {
     expect(stored.session_id).toMatch(/^fake-/);
   }, 60_000);
 
-  test("Continue re-prompts the idle session; Stop cancels a turn that waits on the human", async () => {
+  test("Continue re-prompts the idle session; a message typed mid-turn is queued and goes when the turn ends; Stop drops the queue", async () => {
     expect((await api("POST", "/api/run/prompt", { intent })).status).toBe(200);
     let view = await until(intent, (candidate) => candidate.pending.length > 0);
     expect(view.run.turns).toBe(2);
     expect(view.run.state).toBe("waiting");
-    // A prompt while the turn is live is refused; Stop cancels the turn and its pending input.
+    // Continue (the bare resume prompt) has no meaning mid-turn; a message does: it is queued, the run keeps going.
     expect((await api("POST", "/api/run/prompt", { intent })).status).toBe(409);
+    expect((await api("POST", "/api/run/prompt", { intent, text: "Also add a --json flag" })).status).toBe(200);
+    expect((await api("POST", "/api/run/prompt", { intent, text: "And keep the tests green" })).status).toBe(200);
+    view = await until(intent, (candidate) => candidate.queued.length === 2);
+    expect(view.run.state).toBe("waiting");
+    expect(view.events.filter((event) => event.kind === "queued").map((event) => event.text)).toEqual(["Also add a --json flag", "And keep the tests green"]);
+    // The turn ends (the permission and the question are answered): the queued text is the next prompt, as one message.
+    const permission = view.pending.find((input) => input.kind === "permission")!;
+    expect((await api("POST", "/api/run/permission", { intent, id: permission.id, option_id: "allow" })).status).toBe(200);
+    view = await until(intent, (candidate) => candidate.pending.some((input) => input.kind === "question"));
+    const question = view.pending.find((input) => input.kind === "question")!;
+    expect((await api("POST", "/api/run/question", { intent, id: question.id, action: "accept", content: { question_0_custom: "SQLite" } })).status).toBe(200);
+    view = await until(intent, (candidate) => candidate.run.turns === 3);
+    expect(view.queued).toEqual([]);
+    const starts = view.events.filter((event) => event.kind === "turn" && event.phase === "start").map((event) => event.prompt);
+    expect(starts[2]).toBe("Also add a --json flag\n\nAnd keep the tests green");
+
+    // Stop cancels the live turn, its pending input, and anything queued behind it.
+    view = await until(intent, (candidate) => candidate.pending.length > 0);
+    expect((await api("POST", "/api/run/prompt", { intent, text: "one more" })).status).toBe(200);
+    await until(intent, (candidate) => candidate.queued.length === 1);
     expect((await api("POST", "/api/run/cancel", { intent })).status).toBe(200);
     view = await until(intent, (candidate) => candidate.run.state === "idle");
     expect(view.run.last_stop_reason).toBe("cancelled");
     expect(view.pending).toEqual([]);
-  }, 30_000);
+    expect(view.queued).toEqual([]);
+    expect(view.run.turns).toBe(3);
+  }, 60_000);
 
   test("a daemon restart re-attaches the run with session/load and Continue works on it", async () => {
     const before = JSON.parse(readFileSync(join(project, "aidlc", "spaces", "default", "intents", intent, ".review-ui", "run.json"), "utf-8")) as { session_id: string };
@@ -213,7 +235,7 @@ describe("t365 review UI agent runs", () => {
     expect(view.run.session_id).toBe(before.session_id);
     expect(texts(view)).toContain("restored");
     expect((await api("POST", "/api/run/prompt", { intent, text: "carry on" })).status).toBe(200);
-    const after = await until(intent, (candidate) => candidate.run.turns === 3 && candidate.run.state === "idle");
+    const after = await until(intent, (candidate) => candidate.run.turns === 4 && candidate.run.state === "idle");
     expect(texts(after)).toContain("Working on: carry on");
   }, 60_000);
 

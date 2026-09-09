@@ -110,15 +110,32 @@ function renderNoRun(view) {
     <div class="agent-actions"><button type="button" class="btn primary" data-run-start>${icon("arrowLeft", { size: 14 })} Run the agent</button></div>`;
 }
 
+// The chat box, like the terminal's: always there while the session is alive.
+// Idle, a message is the next prompt; mid-turn it is queued and sent, with
+// anything else queued, the moment the turn ends. Enter sends, Shift+Enter
+// breaks a line.
+function chatBox(run) {
+  const working = run.state !== "idle";
+  const queued = store.run?.queued?.length || 0;
+  return `<form class="agent-reply">
+      <textarea name="reply" rows="1" placeholder="${working ? "Type an instruction - it goes when this turn ends" : "Reply to the agent…"}" aria-label="Message to the agent" autocomplete="off"></textarea>
+      <button type="submit" class="btn primary">${working ? (queued ? `Queue (${queued})` : "Queue") : "Send"}</button>
+    </form>`;
+}
+
 function renderFooter(run) {
   const live = run.state === "starting" || run.state === "running" || run.state === "waiting";
-  if (live) return `<footer class="agent-foot"><span>${run.state === "waiting" ? "Answer above to let the agent continue." : "The agent is working; everything it needs from you appears here."}</span><button type="button" class="btn" data-run-cancel>Stop</button></footer>`;
+  if (live) {
+    return `<footer class="agent-foot reply">
+      ${chatBox(run)}
+      <div class="agent-foot-row"><span>${run.state === "waiting" ? "Answer above to let the agent continue." : "The agent is working."}</span><button type="button" class="btn" data-run-cancel>Stop</button></div>
+    </footer>`;
+  }
   if (run.state === "idle") {
-    // An agent that asks in prose ends its turn: the reply goes back as the
-    // next prompt. Continue sends the harness's own resume prompt instead.
+    // Continue sends the harness's own resume prompt instead of a message.
     const resume = store.run?.start_prompt || "/aidlc";
     return `<footer class="agent-foot reply">
-      <form class="agent-reply"><input type="text" name="reply" placeholder="Reply to the agent…" aria-label="Reply to the agent" autocomplete="off"><button type="submit" class="btn primary">Send</button></form>
+      ${chatBox(run)}
       <div class="agent-foot-row"><span>The agent stopped. Continue sends <code>${escapeHtml(resume)}</code> to the same session.</span><button type="button" class="btn" data-run-continue>Continue</button></div>
     </footer>`;
   }
@@ -191,6 +208,8 @@ function renderLog(events) {
         return `<div class="agent-mark">${icon("checkmarkCircle", { size: 12 })}<span>${escapeHtml(event.title)}${event.decision ? ` · ${escapeHtml(event.decision)}` : " · waiting"}</span></div>`;
       case "question":
         return `<div class="agent-mark">${icon("question", { size: 12 })}<span>${escapeHtml(event.message)}${event.answered ? " · answered" : ""}</span></div>`;
+      case "queued":
+        return `<div class="agent-turn queued">${icon("history", { size: 12 })}<span>${escapeHtml(event.text)}</span><small>queued</small></div>`;
       case "error":
         return `<p class="agent-error">${escapeHtml(event.text)}</p>`;
       default:
@@ -239,13 +258,26 @@ function bind() {
   slot.querySelector("[data-run-continue]")?.addEventListener("click", async () => {
     await act("/api/run/prompt", { intent }, "Could not continue the agent");
   });
-  slot.querySelector(".agent-reply")?.addEventListener("submit", async (event) => {
+  const reply = slot.querySelector(".agent-reply");
+  reply?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const input = event.currentTarget.querySelector("input[name=reply]");
+    const input = reply.querySelector("textarea[name=reply]");
     const text = input.value.trim();
     if (!text) return;
     input.disabled = true;
-    await act("/api/run/prompt", { intent, text }, "Could not send the reply");
+    await act("/api/run/prompt", { intent, text }, "Could not send the message");
+    slot.querySelector("textarea[name=reply]")?.focus();
+  });
+  const box = reply?.querySelector("textarea[name=reply]");
+  box?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      reply.requestSubmit();
+    }
+  });
+  box?.addEventListener("input", () => {
+    box.style.height = "auto";
+    box.style.height = `${Math.min(box.scrollHeight, 120)}px`;
   });
   slot.querySelector("[data-run-start]")?.addEventListener("click", async () => {
     await act("/api/run/prompt", { intent, start: true }, "Could not start the agent");

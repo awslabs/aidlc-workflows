@@ -155,8 +155,11 @@ the same continuation the Stop hook would have injected
 nothing. When a turn ends on a *prepared* question round (a harness whose Stop
 seam cannot hold the turn), the daemon opens the round (`openQuestionsRound`) -
 it is now the process that waits for the browser - so the form shows instead of
-the preparing spinner. `POST /api/run/prompt` with `text` is the reply path for
-an agent that asked in prose. A live run keeps the daemon from idling out; on
+the preparing spinner. `POST /api/run/prompt` with `text` is the message path: to an
+idle run it is the next prompt; to a live turn it is queued (`RunView.queued`, a
+`queued` event in the log) and sent, joined with anything else queued, when the
+turn ends - the queue goes before the daemon's own `onIdle` continuation. The
+bare resume prompt is still refused mid-turn (409); Stop drops the queue. A live run keeps the daemon from idling out; on
 restart, a run whose session is alive is re-attached with `session/load`.
 
 **Runs per intent.** After `session/new` the daemon waits up to 8 s for
@@ -564,7 +567,7 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /api/intents/propose?text=` | Cookie/header | `{scope, source: "keyword"\|"default"}` — what the composer would choose: the engine's keyword inference (`inferScopeFromText`), else the selection-aware default scope |
 | `POST /api/intents` | Cookie/header | Body `{text, space?, scope?: <name>\|null, label?, session_effort?: low\|medium\|high\|xhigh}`. With a runner and a `scope`: runs `intent-create --space --scope --arguments --label` (the record, state, and audit the conductor would create), starts an agent run bound to it, returns 201 `{intent, space, run_id, mode:"running"}`; 409 while another run is live; `mode:"created"` with `error` when the record exists but the agent did not start. Otherwise records a pending request in `aidlc/spaces/<space>/intents/pending-intents.json` under the workspace lock, 201 `{id, space, created_at, mode:"requested"}`. Unknown workflow/effort 400, unknown workspace 404 |
 | `GET /api/run?intent=` | Cookie/header | `{run, pending, events, available, start_prompt, requirement}` — the intent's agent run (`run.json`), the inputs waiting on the human, the last 400 log events, the harness's resume prompt, and what the machine lacks when `available` is false; `run: null` when it never ran |
-| `POST /api/run/prompt` | Cookie/header | `{intent, text?}` — send a prompt (default: the harness's resume prompt) to an idle run — Continue, or a Reply to an agent that asked in prose; with no live run, start one (201). 409 while a turn is live |
+| `POST /api/run/prompt` | Cookie/header | `{intent, text?}` — send a message to a live run: idle, it is the next prompt; mid-turn, it is queued and sent when the turn ends. Without `text` it is the harness's resume prompt (Continue), 409 mid-turn. With no live run, start one (201) |
 | `POST /api/run/permission` | Cookie/header | `{intent, id, option_id}` — answer a pending permission with one of its advertised options |
 | `POST /api/run/question` | Cookie/header | `{intent, id, action: "accept"\|"decline"\|"cancel", content?}` — answer a pending form question; `content` keys are the schema's properties |
 | `POST /api/run/cancel` | Cookie/header | `{intent}` — `session/cancel` the live turn (pending inputs resolve cancelled); an idle run is closed |

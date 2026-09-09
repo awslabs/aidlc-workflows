@@ -57,8 +57,10 @@
 .agent-foot code { font: 11px var(--mono); padding: 1px 4px; border-radius: 4px; background: #fff; }
 .agent-foot.reply { flex-direction: column; align-items: stretch; gap: 8px; }
 .agent-reply { display: flex; gap: 6px; }
-.agent-reply input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line2); border-radius: 7px; font: inherit; font-size: 12.5px; background: #fff; }
-.agent-reply input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); }
+.agent-reply { align-items: flex-end; }
+.agent-reply textarea { flex: 1; min-width: 0; max-height: 120px; padding: 7px 9px; border: 1px solid var(--line2); border-radius: 7px; font: inherit; font-size: 12.5px; line-height: 1.4; background: #fff; resize: none; overflow-y: auto; }
+.agent-reply textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); }
+.agent-turn.queued small { margin-left: auto; font-size: 10.5px; color: var(--muted); }
 .agent-foot-row { display: flex; align-items: center; gap: 10px; }
 .agent-foot-row span { flex: 1; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 

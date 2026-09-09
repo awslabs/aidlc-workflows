@@ -93,6 +93,7 @@ export type RunEvent =
   | { seq: number; t: string; kind: "permission"; id: string; title: string; decision: string | null }
   | { seq: number; t: string; kind: "question"; id: string; message: string; answered: boolean }
   | { seq: number; t: string; kind: "note"; text: string }
+  | { seq: number; t: string; kind: "queued"; text: string }
   | { seq: number; t: string; kind: "error"; text: string };
 
 // `Omit` over a union keeps only the common keys; distribute it so each event
@@ -112,6 +113,8 @@ export interface RunView {
   start_prompt: string | null;
   /** Whether this backend takes a session effort at all. */
   effort_control: boolean;
+  /** Instructions typed while the turn was live; sent, joined, as the next prompt when it ends. */
+  queued: string[];
 }
 
 // A stopped-mid-stage turn is nudged at most this many times before the human
@@ -129,6 +132,7 @@ interface LiveRun {
   pending: Map<string, { input: PendingInput; resolve: (value: AcpPermissionOutcome | AcpElicitationResponse) => void }>;
   turn: Promise<void> | null;
   turnTimer: ReturnType<typeof setTimeout> | null;
+  queued: string[];
   textBuffer: string;
   textTimer: ReturnType<typeof setTimeout> | null;
   toolEvents: Map<string, RunEvent & { kind: "tool" }>;
@@ -240,11 +244,12 @@ export class RunManager {
         available: this.available,
         start_prompt: this.startPrompt,
         effort_control: this.options.launch?.effort !== undefined,
+        queued: live.queued,
       };
     }
     const done = this.finished.get(intent) ?? this.readFromDisk(intent);
     if (!done) return null;
-    return { run: done.record, pending: [], events: done.events, available: this.available, start_prompt: this.startPrompt, effort_control: this.options.launch?.effort !== undefined };
+    return { run: done.record, pending: [], events: done.events, available: this.available, start_prompt: this.startPrompt, effort_control: this.options.launch?.effort !== undefined, queued: [] };
   }
 
   /** Spawn the agent for `intent`, bind the session, and send the first prompt. */
@@ -304,10 +309,20 @@ export class RunManager {
     return record;
   }
 
-  /** Send a prompt to an idle run (the agent stopped; the session is alive). */
+  /**
+   * Send a prompt to a live run. Idle (the agent stopped; the session is alive):
+   * it goes now. Mid-turn: it is queued and sent, with anything else queued,
+   * the moment the turn ends - the terminal's behaviour for typing while the
+   * agent works. The bare resume prompt (Continue) has no meaning mid-turn.
+   */
   prompt(intent: string, text: string): RunRecord {
     const live = this.requireLive(intent);
-    if (live.turn) throw new AcpError("the agent is still working; wait for it to stop");
+    if (live.turn) {
+      if (text === live.client.launch.startPrompt) throw new AcpError("the agent is still working; wait for it to stop");
+      live.queued.push(text);
+      this.push(live, { kind: "queued", text });
+      return live.record;
+    }
     this.humanActed(live);
     this.beginTurn(live, text);
     return live.record;
@@ -393,7 +408,10 @@ export class RunManager {
         entry.resolve(entry.input.kind === "permission" ? { outcome: "cancelled" } : { action: "cancel" });
       }
       live.client.cancel(live.record.session_id);
-      this.note(live, "Stop requested.");
+      // Stop means stop: what was typed for after this turn is dropped too.
+      if (live.queued.length) this.note(live, `Stop requested; ${live.queued.length} queued instruction${live.queued.length === 1 ? "" : "s"} dropped.`);
+      else this.note(live, "Stop requested.");
+      live.queued.length = 0;
       return live.record;
     }
     this.end(live, "ended", null);
@@ -494,6 +512,7 @@ export class RunManager {
       pending: new Map(),
       turn: null,
       turnTimer: null,
+      queued: [],
       textBuffer: "",
       textTimer: null,
       toolEvents: new Map(),
@@ -548,9 +567,15 @@ export class RunManager {
         clearTimeout(live.turnTimer ?? undefined);
         live.turnTimer = null;
         live.turn = null;
-        // After the turn is released: the human's move, or the daemon's nudge,
-        // may start the next one.
-        if (idle) this.options.onIdle?.(live.record.intent, live.record.space);
+        // After the turn is released: what the human typed meanwhile goes first;
+        // otherwise their next move, or the daemon's nudge, starts the next one.
+        if (idle && live.queued.length) {
+          const next = live.queued.splice(0).join("\n\n");
+          this.humanActed(live);
+          this.beginTurn(live, next);
+        } else if (idle) {
+          this.options.onIdle?.(live.record.intent, live.record.space);
+        }
       });
   }
 

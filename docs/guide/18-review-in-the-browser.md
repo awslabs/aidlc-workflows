@@ -374,16 +374,21 @@ The panel (the flow icon in the header; also from ⌘K) follows the intent's run
   are the `AskUserQuestion` widget; on Cursor its own question and plan
   requests. A harness that asks in prose (Kiro, Codex, opencode, Copilot) ends
   its turn instead — the question is the last thing in the log, and the
-  **Reply** box at the foot of the panel sends your answer as the next prompt.
+  message box at the foot of the panel sends your answer as the next prompt.
 - **Permissions** — a tool call the harness's own allow rules do not settle
   waits here with the tool's input (the command, the path) and the agent's
   options: *Allow*, *Always allow*, *Deny*. Everything the install's
   `settings.json` already allows runs without asking, exactly as in a terminal.
 - **Log** — what the agent said, the tools it ran, when each turn started and
   stopped.
+- **Message box** — always at the foot of the panel while the session is
+  alive, as in a terminal. When the agent has stopped, **Send** makes your text
+  the next prompt. While it is working, **Queue** holds the text (shown in the
+  log as *queued*) and sends it — with anything else queued, as one message —
+  the moment the turn ends. Enter sends; Shift+Enter breaks a line.
 - **Continue** sends the harness's resume prompt (`/aidlc`, `$aidlc` on Codex)
-  to a stopped session; **Reply** sends whatever you type; **Stop** cancels the
-  turn. A daemon restart re-attaches the run to the same session.
+  to a stopped session; **Stop** cancels the turn and drops anything queued
+  behind it. A daemon restart re-attaches the run to the same session.
 
 Question rounds and approval gates work as before — the Questions form and
 **Approve** / **Request changes** in the header — and the agent resumes on its
