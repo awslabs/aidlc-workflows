@@ -27866,7 +27866,17 @@ export function appendUnderHeading(
   const remainder = content.slice(bodyStart);
   const nextMatch = nextHeading.exec(remainder);
   const insertAt = nextMatch ? bodyStart + nextMatch.index : content.length;
-  return content.slice(0, insertAt) + newContent + content.slice(insertAt);
+  // When the insertion point is a following `## ` heading, callers that pass
+  // single-`\n`-terminated content would abut the heading with no separating
+  // blank line, producing malformed markdown (e.g. a bullet directly above
+  // `## Scope Overrides` in project.md). Add exactly one blank line in that
+  // case — but only when a heading actually follows (never in the terminal
+  // end-of-file append) and the content does not already end with a blank line.
+  const separator =
+    nextMatch && newContent.endsWith("\n") && !newContent.endsWith("\n\n")
+      ? "\n"
+      : "";
+  return content.slice(0, insertAt) + newContent + separator + content.slice(insertAt);
 }
 
 export function replaceSection(
