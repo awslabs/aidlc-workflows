@@ -286,11 +286,20 @@ function bind() {
     const input = reply.querySelector("textarea[name=reply]");
     const text = input.value.trim();
     if (!text) return;
+    // Empty the live box before the request: the render that follows reads
+    // the draft off the element, so a sent message would otherwise come back.
+    input.value = "";
     input.disabled = true;
-    draft = "";
-    draftCaret = { start: 0, end: 0 };
-    await act("/api/run/prompt", { intent, text }, "Could not send the message");
-    slot.querySelector("textarea[name=reply]")?.focus();
+    const sent = await act("/api/run/prompt", { intent, text }, "Could not send the message");
+    // Sent: the panel re-rendered around a fresh, empty box. Failed: nothing
+    // re-rendered, so give the text back and let it be edited and retried.
+    const box = slot.querySelector("textarea[name=reply]");
+    if (!box) return;
+    if (!sent) {
+      box.value = text;
+      box.disabled = false;
+    }
+    box.focus();
   });
   const box = reply?.querySelector("textarea[name=reply]");
   box?.addEventListener("keydown", (event) => {
@@ -312,7 +321,9 @@ async function act(path, body, failure) {
   try {
     await api.post(path, body);
     await load();
+    return true;
   } catch (error) {
     setNotice(`${failure}: ${error.message}`, "error");
+    return false;
   }
 }
