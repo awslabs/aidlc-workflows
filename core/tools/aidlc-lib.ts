@@ -22892,7 +22892,7 @@ export interface PendingIntentRequest {
   id: string;
   /** The exact words the human typed; the intent's description verbatim. */
   text: string;
-  /** A shipped scope name, or null for "let the composer decide". */
+  /** A shipped scope name, or null for Adaptive (the composer proposes one from the words). */
   scope: string | null;
   created_at: string;
   source: "review-ui";

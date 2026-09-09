@@ -36,11 +36,11 @@ const SESSION_EFFORTS = ["low", "medium", "high", "xhigh"];
 const draft = {
   space: null,
   text: "",
-  scope: null, // null = let the composer decide
+  scope: null, // null = Adaptive: the composer proposes a workflow from the words
   // The agent session's own effort (Claude's /effort, Kiro's --effort): what the
   // conductor and every agent without a pin run at. null = the harness default.
   sessionEffort: null,
-  // With "Let the composer decide" and a runner, Start first asks the daemon
+  // With Adaptive and a runner, Start first asks the daemon
   // what it would pick; the proposal shows here until confirmed or changed.
   proposal: null, // { scope, source } | null
 };
@@ -62,7 +62,7 @@ export function renderComposer() {
     </div>
     <textarea class="composer-text" rows="2" placeholder="What do you want to build?" aria-label="Intent">${escapeHtml(draft.text)}</textarea>
     <div class="composer-bottom">
-      <button type="button" class="composer-chip" data-menu="scope" aria-haspopup="menu">${icon("textBulletListTree", { size: 13 })}<span>Workflow</span><b>${scope ? `${escapeHtml(scope.name)} · ${escapeHtml(scope.depth)}` : "Let the composer decide"}</b>${icon("chevronDown", { size: 12 })}</button>
+      <button type="button" class="composer-chip" data-menu="scope" aria-haspopup="menu">${icon("textBulletListTree", { size: 13 })}<span>Workflow</span><b>${scope ? `${escapeHtml(scope.name)} · ${escapeHtml(scope.depth)}` : "Adaptive"}</b>${icon("chevronDown", { size: 12 })}</button>
       <span class="composer-hint">⌘↵ to start</span>
       <button type="button" class="composer-chip" data-menu="effort" aria-haspopup="menu" title="The effort the agent session thinks at, and what each agent runs at under this project's policy">${escapeHtml(effortLabel)}${icon("chevronDown", { size: 12 })}</button>
       <button type="button" class="composer-start" data-start title="Start the intent" aria-label="Start the intent" ${draft.text.trim() ? "" : "disabled"}>${icon("arrowLeft", { size: 16 })}</button>
@@ -106,7 +106,7 @@ export function bindComposer(root, rerender) {
 
 let starting = false;
 
-// Start. With a runner: "Let the composer decide" first asks the daemon for its
+// Start. With a runner: Adaptive first asks the daemon for its
 // proposal (one confirm, then it runs); a chosen workflow starts at once. The
 // daemon creates the record and launches the agent; the tab opens the intent.
 // Without a runner the request is recorded for the terminal, and the notice
@@ -200,7 +200,7 @@ function spaceMenu() {
 function scopeMenu() {
   const byDepth = ["Minimal", "Standard", "Comprehensive"];
   return `<div class="composer-menu-title">Workflow</div>
-    <button type="button" role="menuitemradio" aria-checked="${draft.scope === null}" data-pick-scope=""><span class="check">${draft.scope === null ? icon("checkmark", { size: 12 }) : ""}</span><b>Let the composer decide <em>Recommended</em></b><small>Reads the intent, proposes a workflow, asks you once</small></button>
+    <button type="button" role="menuitemradio" aria-checked="${draft.scope === null}" data-pick-scope=""><span class="check">${draft.scope === null ? icon("checkmark", { size: 12 }) : ""}</span><b>Adaptive <em>Recommended</em></b><small>Proposes a workflow from your words, asks you once</small></button>
     ${byDepth.map((depth) => `<div class="composer-menu-group">${depth}</div>${SCOPES.filter((entry) => entry.depth === depth).map((entry) => `<button type="button" role="menuitemradio" aria-checked="${draft.scope === entry.name}" data-pick-scope="${escapeHtml(entry.name)}"><span class="check">${draft.scope === entry.name ? icon("checkmark", { size: 12 }) : ""}</span><b>${escapeHtml(entry.name)}</b><small>${escapeHtml(entry.description)}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ""}</small></button>`).join("")}`).join("")}`;
 }
 

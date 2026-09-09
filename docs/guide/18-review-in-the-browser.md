@@ -248,7 +248,7 @@ rewrites the canonical questions file.
 
 The box above the Inbox starts a new intent. Choose the **Workspace** (the
 space it lives in; **New workspace…** creates one), describe what you want to
-build, pick a **Workflow** — a named scope, or *Let the composer decide*, which
+build, pick a **Workflow** — a named scope, or *Adaptive*, which
 proposes one from your words and asks once — and, with a runner, the
 **Effort** (see below). **Start** (or ⌘↵) starts it.
 
@@ -256,7 +256,7 @@ With the harness's CLI installed, Start does the whole thing: the daemon creates
 the record (the same `intent-create` the conductor runs, with the chosen
 workflow) and launches the
 harness's own agent, bound to that intent, prompting it with the words you would
-have typed. You never touch a terminal. With *Let the composer decide*, Start
+have typed. You never touch a terminal. With *Adaptive*, Start
 first shows what the composer would pick from your words (or the default
 workflow) and starts on your confirm. The tab opens the intent with the **Agent**
 panel beside it.
@@ -358,7 +358,7 @@ Without a runner (the harness's CLI is not on this machine, or the runner is
 turned off), Start records the request instead. It appears in the Inbox under
 **Requested** with *Waiting · type `/aidlc` in the terminal*; the next bare
 `/aidlc` in a session with no active workflow picks the oldest request up exactly
-as if you had typed its words there, and a request with *Let the composer decide*
+as if you had typed its words there, and a request with *Adaptive*
 goes through the same inference and compose asks a typed description would. The
 **×** on a requested row withdraws it. Requests are kept per workspace in
 `aidlc/spaces/<space>/intents/pending-intents.json` (gitignored).
