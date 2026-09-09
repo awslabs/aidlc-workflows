@@ -14,6 +14,11 @@ import { setNotice, store } from "./store.js";
 const slot = document.getElementById("slot");
 let loading = false;
 let lastIntent = null;
+// The message box survives re-renders: every run event rebuilds the panel, so
+// what is in the box (and the caret, when it has focus) is read off the live
+// element just before the rebuild and put back just after.
+let draft = "";
+let draftCaret = null; // { start, end } while the box has focus
 const seenPending = new Set();
 
 const STATE = {
@@ -46,6 +51,8 @@ export function init() {
       lastIntent = intent;
       store.set({ run: null });
       seenPending.clear();
+      draft = "";
+      draftCaret = null;
     }
     void load();
   });
@@ -81,6 +88,11 @@ function render() {
   const run = view?.run ?? null;
   const state = run ? STATE[run.state] ?? STATE.idle : null;
   const intent = store.workflow?.intent;
+  const current = slot.querySelector("textarea[name=reply]");
+  if (current) {
+    draft = current.value;
+    draftCaret = document.activeElement === current ? { start: current.selectionStart, end: current.selectionEnd } : null;
+  }
   slot.innerHTML = `
     <section class="agent-panel" aria-labelledby="agent-title">
       <header class="side-panel-header">
@@ -96,6 +108,16 @@ function render() {
       ${run ? renderFooter(run) : ""}
     </section>`;
   bind();
+  const box = slot.querySelector("textarea[name=reply]");
+  if (box && draft) {
+    box.value = draft;
+    box.style.height = "auto";
+    box.style.height = `${Math.min(box.scrollHeight, 120)}px`;
+    if (draftCaret) {
+      box.focus({ preventScroll: true });
+      box.setSelectionRange(draftCaret.start, draftCaret.end);
+    }
+  }
   const body = slot.querySelector(".agent-body");
   if (body) body.scrollTop = body.scrollHeight;
 }
@@ -265,6 +287,8 @@ function bind() {
     const text = input.value.trim();
     if (!text) return;
     input.disabled = true;
+    draft = "";
+    draftCaret = { start: 0, end: 0 };
     await act("/api/run/prompt", { intent, text }, "Could not send the message");
     slot.querySelector("textarea[name=reply]")?.focus();
   });
