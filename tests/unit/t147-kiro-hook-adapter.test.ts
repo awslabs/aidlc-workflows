@@ -332,10 +332,16 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           tool_name: "execute_bash",
           tool_input: { command: "sort input.txt -o src/blocked.txt" },
         },
+        {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "execute_pwsh",
+          tool_input: { command: "Sort-Content input.txt > src/blocked.txt" },
+        },
       ]) {
         const r = runAdapter(dir, "plan-approval-guard", payload);
-        expect(r.code).toBe(2);
-        expect(r.stderr).toContain("Code generation cannot");
+        expect(r.code, payload.tool_name).toBe(2);
+        expect(r.stderr, payload.tool_name).toContain("Code generation cannot");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

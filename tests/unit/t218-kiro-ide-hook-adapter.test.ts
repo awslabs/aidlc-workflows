@@ -1760,6 +1760,107 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   }, 20000);
 
+  test("plan-approval-guard treats execute_pwsh identically to execute_bash (#1044)", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      // Planning writes remain possible before the exact approval prompt.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+
+      // Before approval the Windows shell tool is blocked exactly like
+      // execute_bash: exit 2, and NOT with the opaque "target path" prose — it
+      // takes the recovery-shell path. A { command } payload (not empty args)
+      // reaches the branches shellTool() actually changes; empty args short-
+      // circuit through opaqueMutation before that code runs.
+      const preApproval = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          toolName: "execute_pwsh",
+          toolArgs: { command: "bun .kiro/tools/aidlc-orchestrate.ts next" },
+        }),
+      );
+      expect(preApproval.code).toBe(2);
+      expect(preApproval.stderr).not.toContain(
+        "target path is missing or unsupported",
+      );
+
+      // Author + approve the plan (same flow the execute_bash test uses).
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(
+        seededRecordDir(dir),
+        "construction",
+        "code-generation",
+        "code-generation-plan.md",
+      );
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, plan)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+
+      // After approval the Windows shell tool is permitted, exactly like
+      // execute_bash — the AI-DLC loop can advance. This is the case that
+      // actually regressed: with { command } in the approved window the
+      // pre-fix adapter exits 2 and only exits 0 once execute_pwsh is a
+      // shellTool(). Empty args would exit 0 either way and never prove it.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            toolName: "execute_pwsh",
+            toolArgs: { command: "bun .kiro/tools/aidlc-orchestrate.ts next" },
+          }),
+        ).code,
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
+
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {
     const dir = scratchProject(true);
     const sharedHost = {
