@@ -116,6 +116,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "[",
   "basename",
   "cat",
+  "cd",
   "cmp",
   "cut",
   "diff",

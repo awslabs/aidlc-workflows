@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.7] - 2026-09-09
+
+Fixes a plan-approval guard false-positive where `cd` in shell commands made the shell opaque during code-generation. The `cd` command was missing from `READ_ONLY_SHELL_COMMANDS` — it changes directory but doesn't modify files — so `shellInvocationNeedsApproval` returned true for it, making every `cd ... && <read-only-cmd>` command opaque and trapping it in the guard. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.7` / `install.ps1 -Version 2.8.7`. No migration; existing workflow records resume normally.
+
+* Added `cd` to `READ_ONLY_SHELL_COMMANDS` in `aidlc-plan-approval-guard.ts`.
+
 ## [2.8.6] - 2026-09-09
 
 Fixes a plan-approval guard false-positive where `2>&1` shell redirects blocked read-only inspection commands during code-generation. The shell command parser splits `2>&1` into a bare numeric invocation (`1`), which was not recognized as read-only — making the shell opaque and trapping commands like `ls ... 2>&1; echo ...; cat ...` that have no write targets. The guard now treats bare numeric invocation names as file-descriptor parsing artifacts (read-only), so `2>&1` no longer makes the shell opaque. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration; existing workflow records resume normally.
