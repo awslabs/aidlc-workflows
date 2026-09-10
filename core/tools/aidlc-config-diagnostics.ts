@@ -400,9 +400,24 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
         `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
     );
   }
+  const distribution = value.distribution;
+  if (
+    distribution !== "claude" &&
+    distribution !== "codex" &&
+    distribution !== "copilot" &&
+    distribution !== "cursor" &&
+    distribution !== "kiro" &&
+    distribution !== "kiro-ide" &&
+    distribution !== "opencode"
+  ) {
+    throw new Error(`${path}: distribution must name a supported harness`);
+  }
+  const providers = normalizeProvidersRecord(value.providers);
   return {
     runtime: normalizeRuntimeRecord(value.runtime),
-    providers: normalizeProvidersRecord(value.providers),
+    providers: providers
+      ? reconcileProviderActions(providers, distribution)
+      : null,
     trust: normalizeTrustRecord(value.trust),
     project: normalizeProjectChoicesRecord(value.project),
   };
@@ -1580,7 +1595,7 @@ export function projectChoiceIssues(
   return issues;
 }
 
-function providerValueIssues(
+export function providerSurfaceIssues(
   projectDir: string,
   harnessDir: string,
   harness: ModelHarness,
@@ -1703,7 +1718,7 @@ export function providerIssues(
   if (!record) return [];
   const issues = [
     ...pendingProviderIssues(record),
-    ...providerValueIssues(projectDir, harnessDir, harness, record),
+    ...providerSurfaceIssues(projectDir, harnessDir, harness, record),
   ];
   if (record.provider === "amazon-bedrock" && !credentials.hasCredentials) {
     issues.push({

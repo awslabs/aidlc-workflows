@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -134,6 +135,7 @@ import {
   probeRuntime,
   providerFiles,
   providerIssues,
+  providerSurfaceIssues,
   projectChoiceFiles,
   projectChoiceIssues,
   projectMcpNote,
@@ -2141,7 +2143,16 @@ function prepareDiagnosticSection(
     next = diagnosticWizard(section, projectDir, selected, records, options);
   }
   const previous = currentDiagnosticRecord(records, section);
-  if (canonical(previous) === canonical(next)) {
+  const providerSurfaceDrift =
+    section === "providers" &&
+    next !== null &&
+    providerSurfaceIssues(
+      projectDir,
+      selected.harnessDir,
+      selected.harness,
+      next as ProvidersRecord,
+    ).length > 0;
+  if (canonical(previous) === canonical(next) && !providerSurfaceDrift) {
     emitResult(success(`${section} configuration unchanged`), options);
     return null;
   }
@@ -3400,6 +3411,16 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "rulesSubdir",
 ]);
 
+function providerManagedSurfacePaths(
+  harness: ModelHarness,
+  harnessDir: string,
+): string[] {
+  if (harness === "claude") return [`${harnessDir}/settings.json`];
+  if (harness === "codex") return [`${harnessDir}/config.toml`];
+  if (harness === "kiro") return [`${harnessDir}/settings/mcp.json`];
+  return [];
+}
+
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
@@ -3470,16 +3491,41 @@ function prepareRefreshSource(
     if (diagnosticsOverride.plugins === null) delete staged.plugins;
     else staged.plugins = diagnosticsOverride.plugins;
   }
+  const distribution = staged.distribution;
+  if (typeof distribution !== "string") {
+    throw new Error(`${stagedHarnessData}: distribution must be a string`);
+  }
+  const providers = normalizeProvidersRecord(staged.providers);
+  if (providers) {
+    staged.providers = reconcileProviderActions(
+      providers,
+      modelHarness(distribution),
+    );
+    if (
+      diagnosticsOverride &&
+      Object.hasOwn(diagnosticsOverride, "providers") &&
+      diagnosticsOverride.providers !== null
+    ) {
+      for (const rel of providerManagedSurfacePaths(
+        modelHarness(distribution),
+        descriptor.harnessDir,
+      )) {
+        const currentPath = join(projectDir, rel);
+        const stagedPath = join(root, rel);
+        if (!regularFile(currentPath) || !regularFile(stagedPath)) continue;
+        copyFileSync(currentPath, stagedPath);
+        regenerated.add(rel);
+      }
+    }
+  } else {
+    delete staged.providers;
+  }
   if (
     regularFile(currentHarnessData) ||
     diagnosticsOverride !== undefined
   ) {
     writeFileSync(stagedHarnessData, `${JSON.stringify(staged, null, 2)}\n`);
     regenerated.add(`${descriptor.harnessDir}/tools/data/harness.json`);
-  }
-  const distribution = staged.distribution;
-  if (typeof distribution !== "string") {
-    throw new Error(`${stagedHarnessData}: distribution must be a string`);
   }
   applyModelPolicyToProjection(
     root,

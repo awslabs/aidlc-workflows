@@ -6,13 +6,14 @@
 // whose output cascades downstream (architect, developer, product, ...): it
 // inherits the session's own model and effort so the user's ceiling is never
 // silently capped. `balanced` marks reviewer-shaped work (novel input judged
-// against explicit criteria): the measured reviewer baseline pins a mid-size
-// model at medium effort. `templated` marks dominantly pattern-following output
-// whose methodology already lives in knowledge (delivery plans, CI/CD config,
-// runbooks). It remains a distinct models-dial group, but its shipped baseline
-// now inherits the session model and effort. The names describe the WORK, not
-// the dial, so a reader can classify a new agent without knowing today's model
-// lineup.
+// against explicit criteria): the measured reviewer baseline uses Sonnet at
+// medium effort on Claude Code, while Codex and opencode inherit the session
+// model with a medium reasoning setting. `templated` marks dominantly
+// pattern-following output whose methodology already lives in knowledge
+// (delivery plans, CI/CD config, runbooks). It remains a distinct models-dial
+// group, but its shipped baseline now inherits the session model and effort.
+// The names describe the WORK, not the dial, so a reader can classify a new
+// agent without knowing today's model lineup.
 //
 // Projection targets (see TIER_PROJECTIONS):
 //   - Claude Code   agent .md frontmatter: `model:` and optional `effort:`.

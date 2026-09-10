@@ -90,7 +90,7 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 | Tier | Agents | Meaning |
 |------|--------|---------|
 | `judgment` | architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality | Multi-constraint reasoning under ambiguity; output cascades downstream. Never downgraded: inherits the session's model AND effort |
-| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. The measured baseline pins a mid-size model at medium effort on Claude Code, Codex, and opencode |
+| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Claude Code uses the measured Sonnet/medium baseline; Codex and opencode inherit the session model while applying medium reasoning effort |
 | `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). The tier remains the Writing up models-dial group, but its shipped baseline inherits the session model and effort |
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):

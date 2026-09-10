@@ -126,10 +126,12 @@ Keep credentials and personal overrides out of the shared
 `.claude/settings.json`. Put them in `.claude/settings.local.json` or the
 standard AWS credential files.
 
-To use another Claude Code-supported provider, run `aidlc config providers`,
-select `other`, and complete that provider's Claude Code authentication flow.
-The config command removes old AI-DLC-owned Bedrock overrides from the shared
-project settings. See the
+To keep the provider already selected in Claude Code, choose **Keep current
+provider and model** in `aidlc config providers`. To record a different
+Claude Code-supported provider explicitly, run `aidlc config providers
+--provider other --acknowledge --yes`, then complete that provider's
+authentication flow. The config command removes old AI-DLC-owned Bedrock
+overrides from the shared project settings. See the
 [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
 
 For IAM detail, model access, SSO, and regional troubleshooting, see

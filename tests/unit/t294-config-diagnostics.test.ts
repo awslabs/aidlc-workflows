@@ -975,6 +975,104 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env).status).toBe(0);
   }, 60_000);
 
+  test("legacy Codex Bedrock records acquire new required actions on load and refresh", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    expect(
+      readConfigDiagnosticRecords(join(project, ".codex")).providers
+        ?.pendingActions,
+    ).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("codex-provider-configuration");
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, runtimeEnv());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const persisted = JSON.parse(readFileSync(dataPath, "utf-8"));
+    expect(persisted.providers.pendingActions).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+  }, 60_000);
+
+  test("reapplying an unchanged provider answer repairs stale project overrides", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    settings.env.AWS_REGION = "us-east-1";
+    settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "stale-bedrock-model";
+    settings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(1);
+
+    const repaired = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+    expect(repaired.stdout).not.toContain("configuration unchanged");
+    const repairedSettings = readFileSync(settingsPath, "utf-8");
+    expect(repairedSettings).not.toContain("CLAUDE_CODE_USE_BEDROCK");
+    expect(repairedSettings).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL");
+    expect(repairedSettings).toContain('"MY_TEAM_SETTING": "preserved"');
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, 60_000);
+
   test("OpenCode offer decline and acceptance are recorded and applied", () => {
     const project = install("opencode");
     const env = runtimeEnv();
