@@ -52,11 +52,14 @@ export const CATALOG_HARNESSES = [
 export type CatalogHarness = (typeof CATALOG_HARNESSES)[number];
 
 /** Hosts with their own plugin store; their aggregate catalog is emitted too. */
+// Codex reads a repository marketplace from `.agents/plugins/marketplace.json`
+// and treats `.claude-plugin/marketplace.json` only as a legacy fallback that
+// would resolve the Claude projection instead (verified against codex-cli 0.154).
 export const HOST_STORE_CATALOGS: Readonly<
   Record<"claude" | "codex", string>
 > = {
   claude: ".claude-plugin",
-  codex: ".codex-plugin",
+  codex: ".agents/plugins",
 };
 
 const SAFE_KEY = /^[a-z][a-z0-9-]*$/;
@@ -592,7 +595,7 @@ export function assembleCatalog(root: string, options: AssembleCatalogOptions = 
 
 /**
  * The host-native aggregate catalog (`.claude-plugin/marketplace.json`,
- * `.codex-plugin/marketplace.json`) a store host reads at the repository
+ * `.agents/plugins/marketplace.json` for Codex) a store host reads at the repository
  * root: one entry per plugin that ships that harness, sourced by relative path.
  */
 export function hostMarketplace(

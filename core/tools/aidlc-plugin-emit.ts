@@ -692,8 +692,14 @@ export function buildPluginProjection(
           2,
         )}\n`,
       );
+      // Codex resolves a marketplace root through `.agents/plugins/marketplace.json`;
+      // `.codex-plugin/` may hold only the plugin manifest.
+      const marketplaceDir = options.target.harnessName === "codex"
+        ? join(outDir, ".agents", "plugins")
+        : hostManifestDir;
+      mkdirSync(marketplaceDir, { recursive: true });
       writeFileSync(
-        join(hostManifestDir, "marketplace.json"),
+        join(marketplaceDir, "marketplace.json"),
         `${JSON.stringify(
           {
             name: "aidlc-plugins",

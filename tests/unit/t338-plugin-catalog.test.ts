@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import {
   CATALOG_FILE,
   CatalogError,
+  HOST_STORE_CATALOGS,
   PROJECTION_MARKER,
   archiveUrl,
   assembleCatalog,
@@ -288,7 +289,7 @@ describe("t338 plugin marketplace catalog", () => {
     const root = copyMarketplace("cli");
     rmSync(join(root, CATALOG_FILE));
     rmSync(join(root, ".claude-plugin"), { recursive: true });
-    rmSync(join(root, ".codex-plugin"), { recursive: true });
+    rmSync(join(root, ".agents"), { recursive: true });
     const result = spawnSync(process.execPath, [
       join(REPO_ROOT, "core", "tools", "aidlc-plugin-catalog.ts"),
       root,
@@ -310,7 +311,7 @@ describe("t338 plugin marketplace catalog", () => {
     expect(catalog.owner.name).toBe("Example Company");
     for (const harness of ["claude", "codex"] as const) {
       const aggregate = JSON.parse(
-        readFileSync(join(root, `.${harness}-plugin`, "marketplace.json"), "utf-8"),
+        readFileSync(join(root, HOST_STORE_CATALOGS[harness], "marketplace.json"), "utf-8"),
       ) as { plugins: Array<{ name: string; source: string }> };
       const entry = aggregate.plugins.find((plugin) => plugin.name === "aidlc-test-pro")!;
       const hostManifest = JSON.parse(readFileSync(

@@ -364,7 +364,7 @@ aidlc plugin catalog ./marketplace --name team-plugins --owner "Your team"
 
 Test each projection against a disposable install before publishing (§ below).
 `catalog` writes the schema-v1 `aidlc-marketplace.json` plus the applicable
-`.claude-plugin/marketplace.json` and `.codex-plugin/marketplace.json` aggregates.
+`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (Codex) aggregates.
 It reads version/description from projection markers, computes their full-tree
 SHA-256 digests, and rejects inconsistent versions across harnesses. It needs
 neither a project install nor network access.
@@ -384,7 +384,7 @@ URLs; publish those archives with the same tree paths as the catalog.
 your-marketplace/
   aidlc-marketplace.json
   .claude-plugin/marketplace.json
-  .codex-plugin/marketplace.json
+  .agents/plugins/marketplace.json
   test-pro/claude/...
   test-pro/kiro/...
 ```

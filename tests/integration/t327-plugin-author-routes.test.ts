@@ -101,7 +101,7 @@ describe("t327 top-level plugin authoring routes", () => {
     expect(catalog.plugins.find((plugin: { name: string }) => plugin.name === "test-pro").harnesses.claude.path)
       .toBe("test-pro/claude");
     expect(existsSync(join(marketplace, ".claude-plugin", "marketplace.json"))).toBe(true);
-    expect(existsSync(join(marketplace, ".codex-plugin", "marketplace.json"))).toBe(true);
+    expect(existsSync(join(marketplace, ".agents", "plugins", "marketplace.json"))).toBe(true);
   });
 
   test("catalog and search help require neither a marketplace nor an installed project", () => {
