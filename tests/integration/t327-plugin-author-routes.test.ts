@@ -1,8 +1,9 @@
-// covers: subcommand:aidlc-utility:plugin-validate subcommand:aidlc-utility:plugin-build
+// covers: subcommand:aidlc-utility:plugin-validate subcommand:aidlc-utility:plugin-build subcommand:aidlc-utility:plugin-catalog
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   cpSync,
   mkdtempSync,
   readFileSync,
@@ -85,5 +86,32 @@ describe("t327 top-level plugin authoring routes", () => {
         readFileSync(join(EXPECTED, file)),
       );
     }
+  });
+
+  test("plugin catalog publishes a projection tree through the public dispatcher", () => {
+    const marketplace = join(scratch, "marketplace");
+    cpSync(join(REPO_ROOT, "dist", "plugins"), marketplace, { recursive: true });
+    const result = run(["plugin", "catalog", marketplace, "--name", "team-plugins", "--json"]);
+    expect(result.status, result.stderr).toBe(0);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ schemaVersion: 1, ok: true, code: 0, status: "ok" });
+    const catalog = JSON.parse(readFileSync(join(marketplace, "aidlc-marketplace.json"), "utf-8"));
+    expect(catalog).toEqual(envelope.data.catalog);
+    expect(catalog.name).toBe("team-plugins");
+    expect(catalog.plugins.find((plugin: { name: string }) => plugin.name === "test-pro").harnesses.claude.path)
+      .toBe("test-pro/claude");
+    expect(existsSync(join(marketplace, ".claude-plugin", "marketplace.json"))).toBe(true);
+    expect(existsSync(join(marketplace, ".agents", "plugins", "marketplace.json"))).toBe(true);
+  });
+
+  test("catalog and search help require neither a marketplace nor an installed project", () => {
+    const before = files(pluginRoot).map((file) => [file, readFileSync(join(pluginRoot, file))]);
+    for (const verb of ["catalog", "search"]) {
+      const result = run(["plugin", verb, "--help"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`aidlc plugin ${verb}`);
+    }
+    expect(files(pluginRoot).map((file) => [file, readFileSync(join(pluginRoot, file))])).toEqual(before);
+    expect(existsSync(join(pluginRoot, "aidlc.settings.json"))).toBe(false);
   });
 });

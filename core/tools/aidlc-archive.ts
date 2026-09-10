@@ -37,6 +37,39 @@ function safePath(value: string): string {
   return normalized.replace(/\/$/, "");
 }
 
+/**
+ * Parse one pax extended header block (`<decimal length> <key>=<value>\n`
+ * records). Only `path` and `size` may influence the next entry; a `linkpath`
+ * is refused outright because links are never extracted.
+ */
+function paxRecords(block: Buffer, offset: number): { path?: string; size?: number } {
+  const result: { path?: string; size?: number } = {};
+  for (let cursor = 0; cursor < block.length;) {
+    const space = block.indexOf(0x20, cursor);
+    if (space < 0) throw new Error(`malformed pax header at byte ${offset}`);
+    const length = Number.parseInt(block.subarray(cursor, space).toString("ascii"), 10);
+    if (!Number.isSafeInteger(length) || length <= space - cursor + 1 || cursor + length > block.length) {
+      throw new Error(`malformed pax record length at byte ${offset}`);
+    }
+    const record = block.subarray(space + 1, cursor + length - 1).toString("utf-8");
+    const equals = record.indexOf("=");
+    if (equals < 0 || block[cursor + length - 1] !== 0x0a) {
+      throw new Error(`malformed pax record at byte ${offset}`);
+    }
+    const key = record.slice(0, equals);
+    const value = record.slice(equals + 1);
+    if (key === "path") result.path = value;
+    else if (key === "size") {
+      if (!/^\d+$/.test(value)) throw new Error(`invalid pax size at byte ${offset}`);
+      result.size = Number.parseInt(value, 10);
+    } else if (key === "linkpath") {
+      throw new Error(`archive entry at byte ${offset} declares a pax linkpath; links are not supported`);
+    }
+    cursor += length;
+  }
+  return result;
+}
+
 export function readTarGz(
   path: string,
   options: { maxBytes?: number } = {},
@@ -62,6 +95,8 @@ export function readTarGz(
   }
   const entries: ArchiveEntry[] = [];
   const seen = new Set<string>();
+  // pax extended header (`x`) values that apply to the next entry only.
+  let pending: { path?: string; size?: number } = {};
   for (let offset = 0; offset + 512 <= tar.length;) {
     const header = tar.subarray(offset, offset + 512);
     if (header.every((byte) => byte === 0)) break;
@@ -72,16 +107,26 @@ export function readTarGz(
     if (stored !== actual) throw new Error(`tar header checksum mismatch at byte ${offset}`);
     const name = header.subarray(0, 100).toString("utf-8").replace(/\0.*$/, "");
     const prefix = header.subarray(345, 500).toString("utf-8").replace(/\0.*$/, "");
-    const entryPath = safePath(prefix ? `${prefix}/${name}` : name);
+    const headerSize = octal(header, 124, 12);
+    const typeFlag = String.fromCharCode(header[156] || 0);
+    const dataStart = offset + 512;
+    if (dataStart + headerSize > tar.length) throw new Error(`truncated archive entry at byte ${offset}`);
+    // git archive (GitHub tarballs) opens with a global header carrying the
+    // commit id and precedes long paths with per-entry extended headers.
+    if (typeFlag === "g" || typeFlag === "x") {
+      if (typeFlag === "x") pending = paxRecords(tar.subarray(dataStart, dataStart + headerSize), offset);
+      offset = dataStart + Math.ceil(headerSize / 512) * 512;
+      continue;
+    }
+    const entryPath = safePath(pending.path ?? (prefix ? `${prefix}/${name}` : name));
+    const size = pending.size ?? headerSize;
+    pending = {};
     if (seen.has(entryPath)) throw new Error(`duplicate archive destination: ${entryPath}`);
     seen.add(entryPath);
-    const size = octal(header, 124, 12);
     const mode = octal(header, 100, 8) || 0o644;
-    const typeFlag = String.fromCharCode(header[156] || 0);
     if (!["\0", "0", "5"].includes(typeFlag)) {
       throw new Error(`archive entry ${entryPath} has unsupported link/special type ${typeFlag}`);
     }
-    const dataStart = offset + 512;
     const dataEnd = dataStart + size;
     if (dataEnd > tar.length) throw new Error(`truncated archive entry: ${entryPath}`);
     if (typeFlag === "5" && size !== 0) {
@@ -94,6 +139,9 @@ export function readTarGz(
       data: Buffer.from(tar.subarray(dataStart, dataEnd)),
     });
     offset = dataStart + Math.ceil(size / 512) * 512;
+  }
+  if (pending.path !== undefined || pending.size !== undefined) {
+    throw new Error("archive ends with a pax extended header that names no entry");
   }
   const types = new Map(entries.map((entry) => [entry.path, entry.type]));
   for (const entry of entries) {

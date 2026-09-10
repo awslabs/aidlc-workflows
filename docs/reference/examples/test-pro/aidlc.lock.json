@@ -1,10 +1,10 @@
 {
-  "$comment": "EXAMPLE aidlc.lock for an install that chose the test-pro plugin. Would be written by `aidlc engine plugin add test-pro` — the installer and lockfile writer are FUTURE WORK (doc 18 §9 Status); nothing reads or writes a lockfile today. Pins everything that determines the composed result, so a future `aidlc engine plugin sync` could reproduce a byte-identical install. The sha256 values below are ILLUSTRATIVE placeholders.",
+  "$comment": "HISTORICAL design illustration, not a supported runtime schema. No command reads or writes aidlc.lock.json. Managed plugin installs now record marketplace, tag, version, harness, and projection SHA-256 in <harness-dir>/tools/data/plugin-install-<name>.json; composition stamps track the composed source separately. The hashes and commit below are illustrative placeholders, not evidence for reproduction.",
   "lockfileVersion": 1,
   "harness": "claude",
   "composer": {
     "version": "2.1.0",
-    "$comment": "the AIDLC composer that produced this install (doc 18 §8 Status — future work)"
+    "$comment": "historical example composer version; not consumed"
   },
   "core": {
     "version": "2.0.8",
@@ -24,6 +24,6 @@
   },
   "result": {
     "integrity": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-    "$comment": "content hash of the composed effective install (core + test-pro). sync asserts the recomposed tree matches this."
+    "$comment": "illustrative composed-result digest; current sync does not read or assert this field"
   }
 }

@@ -19,6 +19,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -229,6 +230,50 @@ describe("t243 archive and transaction safety", () => {
         })
       ).toThrow("reserved top-level name");
     }
+  });
+
+  test("git-archive tarballs with pax global and extended headers extract; pax links are refused", () => {
+    // GitHub tag tarballs open with a `pax_global_header` (type g) and carry
+    // per-entry extended headers (type x) for paths longer than 100 bytes.
+    const header = (name: string, type: string, size: number): Buffer => {
+      const block = Buffer.alloc(512);
+      block.write(name, 0, "utf-8");
+      block.write("0000644\0", 100, "ascii");
+      block.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "ascii");
+      block.write(type, 156, "ascii");
+      block.write("ustar\0", 257, "ascii");
+      block.write("00", 263, "ascii");
+      block.fill(0x20, 148, 156);
+      const checksum = block.reduce((sum, byte) => sum + byte, 0);
+      block.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, "ascii");
+      return block;
+    };
+    const padded = (data: Buffer): Buffer => Buffer.concat([data, Buffer.alloc(Math.ceil(data.length / 512) * 512 - data.length)]);
+    const record = (text: string): Buffer => {
+      const body = Buffer.from(text, "utf-8");
+      let length = body.length + 3;
+      while (String(length).length + 1 + body.length + 1 !== length) length++;
+      return Buffer.from(`${length} ${text}\n`, "utf-8");
+    };
+    const longPath = `repo-abc1234/${"n".repeat(120)}/file.txt`;
+    const tar = (extra: Buffer): Buffer =>
+      gzipSync(Buffer.concat([
+        header("pax_global_header", "g", record("comment=abc1234").length), padded(record("comment=abc1234")),
+        header("PaxHeader/file.txt", "x", extra.length), padded(extra),
+        header("truncated-name", "0", 5), padded(Buffer.from("hello")),
+        header("repo-abc1234/short.txt", "0", 3), padded(Buffer.from("abc")),
+        Buffer.alloc(1024),
+      ]));
+    const archive = join(temp("aidlc-t243-pax-"), "pax.tgz");
+    writeFileSync(archive, tar(record(`path=${longPath}`)));
+    expect(readTarGz(archive).map((entry) => [entry.path, entry.data.toString()])).toEqual([
+      [longPath, "hello"],
+      ["repo-abc1234/short.txt", "abc"],
+    ]);
+    writeFileSync(archive, tar(Buffer.concat([record(`path=${longPath}`), record("linkpath=../escape")])));
+    expect(() => readTarGz(archive)).toThrow("pax linkpath");
+    writeFileSync(archive, tar(record("path=../escape")));
+    expect(() => readTarGz(archive)).toThrow("unsafe archive path");
   });
 
   test("transaction rejects symlink traversal and restores every committed byte on fault", () => {

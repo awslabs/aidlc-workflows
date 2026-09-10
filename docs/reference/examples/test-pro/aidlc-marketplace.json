@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "name": "aidlc-plugins",
+  "owner": { "name": "AWS AIDLC" },
+  "description": "AIDLC plugin catalogue.",
+  "plugins": [
+    {
+      "name": "test-pro",
+      "version": "0.1.0",
+      "description": "Comprehensive testing stages and additive contributions.",
+      "tag": "test-pro--v0.1.0",
+      "harnesses": {
+        "claude": {
+          "path": "test-pro/claude",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "codex": {
+          "path": "test-pro/codex",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "kiro": {
+          "path": "test-pro/kiro",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    }
+  ]
+}

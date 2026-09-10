@@ -1,6 +1,20 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.3] - 2026-09-10
+
+Discover and install optional AIDLC plugins from explicitly registered git-backed marketplaces, with verified per-harness projections and a documented path for mature plugins to graduate into core. **Upgrade:** `aidlc update`.
+
+* `aidlc plugin marketplaces add|remove|list` manages project, local, or global registrations; `aidlc plugin search` discovers published plugins without installing them.
+* `aidlc plugin install|update` verifies tagged archives against catalog SHA-256 digests. Claude and Codex receive native host-store commands; Kiro CLI, Kiro IDE, opencode, Cursor, and Copilot use a managed install with explicit confirmation naming hook files and tool scripts, then pinned-engine composition.
+* `aidlc plugin list --check` opts into published-version checks and update guidance; plain list, doctor, and sync remain offline.
+* `aidlc plugin catalog` builds third-party marketplace descriptors and host aggregates. The packager emits the publishable `dist/plugins/aidlc-marketplace.json` tree and Claude/Codex aggregate catalogs.
+* Every emitted plugin projection carries an Agent Plugins v1 root `plugin.json` (`$schema`, `aidlc-<name>`, `extensions["com.amazon.aidlc"]`), so conformant clients and APM recognize the package; `aidlc plugin validate` and `aidlc plugin build` refuse names that cannot project to a valid Agent Plugins name (consecutive or trailing hyphens).
+* Machine-only `plugins.allowedMarketplaces` restricts marketplace registration and use without allowing project or local overrides.
+* `aidlc.supersededBy` tombstones identify a plugin's replacement core version in catalogs, offline plugin status, and doctor. The graduation guide documents review ownership and migration.
+* `aidlc plugin list --check` also verifies the installed bytes of every plugin against the catalog digest (or the managed install record) and flags divergence, so a marketplace branch edited after tagging is caught even when a host store installed it.
+* Marketplace automation distinguishes exit `5` (host handoff, or a check that found an update/tombstone/divergence), `4` (integrity failure; nothing installed), and `3` (network unavailable, offline, or forbidden). Help and catalog generation have no network side effects.
+
 ## [2.8.2] - 2026-09-10
 
 Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.

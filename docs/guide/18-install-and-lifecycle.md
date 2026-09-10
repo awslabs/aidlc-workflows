@@ -815,9 +815,61 @@ but does not prevent an explicit `aidlc update`.
 
 ## Plugins
 
-`aidlc doctor` reports installed-versus-composed plugin state. Plugin changes
-are project configuration and converge through `aidlc config`; there is no
-separate public plugin command.
+`aidlc doctor` and plain `aidlc plugin list` compare installed and composed
+plugin state offline. `aidlc config project --plugins ...` selects which
+installed plugins are enabled; marketplace commands discover and install them.
+
+### Installing plugins from a marketplace
+
+Use a marketplace your team has reviewed. Nothing is registered automatically
+from a plugin's contents:
+
+```bash
+aidlc plugin marketplaces add your-org/your-marketplace --name team --project
+aidlc plugin marketplaces list
+aidlc plugin search testing --marketplace team
+aidlc plugin install test-pro --marketplace team --harness kiro
+aidlc plugin list
+aidlc plugin list --check
+aidlc plugin update test-pro --marketplace team --harness kiro --yes
+```
+
+Replace the source and plugin with your team's actual names. Use your project's
+harness (`claude`, `codex`, `kiro`, `kiro-ide`, `opencode`, `cursor`, or `copilot`);
+omit `--harness` only when the project has exactly one installed harness.
+Registration defaults to the shared project setting; `--local` keeps it in the
+project-local layer and `--global` applies to your machine. To unregister that
+layer's source, run `aidlc plugin marketplaces remove team --project`.
+This does not uninstall any plugin.
+
+Every install/update fetches a tagged projection and checks its SHA-256 against
+the catalog before proceeding. **Claude and Codex** then print native host-store
+commands and exit **5 (action needed)**: run those commands and accept the host's
+trust prompt. AIDLC does not install into a competing local store.
+**Kiro CLI, Kiro IDE, opencode, Cursor, and Copilot** show every hook file and
+tool script before asking for consent, then install a full projection under
+`<harness-dir>/plugins/<name>/` and compose through the pinned engine.
+Non-interactive managed installation requires `--yes`; it does not bypass
+verification or machine policy.
+
+`list --check` is the opt-in remote version check. An update command means a
+newer published version is available; `superseded by core v<version>` means to
+upgrade core and follow the plugin's removal/migration note. Nothing silently
+deletes the plugin. If composition fails after installation, the verified
+projection remains installed and the error directs you to `aidlc engine plugin sync`.
+
+Administrators may restrict registration and use with machine-only
+`plugins.allowedMarketplaces` in `<install-root>/aidlc.settings.json` (directly
+or via MDM; there is no CLI writer). Project/local layers cannot override it.
+Private GitHub sources use `GITHUB_TOKEN` or `GH_TOKEN`, never credentials in
+the URL. Network commands refuse offline mode and the `engine` namespace;
+`marketplaces add --offline` only records a source without fetching it.
+
+Plugin authors publish per-harness projections plus
+`aidlc plugin catalog <root> --name team --owner "Team"` output. See
+[Authoring a Plugin](../harness-engineering/10-authoring-a-plugin.md#5-distribution--install)
+and [Plugin Mechanism](../reference/18-plugin-mechanism.md#5b-marketplaces)
+for the schema and private-marketplace template.
 
 ## Output, Automation, and Exit Codes
 
@@ -849,7 +901,7 @@ ownership, integrity, active-workflow, or release-authentication refusals.
 | 2 | Usage or invalid machine configuration |
 | 3 | Required network result or retained runtime unavailable |
 | 4 | Integrity or ownership refusal |
-| 5 | Check completed and action is required, such as an available update |
+| 5 | Action is required, such as an available update or a plugin host-store handoff |
 
 ## Help and Completions
 

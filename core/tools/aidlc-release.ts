@@ -389,15 +389,24 @@ function proxyFor(url: URL): string | undefined {
   return proxy;
 }
 
-async function download(
+export async function downloadUrl(
   url: string,
   path: string,
-  timeoutMs: number,
-  caBundle?: string,
-  maxBytes = MAX_ASSET_BYTES,
-  contentTypes: readonly string[] = [],
-  reportedTimeoutMs = timeoutMs,
+  options: {
+    timeoutMs: number;
+    caBundle?: string;
+    maxBytes?: number;
+    contentTypes?: readonly string[];
+    headers?: Record<string, string>;
+    notFound?: string;
+    /** Budget named in timeout errors when the caller staged a shorter slice of it. */
+    reportedTimeoutMs?: number;
+  },
 ): Promise<void> {
+  const { timeoutMs, caBundle, maxBytes = MAX_ASSET_BYTES, contentTypes = [], reportedTimeoutMs = timeoutMs } = options;
+  if (process.env.AIDLC_ROUTE_NETWORK_POLICY === "forbidden") {
+    throw new ReleaseUnavailableError(`${process.env.AIDLC_ROUTE_ID ?? "route"} forbids network access`);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   progress(url, false);
@@ -405,12 +414,13 @@ async function download(
     let current = url;
     let response: Response | undefined;
     for (let redirects = 0; redirects <= 5; redirects++) {
-      const parsed = assertReleaseUrl(current, redirects > 0);
+      const parsed = assertReleaseUrl(current, true);
       const proxy = proxyFor(parsed);
       try {
         response = await fetch(current, {
           redirect: "manual",
           signal: controller.signal,
+          ...(options.headers && new URL(url).origin === parsed.origin ? { headers: options.headers } : {}),
           ...(proxy ? { proxy } : {}),
           ...(caBundle ? { tls: { ca: readFileSync(caBundle) } } : {}),
         });
@@ -447,7 +457,7 @@ async function download(
     if (!response) throw new ReleaseUnavailableError(`${redact(url)} returned no response`);
     if (response.status === 404) {
       throw new ReleaseUnavailableError(
-        "No published native release is available yet. Pass --from <release-directory>, or run bun scripts/package.ts in an aidlc-workflows source checkout to materialize the development copy channel.",
+        options.notFound ?? `${redact(url)} returned HTTP 404`,
       );
     }
     if (!response.ok) {
@@ -501,6 +511,26 @@ async function download(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function download(
+  url: string,
+  path: string,
+  timeoutMs: number,
+  caBundle?: string,
+  maxBytes = MAX_ASSET_BYTES,
+  contentTypes: readonly string[] = [],
+  reportedTimeoutMs = timeoutMs,
+): Promise<void> {
+  assertReleaseUrl(url);
+  await downloadUrl(url, path, {
+    timeoutMs,
+    caBundle,
+    maxBytes,
+    contentTypes,
+    reportedTimeoutMs,
+    notFound: "No published native release is available yet. Pass --from <release-directory>, or run bun scripts/package.ts in an aidlc-workflows source checkout to materialize the development copy channel.",
+  });
 }
 
 export async function fetchReleaseMetadata(options: {

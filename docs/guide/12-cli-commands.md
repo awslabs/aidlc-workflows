@@ -62,10 +62,15 @@ diagnostic and lifecycle routes.
 | `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`, `review`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
-| `/aidlc plugin list` | List installed plugins and enabled state |
+| `/aidlc plugin list` | Compare installed plugins with their composed state (offline) |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
-| `/aidlc plugin validate [path]` | Validate an authored plugin (`--json` for structured findings) |
-| `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
+| `aidlc plugin validate [path]` | Validate an authored plugin (`--json` for structured findings) |
+| `aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
+| `aidlc plugin catalog [root]` | Generate marketplace metadata from emitted projections, offline |
+| `aidlc plugin marketplaces add\|remove\|list` | Explicitly register and inspect marketplace sources |
+| `aidlc plugin search [term]` | Discover published plugins in registered marketplaces |
+| `aidlc plugin install\|update <name>` | Verify a tagged projection, then hand off to the host store or confirm a managed install |
+| `aidlc plugin list [--check]` | Offline installed/composed state; `--check` opts into remote published-version checks |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -1149,7 +1154,11 @@ doctor exit code.
 
 ### Plugin state
 
-`/aidlc plugin list` prints installed plugin names and whether each is enabled.
+`/aidlc plugin list` and native `aidlc plugin list` compare installed plugin
+versions/source hashes against composed state, without network access.
+Native `aidlc plugin list --check` adds published-version and graduation
+notices. Discovery and install/update are terminal commands, not engine or
+chat-network operations; follow [Installing plugins from a marketplace](18-install-and-lifecycle.md#installing-plugins-from-a-marketplace).
 `/aidlc plugin select [names]` is the public command. `select-plugins` is its
 direct utility form; it is not an `/aidlc select-plugins` command.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection

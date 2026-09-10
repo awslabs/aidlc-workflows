@@ -1,40 +1,52 @@
-# `test-pro` — concrete config/JSON examples
+# `test-pro` — marketplace and policy examples
 
-These are the **configuration documents** in the plugin design, made concrete for
-the shipped `test-pro` fixture. They illustrate [doc 18](../../18-plugin-mechanism.md),
-the single plugin-mechanism chapter. **Most of what they depict is deferred**, not
-shipped — see doc 18 §8 "Status" for exactly what is wired today (the plugin
-manifest + the compose seam) versus designed-but-future (marketplace resolution,
-managed-settings trust, the lockfile, and the `aidlc engine plugin add`/`sync` installer).
-They show the intended lifecycle, not current behavior.
+These examples accompany [Plugin Mechanism §5b](../../18-plugin-mechanism.md#5b-marketplaces)
+and the shipped `test-pro` fixture. Catalog generation, remote discovery,
+projection verification, managed installation, and the machine allowlist are
+implemented; the historical lockfile example is not a runtime contract.
 
-| File | Role | Authored by | Where it lives |
+| File | Role | Authored by | Runtime location |
 |---|---|---|---|
-| [`../../../../plugins/test-pro/.aidlc-plugin/plugin.json`](../../../../plugins/test-pro/.aidlc-plugin/plugin.json) | **Plugin manifest** — what the plugin is + what it ships | the plugin author | in the plugin repo (real file, created) |
-| [`marketplace.json`](marketplace.json) | **Catalogue entry** — how a plugin is discovered/versioned | a marketplace maintainer | a marketplace repo |
-| [`managed-settings.json`](managed-settings.json) | **Trust allowlist** — which sources an org permits | an org admin (managed scope) | the machine's managed-settings path |
-| [`aidlc.lock.json`](aidlc.lock.json) | **Install lock** — pins the composed result for reproducibility | the `aidlc engine plugin` installer | the consumer's project |
+| [Plugin manifest](../../../../plugins/test-pro/.aidlc-plugin/plugin.json) | Plugin identity and contributed subtrees | Plugin author | `.aidlc-plugin/plugin.json` in the source repository |
+| [`aidlc-marketplace.json`](aidlc-marketplace.json) | Schema-v1 catalog with per-harness paths and digests | `aidlc plugin catalog` / marketplace maintainer | Marketplace repository root |
+| [`managed-settings.json`](managed-settings.json) | Real `plugins.allowedMarketplaces` machine setting | Administrator or MDM | `<install-root>/aidlc.settings.json` (merge this section, not the filename) |
+| [`aidlc.lock.json`](aidlc.lock.json) | Historical design illustration, superseded by install records | Not generated or consumed | No runtime location |
 
-## Status of these files
+## What is real, and what is illustrative
 
-- `plugin.json` is a **real, created file** in the repo — the manifest for the
-  shipped `test-pro` fixture. The authoring tools validate its
-  `aidlc.contributes` keys and canonical paths; projection still discovers the
-  corresponding bytes by directory convention (see doc 18 §3).
-- `marketplace.json`, `managed-settings.json`, and `aidlc.lock.json` are
-  **illustrative examples** for design review only. The installer, marketplace
-  resolution, and lockfile writer that would *produce* and *consume* them are
-  **future work** (doc 18 §9 "Status"). All `sha256:…` and `commit` values in
-  the lockfile are **placeholders**, not computed hashes.
+The catalog example follows the live schema; its `sha256` values are all-zero
+placeholders because real digests change with every fixture edit. Build the
+projections and run `aidlc plugin catalog` to generate real values before
+publishing your own marketplace. Do not treat the example as a live marketplace.
 
-## The lifecycle these files trace
+The machine-setting example permits an organization URL prefix and one exact
+first-party repository URL. A trailing `/` denotes a prefix; a source without
+it is exact. An absent/empty allowlist does not restrict sources. Only the
+machine layer may set `allowedMarketplaces`; project and local settings cannot
+widen it. There is no CLI allowlist writer. This is an AIDLC setting, not a
+Claude `managed-settings.json` document; host-native policies still apply.
 
-1. **Author** writes `plugin.json` and the plugin's subtrees, publishes a git tag.
-2. **Marketplace** (optional) lists the plugin in `marketplace.json` for discovery.
-3. **Org admin** sets `managed-settings.json` so only approved sources may be
-   installed — devs cannot override it (managed scope, highest precedence).
-4. **Developer** runs `aidlc engine plugin add test-pro`: resolves the version, checks
-   it against the allowlist, fetches + verifies, composes `bare core + test-pro`,
-   and writes `aidlc.lock.json`.
-5. **Teammate** runs `aidlc engine plugin sync` against the committed `aidlc.lock.json`
-   and gets a byte-identical install.
+The old `aidlc.lock.json` contains illustrative hashes and is retained only as
+historical design context. Managed installs instead write
+`<harness-dir>/tools/data/plugin-install-<name>.json` with
+`{schemaVersion:1, plugin, version, harness, marketplace:{name,url}, tag, sha256}`.
+That provenance record identifies the source for update/check operations; the
+separate composition stamp records the composed source state.
+
+## Current lifecycle
+
+1. The author validates and builds `<root>/<plugin>/<harness>/`, tests
+   composition, and runs `aidlc plugin catalog <root> --name team --owner "Team"`.
+2. The maintainer publishes that generated tree and its
+   `<plugin>--v<version>` tag in a reviewed marketplace repository.
+3. An administrator optionally restricts sources with the machine setting.
+4. The developer runs `aidlc plugin marketplaces add your-org/your-marketplace
+   --name team`, then `aidlc plugin search test-pro` and
+   `aidlc plugin install test-pro --marketplace team --harness kiro`.
+5. The CLI verifies the tagged projection. Claude/Codex installations hand off
+   to the native host store (exit 5); other harnesses confirm the named hooks
+   and tools, transactionally install the projection plus record, and compose
+   through the project's pinned engine. Non-TTY managed installs need `--yes`.
+6. `aidlc plugin list` compares installed/composed state offline;
+   `aidlc plugin list --check` opts into remote version/tombstone checks, and
+   `aidlc plugin update test-pro` applies the same verification and trust flow.

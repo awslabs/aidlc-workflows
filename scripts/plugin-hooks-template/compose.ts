@@ -2108,7 +2108,7 @@ try {
       // Windows) or a stray blank first line — otherwise the whole contribution
       // was silently skipped with no drop (round-5).
       const content = readFileSync(join(phaseDir, file), "utf-8")
-        .replace(/\r\n/g, "\n").replace(/^﻿/, "").replace(/^\n+/, "");
+        .replace(/\r\n/g, "\n").replace(/^\uFEFF/, "").replace(/^\n+/, "");
       const fm = frontmatter(content);
       const target = frontmatterScalar(content, "target");
       // A .md in contributions/ with no parseable `target:` is a malformed

@@ -351,39 +351,92 @@ doctor bounds its runtime/output and turns script failures into diagnostic rows.
 
 ## 5. Distribution + install
 
-The shipped builder emits your plugin as **a real host plugin** for one harness
-at a time, including `.claude-plugin/plugin.json`,
-`.codex-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, and Kiro's folder
-projection:
+Build a complete host-plugin projection for every harness you support, placing
+them under `<marketplace-root>/<plugin>/<harness>/`. The shared emitter keeps
+external builds equivalent to first-party `dist/plugins/` output:
 
 ```bash
-bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir]
+aidlc plugin validate ./test-pro
+aidlc plugin build claude ./marketplace/test-pro/claude --plugin-root ./test-pro
+aidlc plugin build kiro ./marketplace/test-pro/kiro --plugin-root ./test-pro
+aidlc plugin catalog ./marketplace --name team-plugins --owner "Your team"
 ```
 
-The default output is `<plugin-root>/dist/<harness>/`. Run it once for each
-harness you publish. The repository packager uses the same emitter to build
-first-party `dist/plugins/<name>/<harness>/` trees, so its byte-parity guard also
-guards external builds. Publish the output to a git repo with semver tags and a
-`marketplace.json`; teams then install through the host's native commands.
+Test each projection against a disposable install before publishing (§ below).
+`catalog` writes the schema-v1 `aidlc-marketplace.json` plus the applicable
+`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (Codex) aggregates.
+It reads version/description from projection markers, computes their full-tree
+SHA-256 digests, and rejects inconsistent versions across harnesses. It needs
+neither a project install nor network access.
 
-### Claude / Codex (host store)
+### Publish a private marketplace
+
+Use the generated `dist/plugins/` shape as the template; do not copy authored
+`plugins/` source in place of projections. Copy the generated contents into
+your marketplace repository root, regenerate with your own catalog name and
+owner, commit all projections and catalogs together, then tag that commit
+`<plugin>--v<version>` (for example `test-pro--v0.1.0`) and push the commit and
+tag. Do not move published tags. For direct HTTPS catalog hosting,
+`--archive-base https://plugins.example.com/releases/` generates tagged archive
+URLs; publish those archives with the same tree paths as the catalog.
+
+```text
+your-marketplace/
+  aidlc-marketplace.json
+  .claude-plugin/marketplace.json
+  .agents/plugins/marketplace.json
+  test-pro/claude/...
+  test-pro/kiro/...
+```
+
+The first-party `awslabs/aidlc-plugins` destination uses this same tree, with
+publishing CI and repository creation managed separately. Private publishers
+do not depend on that repository existing.
+
+### Install on a mixed fleet
+
+Teams explicitly register your marketplace and discover its plugin names:
 
 ```bash
-# teams run these in their host CLI:
-/plugin marketplace add <your-org>/<your-plugin-repo>    # Claude
-/plugin install test-pro@<marketplace>                   # Claude
-
-codex plugin marketplace add <your-org>/<your-plugin-repo>   # Codex
-codex plugin add test-pro@<marketplace>                      # Codex
+aidlc plugin marketplaces add your-org/your-marketplace --name team --project
+aidlc plugin search test-pro --marketplace team
+aidlc plugin install test-pro --marketplace team --harness claude
+aidlc plugin install test-pro --marketplace team --harness kiro
+aidlc plugin list --check
+aidlc plugin update test-pro --marketplace team --harness kiro --yes
 ```
 
-A **SessionStart hook** (bundled in the emitted plugin) calls the same
-transactional sync implementation as `aidlc engine plugin sync` for its injected
-current root. It merges the plugin's subtrees and contributions, validates the
-result, compiles the stage graph + scope grid, and writes a version/source-hash
-composition stamp. The orchestrator routes entirely off that compiled graph, so
-a plugin stage runs the moment it is composed in - no prose or skill file to
-edit.
+Use one install command for the actual project harness, not both examples.
+Omit `--harness` only when the project has exactly one installed harness.
+Registration can instead use `--local` or `--global`; `marketplaces remove`
+removes the chosen layer's entry, not the plugin itself.
+
+**Claude / Codex (host stores):** the CLI first verifies the tagged projection,
+then exits **5** with the host commands to run. The `@` suffix is the catalog's
+published `name` (here `your-marketplace`'s catalog name), not the local `team`
+alias, because the host reads that identity from the repository's aggregate
+`marketplace.json`. Claude uses `/plugin marketplace add your-org/your-marketplace`
+and `/plugin install aidlc-test-pro@<catalog name>`; Codex uses
+`codex plugin marketplace add https://github.com/your-org/your-marketplace` and
+`codex plugin add aidlc-test-pro@<catalog name>`. Their native trust prompts
+still gate hooks. Store hosts clone a repository, so a marketplace registered
+by direct catalog URL is refused for these harnesses; register the repository
+form instead. A bundled SessionStart hook invokes the same transactional sync
+as `aidlc engine plugin sync`, scoped to its injected plugin root.
+
+**Kiro CLI / Kiro IDE / opencode / Cursor / Copilot (managed path):** the CLI
+verifies the projection digest, lists every hook file and tool script, and asks
+for confirmation. `--yes` is required without interactive stdin. It installs
+the full projection at `<harness-dir>/plugins/test-pro/`, writes
+`tools/data/plugin-install-test-pro.json` with marketplace/tag/version/digest,
+and invokes the project's pinned engine to compose. If composition fails, the
+verified projection stays installed and the command reports the failure with
+`aidlc engine plugin sync` remediation. The managed inventory remains available
+outside a host hook; manual folder drops retain the injected-root fallback.
+
+The composer merges plugin subtrees and contributions, compiles graph/grid and
+runners, and writes a version/source-hash composition stamp. The orchestrator
+then sees plugin stages without editing its skill prose.
 
 Sync never edits the live project while composing. It copies the relevant
 harness, `.agents`, and `aidlc` surfaces to staging, composes and regenerates
@@ -391,7 +444,7 @@ there, writes `plugin-compose-<key>.json` and hash-proven
 `plugin-owned-<key>.json`, then commits the staged diff through the shared
 transaction engine. A fault restores all files, modes, stamps, and ownership
 records. `--prune-missing` is intentionally stricter: it requires a proved full
-host inventory, explicit confirmation (`--yes` in automation), and unchanged
+installed inventory, explicit confirmation (`--yes` in automation), and unchanged
 owned hashes; local or unowned bytes are refused.
 
 ### Project selection
@@ -401,7 +454,7 @@ stages, scopes, runners, and contributions are active:
 
 ```bash
 aidlc engine plugin select aidlc,test-pro
-aidlc engine plugin list
+aidlc plugin list
 aidlc engine plugin sync
 ```
 
@@ -411,45 +464,38 @@ re-enabled contributions return on the next SessionStart sync. It refuses to
 disable a plugin needed by an active workflow. The
 `PLUGIN_SELECTION_CHANGED` audit append is part of committed validation, so an
 audit failure rolls the whole selection back. `plugin list` is different: it
-compares host inventory with composition/ownership stamps and does not change
+compares installed inventory with composition/ownership stamps and does not change
 selection.
 
-### Kiro (no store — folder-drop, then run the composer explicitly)
+### Trust and transport
 
-```bash
-# From the AIDLC source root, materialize the ignored local plugin projections:
-bun scripts/package.ts
-# Then copy the Kiro projection into the project:
-cp -r dist/plugins/<name>/kiro/. <project>/
-# preferred when aidlc is on PATH:
-AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
-  AIDLC_HARNESS_DIR=.kiro aidlc engine plugin sync
+The machine-only `plugins.allowedMarketplaces` setting in
+`<install-root>/aidlc.settings.json` restricts registration and use. An
+administrator manages it directly or through MDM; project/local layers cannot
+set it, and marketplace commands never widen it. Native host restrictions
+remain in force on Claude/Codex. Managed installs require checksum verification
+and explicit hook/tool consent; a checksum is not a security review of the code.
 
-# fallback: run the composer explicitly:
-AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
-  AIDLC_HARNESS_DIR=.kiro bun "<plugin-root>/hooks/compose.ts"
-# open in Kiro IDE or kiro-cli chat → /aidlc
-```
+For private GitHub marketplaces, use `GITHUB_TOKEN` or `GH_TOKEN`, not credentials
+in URLs. Network verbs refuse offline mode and the engine namespace's forbidden
+network policy. Plain `list`, `marketplaces list/remove`, `catalog`, and help
+remain offline; `marketplaces add --offline` only records the source.
 
-> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE >= 1.0; its folder-drop
-> includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
-> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
-> so run one of the explicit composer commands above. Neither projection emits the
-> retired `.kiro.hook` plugin registration.
+See the real [catalog and machine-setting examples](../reference/examples/test-pro/)
+and [Plugin Mechanism §5b](../reference/18-plugin-mechanism.md#5b-marketplaces)
+for source forms, JSON output, exit codes, and install records. The old
+`aidlc.lock.json` example is historical, not a consumed install lock.
 
-### Trust
+### When the plugin graduates into core
 
-Trust is **host-native** — you don't build anything:
-- Claude: org admin sets `strictKnownMarketplaces` (managed, unoverridable).
-- Codex: one-time trust prompt per plugin, content-hash-pinned.
-- Kiro: n/a (folder-drop, no host gate).
-
-> **Concrete examples** — `plugin.json`, `marketplace.json`,
-> `managed-settings.json` (the org trust config), `aidlc.lock.json` — are in
-> [`examples/test-pro/`](../reference/examples/test-pro/). See also
-> [Plugin Mechanism §9](../reference/18-plugin-mechanism.md) for the full
-> platform-team worked example.
+Publish a final plugin release whose authored `.aidlc-plugin/plugin.json`
+contains `aidlc.supersededBy: {"core":"X.Y.Z","note":"Capability now ships in core."}`,
+using the actual strict-semver core release. Rebuild every projection and the
+catalog, then publish its new plugin-version tag. Installed markers make
+offline list/doctor report `superseded by core vX.Y.Z`; `list --check` can show
+the catalog notice before that tombstone is installed. Users upgrade core and
+remove the plugin according to the migration note; nothing is silently deleted.
+Follow [Plugin Graduation](11-plugin-graduation.md) for acceptance and review.
 
 ## Authoring and testing your plugin
 
@@ -516,10 +562,9 @@ Validation checks:
   injects the current template.
 
 The user-facing `aidlc plugin validate` and `aidlc plugin build` verbs delegate
-to these same shipped tools. `aidlc plugin create` and `aidlc plugin test`
-remain deferred to
-[RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); invoke
-their shipped Bun tools directly.
+to these same shipped tools; `aidlc plugin catalog` assembles their projections
+for marketplace publishing. Create/test remain available through their shipped
+Bun tools, not as top-level dispatcher verbs.
 
 The repository test helper's `validatePluginContent()` delegates these shared
 rules to the same tool and retains checkout-aware fixture integration.
@@ -550,8 +595,8 @@ The authoring flow is:
 3. **Validate** the authored root offline.
 4. **Build** each harness projection you support.
 5. **Test** composition against a disposable copy of a real install.
-6. **Publish** those generated directories and marketplace metadata from your
-   own repository.
+6. **Publish** the generated tree and `aidlc plugin catalog` output together in
+   your marketplace repository, tagged `<plugin>--v<version>`.
 
 All four tools run from a copied AIDLC tools bundle and require neither an
 AIDLC project nor a framework checkout.

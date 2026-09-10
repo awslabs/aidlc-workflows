@@ -131,6 +131,8 @@ export const TOOLS = {
   completions: "aidlc-completions.ts",
   orchestrate: "aidlc-orchestrate.ts",
   plugin: "aidlc-plugin.ts",
+  pluginMarket: "aidlc-plugin-market.ts",
+  pluginCatalog: "aidlc-plugin-catalog.ts",
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
   reviewBrief: "aidlc-review-brief.ts",
@@ -856,18 +858,16 @@ export const ROUTES: readonly Route[] = [
     all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path]", "build <harness> [outDir]"],
   },
   {
-    // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
-    // build` run against a plugin checkout, which is usually NOT an installed
-    // project, so this route is public, unpinned, and carries no project
-    // requirement. The installed-plugin lifecycle (select/sync/list) stays on
-    // the engine `plugin` noun above.
+    // Plugin authoring runs against a checkout rather than an installed project.
+    // Selection and composition stay on the pinned engine route; marketplace
+    // discovery and installation use the explicit-network public route below.
     id: "plugin-author",
     group: "plugin",
     kind: "noun-map",
     classification: "translation",
-    verbs: ["validate", "build"],
+    verbs: ["validate", "build", "catalog"],
     tool: TOOLS.utility,
-    targets: { validate: "plugin-validate", build: "plugin-build" },
+    targets: { validate: "plugin-validate", build: "plugin-build", catalog: "plugin-catalog" },
     namespace: "public",
     visibility: "hidden",
     projectRequirement: "none",
@@ -875,7 +875,15 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: ["validate [path]", "build <harness> [outDir] [--plugin-root <path>]", "catalog [root] [--name <n>] [--owner <o>] [--archive-base <url>]"],
+  },
+  {
+    id: "plugin-marketplace", group: "plugin", kind: "noun-passthrough", classification: "translation",
+    verbs: ["marketplaces", "search", "install", "update", "list"],
+    tool: TOOLS.pluginMarket, namespace: "public", visibility: "hidden",
+    projectRequirement: "optional", pinPolicy: "active", networkPolicy: "explicit-only",
+    mutationScope: "project-and-machine", outputModes: ["human", "quiet", "json"],
+    all: ["marketplaces list [--json]", "marketplaces add <owner/repo|url> [--name <n>] [--project|--local|--global] [--offline]", "marketplaces remove <name> [--project|--local|--global]", "search [term] [--marketplace <name>] [--json]", "list [--check] [--verbose] [--json]", "install <name> [--marketplace <name>] [--harness <name>] [--yes] [--json]", "update <name> [--marketplace <name>] [--harness <name>] [--yes] [--json]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -1393,8 +1401,19 @@ export async function renderEngineHelp(): Promise<string> {
 }
 
 export function renderAllHelp(): string {
+  const nouns: Record<string, string[]> = {};
+  for (const route of ROUTES) {
+    if (route.namespace !== "public" || route.group === "top") continue;
+    nouns[route.group] ??= [];
+    nouns[route.group].push(...routeForms(route));
+  }
   return [
     renderHumanHelp().trimEnd(),
+    "",
+    "Additional public commands:",
+    ...Object.entries(nouns).map(([group, forms]) =>
+      `  ${group}: ${forms.map((form) => stripHelpGroupPrefix(group, form)).join(", ")}`
+    ),
     "",
     "Hidden namespaces:",
     "  engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
@@ -1765,12 +1784,9 @@ function resolveSystem(argv: string[]): Action {
   return topLevelError(`system ${argv[0]}`);
 }
 
-// Public noun routes (the v2 team/authoring surface): `aidlc unit <verb>` and
-// `aidlc plugin <validate|build>` resolve at the top level without the engine
-// prefix. A head token whose verb does not match falls through to the public
-// unknown-command error rather than a noun error, so `aidlc plugin list`
-// remains "unknown command 'plugin'" (that engine surface is `aidlc engine
-// plugin list`).
+// Public nouns cover team commands, plugin authoring, and marketplace lifecycle.
+// Only listed verbs resolve without `engine`; selection and sync remain pinned
+// engine operations. An unrecognized verb falls through to the public error.
 function resolvePublicNoun(argv: string[]): Action | undefined {
   const noun = argv[0];
   const verb = argv[1];
@@ -1992,6 +2008,10 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-orchestrate.ts");
     case TOOLS.plugin:
       return import("./aidlc-plugin.ts");
+    case TOOLS.pluginMarket:
+      return import("./aidlc-plugin-market.ts");
+    case TOOLS.pluginCatalog:
+      return import("./aidlc-plugin-catalog.ts");
     case TOOLS.runnerGen:
       return import("./aidlc-runner-gen.ts");
     case TOOLS.runtime:

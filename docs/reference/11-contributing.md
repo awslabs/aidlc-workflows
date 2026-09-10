@@ -155,6 +155,16 @@ named recovery evidence. `t243-install-mechanism.test.ts` is the engine pattern;
 `t224-plugin-selection.test.ts` and `t242-plugin-state.test.ts` are project
 mutation examples.
 
+## Plugin graduation and marketplace review
+
+Use [Plugin Graduation](../harness-engineering/11-plugin-graduation.md) when
+proposing an external or first-party plugin for core. The acceptance record
+must cover adoption, named maintenance ownership, licensing, and a security
+pass on hooks/tools, plus the core migration and final tombstone release.
+Marketplace additions and tag/catalog changes require the named owners in that
+marketplace repository's `CODEOWNERS`; this repository does not confer review
+approval on a separately published marketplace.
+
 ## Adding a Utility Handler
 
 > **Before adding an audit event**, read [State Machine](12-state-machine.md). The chapter lists every event in the taxonomy, its emitter, and the "same-commit rule" — update the code AND the chapter's tables in the same PR, or the drift test will fail.

@@ -524,6 +524,19 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "plugin catalog delegates offline authoring",
+      routerArgs: ["plugin", "catalog", "--help"],
+      tool: "aidlc-plugin-catalog.ts",
+      toolArgs: ["--help"],
+    },
+    {
+      name: "public plugin list preserves offline inventory",
+      routerArgs: ["plugin", "list", "--json"],
+      tool: "aidlc-plugin-market.ts",
+      toolArgs: ["list", "--json"],
+      fixture: true,
+    },
+    {
       name: "update maps to its machine lifecycle delegate",
       routerArgs: ["update"],
       tool: "aidlc-lifecycle.ts",
@@ -622,7 +635,6 @@ describe("t230 dispatcher route parity", () => {
       ["versions", "list"],
       ["harness", "list"],
       ["package", "verify", "/tmp/release"],
-      ["plugin", "list"],
       ["completions", "bash"],
     ]) {
       const routed = viaDispatcher(args, REPO_ROOT);
@@ -1928,6 +1940,8 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-learnings.ts",
       "aidlc-log.ts",
       "aidlc-orchestrate.ts",
+      "aidlc-plugin-market.ts",
+      "aidlc-plugin-catalog.ts",
       "aidlc-runner-gen.ts",
       "aidlc-runtime.ts",
       "aidlc-sensor-claim-sources.ts",
@@ -1950,6 +1964,9 @@ describe("t230 dispatcher route completeness", () => {
       routeTargets.add("aidlc-sensor-required-sections.ts");
       routeTargets.add("aidlc-sensor-type-check.ts");
       routeTargets.add("aidlc-sensor-upstream-coverage.ts");
+    }
+    if (ROUTES.some((route) => route.tool === TOOLS.utility && route.targets?.catalog === "plugin-catalog")) {
+      routeTargets.add(TOOLS.pluginCatalog);
     }
     const missing = mainExportedTools.filter((tool) => !routeTargets.has(tool));
     expect(missing).toEqual([]);
@@ -2313,6 +2330,10 @@ describe("t230 dispatcher help and errors", () => {
     expect(defaultHelp).not.toContain("Hidden namespaces:");
     expect(defaultHelp).not.toContain("aidlc engine --help");
     expect(defaultHelp).not.toContain("aidlc system --help");
+    const pluginHelp = expanded.split("\n").find((line) => line.startsWith("  plugin:"));
+    for (const verb of ["marketplaces", "search", "install", "update", "list", "catalog"]) {
+      expect(pluginHelp).toContain(verb);
+    }
   });
 
   test("removed alias nouns are routing errors", () => {

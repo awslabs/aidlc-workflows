@@ -401,6 +401,27 @@ describe("t242 fixture-proved host inventories", () => {
     }));
   });
 
+  test("managed directories establish complete inventory and reject malformed projections", () => {
+    const project = temp("aidlc-managed-inventory-");
+    process.env.AIDLC_HARNESS_NAME = "kiro";
+    const root = join(project, ".kiro", "plugins", "test-pro");
+    cpSync(pluginRoot("kiro"), root, { recursive: true });
+    mkdirSync(join(project, ".kiro", "plugins", "missing-manifest"));
+    let result = discoverPluginInventory(".kiro", project);
+    expect(result.capability).toBe("full-inventory");
+    expect(result.installed.map((plugin) => plugin.key)).toEqual(["test-pro"]);
+    expect(result.invalid[0].message).toContain("manifest is missing");
+    writeFileSync(join(root, ".aidlc-plugin-projection.json"), JSON.stringify({
+      schema: 1, producer: "aidlc-plugin-build", plugin: "test-pro", harness: "kiro",
+      supersededBy: { core: "9.0.0" },
+    }));
+    expect(collectPluginStatus(project, ".kiro").statuses.find((row) => row.key === "test-pro")?.state).toBe("superseded");
+    writeFileSync(join(root, ".aidlc-plugin-projection.json"), "{broken");
+    result = discoverPluginInventory(".kiro", project);
+    expect(result.installed).toEqual([]);
+    expect(result.invalid.some((entry) => entry.message.includes("invalid JSON"))).toBe(true);
+  });
+
   test("duplicate installed identities are invalid and name every manifest", () => {
     const rootA = pluginRoot();
     const rootB = pluginRoot();
@@ -461,6 +482,17 @@ describe("t242 pure status comparator", () => {
       version: "version-differs",
     });
     expect(rows.find((row) => row.key === "version")?.message).toContain("upgrade");
+  });
+
+  test("graduation outranks missing or stale stamps but not disabled selection", () => {
+    const plugin = { ...installed("graduated", "0.1.0", "sha256:new"), supersededBy: { core: "9.0.0", note: "use core" } };
+    for (const stamps of [[], [stamp("graduated", "0.0.1", "sha256:old")]]) {
+      const row = comparePluginState(inventory([plugin]), evidence(stamps), null)[0];
+      expect(row.state).toBe("superseded");
+      expect(row.action).toBe("attention");
+      expect(renderPluginStatuses([row])).toContain("needs attention: superseded by core v9.0.0; remove the plugin after upgrading to aidlc 9.0.0: use core");
+    }
+    expect(comparePluginState(inventory([plugin]), evidence(), new Set())[0].state).toBe("installed-disabled");
   });
 
   test("default rendering exposes only the three actions and verbose keeps taxonomy", () => {
