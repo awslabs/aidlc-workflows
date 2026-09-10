@@ -1,6 +1,6 @@
 # Porting AI-DLC to a New Harness
 
-AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
+AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro (IDE and CLI),
 Codex CLI, Cursor, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) materializes each ignored local Bun copy tree

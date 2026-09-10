@@ -542,7 +542,7 @@ both `defaults` and `none`, and later plain config refreshes reapply the answer.
 Kiro CLI always ships `.kiro/settings/mcp.json`; `defaults` is satisfied by
 that file and its five shipped servers, while `none` is an instruct-only
 preference and does not remove a framework-owned file. The current Codex,
-opencode, Copilot, Kiro IDE, and Cursor distributions ship no MCP surface, so
+opencode, Copilot, and Cursor distributions ship no MCP surface, so
 their recorded answer is informational and does not make `--check`
 permanently red. `--show` names the actual MCP file whenever one exists.
 
@@ -627,7 +627,7 @@ project content.
 |---------|-----------|--------|
 | `.gitignore` | All | Own one marked AI-DLC block; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
-| `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
+| `AGENTS.md` | Kiro, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
 
@@ -658,8 +658,7 @@ Successful config prints the host-specific next step:
 | Harness | Next step |
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
-| Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor` |
+| Kiro | Run `kiro-cli chat`, or open the project in Kiro IDE, then `/aidlc --doctor` |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

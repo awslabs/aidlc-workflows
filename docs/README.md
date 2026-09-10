@@ -1,7 +1,7 @@
 # AI-DLC Documentation
 
 AI-DLC is a structured, gated methodology for AI-driven software development.
-This repository runs it natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI,
+This repository runs it natively in Claude Code, Kiro (IDE and CLI), Codex CLI,
 Cursor, opencode, and GitHub Copilot.
 
 ## Quick Start

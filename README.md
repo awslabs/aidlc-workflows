@@ -2,7 +2,7 @@
 
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
-runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
+runs natively in Claude Code, Kiro (IDE and CLI), Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
 ![version](https://img.shields.io/badge/version-2.8.2-blue)

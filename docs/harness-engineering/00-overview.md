@@ -3,7 +3,7 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
+on the harness you use — Claude Code, Kiro (IDE and CLI), Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
 (11 domain experts, 2 reviewers, and the composer), 33 stages, 11 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for

@@ -1,8 +1,8 @@
 # AI-DLC — one core, many harnesses
 
 This directory contains a native implementation of the AI-DLC (AI-Driven
-Development Life Cycle) methodology that ships to many CLI harnesses — today
-Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
+Development Life Cycle) methodology that ships to many agent harnesses — today
+Claude Code, Kiro (IDE and CLI from one row), Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable host you port it to — from
 a single hand-authored source.
 
 ## Project Structure
