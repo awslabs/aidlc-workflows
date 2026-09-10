@@ -75,6 +75,25 @@ const PLUGIN_PROJECTION_MARKER_SCHEMA = 1;
 const PLUGIN_PROJECTION_PRODUCER = "aidlc-plugin-build";
 const PLUGIN_BUILD_LOCK_TIMEOUT_MS = 30_000;
 const PLUGIN_BUILD_LOCK_RETRY_MS = 25;
+// Agent Plugins v1 (agent-plugins.org): the portable root manifest every
+// conformant client loads. AIDLC-specific identity rides the reverse-domain
+// extension namespace; AIDLC content directories stay where the compose hook
+// and host manifests expect them (client-directory conformance is a separate
+// layout migration).
+export const AGENT_PLUGINS_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+export const AIDLC_EXTENSION_NAMESPACE = "com.amazon.aidlc";
+// §5.5: 1-64 chars of [a-z0-9.-], alphanumeric ends, no `--` or `..`.
+export const AGENT_PLUGIN_NAME_RE = /^(?!.*(--|\.\.))[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/;
+
+function agentPluginAuthor(author: unknown): { name: string; email?: string; url?: string } {
+  if (typeof author === "string") return { name: author };
+  if (!isPlainRecord(author) || typeof author.name !== "string") return { name: "AIDLC" };
+  return {
+    name: author.name,
+    ...(typeof author.email === "string" ? { email: author.email } : {}),
+    ...(typeof author.url === "string" ? { url: author.url } : {}),
+  };
+}
 
 const CONTENT_DIRS = [
   "stages",
@@ -596,6 +615,12 @@ export function buildPluginProjection(
     isPlainRecord(manifest.aidlc) ? manifest.aidlc.supersededBy : undefined,
     join(pluginRoot, ".aidlc-plugin", "plugin.json"),
   );
+  const hostName = `aidlc-${pluginName}`;
+  if (!AGENT_PLUGIN_NAME_RE.test(hostName)) {
+    throw new Error(
+      `${pluginRoot}: plugin name "${pluginName}" projects to host name "${hostName}", which is not a valid Agent Plugins name (no "--", no trailing "-", at most 64 characters). Rename the plugin.`,
+    );
+  }
   const reviewers = new Set(
     options.reviewerAgents ?? pluginReviewerAgents(pluginRoot),
   );
@@ -629,6 +654,28 @@ export function buildPluginProjection(
           2,
         )}\n`,
       );
+      writeFileSync(
+        join(outDir, "plugin.json"),
+        `${JSON.stringify(
+          {
+            $schema: AGENT_PLUGINS_SCHEMA,
+            name: hostName,
+            version,
+            description,
+            author: agentPluginAuthor(manifest.author),
+            extensions: {
+              [AIDLC_EXTENSION_NAMESPACE]: {
+                plugin: pluginName,
+                harness: options.target.harnessName,
+                producer: PLUGIN_PROJECTION_PRODUCER,
+                ...(supersededBy === undefined ? {} : { supersededBy }),
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
 
       const hostManifestDir = join(outDir, options.target.manifestDir);
       mkdirSync(hostManifestDir, { recursive: true });
@@ -636,7 +683,7 @@ export function buildPluginProjection(
         join(hostManifestDir, "plugin.json"),
         `${JSON.stringify(
           {
-            name: `aidlc-${pluginName}`,
+            name: hostName,
             version,
             description,
             author,
@@ -654,7 +701,7 @@ export function buildPluginProjection(
             description: "AIDLC plugin catalogue.",
             plugins: [
               {
-                name: `aidlc-${pluginName}`,
+                name: hostName,
                 source: ".",
                 version,
                 description,

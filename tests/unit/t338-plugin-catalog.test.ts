@@ -33,6 +33,8 @@ import {
   type PluginCatalog,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-catalog.ts";
 import {
+  AGENT_PLUGINS_SCHEMA,
+  AIDLC_EXTENSION_NAMESPACE,
   buildPluginProjection,
   readPluginTargets,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
@@ -146,6 +148,57 @@ describe("t338 plugin marketplace catalog", () => {
     const direct = normalizeMarketplaceSource("https://market.example/x/aidlc-marketplace.json");
     expect(() => hostHandoffCommands("claude", "install", "test-pro", direct, catalog))
       .toThrow(/registered by direct catalog URL/);
+  });
+
+  test("every emitted projection carries an Agent Plugins v1 root manifest mirroring the marker", () => {
+    // Spec §5.2 closed schema, §5.3 required fields, §5.4 author object keys,
+    // §5.5 name constraints, §8.1 extension data under a reverse-domain key.
+    const allowedTop = ["$schema", "name", "version", "description", "author", "homepage", "repository", "license", "keywords", "extensions"];
+    for (const harness of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
+      const root = join(PLUGINS_ROOT, "test-pro", harness);
+      const manifest = JSON.parse(readFileSync(join(root, "plugin.json"), "utf-8")) as Record<string, unknown>;
+      expect(Object.keys(manifest).every((key) => allowedTop.includes(key))).toBe(true);
+      expect(manifest.$schema).toBe(AGENT_PLUGINS_SCHEMA);
+      expect(manifest.name).toBe("aidlc-test-pro");
+      expect(manifest.name).toMatch(/^(?!.*(--|\.\.))[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/);
+      const author = manifest.author as Record<string, unknown>;
+      expect(Object.keys(author).every((key) => ["name", "email", "url"].includes(key))).toBe(true);
+      expect(typeof author.name).toBe("string");
+      const marker = readProjectionMarker(root);
+      expect(manifest.version).toBe(marker.version);
+      expect(manifest.description).toBe(marker.description);
+      const extensions = manifest.extensions as Record<string, Record<string, unknown>>;
+      expect(Object.keys(extensions)).toEqual([AIDLC_EXTENSION_NAMESPACE]);
+      expect(extensions[AIDLC_EXTENSION_NAMESPACE]).toEqual({
+        plugin: marker.plugin,
+        harness,
+        producer: marker.producer,
+      });
+    }
+  });
+
+  test("a plugin whose host name would violate Agent Plugins naming is refused before emission", () => {
+    const pluginRoot = join(scratch, "bad-name", "double--dash");
+    mkdirSync(join(pluginRoot, ".aidlc-plugin"), { recursive: true });
+    writeFileSync(join(pluginRoot, ".aidlc-plugin", "plugin.json"), JSON.stringify({
+      name: "double--dash",
+      version: "0.1.0",
+      aidlc: { contributes: { stages: "stages/" } },
+    }));
+    mkdirSync(join(pluginRoot, "stages"));
+    const { errors } = validatePluginRoot(pluginRoot);
+    expect(errors.some((finding) => /not a valid Agent Plugins name/.test(finding.message))).toBe(true);
+    const outDir = join(scratch, "bad-name-out");
+    expect(() =>
+      buildPluginProjection({
+        pluginRoot,
+        target: readPluginTargets(join(TOOLS_ROOT, "data", "plugin-targets.json")).claude,
+        outDir,
+        outputBoundary: scratch,
+        templateHooksDir: join(TOOLS_ROOT, "data", "plugin-hooks-template"),
+      })
+    ).toThrow(/not a valid Agent Plugins name/);
+    expect(existsSync(outDir)).toBe(false);
   });
 
   test("execution disclosure includes compose hooks, IDE hook registrations, and tool scripts", () => {

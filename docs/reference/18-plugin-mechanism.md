@@ -580,17 +580,32 @@ private-marketplace template. See [Authoring a Plugin](../harness-engineering/10
 
 ### Standards alignment
 
-[Agent Plugins v1](https://agent-plugins.org/specification) defines package
-format, not distribution, installation, or permissions. A later mechanism-level
-change can adopt its root `plugin.json` and `com.amazon.aidlc/` extension
-directory, also making AIDLC projections recognizable to
-[APM](https://microsoft.github.io/apm/). APM is a viable alternative fetch
-channel for storeless harnesses, but it does not compose AIDLC stages and
+[Agent Plugins v1](https://agent-plugins.org/specification) defines a package
+format, not distribution, installation, or permissions. Every emitted
+projection now carries the v1 **root manifest** `plugin.json`: `$schema`
+(`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`), `name`
+(`aidlc-<plugin>`, checked against the spec's naming rule at validate and
+build time), `version`, `description`, `author {name}`, and AIDLC identity under
+`extensions["com.amazon.aidlc"]` (`plugin`, `harness`, `producer`,
+`supersededBy?`). A conformant client therefore loads the package (it ships no
+`skills/` or `mcp.json`, so it sees a valid plugin with no portable components
+and ignores the namespace it does not implement), and APM recognizes the tree.
+What the projection does **not** yet do is place AIDLC's files under the
+`com.amazon.aidlc/` extension directory (§8.2): `stages/`, `contributions/`,
+`hooks/`, and the rest stay at the root where the compose hook, the composition
+hash, and every host manifest expect them. That layout migration is feasible
+(Claude's manifest accepts `hooks`/`agents` path overrides, so namespaced files
+can be referenced from the native manifest) but is a mechanism-level change
+across the emitter, composer, and fixtures, deferred deliberately.
+
+[APM](https://microsoft.github.io/apm/) is a viable alternative fetch channel
+for storeless harnesses, but it does not compose AIDLC stages and
 contributions, hand off to native host stores, or avoid an extra `apm`
 prerequisite. The in-binary catalog remains for those gaps; source normalization,
 content hashes, and allowlists are overlapping minimum safeguards, not a new
 package-format claim. A bounded **APM 0.30.0 probe on 2026-09-10**, using a
-loopback git server and `apm install --target kiro`, established:
+loopback git server and `apm install --target kiro` against a projection that
+predates the root manifest, established:
 
 | Concern | Observed result and boundary |
 |---|---|
@@ -749,7 +764,7 @@ Independent authors who never coordinate are kept safe by:
 
 ## 9. As-built: emission, install, and the worked example
 
-The shared plugin emitter projects one authored root into one host plugin. `bun scripts/package.ts` calls it for discovered first-party `plugins/<name>/` roots; `aidlc-plugin-build.ts` calls it from an external plugin repository. Each projection carries `.aidlc-plugin-projection.json`, binding replacement authority to the logical plugin and exact harness, plus the host-native manifest (`.claude-plugin/` / `.codex-plugin/` / Copilot `.plugin/` / `.kiro-plugin/` / `.opencode-plugin/` / `.cursor-plugin/`), a `marketplace.json`, the compose hook, and the plugin's content (stages with full `number`/`plugin`/`when` frontmatter — the schema accepts them natively). A non-empty output without a valid matching marker is never cleaned; there is no force bypass. Cursor keeps plugin-agent compose inputs under `aidlc/agents/`, outside Cursor's auto-discovered root `agents/`; compose projects the single native copy into the installed `.cursor/agents/` roster with harness tokens resolved and named model pins removed. The compose hook is a single portable `compose.ts` (bun — no GNU-specific shell) that is **harness-agnostic**: plugin root resolves from `CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT` and falls back to the emitted hook location, project dir from `CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD` (Codex leaves the project-dir var unset — PWD is the fallback), and the harness leaf from `AIDLC_HARNESS_DIR`, which each host command or Cursor launcher supplies. Cursor's launcher additionally parses SessionStart `workspace_roots`, chooses the only root carrying an AI-DLC Cursor install, and refuses multiple matching roots unless `AIDLC_PROJECT_DIR` selects one. It copies new stages/scopes/agents/knowledge/sensors/tools without clobbering, merges the seam idempotently (content-hashed sentinel splices, compare-before-write), and records any contribution it has to drop (missing target, malformed anchor, a key the installed engine won't accept) to per-plugin `<hooksHealthDir>/plugin-compose-<key>.drops` files — the same per-space health dir core hooks write to and `/aidlc --doctor` scans — rather than failing the session. Installed test/fixture payloads are audited separately in a per-harness `plugin-compose-installed-tool-payloads-<harness>.drops` record keyed by the composing harness leaf: the scan walks that harness's installed tools tree even when the corrected plugin projection no longer contains the path, so a clean compose on one harness never erases another harness's advisory, and legacy files are reported without attributing them to whichever plugin happens to compose next because older compose versions stored no tool-file provenance. Sensor manifests carry an extra copy-time guard: discovery flatly scans `sensors/` and indexes only basenames matching `aidlc-<id>.md`, so a plugin manifest under any other name (or nested in a subdirectory) would compose but never fire. Compose rejects such a manifest and records a degraded drop naming the file and the required shape, and reports one an older compose hook already landed the same way on the next run, so a mis-named sensor is never silently dead on disk.
+The shared plugin emitter projects one authored root into one host plugin. `bun scripts/package.ts` calls it for discovered first-party `plugins/<name>/` roots; `aidlc-plugin-build.ts` calls it from an external plugin repository. Each projection carries `.aidlc-plugin-projection.json`, binding replacement authority to the logical plugin and exact harness, an Agent Plugins v1 root `plugin.json` (§5b, Standards alignment), plus the host-native manifest (`.claude-plugin/` / `.codex-plugin/` / Copilot `.plugin/` / `.kiro-plugin/` / `.opencode-plugin/` / `.cursor-plugin/`), a `marketplace.json`, the compose hook, and the plugin's content (stages with full `number`/`plugin`/`when` frontmatter — the schema accepts them natively). A non-empty output without a valid matching marker is never cleaned; there is no force bypass. Cursor keeps plugin-agent compose inputs under `aidlc/agents/`, outside Cursor's auto-discovered root `agents/`; compose projects the single native copy into the installed `.cursor/agents/` roster with harness tokens resolved and named model pins removed. The compose hook is a single portable `compose.ts` (bun — no GNU-specific shell) that is **harness-agnostic**: plugin root resolves from `CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT` and falls back to the emitted hook location, project dir from `CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD` (Codex leaves the project-dir var unset — PWD is the fallback), and the harness leaf from `AIDLC_HARNESS_DIR`, which each host command or Cursor launcher supplies. Cursor's launcher additionally parses SessionStart `workspace_roots`, chooses the only root carrying an AI-DLC Cursor install, and refuses multiple matching roots unless `AIDLC_PROJECT_DIR` selects one. It copies new stages/scopes/agents/knowledge/sensors/tools without clobbering, merges the seam idempotently (content-hashed sentinel splices, compare-before-write), and records any contribution it has to drop (missing target, malformed anchor, a key the installed engine won't accept) to per-plugin `<hooksHealthDir>/plugin-compose-<key>.drops` files — the same per-space health dir core hooks write to and `/aidlc --doctor` scans — rather than failing the session. Installed test/fixture payloads are audited separately in a per-harness `plugin-compose-installed-tool-payloads-<harness>.drops` record keyed by the composing harness leaf: the scan walks that harness's installed tools tree even when the corrected plugin projection no longer contains the path, so a clean compose on one harness never erases another harness's advisory, and legacy files are reported without attributing them to whichever plugin happens to compose next because older compose versions stored no tool-file provenance. Sensor manifests carry an extra copy-time guard: discovery flatly scans `sensors/` and indexes only basenames matching `aidlc-<id>.md`, so a plugin manifest under any other name (or nested in a subdirectory) would compose but never fire. Compose rejects such a manifest and records a degraded drop naming the file and the required shape, and reports one an older compose hook already landed the same way on the next run, so a mis-named sensor is never silently dead on disk.
 
 Projection markers also carry the emitted version, description, and optional
 graduation tombstone. The packager builds a root `aidlc-marketplace.json` and

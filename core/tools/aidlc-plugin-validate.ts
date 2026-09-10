@@ -32,7 +32,8 @@ import {
 } from "./aidlc-stage-schema.ts";
 
 import { CatalogError, parseSupersededBy } from "./aidlc-plugin-catalog.ts";
-import { isPlainRecord } from "./aidlc-plugin-emit.ts";
+import { AGENT_PLUGIN_NAME_RE, isPlainRecord } from "./aidlc-plugin-emit.ts";
+
 export type PluginValidationRule =
   | "plugin-root"
   | "manifest-missing"
@@ -281,6 +282,14 @@ export function validatePluginName(
       rule: "manifest-name",
       message: `manifest name "${declaredName}" is reserved`,
       fix: 'Choose a name other than "core", "aidlc", or the "aidlc-" namespace.',
+    });
+  }
+  if (PLUGIN_NAME_RE.test(declaredName) && !AGENT_PLUGIN_NAME_RE.test(`aidlc-${declaredName}`)) {
+    findings.push({
+      file,
+      rule: "manifest-name",
+      message: `manifest name "${declaredName}" projects to host name "aidlc-${declaredName}", which is not a valid Agent Plugins name`,
+      fix: 'Avoid consecutive or trailing hyphens and keep "aidlc-<name>" within 64 characters.',
     });
   }
   if (declaredName !== rootName) {
