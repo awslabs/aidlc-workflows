@@ -936,6 +936,12 @@ describe("t265b hook lifecycle", () => {
           seedUnit(proj, null, { plan: true, answer: null });
         }
         const entry = ".claude/tools/aidlc.ts";
+        for (const nonShellBlank of ["\u00a0", "\r", "\v", "\f", "\u2028", "\u2029"]) {
+          for (const suffix of ["", ".ts"]) {
+            const redirected = `printf 'export const bypass=1;' >&1${nonShellBlank}${suffix}`;
+            expect(runHook(proj, BASH(redirected)).code, JSON.stringify(redirected)).toBe(2);
+          }
+        }
         const wrapped = `env -C other bun ${entry} engine orchestrate next`;
         expect(runHook(proj, BASH(wrapped)).code, wrapped).toBe(2);
         for (const command of [
