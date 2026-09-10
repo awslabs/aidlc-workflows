@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1042,
+    "total": 1045,
     "enumeratedByClass": {
-      "function": 722,
+      "function": 725,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 436,
+      "function": 439,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -3798,6 +3798,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:INTENT_SELECTOR_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t114-orchestrate-next.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4887,6 +4899,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ORCHESTRATOR_VERBS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:pairedReviewRecordForCompletion",
       "minMechanism": "none",
       "coveredBy": [
@@ -5177,6 +5201,22 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseTeamBoardArgs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t114-orchestrate-next.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
