@@ -1424,6 +1424,18 @@ function canonicalEngineCommand(text: string): string {
     );
 }
 
+function hasShellEvaluationSyntax(command: string): boolean {
+  // Bash/PowerShell substitutions and cmd.exe variable expansion may execute
+  // or reveal additional commands before the apparent invocation is parsed.
+  return /\$\(|\$\{|\$\[|[`%!]/.test(command);
+}
+
+function isLiteralExecutableWord(word: string): boolean {
+  if (/[$`%!^]/.test(word)) return false;
+  if (/^"[^"]*"$/.test(word)) return true;
+  return /^[\p{L}\p{N}_./:\\-]+$/u.test(word);
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
@@ -1437,9 +1449,18 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const text = canonicalEngineCommand(
-    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
+  const original = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  const text = canonicalEngineCommand(original);
+  // A quoted source-dispatcher path may contain an evaluated shell expression.
+  // Normalizing that path erases the expression, so preserve this evidence
+  // before considering a terminal-workspace exemption.
+  const literalSourcePaths = [...original.matchAll(sourceEngineDispatcher)].every(
+    (match) => isLiteralExecutableWord(
+      match[0].replace(/^bun[ \t]+/, "").replace(/[ \t]+$/, ""),
+    ),
   );
+  const allowWorkspaceRouting = !hasShellEvaluationSyntax(original) &&
+    !/[^\S \t\n]/u.test(original) && literalSourcePaths;
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
@@ -1454,13 +1475,13 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
   for (const seg of segments) {
-    if (isEngineEngagementSegment(seg)) return true;
+    if (classifyEngineEngagementSegment(seg, allowWorkspaceRouting)) return true;
   }
   return false;
 }
 
-// Current legacy-shape engagement rules. Kept as a helper so the exported
-// classifier can preserve every old-shape result while adding the new grammar.
+// Legacy-shape fallback rules. Workspace routing is classified through the
+// shared terminal grammar before these lexical engagement checks.
 function legacyEngineEngagementSegment(seg: string): boolean {
   if (!/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) return false;
   // A PURE read-only query: a read-only flag present AND no mutating/advancing
@@ -1491,6 +1512,59 @@ function legacyEngineEngagementSegment(seg: string): boolean {
   return true;
 }
 
+const legacyWorkspaceRoutingTool =
+  String.raw`(?:"(?:[^"]*[/\\])?aidlc-orchestrate(?:\.ts)?"|` +
+  String.raw`'(?:[^']*[/\\])?aidlc-orchestrate(?:\.ts)?'|` +
+  String.raw`(?:[^\s"';&|<>]*[/\\])?aidlc-orchestrate(?:\.ts)?)`;
+const workspaceRoutingInvocation = new RegExp(
+  String.raw`^(?:aidlc(?:[ \t]+orchestrate)?|(?:bun[ \t]+)?(?<legacy>${legacyWorkspaceRoutingTool}))[ \t]+next(?:[ \t]+|$)(?<args>.*)$`,
+);
+
+// Classify literal workspace arguments carried through `next` using the same
+// grammar as the router. Terminal utilities do not engage; intent creation does.
+// This is a narrow exemption: indirect shell execution, substitutions, and
+// multiple engine invocations retain the existing lexical classification.
+function workspaceRoutingEngagement(segment: string): boolean | null {
+  if (/[&|;()<>]/.test(segment) || hasShellEvaluationSyntax(segment)) return null;
+  const command = segment.replace(/^[ \t]+|[ \t]+$/g, "")
+    .replace(/^command[ \t]+(?:--[ \t]+)?/, "")
+    .replace(/^env[ \t]+(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_./:-]*[ \t]+)*/, "");
+  const routing = workspaceRoutingInvocation.exec(command);
+  if (!routing) return null;
+  if (routing.groups?.legacy && !isLiteralExecutableWord(routing.groups.legacy)) {
+    return null;
+  }
+  const engineCalls = command.match(
+    /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b|\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/g,
+  );
+  if (engineCalls?.length !== 1) return null;
+
+  // Only the leading noun and verb determine whether workspace routing creates
+  // an intent. Unknown expansions/escaping cannot establish a terminal route.
+  const words = (routing.groups?.args ?? "")
+    .match(/"[^"]*"(?=[ \t]|$)|'[^']*'(?=[ \t]|$)|[^ \t]+/g) ?? [];
+  const args: string[] = [];
+  for (const word of words.slice(0, 2)) {
+    if (/[\\$`^]/.test(word)) return null;
+    // Unlike Bash and PowerShell, cmd.exe preserves single quotes in argv.
+    // A quoted noun therefore cannot establish workspace routing on every
+    // supported shell; retain the old classification when it is ambiguous.
+    if (args.length === 0 && word.startsWith("'")) return null;
+    if (/^"[^"]*"$|^'[^']*'$/.test(word)) {
+      args.push(word.slice(1, -1));
+    } else {
+      if (!/^[\p{L}\p{N}_./:-]+$/u.test(word)) return null;
+      args.push(word);
+    }
+  }
+  // Entry points remove/relocate global flags before workspace parsing. Raw
+  // flags between the noun and verb therefore cannot establish literal argv.
+  if (args.some((arg) => arg.startsWith("-"))) return null;
+  const workspace = parseWorkspaceCommand(args);
+  if (workspace.kind === "not-workspace") return null;
+  return classifyTerminalCommand(args) === null;
+}
+
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately
 // ask "what stage am I on?" answered with `--status` / `next --status` /
@@ -1503,6 +1577,17 @@ function legacyEngineEngagementSegment(seg: string): boolean {
 // engagement (BLOCK), so an unrecognised mutating verb can never leak through as
 // "chat" - the conservative direction for loop integrity.
 export function isEngineEngagementSegment(seg: string): boolean {
+  return classifyEngineEngagementSegment(seg, true);
+}
+
+function classifyEngineEngagementSegment(
+  seg: string,
+  allowWorkspaceRouting: boolean,
+): boolean {
+  if (allowWorkspaceRouting) {
+    const workspaceEngagement = workspaceRoutingEngagement(seg);
+    if (workspaceEngagement !== null) return workspaceEngagement;
+  }
   if (
     /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)

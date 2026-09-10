@@ -490,6 +490,7 @@ export async function driveAidlc(
   writeSdkTrace(tracePath, "start", {
     prompt,
     projectDir,
+    claudeConfigDir,
     permissionMode,
     settingSources,
     persistSession: opts.persistSession ?? false,
@@ -523,6 +524,9 @@ export async function driveAidlc(
         // Each drive has its own config directory. Natural-completion tests
         // need the transcript that Stop hooks inspect before accepting a stop.
         persistSession: opts.persistSession ?? false,
+        // Hook feedback explains why a natural stop resumed a workflow. Keep
+        // it in the same opt-in debug trace as tool calls and results.
+        includeHookEvents: Boolean(tracePath),
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         canUseTool: async (toolName, input, permissionOptions) => {
@@ -575,7 +579,17 @@ export async function driveAidlc(
 
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
-      if (msg.type === "assistant") {
+      if (msg.type === "system" && msg.subtype === "hook_response") {
+        writeSdkTrace(tracePath, "hook_response", {
+          hookName: msg.hook_name,
+          hookEvent: msg.hook_event,
+          outcome: msg.outcome,
+          exitCode: msg.exit_code,
+          stdout: msg.stdout,
+          stderr: msg.stderr,
+          output: msg.output,
+        });
+      } else if (msg.type === "assistant") {
         // Capture assistant text AND register any tool_use blocks so we can
         // join them to their tool_result by toolUseID.
         const content = (msg as { message?: { content?: unknown } }).message

@@ -913,6 +913,106 @@ describe("detector corpus", () => {
     }
   });
 
+  test("terminal workspace routes do not engage the workflow", () => {
+    const entries = [
+      "aidlc",
+      "aidlc engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+      'bun "/workspace/project with spaces/.claude/tools/aidlc-orchestrate.ts"',
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      'bun "C:\\workspace\\project with spaces\\.codex\\tools\\aidlc.ts" engine orchestrate',
+    ];
+    for (const entry of entries) {
+      for (const args of [
+        "space-create teamB",
+        'space create "Team B"',
+        "space list --json",
+        "space switch default",
+        "space-create",
+        "space archive",
+        "intent list --json",
+        "intent switch report",
+        '"intent" "list"',
+        "intent",
+      ]) {
+        for (const prefix of ["", "cd app && ", "command ", "env MODE=test "]) {
+          const command = `${prefix}${entry} next ${args}`;
+          expect(d1(command), command).toBe(false);
+        }
+      }
+    }
+  });
+
+  test("workspace routing preserves intent creation and subsequent workflow work", () => {
+    for (const entry of [
+      "aidlc",
+      "aidlc engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+    ]) {
+      for (const args of [
+        "intent create --scope bugfix --label work",
+        'intent "create" --scope bugfix',
+        "intent create --status",
+        "Build a space station",
+        "--scope feature",
+        "",
+      ]) {
+        const command = `${entry} next ${args}`;
+        expect(d1(command), command).toBe(true);
+      }
+      for (const separator of [" && ", " || ", "; ", " | ", "\n", " & "]) {
+        const command = `${entry} next space-create teamB${separator}aidlc engine state approve`;
+        expect(d1(command), command).toBe(true);
+      }
+      expect(d1(`${entry} next space-create teamB && ${entry} next`)).toBe(true);
+      expect(d1(`${entry} report --reason "next space-create teamB"`)).toBe(true);
+    }
+  });
+
+  test("ambiguous shell forms cannot establish a terminal workspace exemption", () => {
+    for (const command of [
+      'aidlc engine orchestrate next intent cr"eat"e --scope bugfix',
+      'aidlc engine orchestrate next intent "$COMMAND" --scope bugfix',
+      'aidlc engine orchestrate next "intent create" --scope bugfix',
+      'aidlc engine orchestrate next space-create "$(aidlc engine state approve)"',
+      'aidlc engine orchestrate next space-create "$(helper)"',
+      'bash -lc "aidlc engine orchestrate next space-create $COMMAND"',
+      'eval "aidlc engine orchestrate next space-create teamB"',
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  for (const [shape, command] of [
+    ["redirection", "aidlc engine orchestrate next intent 2>/dev/null create --scope bugfix"],
+    ["glob", "aidlc engine orchestrate next intent [c]reate --scope bugfix"],
+    ["brace expansion", "aidlc engine orchestrate next intent {create,switch} work"],
+    ["project-dir flag", "bun .claude/tools/aidlc-orchestrate.ts next intent --project-dir . create --scope bugfix"],
+    ["global flag", "aidlc engine orchestrate next intent --quiet create --scope bugfix"],
+    ["source-path command substitution", 'bun "$(aidlc engine orchestrate next >/dev/null; pwd)/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB'],
+    ["source-path arithmetic expansion", 'bun "$[path]/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB'],
+    ["PowerShell splatting", "aidlc engine orchestrate next intent @arguments"],
+    ["cmd variable expansion", "aidlc engine orchestrate next intent %ACTION%"],
+    ["cmd delayed expansion", "aidlc engine orchestrate next intent !ACTION!"],
+    ["cmd caret escape", "aidlc engine orchestrate next intent cr^eate --scope bugfix"],
+    ["cmd source-path expansion", 'bun "%PROJECT_DIR%/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB'],
+    ["tilde expansion", "aidlc engine orchestrate next intent ~+ --scope bugfix"],
+    ["extended glob", "aidlc engine orchestrate next intent crea#te --scope bugfix"],
+    ["PowerShell argument expression", "aidlc engine orchestrate next intent ,create --scope bugfix"],
+    ["shell-dependent noun quoting", "aidlc engine orchestrate next 'space' create teamB"],
+    ["non-shell whitespace", "aidlc engine orchestrate next space\u00a0create teamB"],
+    ["non-shell leading whitespace", "aidlc engine orchestrate next \u00a0space-create teamB"],
+    ["unquoted source arguments", "bun $AIDLC_ARGS/.claude/tools/aidlc.ts engine orchestrate next space-create teamB"],
+    ["quoted source arguments", 'bun "$AIDLC_ARGS/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB'],
+    ["legacy source arguments", "bun $AIDLC_ARGS/.claude/tools/aidlc-orchestrate.ts next space-create teamB"],
+    ["source-path glob", "bun /workspace/*/.claude/tools/aidlc.ts engine orchestrate next space-create teamB"],
+  ]) {
+    test(`workspace routing retains enforcement with ${shape}`, () => {
+      expect(d1(command), command).toBe(true);
+    });
+  }
+
   test("unified runtime recursion wins in composites but not quoted argument text", () => {
     for (const entry of [
       "bun .claude/tools/aidlc.ts",

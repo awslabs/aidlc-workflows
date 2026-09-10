@@ -2361,6 +2361,74 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   // =========================================================================
 
   // --- (h.1) read-only engine queries are conversational (ALLOW) ---
+  for (const format of ["claude", "codex"] as const) {
+    const harnessDir = format === "claude" ? ".claude" : ".codex";
+    for (const [shape, entry] of [
+      ["legacy", `bun ${harnessDir}/tools/aidlc-orchestrate.ts`],
+      ["native", "aidlc engine orchestrate"],
+      ["source dispatcher", `bun ${harnessDir}/tools/aidlc.ts engine orchestrate`],
+    ]) {
+      test(`(h) ${format} terminal workspace routing through ${shape} allows stopping`, () => {
+        const proj = makeProject();
+        seedActive(proj, "requirements-analysis");
+        const before = readFileSync(seededStateFile(proj), "utf-8");
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc space-create teamB" },
+          { kind: "bash", command: `${entry} next space-create teamB` },
+          { kind: "bash", command: "aidlc engine space create teamB" },
+          { kind: "text" },
+        ]);
+        const r = runHook(
+          proj,
+          JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+          "load-steering",
+        );
+        expect(r.rc).toBe(0);
+        expect(r.out).toBe("");
+        expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+      }, 30000);
+    }
+
+    test(`(h) ${format} workspace utility followed by a genuine next still blocks stopping`, () => {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "Create teamB, then continue the current workflow" },
+        { kind: "bash", command: `bun ${harnessDir}/tools/aidlc.ts engine orchestrate next space-create teamB` },
+        { kind: "bash", command: "aidlc engine space create teamB" },
+        { kind: "bash", command: "aidlc engine orchestrate next" },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "load-steering",
+      );
+      expect(r.rc).toBe(0);
+      expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    }, 30000);
+
+    test(`(h) ${format} workspace routing retains workflow work in a source-path substitution`, () => {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "Continue the workflow, then create teamB" },
+        {
+          kind: "bash",
+          command: `bun "$(aidlc engine orchestrate next >/dev/null; pwd)/${harnessDir}/tools/aidlc.ts" engine orchestrate next space-create teamB`,
+        },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "load-steering",
+      );
+      expect(r.rc).toBe(0);
+      expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    }, 30000);
+  }
+
   test("(h) chat + read-only `aidlc-orchestrate next --status` after the human prompt allows the stop", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
