@@ -13,8 +13,9 @@ permissions:
   contents: read
 
 # Stable tags and preview publications have independent serialization. Preview
-# runs queue instead of cancelling because each run allocates its build number
-# from the tags left by earlier runs.
+# runs serialize across schedule and workflow_dispatch so the next planner
+# observes the prior run's publication and enforces at most once per UTC day.
+# Failed attempts reserve only their build counter, leaving the daily slot open.
 concurrency:
   group: release-${{ github.event_name == 'push' && 'stable' || 'preview' }}
   cancel-in-progress: false
@@ -65,9 +66,11 @@ jobs:
             esac
             test "$GITHUB_REF" = "refs/heads/main"
             git fetch --no-tags origin main
-            source_sha="$(git rev-parse origin/main^{commit})"
-            test "$GITHUB_SHA" = "$source_sha"
+            # A queued run may no longer be the tip. Let it observe today's
+            # publication and skip before requiring current main for a build.
+            source_sha="$GITHUB_SHA"
             test "$(git rev-parse HEAD^{commit})" = "$source_sha"
+            git merge-base --is-ancestor "$source_sha" origin/main
             RELEASE_TAG=
           fi
           printf 'channel=%s\ntag=%s\nsha=%s\n' \
@@ -91,6 +94,9 @@ jobs:
             --source-repository "$GITHUB_REPOSITORY" \
             --source-digest "$AUTHORIZED_SHA" \
             --output "$plan"
+          if [ "$(jq -r 'type' "$plan")" != null ]; then
+            test "$AUTHORIZED_SHA" = "$(git rev-parse origin/main^{commit})"
+          fi
           {
             printf 'preview_plan='
             jq -c . "$plan"

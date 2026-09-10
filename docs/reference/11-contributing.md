@@ -86,12 +86,21 @@ the exported bundle, validates the complete inventory, and uploads one
 `attested-release` artifact. `release` rechecks the tag and checksums, creates
 the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
-candidate. Stable releases start from pushed version tags. The same workflow
-also schedules or manually dispatches preview builds from `main`, gates them
-through callable CI, stamps `AIDLC_BUILD_VERSION`, and publishes an
-annotated-tag prerelease that is never "latest". Stable and preview publication
-use the `release` and `preview` environments respectively and queue
-independently. The full trust design is
+candidate.
+
+Stable releases start from pushed version tags. The same workflow schedules
+or manually dispatches preview builds from `main`, gates them through callable
+CI, stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease
+that is never "latest". Previews publish at most once per UTC day. Scheduled
+and manual runs share `release-preview` workflow concurrency; each later run
+re-reads releases and skips if that day already has a published preview, even
+if `main` advanced. Unchanged sources also skip. Drafts and orphan tags do not
+consume the daily allowance: the planner can retry with an unoccupied id,
+whose `.N` counter does not authorize extra public releases that day.
+
+Stable and preview publication use the `release` and `preview` environments
+respectively and serialize independently. The full trust design, including
+how overnight publication timestamps count toward the daily cap, is
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Testing

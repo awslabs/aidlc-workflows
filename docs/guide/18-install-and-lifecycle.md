@@ -694,16 +694,24 @@ There is no public rollback or retained-version management command.
 
 ## Release Channels
 
-`main` is the trunk: every user-visible change bumps the patch version and adds
-a CHANGELOG entry, so `main` is a stream of named versions. The **stable**
-channel blesses one point in that stream as a GitHub release tagged `vX.Y.Z`;
-the **preview** channel publishes the stream itself, once a day, as a GitHub
-prerelease that is never marked "latest". There is no release branch and no
-cherry-pick: a preview is `main` at a commit, and the next stable release is a
-later (or the same) commit of the same stream.
+`main` is the shared development branch. The **stable** channel publishes a
+selected commit as a GitHub release tagged `vX.Y.Z`. The **preview** channel
+lets users try changes from `main` before the next stable release, at most once
+per UTC day, as a GitHub prerelease that is never marked "latest". Source
+versions and changelog entries are updated during release preparation.
+
+Scheduled and manual runs share the same daily cap. A run skips if a preview
+is already published for that UTC day, even when `main` has advanced; it also
+skips when the source is unchanged since the latest published preview. An
+overnight build counts on the UTC date it is published as well as the date in
+its id.
 
 A preview id is `<x.y.z>-preview.<YYYYMMDD>.<N>`: the source tree's version,
-the UTC build date, and that day's build counter (`1` for the first build).
+the UTC build date chosen during planning, and a retry counter (`1` initially).
+Drafts and tags left by failed attempts reserve ids without consuming the
+daily publication allowance. A retry can advance `N` past those occupied ids;
+it does not permit multiple public releases in one day.
+
 Stable ids stay exactly `x.y.z`, and nothing else is accepted anywhere a
 version appears (installer flags, `use`, pins, `.aidlc-version`, retained
 version directories). Ids order numerically on `x.y.z`; at an equal base the
@@ -728,21 +736,21 @@ overrides the marker for one run; `--version` and `--from` select an exact
 release regardless of channel. Stable discovery is unchanged (the
 `latest/download` redirect). Preview discovery lists the releases of the
 repository behind the release base URL through the GitHub API, keeps the
-newest published prerelease whose tag is a preview id, and installs it through
-the exact-version path. For `github.com` base URLs the API endpoint is derived;
-for any other host set `--release-api-url <url>` or `AIDLC_RELEASE_API_URL`.
+newest published prerelease by preview version id, and installs it through
+the exact-version path. Drafts and tags without a published release are ignored.
+For `github.com` base URLs the API endpoint is derived; for any other host set
+`--release-api-url <url>` or `AIDLC_RELEASE_API_URL`.
 An API failure, a rate limit, or a repository with no published preview is
 reported as unavailable (exit 3); the client never falls back to the stable
 release. The update cache records the channel it was refreshed for, so a cached
 preview result never answers a stable check or the reverse.
 
-Switching back is `aidlc config --channel stable` then `aidlc update`. The
-newest stable id sorts below the preview you are running; update installs it
-anyway and reports a channel switch, not a downgrade. Preview retention is a
-bounded window on top of the protection every release has (active, rollback,
-in use, pinned): after an update the two newest complete previews stay, and
-every older preview without its own protection is pruned; stable retention is
-unchanged.
+Switching back is `aidlc config --channel stable` then `aidlc update`. Even if
+the newest stable id sorts below the preview you are running, update installs
+it and reports a channel switch. Preview retention is a bounded window on top
+of the protection every release has (active, rollback, in use, pinned): after
+an update the two newest complete previews stay, and every older preview
+without its own protection is pruned; stable retention is unchanged.
 
 Project pins keep overriding the machine channel: `aidlc config --pin <id>` and
 `.aidlc-version` accept preview ids, and a pinned project dispatches to that

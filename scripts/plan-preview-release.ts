@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 // Plans one preview publication from the authorized main commit: decides
-// whether main has moved since the newest published preview, allocates the next
-// preview id for today's UTC date, and renders the release notes. Runs in the
-// authorize job, where the full history is available; the promote job consumes
+// whether today's UTC publication slot is free and main has moved since the
+// newest published preview, allocates a retry-safe id, and renders release notes.
+// Runs in the validate job, where full history is available; publication consumes
 // the resulting plan verbatim.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
@@ -19,6 +19,8 @@ import {
   parsePreviewTagSource,
   type PreviewPlan,
   previewReleaseName,
+  previewReleaseVersion,
+  publishedPreviewOnDate,
 } from "./preview-release.ts";
 
 const API_VERSION = "2022-11-28";
@@ -27,7 +29,13 @@ const COMMIT = /^[a-f0-9]{40}$/;
 const HEADING = /^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}\s*$/;
 
 export type PreviewPlanResult =
-  | { skip: true; version: null; previousSourceDigest: string; plan: null }
+  | {
+    skip: true;
+    reason: "daily-limit" | "unchanged-source";
+    version: null;
+    previousSourceDigest: string | null;
+    plan: null;
+  }
   | { skip: false; version: string; previousSourceDigest: string | null; plan: PreviewPlan };
 
 type ApiClient = {
@@ -88,6 +96,7 @@ async function paginated(client: ApiClient, path: string): Promise<unknown[]> {
     rows.push(...result.value);
     next = result.next;
   }
+  if (next) throw new Error(`${path} exceeded the pagination limit`);
   return rows;
 }
 
@@ -117,6 +126,10 @@ export async function newestPublishedPreview(
   repository: string,
 ): Promise<string | null> {
   const releases = await paginated(client, `repos/${repository}/releases?per_page=100`);
+  return newestPublishedPreviewVersion(releases);
+}
+
+function newestPublishedPreviewVersion(releases: readonly unknown[]): string | null {
   let newest: string | null = null;
   for (const entry of releases) {
     if (
@@ -275,15 +288,33 @@ export async function planPreviewRelease(options: {
   if (!COMMIT.test(options.sourceDigest)) {
     throw new Error("source digest must be a lowercase 40-hex commit");
   }
-  const newest = await newestPublishedPreview(options.client, options.repository);
+  const date = options.date ?? utcBuildDate();
+  const releases = await paginated(
+    options.client,
+    `repos/${options.repository}/releases?per_page=100`,
+  );
+  if (publishedPreviewOnDate(releases, date)) {
+    return {
+      skip: true,
+      reason: "daily-limit",
+      version: null,
+      previousSourceDigest: null,
+      plan: null,
+    };
+  }
+  const newest = newestPublishedPreviewVersion(releases);
   const previousSourceDigest = newest
     ? await previewSourceDigest(options.client, options.repository, newest)
     : null;
   if (previousSourceDigest && previousSourceDigest === options.sourceDigest) {
-    return { skip: true, version: null, previousSourceDigest, plan: null };
+    return { skip: true, reason: "unchanged-source", version: null, previousSourceDigest, plan: null };
   }
   const tags = await listPreviewTags(options.client, options.repository);
-  const version = nextPreviewVersion(tags, AIDLC_VERSION, options.date ?? utcBuildDate());
+  // A draft may reserve a preview id without having created its tag yet.
+  const releaseVersions = releases
+    .map(previewReleaseVersion)
+    .filter((version): version is string => version !== null);
+  const version = nextPreviewVersion([...tags, ...releaseVersions], AIDLC_VERSION, date);
   const notes = previewReleaseNotes({
     cwd: options.cwd,
     version,
@@ -330,7 +361,9 @@ async function main(argv: string[]): Promise<void> {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${rows.join("\n")}\n`);
   process.stdout.write(
     result.skip
-      ? `main ${sourceDigest} is already the source of the newest ${PREVIEW_CHANNEL}; nothing to publish\n`
+      ? result.reason === "daily-limit"
+        ? `a ${PREVIEW_CHANNEL} is already published for this UTC day; nothing to publish\n`
+        : `main ${sourceDigest} is already the source of the newest ${PREVIEW_CHANNEL}; nothing to publish\n`
       : `planned ${PREVIEW_CHANNEL} ${result.version} from ${sourceDigest}${
         result.previousSourceDigest ? ` (previous ${result.previousSourceDigest})` : ""
       }\n`,

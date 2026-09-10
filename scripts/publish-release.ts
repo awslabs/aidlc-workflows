@@ -16,8 +16,9 @@ import {
   requireReleaseChannel,
   STABLE_CHANNEL,
   STABLE_VERSION,
+  utcBuildDate,
 } from "../core/tools/aidlc-channel.ts";
-import { previewTagMessage, readPreviewPlan } from "./preview-release.ts";
+import { previewTagMessage, publishedPreviewOnDate, readPreviewPlan } from "./preview-release.ts";
 
 type ReleaseAsset = {
   id: number;
@@ -64,6 +65,7 @@ export type PublishReleaseOptions = {
   channel?: ReleaseChannel;
   sourceRepository?: string;
   sourceDigest?: string;
+  now?: () => Date;
 };
 
 export type PublishedRelease = {
@@ -595,6 +597,7 @@ function assertSameAssets(
 async function leftoverStagingDrafts(
   releasesUrl: string,
   token: string,
+  previewDate?: string,
 ): Promise<string[]> {
   const leftovers: string[] = [];
   let next: string | null = `${releasesUrl}?per_page=100`;
@@ -603,6 +606,9 @@ async function leftoverStagingDrafts(
     if (response.status !== 200) throw await responseFailure(response);
     const page = await response.json();
     if (!Array.isArray(page)) throw new Error("release list API response must be an array");
+    if (previewDate && publishedPreviewOnDate(page, previewDate)) {
+      throw new Error(`a preview is already published for UTC date ${previewDate}; daily limit reached`);
+    }
     for (const entry of page) {
       if (
         entry &&
@@ -653,6 +659,7 @@ export async function publishRelease(
   const apiBaseUrl = options.apiBaseUrl ?? "https://api.github.com";
   const expectedAssetCount = options.expectedAssetCount ?? 13;
   const log = options.log ?? ((message: string) => process.stdout.write(`${message}\n`));
+  const previewDate = () => preview ? utcBuildDate((options.now ?? (() => new Date()))()) : undefined;
   const local = await localAssets(options.directory, expectedAssetCount);
   const releasesUrl = apiUrl(
     apiBaseUrl,
@@ -673,7 +680,7 @@ export async function publishRelease(
   // A leftover draft means an earlier run stopped after creating evidence or
   // failed to clean up. It must be inspected and removed deliberately before
   // another candidate is staged, so drafts never accumulate unnoticed.
-  const leftovers = await leftoverStagingDrafts(releasesUrl, options.token);
+  const leftovers = await leftoverStagingDrafts(releasesUrl, options.token, previewDate());
   if (leftovers.length > 0) {
     throw new Error(
       `staging draft${leftovers.length === 1 ? "" : "s"} from an earlier run must be removed first: ${
@@ -926,6 +933,10 @@ export async function publishRelease(
     // the annotated tag object. A run that fails between here and the PATCH
     // leaves a tag without a release; the next plan skips that build counter.
     if (previewTag) {
+      // Builds can cross UTC midnight. Recheck the actual publication day
+      // immediately before the public tag/release writes; the workflow holds
+      // the shared preview concurrency slot throughout planning and promotion.
+      await leftoverStagingDrafts(releasesUrl, options.token, previewDate());
       await createAnnotatedTag(
         apiBaseUrl,
         options.repository,

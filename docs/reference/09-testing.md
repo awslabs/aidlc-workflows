@@ -53,8 +53,13 @@ Distribution coverage is split by contract:
   channel-aware `update` and `update --check`, API failure as unavailable,
   switching back to stable, preview retention, and preview pins.
 - `t332-preview-release-pipeline.test.ts` covers the annotated-tag prerelease
-  publication, the preview planner and notes, the plan record, and the release
-  workflow's schedule/manual trigger, CI gate ordering, and build stamping.
+  publication, the preview planner and notes, and the plan record. It checks
+  the cap of at most one published preview per UTC day even after `main`
+  advances or a later manual run starts, including overnight publication
+  timestamps. Unchanged sources skip; drafts and orphan tags permit retry
+  planning with unoccupied ids. Workflow assertions cover scheduled/manual
+  triggers sharing `release-preview` concurrency, CI gate ordering, and build
+  stamping.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.

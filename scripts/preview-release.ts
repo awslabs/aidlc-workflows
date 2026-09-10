@@ -8,6 +8,7 @@ import {
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
   requireVersion,
+  utcBuildDate,
 } from "../core/tools/aidlc-channel.ts";
 
 export type PreviewPlan = {
@@ -23,6 +24,41 @@ export type PreviewPlan = {
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const SOURCE_LINE = /^Source: ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@([a-f0-9]{40})$/m;
+
+export function previewReleaseVersion(release: unknown): string | null {
+  if (
+    !release ||
+    typeof release !== "object" ||
+    !("tag_name" in release) ||
+    typeof release.tag_name !== "string" ||
+    !release.tag_name.startsWith("v")
+  ) return null;
+  const version = release.tag_name.slice(1);
+  return PREVIEW_VERSION.test(version) ? version : null;
+}
+
+// The build date reserves the daily slot; published_at also counts an overnight
+// build on the UTC day it actually became public. Drafts never consume a slot.
+export function publishedPreviewOnDate(releases: readonly unknown[], date: string): string | null {
+  for (const release of releases) {
+    const version = previewReleaseVersion(release);
+    if (
+      !version ||
+      !release ||
+      typeof release !== "object" ||
+      !("draft" in release) ||
+      release.draft !== false ||
+      !("prerelease" in release) ||
+      release.prerelease !== true
+    ) continue;
+    if (parseVersion(version).date === date) return version;
+    if ("published_at" in release && typeof release.published_at === "string") {
+      const published = new Date(release.published_at);
+      if (Number.isFinite(published.getTime()) && utcBuildDate(published) === date) return version;
+    }
+  }
+  return null;
+}
 
 export function previewReleaseName(version: string): string {
   if (!PREVIEW_VERSION.test(version)) {
