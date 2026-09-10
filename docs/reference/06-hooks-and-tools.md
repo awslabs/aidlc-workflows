@@ -436,6 +436,13 @@ returns bounded fresh-`next` recovery and never replays an old continuation.
 - **A conversational turn is not free either.** During an active workflow a human who just wants to chat (ask a question, discuss a decision) should not be nudged back into the loop. The hook allows the stop when the most recent genuine human prompt was answered with **no** workflow-engine engagement - the conductor ran neither `aidlc-orchestrate` nor `aidlc-state` since that prompt. A read-only query (`--status`, `--doctor`, `--help`, `--version`) does **not** count as engagement, so "what stage am I on?" answered with `--status` still qualifies as chat. This is **strictly gated and fail-closed**: it never fires under autonomous Construction, and missing or unreadable evidence, no human prompt found, or any engine call in the responding turn falls through to the cap-bounded block, so a conductor that engaged the workflow and then quit mid-loop is still nudged. It only ever ALLOWS - it can never block more.
 - **A pending Resume choice is a human wait.** `next --resume` writes a state-bound active-directive marker with `kind: "ask"` and `resume.status: "waiting"`. On the shared non-Copilot path the Stop hook reads that latch before its own `next` probe can replace the sessionless marker, and allows the turn to end while the human chooses how to resume. A state change or delivered non-`ask` directive closes the latch. Autonomous Construction suppresses this carve-out and continues through the bounded enforcement path.
 
+  Workspace navigation routed through `next` also remains terminal: listing,
+  creating, or switching spaces and listing or switching intents does not engage
+  the workflow loop. The transcript classifier uses the shared workspace grammar
+  for these calls. Intent creation and any chained workflow advance still count
+  as workflow engagement; malformed or dynamic shell commands retain conservative
+  classification.
+
   **One predicate, two evidence sources.** The question is identical on every harness; only the evidence differs.
 
   | Evidence | Harnesses | How it answers "zero engine calls since the last human prompt?" |
