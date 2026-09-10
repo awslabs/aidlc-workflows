@@ -261,9 +261,9 @@ async function installCommand(
       const marker = readProjectionMarker(root);
       if (marker.plugin !== name || marker.harness !== harness || marker.version !== plugin.version) throw new Error("projection identity does not match the catalog");
       normalizeInstalledPlugin(root, harness === "kiro-ide" ? "kiro" : harness, true, plugin.version);
-      if (projectionDigest(root) !== projection.sha256) throw new Error("digest mismatch");
+      if (projectionDigest(root) !== projection.sha256) throw new Error("projection digest does not match the catalog");
     } catch (error) {
-      throw new MarketError(`integrity: fetched ${name}@${plugin.version} does not match the catalog digest; nothing was installed (${errorMessage(error)})`, EXIT.integrity);
+      throw new MarketError(`integrity: fetched ${name}@${plugin.version} could not be verified against the catalog; nothing was installed (${errorMessage(error)})`, EXIT.integrity);
     }
     const fetched = `fetched ${name} ${plugin.version} (${plugin.tag}), checksum verified`;
     if (options.mode === "human") process.stdout.write(`${fetched}\n`);
