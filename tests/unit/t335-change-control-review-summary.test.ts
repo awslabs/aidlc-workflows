@@ -14,7 +14,7 @@
 // its window under both values, and no relaxed setting ever skips a human gate,
 // Plan Approval itself, the autonomous-mode plan stop, or the observer barrier.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -42,6 +42,9 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+// Checkpoint fixtures and repeated gate checks span several CLI processes.
+setDefaultTimeout(30_000);
 
 const BUN = process.execPath;
 const TOOLS = join(AIDLC_SRC, "tools");

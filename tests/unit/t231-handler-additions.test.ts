@@ -54,6 +54,13 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+// Keep the host's native install out of fixture source discovery.
+const nativeMachine = tempDir("aidlc-t231-native-machine-");
+const nativeEnv = {
+  AIDLC_INSTALL_ROOT: join(nativeMachine, "install"),
+  AIDLC_BIN_DIR: join(nativeMachine, "bin"),
+};
+
 function stateProject(): string {
   const project = createTestProject();
   tempDirs.push(project);
@@ -71,6 +78,7 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
     encoding: "utf-8",
     env: {
       ...process.env,
+      ...nativeEnv,
       ...extraEnv,
       CLAUDE_PROJECT_DIR: cwd,
     },
@@ -428,6 +436,7 @@ describe("t231 emitted plugin hook command", () => {
       encoding: "utf-8",
       env: {
         ...process.env,
+        ...nativeEnv,
         PATH: [binDir, dirname(POSIX_SH), process.env.PATH ?? ""].join(delimiter),
         CLAUDE_PLUGIN_ROOT: outDir,
         CLAUDE_PROJECT_DIR: outDir,

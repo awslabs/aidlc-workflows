@@ -52,6 +52,13 @@ function temp(prefix: string): string {
   return path;
 }
 
+// Keep the host's native install out of fixture source discovery.
+const nativeMachine = temp("aidlc-t294-native-machine-");
+const nativeEnv = {
+  AIDLC_INSTALL_ROOT: join(nativeMachine, "install"),
+  AIDLC_BIN_DIR: join(nativeMachine, "bin"),
+};
+
 function run(
   args: string[],
   cwd: string,
@@ -59,7 +66,7 @@ function run(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [INIT, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...nativeEnv, ...env },
     encoding: "utf-8",
     timeout: 60_000,
   });
