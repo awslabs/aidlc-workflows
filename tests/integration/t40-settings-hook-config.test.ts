@@ -46,7 +46,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SETTINGS_LOCAL_EXAMPLE = join(AIDLC_SRC, "settings.local.json.example");
-const SOURCE_INVOKE = "bun .claude/tools/aidlc.ts";
+const SOURCE_INVOKE = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"';
 
 interface HookEntry {
   type?: string;

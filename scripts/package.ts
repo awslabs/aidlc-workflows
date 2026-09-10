@@ -1121,6 +1121,14 @@ function rewriteNativeInvocations(
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
     let value = readFileSync(file, "utf-8");
+    // Claude's source hook/statusline dispatcher is rooted at the project, so
+    // it still loads after an application command changes cwd. JSON escapes
+    // its shell quotes; strip the complete invocation for native releases.
+    const escapedJsonDispatcher = new RegExp(
+      String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/tools/aidlc\.ts\\"`,
+      "gi",
+    );
+    value = value.replace(escapedJsonDispatcher, "aidlc");
     const escapedJsonHook = new RegExp(
       String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
       "gi",

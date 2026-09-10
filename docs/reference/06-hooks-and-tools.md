@@ -67,6 +67,14 @@ All seventeen TypeScript hook sources:
 - Resolve `$CLAUDE_PROJECT_DIR` with multiple fallback methods
 - Share locking and utility functions from `lib.ts`
 
+Claude's source-generated `.claude/settings.json` invokes hooks with
+`bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>` and uses
+the same anchored dispatcher for `engine statusline`. The quoted entry path
+survives project roots containing spaces and application commands that change
+the working directory. It does not change the hook process's working directory
+or the `cwd` supplied in the JSON payload. Native release settings use
+`aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
+
 ### Observers never write authority
 
 Some engine invocations exist only to LEARN the current directive. There are
