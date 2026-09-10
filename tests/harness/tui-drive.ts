@@ -130,16 +130,18 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { dirname, join, posix, win32 } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
 
 const POLL_INTERVAL_MS = 150;
@@ -362,6 +364,40 @@ function commandBasename(file: string): string {
 // them here would fail OPEN — the command returns unchanged and user-level
 // settings leak into a supposedly isolated live TUI run.
 const CLAUDE_BASENAMES = new Set(["claude", "claude.exe", "claude.cmd", "claude.ps1"]);
+
+export const TUI_TEST_FIXTURE_MARKER = ".aidlc-tui-fixture.json";
+
+/** Only setupTuiProject's disposable directory, while its owning test is alive. */
+export function isOwnedTuiFixture(cwd: string): boolean {
+  try {
+    const canonical = realpathSync(cwd);
+    if (
+      dirname(canonical) !== realpathSync(tmpdir()) ||
+      !basename(canonical).startsWith("aidlc-tui-")
+    ) return false;
+    const markerPath = join(canonical, TUI_TEST_FIXTURE_MARKER);
+    if (!lstatSync(markerPath).isFile() || lstatSync(markerPath).isSymbolicLink()) {
+      return false;
+    }
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    if (
+      marker.cwd !== canonical ||
+      !Number.isSafeInteger(marker.ownerPid) ||
+      marker.ownerPid <= 0
+    ) return false;
+    process.kill(marker.ownerPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function claudeFixtureCwd(cwd: string, command: string[]): string | null {
+  return CLAUDE_BASENAMES.has(commandBasename(command[0] ?? "")) &&
+      isOwnedTuiFixture(cwd)
+    ? realpathSync(cwd)
+    : null;
+}
 
 function hasSettingSourcesArg(command: string[]): boolean {
   return command.some((arg) => arg === "--setting-sources" || arg.startsWith("--setting-sources="));
@@ -1168,6 +1204,8 @@ interface Backend {
   kill(session: string): void;
   /** Labels for live backend processes or cleanup-verification blockers. */
   liveProcesses(session: string): string[];
+  /** Disposable fixture recorded when this session launched Claude. */
+  fixtureCwd(session: string): string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,7 +1258,17 @@ const tmuxBackend: Backend = {
       shellCmd,
     ]);
     if (r.code !== 0) fail(`new-session failed: ${r.stderr.trim()}`);
+    const fixture = claudeFixtureCwd(cwd, cmd);
+    if (fixture) {
+      const recorded = tmux(["set-option", "-t", session, "@aidlc-tui-fixture", fixture]);
+      if (recorded.code !== 0) fail(`cannot record fixture session: ${recorded.stderr.trim()}`);
+    }
     process.stdout.write(`started session '${session}' (${width}x${height})\n`);
+  },
+
+  fixtureCwd(session) {
+    const result = tmux(["show-options", "-v", "-t", session, "@aidlc-tui-fixture"]);
+    return result.code === 0 ? result.stdout.trim() || null : null;
   },
 
   send(session, keys, literal, noEnter) {
@@ -1379,6 +1427,12 @@ function killLegacyWindowsSession(session: string, dir: string): void {
 }
 
 const win32Backend: Backend = {
+  fixtureCwd(session) {
+    return readJsonFile<WindowsSessionMeta & { fixtureCwd?: string }>(
+      join(winSessionDir(session), "meta.json"),
+    )?.fixtureCwd ?? null;
+  },
+
   async start(session, cwd, width, height, cmd) {
     if (cmd.length === 0) fail("no command after `--` to run in the session");
 
@@ -1404,7 +1458,10 @@ const win32Backend: Backend = {
     const ownerToken = randomUUID();
     writeFileSync(
       join(dir, "meta.json"),
-      JSON.stringify({ cols: width, rows: height, session, ownerToken, cwd }),
+      JSON.stringify({
+        cols: width, rows: height, session, ownerToken, cwd,
+        fixtureCwd: claudeFixtureCwd(cwd, cmd),
+      }),
     );
 
     // Fork the daemon UNDER NODE (never bun — node-pty input wedges under bun,
@@ -2841,9 +2898,16 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
   await backend.start(session, cwd, width, height, command);
 }
 
-function cmdSend(backend: Backend, a: Args): void {
+async function cmdSend(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const keys = requireFlag(a, "keys");
+  // Existing journeys request the old numbered trust choice. Adapt that request
+  // only while the known fixture's actual trust menu is visible.
+  if (
+    keys === "1" && !a.bools.literal && !a.bools["no-enter"] &&
+    backend.fixtureCwd(session) &&
+    await acceptTuiFixtureTrust(backend, session, backend.capture(session, false))
+  ) return;
   writeTuiTrace(session, "send", {
     keys,
     literal: a.bools.literal === true,
@@ -2923,6 +2987,56 @@ export function initialTuiStartupState(): TuiStartupState {
 const CLAUDE_TRUST_MODAL_RE =
   /(?:Do you trust (?:the files in )?this folder|Yes, I trust this folder)/i;
 const CLAUDE_BYPASS_MODAL_RE = /Bypass Permissions mode/i;
+
+/** Use the painted selection, not a version-dependent option number. */
+export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (!/(?:Accessing workspace:|Do you trust (?:the files in )?this folder)/i.test(screen)) {
+    return null;
+  }
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I trust this folder" }] : [];
+  });
+  if (
+    options.length !== 2 ||
+    options.filter((option) => option.yes).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const yes = options.findIndex((option) => option.yes);
+  return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
+}
+
+export async function acceptTuiFixtureTrust(
+  backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
+  session: string,
+  screen: string,
+): Promise<boolean> {
+  const cwd = backend.fixtureCwd(session);
+  if (!cwd || !isOwnedTuiFixture(cwd)) return false;
+  const navigation = claudeTrustNavigation(screen);
+  if (!navigation) return false;
+  writeTuiTrace(session, "fixture_trust_action", { cwd, navigation, screen });
+  if (navigation !== "Enter") {
+    backend.send(session, navigation, false, true);
+    const deadline = Date.now() + 5_000;
+    do {
+      await sleep(POLL_INTERVAL_MS);
+      screen = backend.capture(session, false);
+      if (claudeTrustNavigation(screen) === "Enter") break;
+    } while (Date.now() < deadline);
+    if (claudeTrustNavigation(screen) !== "Enter") {
+      throw new Error("fixture trust selection never moved to Yes; refusing Enter");
+    }
+  }
+  // Revalidate both the fixture and visible selection immediately before Enter.
+  if (!isOwnedTuiFixture(cwd) || claudeTrustNavigation(backend.capture(session, false)) !== "Enter") {
+    throw new Error("fixture trust context changed; refusing Enter");
+  }
+  backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, "fixture_trust_accepted", { cwd, screen });
+  return true;
+}
 
 function regexMatches(re: RegExp, text: string): boolean {
   re.lastIndex = 0;
@@ -3005,7 +3119,9 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      backend.send(session, "1", false, false);
+      if (!await acceptTuiFixtureTrust(backend, session, screen)) {
+        throw new Error("refusing automatic trust outside a known disposable TUI fixture");
+      }
     } else if (step.action === "dismiss-bypass") {
       writeTuiTrace(session, "startup_action", {
         action: step.action,

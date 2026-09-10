@@ -29,12 +29,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProjectAfterKill } from "../harness/tui-fixtures.ts";
+import { cleanupTuiProjectAfterKill, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -103,13 +102,11 @@ describe("t-tui-statusline (statusline renders in a real terminal)", () => {
     `[AIDLC] ready paints in the launched TUI${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,
     () => {
       const session = `aidlc_tui_statusline_${process.pid}`;
-      const sandbox = mkdtempSync(join(tmpdir(), "aidlc-tui-statusline-"));
+      const sandbox = setupTuiProject({ noAidlcDocs: true });
       try {
-        // --- step 1: copy the distributable per the README ---------------------
-        // README: `cp -r dist/claude/.claude/ your-project/.claude/`. The
-        // dest .claude must NOT pre-exist or cp nests it — we copy SRC -> <sandbox>/.claude.
+        // The shared fixture copies the distributable and marks this fresh
+        // directory for the driver's interactive trust-menu handling.
         const destClaude = join(sandbox, ".claude");
-        cpSync(AIDLC_SRC, destClaude, { recursive: true });
         const settingsPath = join(destClaude, "settings.json");
         expect(existsSync(settingsPath)).toBe(true);
         // P0a — the retired spike (git show 4ce826b:tests/spike/t-tui-statusline.sh

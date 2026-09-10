@@ -40,6 +40,7 @@ import {
   stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
+import { TUI_TEST_FIXTURE_MARKER } from "./tui-drive.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -435,6 +436,10 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   } catch {
     /* keep the raw path */
   }
+  writeFileSync(
+    join(proj, TUI_TEST_FIXTURE_MARKER),
+    JSON.stringify({ cwd: proj, ownerPid: process.pid }),
+  );
 
   // 1. Copy the distributable (dest must NOT pre-exist or cp nests it — same
   //    caveat the inline render tests note). Harness selects the dist tree.

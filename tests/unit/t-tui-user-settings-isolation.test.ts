@@ -5,11 +5,79 @@
 // can run as a narrow, token-free unit slice.
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
 import {
   completedClaudeTurnPattern,
   isolatedTuiUserProfileEnv,
+  cleanupTuiProject,
+  setupTuiProject,
 } from "../harness/tui-fixtures.ts";
-import { normalizeTuiCommand } from "../harness/tui-drive.ts";
+import {
+  acceptTuiFixtureTrust,
+  claudeTrustNavigation,
+  isOwnedTuiFixture,
+  normalizeTuiCommand,
+  TUI_TEST_FIXTURE_MARKER,
+} from "../harness/tui-drive.ts";
+
+const TRUST_NO = "Accessing workspace:\n\n❯ No, exit\n  Yes, I trust this folder\n\nEnter to confirm · Esc to cancel";
+const TRUST_YES = "Accessing workspace:\n\n  No, exit\n❯ Yes, I trust this folder\n\nEnter to confirm · Esc to cancel";
+
+describe("Claude fixture trust menu", () => {
+  test("navigates both unnumbered and numbered layouts using the selected label", () => {
+    expect(claudeTrustNavigation(TRUST_NO)).toBe("Down");
+    expect(claudeTrustNavigation(TRUST_YES)).toBe("Enter");
+    expect(claudeTrustNavigation("Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit")).toBe("Enter");
+    expect(claudeTrustNavigation("Do you trust this folder?\n  1. Yes, I trust this folder\n❯ 2. No, exit")).toBe("Up");
+    expect(claudeTrustNavigation("Yes, I trust this folder\n❯ No, exit")).toBeNull();
+    expect(claudeTrustNavigation("Accessing workspace:\nNo, exit\nYes, I trust this folder")).toBeNull();
+  });
+
+  test("presses Enter only after the marked fixture paints Yes as selected", async () => {
+    const project = setupTuiProject({ noAidlcDocs: true });
+    const sent: string[] = [];
+    let screen = TRUST_NO;
+    try {
+      expect(await acceptTuiFixtureTrust({
+        fixtureCwd: () => project,
+        capture: () => screen,
+        send: (_session, key, literal, noEnter) => {
+          expect(literal).toBe(false);
+          expect(noEnter).toBe(true);
+          if (key === "Enter") expect(screen).toBe(TRUST_YES);
+          sent.push(key);
+          if (key === "Down") screen = TRUST_YES;
+        },
+      }, "fixture-trust-regression", screen)).toBe(true);
+      expect(sent).toEqual(["Down", "Enter"]);
+    } finally {
+      cleanupTuiProject(project);
+    }
+  });
+
+  test("does not automate an unmarked directory or a stale fixture owner", async () => {
+    const project = setupTuiProject({ noAidlcDocs: true });
+    const sent: string[] = [];
+    const backend = {
+      fixtureCwd: () => project,
+      capture: () => TRUST_NO,
+      send: (_session: string, key: string) => { sent.push(key); },
+    };
+    try {
+      rmSync(join(project, TUI_TEST_FIXTURE_MARKER));
+      expect(isOwnedTuiFixture(project)).toBe(false);
+      expect(await acceptTuiFixtureTrust(backend, "unmarked", TRUST_NO)).toBe(false);
+      writeFileSync(join(project, TUI_TEST_FIXTURE_MARKER), JSON.stringify({
+        cwd: project, ownerPid: -1,
+      }));
+      expect(await acceptTuiFixtureTrust(backend, "stale-owner", TRUST_NO)).toBe(false);
+      expect(sent).toEqual([]);
+    } finally {
+      cleanupTuiProject(project);
+    }
+  });
+});
 
 describe("TUI user-settings journey guards", () => {
   test("path-resolved Windows launchers preserve explicit setting sources without duplication", () => {
