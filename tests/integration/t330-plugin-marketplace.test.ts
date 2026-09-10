@@ -123,18 +123,28 @@ describe("t330 plugin marketplace", () => {
     expect(stages.some((stage: { slug: string }) => stage.slug.startsWith("test-pro-"))).toBe(true);
     expect(JSON.parse((await f.run(["list", "--json"])).stdout).data.statuses).toEqual([expect.objectContaining({ key: "test-pro", state: "current" })]);
     expect((await f.run(["install", "test-pro", "--yes"])).stdout).toContain("already installed");
-    writeFileSync(join(projection, "obsolete.txt"), "remove on replacement");
+    // A published newer version: the installed bytes still match the catalog digest for 0.1.0.
     f.publish("0.2.0");
     const checked = await f.run(["list", "--check", "--json"]);
-    expect(checked.code).toBe(0);
+    expect(checked.code).toBe(5);
     expect(JSON.parse(checked.stdout).data.statuses[0]).toMatchObject({
-      message: "update available: aidlc plugin update test-pro", published: { version: "0.2.0", marketplace: "local" },
+      message: "update available: aidlc plugin update test-pro", published: { version: "0.2.0", marketplace: "local", verified: true },
     });
+    // Bytes that diverge from what the catalog published are flagged, whatever installed them.
+    writeFileSync(join(projection, "obsolete.txt"), "remove on replacement");
+    const divergedRun = await f.run(["list", "--check", "--json"]);
+    expect(divergedRun.code).toBe(5);
+    const diverged = JSON.parse(divergedRun.stdout).data.statuses[0];
+    expect(diverged.published.verified).toBe(false);
+    expect(diverged.message).toContain("installed bytes differ from the catalog digest for 0.1.0");
+    expect(diverged.message).toContain("aidlc plugin update test-pro");
     const updated = await f.run(["update", "test-pro", "--yes"]);
     expect(updated, updated.stdout + updated.stderr).toMatchObject({ code: 0 });
     expect(JSON.parse(readFileSync(recordPath, "utf-8")).version).toBe("0.2.0");
     expect(existsSync(join(projection, "obsolete.txt"))).toBe(false);
-    expect((await f.run(["list", "--check"])).stdout).toContain("current");
+    const currentRun = await f.run(["list", "--check", "--json"]);
+    expect(currentRun.code).toBe(0);
+    expect(JSON.parse(currentRun.stdout).data.statuses[0]).toMatchObject({ message: "current", published: { version: "0.2.0", verified: true } });
     expect((await f.run(["update", "test-pro", "--yes"])).stdout).toContain("already current");
   }, 30_000);
 
@@ -211,7 +221,9 @@ describe("t330 plugin marketplace", () => {
     await register(f);
     expect((await f.run(["install", "test-pro", "--yes"])).code).toBe(0);
     f.catalog().plugins[0].supersededBy = { core: "9.0.0" };
-    expect((await f.run(["list", "--check"])).stdout).toContain("superseded by core v9.0.0 - remove the plugin after upgrading");
+    const tombstoned = await f.run(["list", "--check"]);
+    expect(tombstoned.code).toBe(5);
+    expect(tombstoned.stdout).toContain("superseded by core v9.0.0 - remove the plugin after upgrading");
     f.publish("0.2.0", { core: "9.0.0", note: "now maintained in core" });
     expect((await f.run(["update", "test-pro", "--yes"])).code).toBe(0);
     const offline = await f.run(["list"], { AIDLC_OFFLINE: "1" });

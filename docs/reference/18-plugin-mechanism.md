@@ -504,8 +504,15 @@ sorts by plugin then marketplace. One failed source warns without discarding
 successful results; all sources failing exits 3. No sources registered exits 1
 and points to `marketplaces add`. `list --check` adds a `PUBLISHED` column and
 an update command when a newer version exists, preferring the install record's
-marketplace; otherwise it selects the highest published semver. JSON rows add
-`published: {version, marketplace, supersededBy?} | null`.
+marketplace; otherwise it selects the highest published semver. It also
+**verifies the installed bytes**: the installed projection's digest is compared
+with the catalog digest for the installed version (or, once the catalog has
+moved on, the digest recorded at managed install time); a mismatch is reported
+as `needs attention: installed bytes differ from the catalog digest …`,
+whichever path installed them. JSON rows add
+`published: {version, marketplace, supersededBy?, verified: boolean | null} | null`.
+A check that finds an update, a tombstone, or diverged bytes exits **5**; a clean
+check exits 0.
 
 ### Install and update
 
@@ -521,8 +528,14 @@ The client downloads the catalog's tagged archive, checks the projection marker'
 plugin/harness identity, and verifies the complete projection digest before
 installing or handing off. Updating an already-current version is a no-op.
 
-- **Claude/Codex:** after verification, the CLI prints host marketplace and
-  install/update commands and exits **5 (action needed)**. The `@` suffix is
+- **Claude/Codex:** after verifying the *published tag archive* against the
+  catalog digest, the CLI prints host marketplace and install/update commands
+  and exits **5 (action needed)**. The host then clones the marketplace
+  repository and installs from its default branch, so that verification is a
+  preflight of what was published, not of the bytes the host installs; run
+  `aidlc plugin list --check` afterwards, which compares the host-installed
+  projection with the catalog digest and flags a branch that diverged from its
+  tag. The `@` suffix is
   the catalog's published `name` (the identity the host reads from the
   repository's aggregate `marketplace.json`), never your local registration
   alias. Claude uses `/plugin marketplace add <owner>/<repo>` and
@@ -540,11 +553,13 @@ installing or handing off. Updating an already-current version is a no-op.
   failure exits 1, leaves the verified projection installed, and directs you to
   `aidlc engine plugin sync`; it does not claim a composed install.
 
-Exit codes: **0** success/already current, **1** failed operation or policy
-refusal, **2** usage/confirmation required, **3** network unavailable or
-forbidden, **4** integrity mismatch (nothing installed), **5** host handoff.
+Exit codes: **0** success/already current/clean check, **1** failed operation or
+policy refusal, **2** usage/confirmation required, **3** network unavailable or
+forbidden, **4** integrity mismatch (nothing installed), **5** host handoff or a
+check that found an update, tombstone, or diverged bytes.
 `--json` uses `{schemaVersion:1, ok, code, status, message, data?, remediation?}`;
-handoff has `status: "handoff"` and `data.commands`. Every verb's `--help`/`-h`
+handoff has `status: "handoff"` and `data.commands`; an actionable check has
+`status: "action-needed"` with the rows in `data.statuses`. Every verb's `--help`/`-h`
 is side-effect-free. Network work is explicit-only and refuses `--offline`,
 `AIDLC_OFFLINE=1`, the machine `offline` setting, or
 `AIDLC_ROUTE_NETWORK_POLICY=forbidden`; offline registration is the exception

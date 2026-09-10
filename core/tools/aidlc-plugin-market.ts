@@ -41,7 +41,7 @@ const HARNESS_DIRS: Record<CatalogHarness, string> = {
   cursor: ".cursor", copilot: ".aidlc", opencode: ".aidlc",
 };
 type Marketplace = { name: string; source: MarketplaceSource; catalog: PluginCatalog };
-type Published = { version: string; marketplace: string; supersededBy?: SupersededBy };
+type Published = { version: string; marketplace: string; supersededBy?: SupersededBy; verified: boolean | null };
 
 class MarketError extends Error {
   constructor(message: string, readonly code: number = EXIT.failure, readonly remediation?: string) {
@@ -171,6 +171,7 @@ async function listCommand(projectDir: string, argv: string[], settings: Resolve
   const result = collectPluginStatus(projectDir, harnessDir);
   if (!argv.includes("--check")) return success(options.mode === "quiet" ? "" : renderPluginStatuses(result.statuses, options.verbose).trimEnd(), result);
   const markets = await fetchMarketplaces(settings, undefined, "list --check", options, true);
+  const harness = discoverProjectHarnesses(projectDir).find((item) => item.harnessDir === harnessDir)?.distribution ?? result.inventory.harness;
   const statuses = result.statuses.map((status) => {
     const record = status.key ? readInstallRecord(projectDir, harnessDir, status.key) : null;
     const candidates = markets.flatMap((market) => market.catalog.plugins.filter((plugin) => plugin.name === status.key).map((plugin) => ({ plugin, market })));
@@ -179,21 +180,42 @@ async function listCommand(projectDir: string, argv: string[], settings: Resolve
       return preference || Bun.semver.order(right.plugin.version, left.plugin.version) || left.market.name.localeCompare(right.market.name);
     });
     const latest = candidates[0];
+    // The host (or the managed path) installed bytes from the repository; the
+    // digest the catalog published for the installed version — or, once the
+    // catalog has moved on, the digest recorded at managed install time — is the
+    // only statement of what those bytes should be.
+    const installed = result.inventory.installed.find((plugin) => plugin.key === status.key);
+    const expected = candidates.find(({ plugin }) => plugin.version === status.installedVersion)?.plugin.harnesses[harness as CatalogHarness]?.sha256 ??
+      (record?.version === status.installedVersion ? record.sha256 : undefined);
+    const verified = installed && expected ? projectionDigest(installed.root) === expected : null;
     const published: Published | null = latest ? {
       version: latest.plugin.version, marketplace: latest.market.name,
       ...(latest.plugin.supersededBy ? { supersededBy: latest.plugin.supersededBy } : {}),
+      verified,
     } : null;
-    const message = published?.supersededBy
+    const newer = published && status.installedVersion && Bun.semver.order(published.version, status.installedVersion) > 0;
+    const message = verified === false
+      ? `needs attention: installed bytes differ from the catalog digest for ${status.installedVersion}; ${newer ? `update available: aidlc plugin update ${status.key}` : `reinstall from the marketplace or inspect ${installed?.root}`}`
+      : published?.supersededBy
       ? `superseded by core v${published.supersededBy.core} - remove the plugin after upgrading`
-      : published && status.installedVersion && Bun.semver.order(published.version, status.installedVersion) > 0
+      : newer
       ? `update available: aidlc plugin update ${status.key}`
       : status.action === "current" ? "current" : status.action === "sync" ? "run: aidlc config" : `needs attention: ${status.message}`;
     return { ...status, message, published };
   });
-  return success(table(["PLUGIN", "INSTALLED", "COMPOSED", "PUBLISHED", "STATUS"], statuses.map((status) => [
+  const rendered = table(["PLUGIN", "INSTALLED", "COMPOSED", "PUBLISHED", "STATUS"], statuses.map((status) => [
     status.key ?? "-", status.installedVersion ?? "-", status.composedVersion ?? "-", status.published?.version ?? "-",
     status.message + (options.verbose ? ` [${status.state}]` : ""),
-  ])), { ...result, statuses });
+  ]));
+  // A check that found divergence, an update, or a tombstone is exit 5, so
+  // automation never reads "action needed" and "current" from the same code.
+  const actionable = statuses.filter((status) => status.message !== "current").length;
+  if (actionable === 0) return success(rendered, { ...result, statuses });
+  if (options.mode === "human") process.stdout.write(`${rendered}\n`);
+  return {
+    ok: false, code: EXIT.actionNeeded, status: "action-needed",
+    message: `${actionable} plugin(s) need action; see STATUS`, data: { ...result, statuses },
+  };
 }
 
 /**
@@ -265,11 +287,15 @@ async function installCommand(
     } catch (error) {
       throw new MarketError(`integrity: fetched ${name}@${plugin.version} could not be verified against the catalog; nothing was installed (${errorMessage(error)})`, EXIT.integrity);
     }
-    const fetched = `fetched ${name} ${plugin.version} (${plugin.tag}), checksum verified`;
+    const fetched = `fetched ${name} ${plugin.version} (${plugin.tag}), published archive matches the catalog digest`;
     if (options.mode === "human") process.stdout.write(`${fetched}\n`);
     if (handoff) {
-      const note = `${harness === "claude" ? "Claude Code" : "Codex"} installs plugins through its own store; its trust prompt gates the hooks.`;
-      return { ok: false, code: EXIT.actionNeeded, status: "handoff", message: `${handoff.join("\n")}\n${note}`, data: { harness, commands: handoff } };
+      // The host clones the marketplace repository itself, so the bytes it
+      // installs are not the archive verified above; `list --check` compares
+      // the installed projection with the catalog digest afterwards.
+      const hostLabel = harness === "claude" ? "Claude Code" : "Codex";
+      const note = `${hostLabel} installs plugins through its own store from the marketplace repository; its trust prompt gates the hooks.\nAfter installing, run \`aidlc plugin list --check\` here to verify the installed bytes against the catalog.`;
+      return { ok: false, code: EXIT.actionNeeded, status: "handoff", message: `${handoff.join("\n")}\n${note}`, data: { harness, commands: handoff, verifiedArchive: projection.sha256 } };
     }
     const executables = executableFiles(root);
     const consent = [`this plugin installs ${executables.hooks.length} hook file(s) that run in your shell:`, ...executables.hooks.map((file) => `  ${file}`)];

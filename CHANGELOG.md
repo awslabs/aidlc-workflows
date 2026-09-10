@@ -12,7 +12,8 @@ Discover and install optional AIDLC plugins from explicitly registered git-backe
 * Every emitted plugin projection carries an Agent Plugins v1 root `plugin.json` (`$schema`, `aidlc-<name>`, `extensions["com.amazon.aidlc"]`), so conformant clients and APM recognize the package; `aidlc plugin validate` and `aidlc plugin build` refuse names that cannot project to a valid Agent Plugins name (consecutive or trailing hyphens).
 * Machine-only `plugins.allowedMarketplaces` restricts marketplace registration and use without allowing project or local overrides.
 * `aidlc.supersededBy` tombstones identify a plugin's replacement core version in catalogs, offline plugin status, and doctor. The graduation guide documents review ownership and migration.
-* Marketplace automation distinguishes exit `5` (host handoff requiring action), `4` (integrity failure; nothing installed), and `3` (network unavailable, offline, or forbidden). Help and catalog generation have no network side effects.
+* `aidlc plugin list --check` also verifies the installed bytes of every plugin against the catalog digest (or the managed install record) and flags divergence, so a marketplace branch edited after tagging is caught even when a host store installed it.
+* Marketplace automation distinguishes exit `5` (host handoff, or a check that found an update/tombstone/divergence), `4` (integrity failure; nothing installed), and `3` (network unavailable, offline, or forbidden). Help and catalog generation have no network side effects.
 
 ## [2.8.2] - 2026-09-10
 
