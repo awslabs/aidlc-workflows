@@ -1033,7 +1033,9 @@ describe("t327 team construction dispatcher", () => {
     );
     const movedDoctor = run(UTILITY, ["doctor", "--verbose"], moved.project);
     expect(movedDoctor.out).not.toContain("no observed ref movement");
-  });
+    // Four board fixtures and five doctor processes share this case's budget.
+    // Keep it bounded while allowing the full subprocess scenario to finish.
+  }, 30_000);
 
   test("local board failures name the real source instead of blaming the registry", () => {
     const fixture = boardFixture();

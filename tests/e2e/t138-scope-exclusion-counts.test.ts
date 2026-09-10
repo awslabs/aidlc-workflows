@@ -145,6 +145,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
             },
           },
         );
+        expect(init.timedOut).toBe(false);
         assertToolResultContains(init, "Bash", "State initialized:");
         expect(init.stateFile).toContain(`- **Scope**: ${SCOPE}`);
 
@@ -156,8 +157,12 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           {
             projectDir: proj,
             timeoutMs: DRIVE_TIMEOUT_MS,
+            // Whole-workflow completion exercises Stop and human-choice hooks;
+            // keep their session transcript available until the SDK turn ends.
+            persistSession: true,
           },
         );
+        expect(r.timedOut).toBe(false);
         assertResultOk(r);
         // Whole-run invariant means whole run: a parked or partially completed
         // journey cannot prove that a later SKIP stage never starts.
