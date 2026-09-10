@@ -127,6 +127,7 @@ export type DiagnosticIssue = {
   id: string;
   message: string;
   remediation: string;
+  severity?: "warn";
 };
 
 export type DiagnosticFileSetting = {
@@ -208,7 +209,10 @@ export const PROVIDER_PENDING_ACTIONS: Record<
     label:
       "Configure the selected provider in the user-level Codex configuration.",
     remediation:
-      "Configure the provider, credentials, and model in ~/.codex/config.toml, then acknowledge the manual setup.",
+      "Configure the provider, credentials, and model in $CODEX_HOME/config.toml (normally ~/.codex/config.toml). " +
+      "For Bedrock, add model_provider = \"amazon-bedrock\", select model = \"<Bedrock model ID>\", and add " +
+      "[model_providers.amazon-bedrock.aws] with profile = \"<AWS profile>\" and region = \"<AWS region>\". " +
+      "Then acknowledge the manual setup.",
   },
   "kiro-ide-chat-model": {
     label:
@@ -1039,21 +1043,50 @@ function clearClaudeProvider(
   writeJson(settingsPath, settings);
 }
 
+const LEGACY_CODEX_BEDROCK_COMMENT =
+  /^# D-9: Amazon Bedrock is the shipped default provider \(web_search is\r?\n# unavailable there; the market-research stage degrades gracefully\)\. For\r?\n# OpenAI-auth setups, comment out model_provider and the \[model_providers\]\r?\n# block\.\r?\n/m;
+
 function clearCodexProvider(
   projectionRoot: string,
   harnessDir: string,
 ): void {
   const path = join(projectionRoot, harnessDir, "config.toml");
-  let content = readFileSync(path, "utf-8");
+  const original = readFileSync(path, "utf-8");
+  if (!hasLegacyCodexProviderConfig(original)) return;
+  let content = original;
+  content = content.replace(LEGACY_CODEX_BEDROCK_COMMENT, "");
   content = content.replace(
-    /^(?:model|model_provider|model_context_window|model_reasoning_effort)\s*=.*(?:\r?\n|$)/gm,
+    /^model\s*=\s*"openai\.gpt-5\.5"\s*(?:\r?\n|$)/m,
     "",
   );
   content = content.replace(
-    /^\[model_providers\.amazon-bedrock(?:\.[^\]]+)?\]\r?\n(?:^(?!\[).*(?:\r?\n|$))*/gm,
+    /^model_provider\s*=\s*"amazon-bedrock"\s*(?:\r?\n|$)/m,
+    "",
+  );
+  content = content.replace(
+    /^model_context_window\s*=\s*1000000\s*(?:\r?\n|$)/m,
+    "",
+  );
+  content = content.replace(
+    /^model_reasoning_effort\s*=\s*"high"\s*(?:\r?\n|$)/m,
+    "",
+  );
+  content = content.replace(
+    /^\[model_providers\.amazon-bedrock\.aws\]\r?\n(?:^(?!\[).*(?:\r?\n|$))*/gm,
     "",
   );
   writeFileSync(path, content.replace(/\n{3,}/g, "\n\n"));
+}
+
+function hasLegacyCodexProviderConfig(content: string): boolean {
+  return (
+    LEGACY_CODEX_BEDROCK_COMMENT.test(content) &&
+    /^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(content) &&
+    /^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(content) &&
+    /^model_context_window\s*=\s*1000000\s*$/m.test(content) &&
+    /^model_reasoning_effort\s*=\s*"high"\s*$/m.test(content) &&
+    /^\[model_providers\.amazon-bedrock\.aws\]\s*$/m.test(content)
+  );
 }
 
 function writeKiroProvider(
@@ -1609,6 +1642,9 @@ export function providerSurfaceIssues(
       remediation: `Run aidlc config providers again to reapply the recorded answer to ${file}.`,
     });
   };
+  const warning = (id: string, message: string, remediation: string): void => {
+    issues.push({ id, message, remediation, severity: "warn" });
+  };
   try {
     if (record.provider === "current" || record.provider === "other") {
       if (harness === "claude") {
@@ -1630,17 +1666,34 @@ export function providerSurfaceIssues(
             `Claude settings still carry Bedrock override(s): ${stale.join(", ")}`,
           );
         }
+        const localPath = join(projectDir, harnessDir, "settings.local.json");
+        if (existsSync(localPath)) {
+          const local = JSON.parse(
+            readFileSync(localPath, "utf-8"),
+          ) as Record<string, unknown>;
+          const localEnv = isRecord(local.env) ? local.env : {};
+          const localOverrides: string[] = CLAUDE_BEDROCK_MODEL_KEYS.filter(
+            (key) => Object.hasOwn(localEnv, key),
+          );
+          if (localOverrides.length > 0) {
+            for (const key of ["AWS_REGION", "AWS_PROFILE"]) {
+              if (Object.hasOwn(localEnv, key)) localOverrides.push(key);
+            }
+            warning(
+              "provider-claude-local-override",
+              `Claude local settings override the recorded project choice with: ${localOverrides.join(", ")}`,
+              `Review ${localPath}. Leave the entries in place if the personal override is intentional.`,
+            );
+          }
+        }
       } else if (harness === "codex") {
         const path = join(projectDir, harnessDir, "config.toml");
         const text = readFileSync(path, "utf-8");
-        if (
-          /^(?:model|model_provider|model_context_window|model_reasoning_effort)\s*=/m.test(text) ||
-          /^\[model_providers\.amazon-bedrock(?:\.[^\]]+)?\]/m.test(text)
-        ) {
+        if (hasLegacyCodexProviderConfig(text)) {
           mismatch(
             "provider-codex-project-override",
             path,
-            "Codex project configuration still overrides the user-level provider or model",
+            "Codex project configuration still contains the legacy AI-DLC Bedrock defaults",
           );
         }
       } else if (harness === "opencode") {
@@ -1658,7 +1711,13 @@ export function providerSurfaceIssues(
       return issues;
     }
     if (record.provider !== "amazon-bedrock" || !record.region) return issues;
-    if (harness === "claude") {
+    if (harness === "codex") {
+      warning(
+        "provider-codex-self-attested",
+        "Codex provider setup is self-attested because AI-DLC cannot resolve the effective user configuration or alternate credential channels",
+        PROVIDER_PENDING_ACTIONS["codex-provider-configuration"].remediation,
+      );
+    } else if (harness === "claude") {
       const settingsPath = join(projectDir, harnessDir, "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
       const env = isRecord(settings.env) ? settings.env : {};
@@ -2248,7 +2307,17 @@ export function providerDoctorCheck(
   }
   try {
     const record = readConfigDiagnosticRecords(selected.root).providers;
-    const issues = pendingProviderIssues(record);
+    const issues = [
+      ...pendingProviderIssues(record),
+      ...(record
+        ? providerSurfaceIssues(
+            projectDir,
+            selected.harnessDir,
+            selected.harness,
+            record,
+          ).filter((issue) => issue.severity === "warn")
+        : []),
+    ];
     return issues.length === 0
       ? {
           pass: true,
@@ -2259,7 +2328,7 @@ export function providerDoctorCheck(
       : {
           pass: false,
           severity: "warn",
-          label: `Providers: ${issues.length} unmet item(s)`,
+          label: `Providers: ${issues.length} unmet or unverified item(s)`,
           fix: issues.map((issue) => issue.message).join("; "),
         };
   } catch (error) {

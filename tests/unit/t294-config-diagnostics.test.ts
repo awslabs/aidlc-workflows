@@ -446,7 +446,12 @@ describe("t294 provider diagnostics", () => {
     const codexPath = join(codex, ".codex", "config.toml");
     writeFileSync(
       codexPath,
-      `model = "bedrock.model"\nmodel_provider = "amazon-bedrock"\n\n` +
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
         `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n` +
         readFileSync(codexPath, "utf-8"),
     );
@@ -459,6 +464,24 @@ describe("t294 provider diagnostics", () => {
       emptyRecords(record),
     );
     expect(providerIssues(codex, ".codex", "codex", record)).toEqual([]);
+
+    const customCodex = temp("aidlc-t294-custom-codex-");
+    cpSync(join(DIST, "codex"), customCodex, { recursive: true });
+    const customCodexPath = join(customCodex, ".codex", "config.toml");
+    const customConfig =
+      `model = "gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n` +
+      readFileSync(customCodexPath, "utf-8");
+    writeFileSync(customCodexPath, customConfig);
+    expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([]);
+    applyConfigDiagnosticRecords(
+      customCodex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(readFileSync(customCodexPath, "utf-8")).toBe(customConfig);
 
     const opencode = temp("aidlc-t294-other-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });
@@ -1019,6 +1042,72 @@ describe("t294 config diagnostics CLI", () => {
       status: "pending",
     });
   }, 60_000);
+
+  test("completed Codex Bedrock setup stays visibly self-attested", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+        { id: "codex-provider-configuration", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const issues = providerIssues(
+      project,
+      ".codex",
+      "codex",
+      readConfigDiagnosticRecords(join(project, ".codex")).providers,
+      {
+        hasCredentials: true,
+        sources: [],
+        profiles: [],
+        regions: [],
+        files: [],
+      },
+    );
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-codex-self-attested",
+      severity: "warn",
+    }));
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+      "--json",
+    ], project, runtimeEnv());
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-codex-self-attested");
+  }, 60_000);
+
+  test("Claude local provider overrides are reported as warnings", () => {
+    const project = temp("aidlc-t294-claude-local-provider-");
+    cpSync(join(DIST, "claude"), project, { recursive: true });
+    writeFileSync(
+      join(project, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "eu-west-1",
+        },
+      }, null, 2)}\n`,
+    );
+    const issues = providerIssues(project, ".claude", "claude", {
+      schemaVersion: 1,
+      provider: "current",
+    });
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-claude-local-override",
+      severity: "warn",
+    }));
+  });
 
   test("reapplying an unchanged provider answer repairs stale project overrides", () => {
     const project = install("claude");

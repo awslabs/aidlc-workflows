@@ -5,10 +5,17 @@
 // test-only harness default. Shipped settings still own the environment.
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveDriveSdkSettings } from "../harness/sdk-drive.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const HARNESS_DEFAULT_MODEL = "opus[1m]";
 
@@ -37,8 +44,14 @@ describe("sdk-drive model resolution", () => {
 
       expect(resolved.model).toBe(HARNESS_DEFAULT_MODEL);
       expect(resolved.modelSource).toBe("harness-default");
-      expect(resolved.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
-      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+      const shipped = JSON.parse(
+        readFileSync(
+          join(REPO_ROOT, "harness", "claude", "settings.json"),
+          "utf-8",
+        ),
+      ) as { env?: Record<string, string> };
+      expect(shipped.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(shipped.env?.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
     });
   });
 

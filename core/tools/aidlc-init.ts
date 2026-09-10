@@ -148,6 +148,7 @@ import {
   type ConfigDiagnosticRecords,
   type CompletionShell,
   type ConfigOutstandingAction,
+  type DiagnosticIssue,
   type ProjectChoicesRecord,
   type ProvidersRecord,
   type RuntimeRecord,
@@ -1401,6 +1402,12 @@ function showDiagnosticSection(
     for (const source of credentials.sources) output += `    source: ${source}\n`;
     const pending = data.pendingActions as ReturnType<typeof pendingProviderIssues>;
     for (const issue of pending) output += `  Pending: ${issue.id} - ${issue.message}\n`;
+    const warnings = (data.issues as DiagnosticIssue[]).filter(
+      (issue) => issue.severity === "warn",
+    );
+    for (const issue of warnings) {
+      output += `  Warning: ${issue.id} - ${issue.message}\n`;
+    }
     output += "  Files carrying provider settings:\n";
     for (const entry of data.files as ReturnType<typeof providerFiles>) {
       output += `    ${entry.setting}: ${entry.file}\n`;
@@ -1425,7 +1432,7 @@ function checkDiagnosticSection(
   records: ConfigDiagnosticRecords,
   options: ReturnType<typeof globalOptions>,
 ): void {
-  let issues: Array<{ id: string; message: string }>;
+  let issues: DiagnosticIssue[];
   if (section === "runtime") {
     issues = runtimeIssues(
       probeRuntime(projectDir, selected.harnessDir, selected.harness),
@@ -1444,16 +1451,25 @@ function checkDiagnosticSection(
       selected.harness,
     ).issues;
   }
+  const blockers = issues.filter((issue) => issue.severity !== "warn");
+  const warnings = issues.filter((issue) => issue.severity === "warn");
   emitResult(
-    issues.length === 0
-      ? success(`${section} configuration is clean for ${selected.harness}`, {
-          section,
-          harness: selected.harness,
-          issues: [],
-        })
+    blockers.length === 0
+      ? success(
+          warnings.length === 0
+            ? `${section} configuration is clean for ${selected.harness}`
+            : `${section} configuration has ${warnings.length} warning(s) for ${selected.harness}: ${
+              warnings.map((issue) => `${issue.id} (${issue.message})`).join("; ")
+            }`,
+          {
+            section,
+            harness: selected.harness,
+            issues: warnings,
+          },
+        )
       : failure(
-          `${section} configuration has ${issues.length} unmet item(s): ${
-            issues.map((issue) => `${issue.id} (${issue.message})`).join("; ")
+          `${section} configuration has ${blockers.length} unmet item(s): ${
+            blockers.map((issue) => `${issue.id} (${issue.message})`).join("; ")
           }`,
           EXIT.failure,
           configCommand(`${section} --show`),
@@ -2151,7 +2167,7 @@ function prepareDiagnosticSection(
       selected.harnessDir,
       selected.harness,
       next as ProvidersRecord,
-    ).length > 0;
+    ).some((issue) => issue.severity !== "warn");
   if (canonical(previous) === canonical(next) && !providerSurfaceDrift) {
     emitResult(success(`${section} configuration unchanged`), options);
     return null;

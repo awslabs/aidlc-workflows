@@ -437,9 +437,14 @@ Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
 `--mark-done <id>` records completion. Kiro IDE also carries the
-`kiro-ide-chat-model` action. `--provider current` preserves the harness's
-user-level provider and removes old AI-DLC-owned Bedrock overrides from Claude,
-Codex, or opencode project files. `--provider other` records a manually
+`kiro-ide-chat-model` action. Codex provider setup remains explicitly
+self-attested after completion because the effective user configuration and
+alternate credential channels cannot be resolved offline; `--check` returns
+success with that warning instead of describing the setup as verified.
+`--provider current` preserves the harness's configured provider and removes
+the exact legacy AI-DLC Bedrock defaults from Claude, Codex, or opencode
+project files while preserving user-authored Codex model and provider keys.
+`--provider other` records a manually
 configured non-Bedrock provider and reports that setup as pending until
 `--acknowledge` is supplied.
 
