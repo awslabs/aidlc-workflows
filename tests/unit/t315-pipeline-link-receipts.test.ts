@@ -45,6 +45,10 @@ const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const NATIVE_ORCH = join(
+  import.meta.dir,
+  "../../dist-release/claude/.claude/tools/aidlc-orchestrate.ts",
+);
 const RE_STAGE = "reverse-engineering";
 const LEAD = "aidlc-developer-agent";
 const FINAL = "aidlc-architect-agent";
@@ -161,10 +165,11 @@ function state(
 function report(
   proj: string,
   args: string[],
+  orchestrator = ORCH,
 ): { rc: number; out: string; directive: Record<string, unknown> | null } {
   const result = spawnSync(
     BUN,
-    [ORCH, "report", ...args, "--project-dir", proj],
+    [orchestrator, "report", ...args, "--project-dir", proj],
     { encoding: "utf-8", env: childEnv() },
   );
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
@@ -533,58 +538,70 @@ describe("t315 pipeline link receipts", () => {
     expect(runLog(proj, LEAD).rc).toBe(0);
   });
 
-  test("a targeted CodeKB revision needs fresh pipeline work after rejection (t139)", () => {
-    const proj = pipelineProject();
-    const feedback = "Add a Persistence Design (Target State) section to architecture.md.";
-    writeAllCodekbArtifacts(proj);
-    expect(state(proj, ["checkbox", `${RE_STAGE}=in-progress`]).rc).toBe(0);
-    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
-    expect(runLog(proj, LEAD).rc).toBe(0);
-    expect(runLog(proj, FINAL).rc).toBe(0);
-    expect(report(proj, ["--stage", RE_STAGE, "--result", "awaiting-approval"]).directive?.kind).toBe("print");
+  test.each(["source", "native"] as const)(
+    "a targeted CodeKB revision needs fresh pipeline work after rejection (t139, %s)",
+    (transport) => {
+      const proj = pipelineProject();
+      const orchestrator = transport === "native" ? NATIVE_ORCH : ORCH;
+      const nextCommand = transport === "native"
+        ? "aidlc engine orchestrate next"
+        : "bun .claude/tools/aidlc-orchestrate.ts next";
+      const linkCommand = transport === "native"
+        ? "aidlc engine log link"
+        : "bun .claude/tools/aidlc-log.ts link";
+      const feedback = "Add a Persistence Design (Target State) section to architecture.md.";
+      writeAllCodekbArtifacts(proj);
+      expect(state(proj, ["checkbox", `${RE_STAGE}=in-progress`]).rc).toBe(0);
+      appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+      expect(runLog(proj, LEAD).rc).toBe(0);
+      expect(runLog(proj, FINAL).rc).toBe(0);
+      expect(report(proj, ["--stage", RE_STAGE, "--result", "awaiting-approval"], orchestrator).directive?.kind).toBe("print");
 
-    const rejected = report(proj, [
-      "--stage", RE_STAGE, "--result", "rejected",
-      "--user-input", "Request Changes", "--reason", feedback,
-    ]);
-    expect(rejected.directive?.kind).toBe("print");
-    expect(rejected.directive?.message).toContain("aidlc-orchestrate.ts next");
-    expect(rejected.directive?.message).toContain("dispatch every missing link");
+      const rejected = report(proj, [
+        "--stage", RE_STAGE, "--result", "rejected",
+        "--user-input", "Request Changes", "--reason", feedback,
+      ], orchestrator);
+      expect(rejected.directive?.kind).toBe("print");
+      expect(rejected.directive?.message).toContain(nextCommand);
+      expect(rejected.directive?.message).toContain("dispatch every missing link");
 
-    // Replay the live failure: the conductor edits only the final artifact,
-    // then tries to re-certify the developer's pre-rejection handoff.
-    appendFileSync(
-      join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", basename(proj), "architecture.md"),
-      "\n## Persistence Design (Target State)\n\nHydrate on mount; persist on change.\n",
-    );
-    const revisedTooEarly = report(proj, ["--stage", RE_STAGE, "--result", "revised"]);
-    expect(revisedTooEarly.directive?.kind).toBe("error");
-    expect(revisedTooEarly.out).toContain("pipeline handoffs have not been recorded");
-    expect(revisedTooEarly.out).toContain("dispatch the missing pipeline links");
-    expect(revisedTooEarly.out).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1");
-    const staleDeveloper = runLog(proj, LEAD, undefined, false, false);
-    expect(staleDeveloper.rc).not.toBe(0);
-    expect(staleDeveloper.out).toMatch(
-      /not written in the current stage attempt|not rewritten after its prior pipeline receipt/,
-    );
-    expect(runLog(proj, FINAL).out).toContain("out of order");
+      // Replay the live failure: the conductor edits only the final artifact,
+      // then tries to re-certify the developer's pre-rejection handoff.
+      appendFileSync(
+        join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", basename(proj), "architecture.md"),
+        "\n## Persistence Design (Target State)\n\nHydrate on mount; persist on change.\n",
+      );
+      const revisedTooEarly = report(proj, ["--stage", RE_STAGE, "--result", "revised"], orchestrator);
+      expect(revisedTooEarly.directive?.kind).toBe("error");
+      expect(revisedTooEarly.out).toContain("pipeline handoffs have not been recorded");
+      expect(revisedTooEarly.out).toContain("dispatch the missing pipeline links");
+      expect(revisedTooEarly.directive?.message).toContain(nextCommand);
+      expect(revisedTooEarly.directive?.message).toContain(linkCommand);
+      expect(revisedTooEarly.out).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1");
+      const staleDeveloper = runLog(proj, LEAD, undefined, false, false);
+      expect(staleDeveloper.rc).not.toBe(0);
+      expect(staleDeveloper.out).toMatch(
+        /not written in the current stage attempt|not rewritten after its prior pipeline receipt/,
+      );
+      expect(runLog(proj, FINAL).out).toContain("out of order");
 
-    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
-    expect(next.directive?.kind).toBe("run-stage");
-    expect(next.directive?.pipeline).toEqual({
-      links: [LEAD, FINAL],
-      completed: [],
-    });
-    // Simulate fresh developer work and its architect successor, retaining
-    // the real logger's current-attempt, file-identity and ordering checks.
-    expect(runLog(proj, LEAD).rc).toBe(0);
-    expect(runLog(proj, FINAL).rc).toBe(0);
-    expect(report(proj, ["--stage", RE_STAGE, "--result", "revised"]).directive?.kind).toBe("print");
-    expect(report(proj, [
-      "--stage", RE_STAGE, "--result", "approved", "--user-input", "Approve",
-    ]).directive?.kind).toBe("done");
-    expect(readFileSync(seededStateFile(proj), "utf8")).toContain("- **Revision Count**: 1");
-  });
+      const next = runOrchestrateNext(orchestrator, proj, [], { env: childEnv() });
+      expect(next.directive?.kind).toBe("run-stage");
+      expect(next.directive?.pipeline).toEqual({
+        links: [LEAD, FINAL],
+        completed: [],
+      });
+      // Simulate fresh developer work and its architect successor, retaining
+      // the real logger's current-attempt, file-identity and ordering checks.
+      expect(runLog(proj, LEAD).rc).toBe(0);
+      expect(runLog(proj, FINAL).rc).toBe(0);
+      expect(report(proj, ["--stage", RE_STAGE, "--result", "revised"], orchestrator).directive?.kind).toBe("print");
+      expect(report(proj, [
+        "--stage", RE_STAGE, "--result", "approved", "--user-input", "Approve",
+      ], orchestrator).directive?.kind).toBe("done");
+      expect(readFileSync(seededStateFile(proj), "utf8")).toContain("- **Revision Count**: 1");
+    },
+  );
 
   test("developer handoffs reject symlinks when minting and verifying receipts", () => {
     const proj = pipelineProject();

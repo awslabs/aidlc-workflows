@@ -7920,10 +7920,10 @@ function checkPipelineLinkEvidence(
     ok: false,
     message:
       `${refusal}: ${missing.join(", ")}. ` +
-      `Re-run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
+      `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
       `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
       `Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ` +
-      `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
+      `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
       `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}` +
       `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`,
   };
@@ -8792,7 +8792,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
             : flags.result === "rejected" && node.mode === "pipeline"
             ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
-              `Re-run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, then dispatch every missing link in ` +
+              `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
               `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
               `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
               `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.`
