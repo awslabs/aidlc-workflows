@@ -17404,6 +17404,8 @@ export function readUnitSourceManifest(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const pathModeIndexes: GitPathModeIndexCache = new Map();
+  // Cache only this manifest read: later review, verdict, and finalize checks
+  // must observe fresh HEAD and ignore rules, even for the same manifest.
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
 
   for (const candidate of value.writes) {
