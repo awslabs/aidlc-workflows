@@ -598,6 +598,17 @@ hash, and every host manifest expect them. That layout migration is feasible
 can be referenced from the native manifest) but is a mechanism-level change
 across the emitter, composer, and fixtures, deferred deliberately.
 
+Verified against a real GitHub marketplace on 2026-09-10: APM 0.30.0 reported
+the published projection as an "Agent Plugins v1.0.0 package", pinned the tag
+commit and a content hash in `apm.lock.yaml`, and — for its `copilot` target,
+the only one where it installs Agent Plugins natively — registered
+`aidlc-test-pro@apm` as an enabled GitHub Copilot plugin from the fetched tree.
+In the same session Claude Code 2.1 (`claude plugin validate`, `marketplace
+add`, `install`, `update`) and Codex 0.154 (`codex plugin marketplace add`,
+`plugin add`) consumed the aggregate catalogs and installed the correct
+per-harness projection, which `aidlc plugin list` then reported from the host
+inventory and `aidlc engine plugin sync` composed.
+
 [APM](https://microsoft.github.io/apm/) is a viable alternative fetch channel
 for storeless harnesses, but it does not compose AIDLC stages and
 contributions, hand off to native host stores, or avoid an extra `apm`
