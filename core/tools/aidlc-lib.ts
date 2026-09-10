@@ -1396,11 +1396,24 @@ export function decodeHarnessPlainText(
 // strings match, which is a pre-existing class shared with the old detectors.
 // That direction fails closed: over-detection nudges, never releases.
 
+const engineCommandHarnessPattern = KNOWN_HARNESS_DIRS
+  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+const sourceEngineDispatcherPath =
+  String.raw`(?:${engineCommandHarnessPattern})[/\\]tools[/\\]aidlc\.ts`;
+// Normalize the source dispatcher's executable token, including quoted project
+// roots. Leave surrounding shell wrappers, arguments, and legacy tools intact.
+const sourceEngineDispatcher = new RegExp(
+  String.raw`\bbun[ \t]+(?:"(?:[^"\r\n]*[/\\])?${sourceEngineDispatcherPath}"|'(?:[^'\r\n]*[/\\])?${sourceEngineDispatcherPath}'|(?:[^\s"';&|<>]*[/\\])?${sourceEngineDispatcherPath})[ \t]+(?=engine\b)`,
+  "g",
+);
+
 // Authored methodology uses the native dispatcher's hidden engine namespace.
 // Canonicalize only the engine tools these detectors own so the Bun and native
 // spellings share one classification policy. Other engine tools remain untouched.
 function canonicalEngineCommand(text: string): string {
   return text
+    .replace(sourceEngineDispatcher, "aidlc ")
     .replace(
       /\baidlc\s+engine\s+orchestrate\s+help\b/g,
       "aidlc help",
@@ -1579,17 +1592,14 @@ function shellCommandSegments(command: string): string[] {
 // Classify commands for the rebuild-stage-graph hook's cheap PostToolUse gate.
 // Transition matching stays intentionally lexical, but the recursion guard
 // only examines real unquoted shell-command segments.
-const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
-  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  .join("|");
 const runtimeCompileTool = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
 );
 const runtimeCompileReport = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
 );
 const runtimeCompileSelf = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
 );
 
 export function classifyRuntimeCompileCommand(
@@ -1597,7 +1607,7 @@ export function classifyRuntimeCompileCommand(
 ): "reject" | "fire" | "pass" {
   const canonical = canonicalEngineCommand(command);
   const invokesRuntime = shellCommandSegments(command).some((segment) =>
-    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(segment)
+    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(canonicalEngineCommand(segment))
   );
   if (runtimeCompileSelf.test(command) || invokesRuntime) {
     return "reject";
