@@ -3,7 +3,8 @@
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -234,7 +235,8 @@ describe("t318 session binding helpers", () => {
   test("GC keeps a live entry it cannot verify and still reaps dead ones without ps", () => {
     const pidDir = sessionPidMapDir(proj);
     mkdirSync(pidDir, { recursive: true });
-    const liveEntry = join(pidDir, String(process.ppid));
+    // This process is not an ancestor of itself, so GC must inspect this entry.
+    const liveEntry = join(pidDir, String(process.pid));
     const deadEntry = join(pidDir, "999900123");
     writeFileSync(
       liveEntry,
@@ -278,6 +280,28 @@ describe("t318 session binding helpers", () => {
     }
   });
 
+  test("a failed SessionStart cannot restore the previous session when process lookup recovers", () => {
+    writeSessionPidAncestry(proj, "previous-session");
+    expect(resolveSessionIdFromAncestry(proj)).toBe("previous-session");
+    const current = createIntent(proj, "current", "default", "feature");
+    writeSessionBinding(proj, "current-session", "default", current.dirName);
+
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    process.env.AIDLC_TEST_PS_DENIED = "1";
+    writeSessionPidAncestry(proj, "current-session");
+    delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+    delete process.env.AIDLC_TEST_PS_DENIED;
+
+    // Recovery must not make the superseded parent or an older ancestor win.
+    expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+    process.env.AIDLC_SESSION_OVERRIDE = "current-session";
+    expect(resolveWorkflowSelection(proj).intent).toBe(current.dirName);
+
+    // A later successful refresh restores normal ancestry selection.
+    writeSessionPidAncestry(proj, "current-session");
+    expect(resolveSessionIdFromAncestry(proj)).toBe("current-session");
+  });
+
   test("a new session's nearest ancestor is written even when many stale entries are queued for GC", () => {
     const pidDir = sessionPidMapDir(proj);
     mkdirSync(pidDir, { recursive: true });
@@ -292,10 +316,25 @@ describe("t318 session binding helpers", () => {
       );
     }
 
-    // Before the fix, GC ran first and probed every entry with `ps`, so forty
-    // stale entries exhausted the 50 ms budget before the walk mapped its
-    // nearest ancestor. The walk now writes first and GC reaps dead pids
-    // without spawning, so the mapping must survive any stale-entry count.
+    // Model a 5ms ps call deterministically: GC-first exhausts the 50ms budget
+    // on stale entries. The current walk resolves its parent once and GC
+    // reaps dead PIDs without ps, regardless of host scheduling.
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const ps = spyOn(childProcess, "spawnSync").mockImplementation(((
+      command: string,
+    ) => {
+      expect(command).toBe("ps");
+      now += 5;
+      return {
+        pid: 123,
+        output: [null, "1 Thu Sep 10 00:00:00 2026\n", ""],
+        stdout: "1 Thu Sep 10 00:00:00 2026\n",
+        stderr: "",
+        status: 0,
+        signal: null,
+      };
+    }) as typeof childProcess.spawnSync);
     const priorPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
     process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
     try {
@@ -305,7 +344,11 @@ describe("t318 session binding helpers", () => {
       expect(
         JSON.parse(readFileSync(nearest, "utf-8")).sessionId,
       ).toBe("fresh-session");
+      expect(ps).toHaveBeenCalledTimes(1);
+      expect(readdirSync(pidDir)).toEqual([String(process.ppid)]);
     } finally {
+      ps.mockRestore();
+      clock.mockRestore();
       if (priorPlatform === undefined) {
         delete process.env.AIDLC_TEST_SESSION_PLATFORM;
       } else {

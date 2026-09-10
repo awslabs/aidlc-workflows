@@ -3683,7 +3683,8 @@ export function clearSessionRebindOffer(
 }
 
 interface SessionPidEntry {
-  sessionId: string;
+  // A null session stops ancestry fallback while SessionStart refreshes a PID.
+  sessionId: string | null;
   startTime: string | null;
 }
 
@@ -3783,8 +3784,9 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
     if (parsed === null || typeof parsed !== "object") return null;
     const candidate = parsed as Partial<SessionPidEntry>;
     if (
-      typeof candidate.sessionId !== "string" ||
-      validSessionId(candidate.sessionId) === null ||
+      (candidate.sessionId !== null &&
+        (typeof candidate.sessionId !== "string" ||
+          validSessionId(candidate.sessionId) === null)) ||
       (candidate.startTime !== null && typeof candidate.startTime !== "string")
     ) {
       return null;
@@ -3792,6 +3794,21 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
     return candidate as SessionPidEntry;
   } catch {
     return null;
+  }
+}
+
+function writeSessionPidRecord(
+  projectDir: string,
+  pid: number,
+  entry: SessionPidEntry,
+): void {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return;
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
   }
 }
 
@@ -3816,16 +3833,10 @@ export function writeSessionPidEntry(
   }
   const resolvedIdentity =
     identity === undefined ? processIdentity(pid, deadlineMs) : identity;
-  try {
-    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
-    const entry: SessionPidEntry = {
-      sessionId,
-      startTime: resolvedIdentity?.startTime ?? null,
-    };
-    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
-  } catch {
-    /* per-user runtime state; best-effort */
-  }
+  writeSessionPidRecord(projectDir, pid, {
+    sessionId,
+    startTime: resolvedIdentity?.startTime ?? null,
+  });
 }
 
 function gcSessionPidEntries(
@@ -3874,8 +3885,13 @@ export function writeSessionPidAncestry(projectDir: string, sessionId: string): 
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
-    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    if (pid <= 1 || seen.has(pid)) break;
     seen.add(pid);
+    // Retire this PID's previous session before the bounded lookup. If lookup
+    // fails, a null record stops later tools from falling through to an older
+    // ancestor when process inspection recovers. A verified write replaces it.
+    writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
+    if (Date.now() >= deadline) break;
     const identity = processIdentity(pid, deadline);
     if (!identity) break;
     writeSessionPidEntry(projectDir, pid, sessionId, deadline, identity);

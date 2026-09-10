@@ -694,6 +694,13 @@ the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
 
+SessionStart retires each visited PID's previous session before checking its
+process identity. Until that check succeeds, a record with `sessionId: null`
+stops ancestry fallback at that PID. A failed or timed-out refresh therefore
+cannot restore the previous session when process inspection recovers; explicit
+payload identity, environment identity, and the shared-cursor fallback still
+apply. A later successful SessionStart replaces the null record.
+
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
 `ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
