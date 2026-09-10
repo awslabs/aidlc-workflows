@@ -1625,9 +1625,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       ),
     ) as { unit?: string; state_sha256?: string };
     expect(syncedMarker.unit).toBe("alpha");
-    expect(syncedMarker.state_sha256).toBe(
-      createHash("sha256").update(syncedState, "utf-8").digest("hex"),
-    );
+    expect(syncedMarker.state_sha256).toBe(stateDigest(syncedState));
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
