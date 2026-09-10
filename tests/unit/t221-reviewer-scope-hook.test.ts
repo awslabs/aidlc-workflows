@@ -811,7 +811,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       const group = groups.find((g) =>
         (g.hooks ?? []).some(
           (h) => h.command ===
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine hook reviewer-scope`,
+            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook reviewer-scope`,
         ),
       );
       expect(group, harness.name).toBeDefined();

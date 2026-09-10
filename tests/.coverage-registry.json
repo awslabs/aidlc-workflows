@@ -7953,6 +7953,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-claude-hook-project-root.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
           "mechanism": "cli"
         },
