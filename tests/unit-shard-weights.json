@@ -2,7 +2,7 @@
   "defaultSeconds": 1,
   "weights": {
     "t115.test.ts": 19.1,
-    "t218-kiro-ide-hook-adapter.test.ts": 60,
+    "t218-kiro-hook-adapter-channel.test.ts": 60,
     "t238-build-binaries.test.ts": 93.1,
     "t243-install-mechanism.test.ts": 48.3,
     "t244-install-management.test.ts": 49.5,
