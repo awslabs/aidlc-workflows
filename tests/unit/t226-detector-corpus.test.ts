@@ -1051,6 +1051,18 @@ describe("detector corpus", () => {
     expect(d1("env X=one aidlc next space teamb")).toBe(false);
   });
 
+  test("adjacent redirections keep legacy workflow commands engaged", () => {
+    for (const command of [
+      "bun .claude/tools/aidlc-orchestrate.ts</tmp/input next",
+      "bun .claude/tools/aidlc-state.ts>/tmp/output approve",
+      "bun .claude/tools/aidlc-unit.ts</tmp/input claim",
+      "sh -c 'bun .claude/tools/aidlc-state.ts>/tmp/output approve'",
+      "bun .claude/tools/aidlc-state.t[sx] approve",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
   test("the unconditional configuration alias is terminal without exempting workflow modifiers", () => {
     for (const args of ["--config", "--config project", "--config trust", "--config unknown"]) {
       expect(d1(`aidlc engine orchestrate next ${args}`), args).toBe(false);

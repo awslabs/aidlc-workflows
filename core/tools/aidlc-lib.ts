@@ -1675,9 +1675,14 @@ export function isEngineEngagementSegment(
 ): boolean {
   const invocation = allowLiteralCommand ? literalEngineCommand(seg) : "uncertain";
   if (invocation === "uncertain" || invocation === "opaque") {
+    // Retain the legacy name boundary even when a shell operator touches the
+    // executable; e.g. aidlc-state.ts>out approve still invokes the state tool.
     return /\baidlc\s/.test(seg) ||
-      /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?\s/.test(seg) ||
-      (invocation === "uncertain" && /\baidlc\.ts["']?\s/.test(seg));
+      /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?(?=\s|[<>;&|()])/.test(seg) ||
+      (invocation === "uncertain" && (
+        /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) ||
+        /\baidlc\.ts\b/.test(seg)
+      ));
   }
   if (invocation) {
     if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
