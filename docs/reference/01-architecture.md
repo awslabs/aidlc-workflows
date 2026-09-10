@@ -502,6 +502,34 @@ preserves recovery evidence, and the next transaction quarantines abandoned
 staging rather than deleting it. Project init/refresh, machine lifecycle,
 project pins, plugin selection, and plugin sync all build plans for this engine.
 
+The root lock prefers hard-link publication and falls back automatically to an
+owner-stamped directory when hard links are unavailable. Both use
+`.aidlc-transaction.lock`, so a live legacy file owner still blocks the directory
+fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
+gate in the temporary directory, keyed by canonical root, around transaction
+execution, including
+acquisition, stale-owner recovery, and ownership-checked release. Directory
+recovery requires a matching host/boot identity and a dead owner PID; unknown,
+foreign, or incomplete directory owners are retained for manual diagnosis.
+
+The coordination contract covers cooperating processes on one continuously
+running mount on one host with a common local temporary directory (`TMPDIR` on
+Unix), canonical root, and PID namespace. It provides no distributed locking
+between hosts or independent mounts. Moving the gate locally does not change
+the data contract: workflow append and descriptor identity must remain coherent,
+and transaction publication still depends on atomic file replacement and
+directory rename supplied by the filesystem. No copy-and-delete rename
+fallback is added.
+
+`assertTransactionFilesystem` probes exclusive creation, regular-file `fsync`,
+mutable append/readback and descriptor identity, file/directory rename, Unix
+`chmod`, and transaction and runtime workflow locking. The first-run wizard and
+transactions using the directory fallback invoke it; unsupported directory
+`fsync` is tolerated. Successful probes cannot establish crash durability or
+rename atomicity, nor certify a driver through simulated failures. Mountpoint's
+missing directory rename/mutable-file support and s3fs's non-atomic rename
+remain outside the full transaction contract. See the [storage compatibility matrix](../guide/18-install-and-lifecycle.md#transactions-and-recovery).
+
 ### Release assembly and provenance
 
 `scripts/build-binaries.ts` regenerates projections, compiles the dispatcher

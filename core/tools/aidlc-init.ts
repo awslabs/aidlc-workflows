@@ -58,7 +58,7 @@ import { configureProjectPin } from "./aidlc-lifecycle.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
-  TransactionLockError,
+  TransactionFilesystemError,
   assertTransactionFilesystem,
   executePlan,
   transactionSourceHash,
@@ -4256,7 +4256,7 @@ function renderFirstRunFailure(error: unknown): void {
     `\n  Setup stopped: ${error instanceof Error ? error.message : String(error)}\n`,
   );
   if (
-    (error instanceof ConfigChildError || error instanceof TransactionLockError) &&
+    (error instanceof ConfigChildError || error instanceof TransactionFilesystemError) &&
     error.remediation
   ) {
     process.stdout.write(`  fix: ${error.remediation}\n`);
@@ -4940,7 +4940,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   }
   return true;
   } catch (error) {
-    if (error instanceof TransactionLockError) {
+    if (error instanceof TransactionFilesystemError) {
       renderFirstRunFailure(error);
       process.stdout.write("  Nothing written.\n");
       process.exitCode = EXIT.failure;
@@ -6583,7 +6583,7 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      error instanceof TransactionLockError
+      error instanceof TransactionFilesystemError
         ? error.remediation
         : copiedRefreshWithoutSource
         ? "re-copy the matching dist/<harness>/ tree, then rerun this command"

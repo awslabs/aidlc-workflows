@@ -1,6 +1,7 @@
 // covers: tool:aidlc-init, function:readTerminalLine
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -118,34 +119,225 @@ function detection(
 // explicit AIDLC_RUNTIME_ROOT plus the active machine runtime).
 function isolatedMachineEnv(): NodeJS.ProcessEnv {
   const machine = temp("aidlc-t299-machine-");
+  const isolatedHome = join(machine, "home");
+  const scratch = join(machine, "tmp");
+  mkdirSync(isolatedHome);
+  mkdirSync(scratch);
   return {
     AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
     AIDLC_BIN_DIR: join(machine, "bin"),
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    XDG_CONFIG_HOME: join(isolatedHome, ".config"),
+    XDG_CACHE_HOME: join(isolatedHome, ".cache"),
+    CLAUDE_CONFIG_DIR: join(isolatedHome, ".claude"),
+    CODEX_HOME: undefined,
+    AWS_CONFIG_FILE: join(isolatedHome, ".aws", "config"),
+    AWS_SHARED_CREDENTIALS_FILE: join(isolatedHome, ".aws", "credentials"),
+    AWS_ACCESS_KEY_ID: undefined,
+    AWS_SECRET_ACCESS_KEY: undefined,
+    AWS_SESSION_TOKEN: undefined,
+    AWS_PROFILE: undefined,
+    AWS_DEFAULT_PROFILE: undefined,
+    AWS_WEB_IDENTITY_TOKEN_FILE: undefined,
+    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: undefined,
+    AWS_CONTAINER_CREDENTIALS_FULL_URI: undefined,
+    AWS_EC2_METADATA_DISABLED: "true",
+    AWS_AIDLC_DEFAULT_SCOPE: undefined,
+    AIDLC_SESSION_OVERRIDE: undefined,
+    AIDLC_SKIP_SOURCE_FRESHNESS: undefined,
+    TMPDIR: scratch,
+    TMP: scratch,
+    TEMP: scratch,
   };
 }
 
-// Run the real CLI with an isolated filesystem mock. The trace proves that a
-// failure reached linkSync, rather than stopping at a missing runtime or stdin.
-function hardLinkFailurePreload(): { preload: string; trace: string } {
+const REQUIRED_FILESYSTEM_FAILURES = [
+  { operation: "file-rename", code: "ENOTSUP", diagnostic: "file replacement by rename" },
+  { operation: "directory-rename", code: "EOPNOTSUPP", diagnostic: "directory rename" },
+  { operation: "append", code: "ENOSYS", diagnostic: "mutable file append" },
+] as const;
+type FilesystemFailure = (typeof REQUIRED_FILESYSTEM_FAILURES)[number];
+type FilesystemTrace = {
+  event: string;
+  pid: number;
+  args?: string[];
+  childPid?: number;
+  status?: number;
+  path?: string;
+  source?: string;
+  destination?: string;
+  code?: string;
+  flags?: string | number;
+  owner?: { schemaVersion: number; pid: number; host: string; token: string };
+};
+
+// These faults model only API availability on the project filesystem. Local
+// temp storage, release sources, credentials, and the test runner are untouched.
+// Passing them says nothing about a real S3 driver's atomicity or durability.
+function filesystemPreload(failure?: FilesystemFailure): { preload: string; trace: string } {
   const directory = temp("aidlc-t299-filesystem-mock-");
-  const preload = join(directory, "reject-hard-links.ts");
-  const trace = join(directory, "links.ndjson");
+  const preload = join(directory, "project-filesystem.ts");
+  const trace = join(directory, "filesystem.ndjson");
   writeFileSync(preload, `
     import { mock } from "bun:test";
+    import { basename, resolve, sep } from "node:path";
+    import { fileURLToPath } from "node:url";
     const actual = { ...await import("node:fs") };
+    const children = { ...await import("node:child_process") };
+    const root = actual.realpathSync(process.env.AIDLC_T299_PROJECT_DIR);
+    const fault = ${JSON.stringify(failure ?? null)};
+    const record = (event, fields = {}) => actual.appendFileSync(
+      ${JSON.stringify(trace)}, JSON.stringify({ event, pid: process.pid, ...fields }) + "\\n",
+    );
+    const pathOf = (path) => resolve(path instanceof URL ? fileURLToPath(path) : String(path));
+    const inProject = (path) => {
+      if (typeof path === "number") return false;
+      const absolute = pathOf(path);
+      return absolute === root || absolute.startsWith(root + sep);
+    };
+    const reject = (operation, fields, code) => {
+      record("refused", { operation, ...fields, code });
+      throw Object.assign(new Error("simulated project filesystem " + operation + " failure"), { code });
+    };
+    const observeMutation = (method, pathIndex = 0) => (...args) => {
+      const path = args[pathIndex];
+      if (inProject(path)) record(method, { path: pathOf(path) });
+      return actual[method](...args);
+    };
+    record("preload", { args: process.argv.slice(1) });
     mock.module("node:fs", () => ({
       ...actual,
+      chmodSync: observeMutation("chmodSync"),
+      copyFileSync: observeMutation("copyFileSync", 1),
+      cpSync: observeMutation("cpSync", 1),
+      symlinkSync: observeMutation("symlinkSync", 1),
+      unlinkSync: observeMutation("unlinkSync"),
+      rmdirSync: observeMutation("rmdirSync"),
       linkSync(source, destination) {
-        actual.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ source, destination }) + "\\n");
-        throw Object.assign(new Error("simulated hard-link failure"), { code: "EMLINK" });
+        if (inProject(source) || inProject(destination)) {
+          record("link", { source: pathOf(source), destination: pathOf(destination), code: "EMLINK" });
+          throw Object.assign(new Error("simulated project hard-link failure"), { code: "EMLINK" });
+        }
+        return actual.linkSync(source, destination);
+      },
+      openSync(path, flags, ...rest) {
+        if (inProject(path)) {
+          const append = typeof flags === "string"
+            ? flags.includes("a")
+            : Boolean(flags & actual.constants.O_APPEND);
+          const write = typeof flags === "string"
+            ? /[wa+]/.test(flags)
+            : Boolean(flags & (actual.constants.O_WRONLY | actual.constants.O_RDWR | actual.constants.O_CREAT));
+          if (write) record("open", { path: pathOf(path), flags });
+          if (fault?.operation === "append" && append && actual.existsSync(path)) {
+            reject("append", { path: pathOf(path), flags }, fault.code);
+          }
+        }
+        return actual.openSync(path, flags, ...rest);
+      },
+      renameSync(source, destination) {
+        if (inProject(source) || inProject(destination)) {
+          const fields = { source: pathOf(source), destination: pathOf(destination) };
+          record("rename", fields);
+          const directory = actual.lstatSync(source).isDirectory();
+          if ((fault?.operation === "file-rename" && !directory) ||
+              (fault?.operation === "directory-rename" && directory)) {
+            reject(fault.operation, fields, fault.code);
+          }
+        }
+        return actual.renameSync(source, destination);
+      },
+      mkdirSync(path, ...rest) {
+        if (inProject(path)) record("mkdir", { path: pathOf(path) });
+        return actual.mkdirSync(path, ...rest);
+      },
+      mkdtempSync(path, ...rest) {
+        if (inProject(path)) record("mkdtemp", { path: pathOf(path) });
+        return actual.mkdtempSync(path, ...rest);
+      },
+      writeFileSync(path, ...rest) {
+        if (inProject(path)) record("write", { path: pathOf(path) });
+        return actual.writeFileSync(path, ...rest);
+      },
+      appendFileSync(path, ...rest) {
+        if (inProject(path)) {
+          record("append", { path: pathOf(path) });
+          if (fault?.operation === "append" && actual.existsSync(path)) {
+            reject("append", { path: pathOf(path) }, fault.code);
+          }
+        }
+        return actual.appendFileSync(path, ...rest);
+      },
+      rmSync(path, ...rest) {
+        if (inProject(path)) {
+          record("remove", { path: pathOf(path) });
+          if (basename(pathOf(path)) === ".aidlc-transaction.lock" &&
+              actual.existsSync(path) && actual.lstatSync(path).isDirectory() &&
+              actual.existsSync(resolve(String(path), "owner.json"))) {
+            record("directory-lock", {
+              path: pathOf(path),
+              owner: JSON.parse(actual.readFileSync(resolve(String(path), "owner.json"), "utf-8")),
+            });
+          }
+        }
+        return actual.rmSync(path, ...rest);
+      },
+    }));
+    // runConfigChild launches process.execPath without the parent's CLI flags.
+    // Propagate the preload explicitly and prove each child loaded it below.
+    mock.module("node:child_process", () => ({
+      ...children,
+      spawnSync(command, args, options) {
+        if (command !== process.execPath || !Array.isArray(args)) {
+          return children.spawnSync(command, args, options);
+        }
+        const forwarded = args.includes(${JSON.stringify(preload)})
+          ? args : ["--preload", ${JSON.stringify(preload)}, ...args];
+        const result = children.spawnSync(command, forwarded, options);
+        record("spawn", { args, childPid: result.pid, status: result.status });
+        return result;
       },
     }));
   `);
   return { preload, trace };
 }
 
-function linkTrace(trace: string): Array<{ source: string; destination: string }> {
+function filesystemTrace(trace: string): FilesystemTrace[] {
   return readFileSync(trace, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+}
+
+type CliResult = { status: number; stdout: string; stderr: string; pid: number };
+type CliContext = { project: string; env: NodeJS.ProcessEnv; preload?: string };
+
+function runCli(context: CliContext, tool: string, args: string[], input = ""): CliResult {
+  const result = spawnSync(BUN, [
+    ...(context.preload ? ["--preload", context.preload] : []),
+    tool,
+    ...args,
+    "--project-dir",
+    context.project,
+  ], {
+    cwd: context.project,
+    env: context.env,
+    input,
+    encoding: "utf-8",
+    timeout: 60_000,
+  });
+  if (result.error) throw result.error;
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    pid: result.pid,
+  };
+}
+
+function runConfig(context: CliContext, args: string[]): CliResult {
+  return runCli({
+    ...context,
+    env: { ...context.env, AIDLC_TEST_CONFIG_TTY: undefined },
+  }, INIT, ["config", ...args]);
 }
 
 function runWizard(
@@ -159,8 +351,8 @@ function runWizard(
     preload?: string;
     configArgs?: string[];
   } = {},
-): { project: string; status: number; stdout: string; stderr: string } {
-  const project = temp("aidlc-t299-project-");
+): CliContext & CliResult {
+  const project = realpathSync(temp("aidlc-t299-project-"));
   const bin = temp("aidlc-t299-bin-");
   mkdirSync(join(project, ".git"));
   executable(join(bin, "claude"), "claude 2.1.220");
@@ -174,42 +366,164 @@ function runWizard(
   executable(join(bin, "getconf"), bin);
   if (options.aidlc !== false) executable(join(bin, "aidlc"));
   options.prepare?.(project);
-  const result = spawnSync(
-    BUN,
-    [
-      ...(options.preload ? ["--preload", options.preload] : []),
-      INIT,
-      "config",
-      "--project-dir",
-      project,
-      ...(options.configArgs ?? []),
-    ],
-    {
-      cwd: project,
-      env: {
-        ...process.env,
-        ...isolatedMachineEnv(),
-        PATH: bin,
-        AIDLC_RUNTIME_ROOT: RUNTIME,
-        AIDLC_TEST_CONFIG_TTY: "1",
-        AIDLC_TEST_CONFIG_DETECTION_JSON: detection(
-          bin,
-          options.harnesses,
-          options.runtimeIssue,
-        ),
-        ...options.env,
-      },
-      input,
-      encoding: "utf-8",
-      timeout: 60_000,
-    },
-  );
-  return {
+  const context: CliContext = {
     project,
-    status: result.status ?? -1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    preload: options.preload,
+    env: {
+      ...process.env,
+      ...isolatedMachineEnv(),
+      PATH: bin,
+      NO_COLOR: "1",
+      AIDLC_RUNTIME_ROOT: RUNTIME,
+      AIDLC_TEST_CONFIG_TTY: "1",
+      AIDLC_TEST_CONFIG_DETECTION_JSON: detection(
+        bin,
+        options.harnesses,
+        options.runtimeIssue,
+      ),
+      ...options.env,
+      AIDLC_T299_PROJECT_DIR: project,
+    },
   };
+  return { ...context, ...runCli(context, INIT, ["config", ...(options.configArgs ?? [])], input) };
+}
+
+function expectConfiguredProject(project: string, mcp: "defaults" | "none"): void {
+  const settings = JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8"));
+  expect(settings).toEqual(expect.objectContaining({
+    schemaVersion: 1,
+    models: expect.objectContaining({ schemaVersion: 1, preset: "balanced" }),
+  }));
+  const data = join(project, ".claude", "tools", "data");
+  const harness = JSON.parse(readFileSync(join(data, "harness.json"), "utf-8"));
+  expect(harness.providers).toEqual(expect.objectContaining({
+    schemaVersion: 1,
+    provider: "amazon-bedrock",
+    region: "us-east-2",
+    pendingActions: expect.arrayContaining([
+      expect.objectContaining({ id: "bedrock-model-access", status: "done" }),
+    ]),
+  }));
+  const nativeSettings = JSON.parse(
+    readFileSync(join(project, ".claude", "settings.json"), "utf-8"),
+  );
+  expect(nativeSettings.env).toEqual(expect.objectContaining({
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    AWS_REGION: "us-east-2",
+  }));
+  expect(readFileSync(join(project, ".claude", "agents", "aidlc-product-lead-agent.md"), "utf-8"))
+    .toContain("effort: medium");
+  const baseline = JSON.parse(readFileSync(join(data, "aidlc-manifest.json"), "utf-8"));
+  expect(baseline).toEqual(expect.objectContaining({
+    schemaVersion: 1,
+    distribution: "claude",
+    harnessDir: ".claude",
+    mcpMode: mcp,
+  }));
+  // planManagedFiles excludes mutable harness data from baseline ownership;
+  // its provider content is checked above. Other regenerated surfaces stay hashed.
+  expect(Object.hasOwn(baseline.files, ".claude/tools/data/harness.json")).toBe(false);
+  for (const path of [
+    ".claude/settings.json",
+    ".claude/tools/data/agent-tiers.json",
+    ".claude/agents/aidlc-product-lead-agent.md",
+  ]) {
+    const hash = createHash("sha256").update(readFileSync(join(project, path))).digest("hex");
+    expect(baseline.files[path], path).toBe(`sha256:${hash}`);
+  }
+  expect(readdirSync(project).filter((name) =>
+    /^\.aidlc-(?:transaction\.lock|lock-|txn-|recovery-)/.test(name)
+  )).toEqual([]);
+}
+
+function expectDirectoryTransaction(
+  events: FilesystemTrace[],
+  project: string,
+  pid: number,
+): void {
+  const lock = join(project, ".aidlc-transaction.lock");
+  expect(events).toContainEqual(expect.objectContaining({
+    event: "link", pid, destination: lock, code: "EMLINK",
+  }));
+  expect(events).toContainEqual(expect.objectContaining({
+    event: "directory-lock",
+    pid,
+    path: lock,
+    owner: expect.objectContaining({
+      schemaVersion: 1,
+      pid,
+      host: expect.any(String),
+      token: expect.any(String),
+    }),
+  }));
+}
+
+function expectFilesystemRemediation(message: string, remediation: string, fault: FilesystemFailure): void {
+  expect(message).toContain("Cannot use the filesystem at");
+  expect(message).toContain(fault.diagnostic);
+  expect(message).toContain(`(${fault.code})`);
+  expect(remediation).toMatch(/mutable files/i);
+  expect(remediation).toMatch(/rename/i);
+  expect(remediation).toMatch(/local storage|ext4|XFS/i);
+  expect(remediation).toMatch(/one host/i);
+  expect(message + remediation).not.toContain("<valid-release-data>");
+  expect(message + remediation).not.toContain("hard-link creation");
+}
+
+function expectInstalledWorkflowWrites(context: CliContext, trace: string): void {
+  const run = (tool: string, args: string[]): CliResult => {
+    const result = runCli({
+      ...context,
+      env: {
+        ...context.env,
+        AIDLC_TEST_CONFIG_TTY: undefined,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_PROJECT_DIR: context.project,
+      },
+    }, join(context.project, ".claude", "tools", tool), args);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(filesystemTrace(trace)).toContainEqual(expect.objectContaining({
+      event: "preload", pid: result.pid,
+    }));
+    return result;
+  };
+  // These installed utilities execute locally; no agent or provider is called.
+  const next = run("aidlc-orchestrate.ts", ["next", "--scope", "bugfix"]);
+  const directive = JSON.parse(next.stdout);
+  expect(directive.kind).toBe("print");
+  expect(directive.message).toContain("intent create --scope bugfix");
+  run("aidlc-utility.ts", [
+    "intent-create", "--scope", "bugfix", "--depth", "minimal",
+    "--label", "Filesystem regression", "--arguments", "Exercise mutable project storage",
+  ]);
+  const workspace = join(context.project, "aidlc");
+  const space = readFileSync(join(workspace, "active-space"), "utf-8").trim();
+  const intents = join(workspace, "spaces", space, "intents");
+  const record = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
+  const statePath = join(record, "aidlc-state.md");
+  expect(readFileSync(statePath, "utf-8")).toContain("- **Scope**: bugfix");
+  expect(existsSync(join(workspace, "spaces", space, "knowledge"))).toBe(true);
+  expect(run("aidlc-state.ts", ["get", "Depth"]).stdout.trim()).toBe("Minimal");
+
+  const auditDir = join(record, "audit");
+  const readAudit = (): string => readdirSync(auditDir).filter((name) => name.endsWith(".md"))
+    .sort().map((name) => readFileSync(join(auditDir, name), "utf-8")).join("\n");
+  const before = readAudit();
+  expect(before).toContain("**Event**: WORKFLOW_STARTED");
+  const changed = run("aidlc-utility.ts", ["config-change", "--depth", "comprehensive"]);
+  expect(run("aidlc-state.ts", ["get", "Depth"]).stdout.trim()).toBe("Comprehensive");
+  expect(readFileSync(statePath, "utf-8")).toContain("- **Depth**: Comprehensive");
+  const after = readAudit();
+  expect(after.length).toBeGreaterThan(before.length);
+  expect(after).toContain("**Event**: DEPTH_CHANGED");
+  expect(after).toContain("**New Depth**: Comprehensive");
+  const events = filesystemTrace(trace).filter((event) => event.pid === changed.pid);
+  expect(events.some((event) =>
+    event.event === "rename" && event.destination === statePath
+  )).toBe(true);
+  expect(events.some((event) =>
+    event.event === "open" && event.path && dirname(event.path) === auditDir
+  )).toBe(true);
 }
 
 describe("t299 first-run setup wizard", () => {
@@ -355,95 +669,225 @@ describe("t299 first-run setup wizard", () => {
     expect(treeSnapshot(result.project)).toEqual(before);
   }, 60_000);
 
-  for (const [label, harnesses] of [
-    ["one detected CLI", { claude: { found: true } }],
-    ["multiple detected CLIs", { claude: { found: true }, codex: { found: true } }],
-    ["no detected CLI", { claude: { found: false } }],
-  ] as const) {
-    test(`filesystem rejection stops the wizard before selection with ${label}`, () => {
-      const { preload, trace } = hardLinkFailurePreload();
-      let before: Record<string, string> = {};
-      // Empty stdin cannot answer either the harness picker or the setup gate.
-      const result = runWizard("", {
-        preload,
-        harnesses,
-        prepare: (project) => {
-          writeFileSync(join(project, "README.md"), "existing project\n");
-          before = treeSnapshot(project);
-        },
-      });
-      const output = result.stdout + result.stderr;
-      expect(result.status, output).toBe(1);
-      expect(output).toContain("Setup stopped:");
-      expect(output).toContain("Cannot create an AI-DLC transaction lock in");
-      expect(output).toContain("(EMLINK)");
-      expect(output).toMatch(/fix:/i);
-      expect(output).toMatch(/hard[- ]links?/i);
-      expect(output).toMatch(/S3|FUSE/i);
-      expect(output).toContain("Nothing written.");
-      expect(output).not.toContain("Choose the harness for this project first.");
-      expect(output).not.toContain("Choose one to configure:");
-      expect(output).not.toContain("Set up AI-DLC for");
-      expect(output).not.toContain("Customize setup");
-      expect(output).not.toContain('"schemaVersion"');
-      expect(output).not.toContain('"actions"');
-      expect(output).not.toContain("<valid-release-data>");
-      const links = linkTrace(trace);
-      expect(links).toHaveLength(1);
-      expect(basename(dirname(links[0].source))).toMatch(/^\.aidlc-lock-probe-/);
-      expect(dirname(links[0].source)).toBe(dirname(links[0].destination));
-      expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
-      expect(treeSnapshot(result.project)).toEqual(before);
-    }, 60_000);
-  }
+  test("recommended first-run and installed workflow writes succeed with project hardlinks refused in every config child", () => {
+    const { preload, trace } = filesystemPreload();
+    const result = runWizard("\n", { preload });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(0);
+    expect(output).toContain("Writing project files ... done");
+    expect(output).toContain("Recording your choices ... done");
+    expect(output).toContain("Setup complete. Start your first workflow:");
+    expect(output).not.toContain("Setup stopped:");
+    expectConfiguredProject(result.project, "defaults");
 
-  for (const mode of ["json", "quiet", "human"] as const) {
-    test(`noninteractive ${mode} config preserves filesystem remediation on apply failure`, () => {
-      const { preload, trace } = hardLinkFailurePreload();
-      let before: Record<string, string> = {};
-      const result = runWizard("", {
-        preload,
-        configArgs: [
-          "--from", join(RUNTIME, "claude"),
-          "--harness", "claude",
-          "--mcp", "none",
-          "--yes",
-          ...(mode === "human" ? [] : [`--${mode}`]),
-        ],
-        env: { AIDLC_TEST_CONFIG_TTY: undefined, NO_COLOR: "1" },
-        prepare: (project) => {
-          writeFileSync(join(project, "README.md"), "existing project\n");
-          writeFileSync(join(project, ".gitignore"), "# user-owned\n");
-          before = treeSnapshot(project);
-        },
-      });
-      const output = result.stdout + result.stderr;
-      expect(result.status, output).toBeGreaterThan(0);
-      expect(output).not.toContain("<valid-release-data>");
-      if (mode === "json") {
-        const error = JSON.parse(result.stdout);
-        expect(error.ok).toBe(false);
-        expect(error.code).toBe(result.status);
-        expect(error.message).toContain("Cannot create an AI-DLC transaction lock in");
-        expect(error.message).toContain("(EMLINK)");
-        expect(error.remediation).toMatch(/hard[- ]links?/i);
-        expect(error.remediation).toMatch(/S3|FUSE/i);
-      } else {
-        expect(output).toMatch(/hard[- ]links?/i);
-        expect(output).toMatch(/S3|FUSE/i);
+    const events = filesystemTrace(trace);
+    const probeLinks = events.filter((event) => event.event === "link" && event.pid === result.pid);
+    expect(probeLinks.length).toBeGreaterThan(0);
+    for (const link of probeLinks) {
+      expect(basename(dirname(link.destination!))).toMatch(/^\.aidlc-lock-probe-/);
+    }
+    const children = events.filter((event) =>
+      event.event === "spawn" && event.pid === result.pid && event.args?.includes("config")
+    );
+    // Scaffold, models, project choices, and provider setup all mutate through
+    // separate Bun processes. A parent-only preload cannot satisfy this check.
+    expect(children.map((child) => {
+      const args = child.args!;
+      const section = args[args.indexOf("config") + 1];
+      return section.startsWith("--") ? "config" : section;
+    })).toEqual(["config", "models", "project", "providers"]);
+    for (const child of children) {
+      expect(child.status).toBe(0);
+      expect(events).toContainEqual(expect.objectContaining({
+        event: "preload", pid: child.childPid,
+      }));
+      expectDirectoryTransaction(events, result.project, child.childPid!);
+    }
+    expectInstalledWorkflowWrites(result, trace);
+  }, 120_000);
+
+  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid without hardlinks", () => {
+    const { preload, trace } = filesystemPreload();
+    const result = runWizard("", {
+      preload,
+      configArgs: [
+        "--from", join(RUNTIME, "claude"),
+        "--harness", "claude",
+        "--mcp", "none",
+        "--yes", "--json",
+      ],
+      env: {
+        AIDLC_TEST_CONFIG_TTY: undefined,
+        // The providers --check command performs offline credential detection.
+        // Synthetic values satisfy that check without reading host credentials.
+        AWS_ACCESS_KEY_ID: "aidlc-t299-offline-access",
+        AWS_SECRET_ACCESS_KEY: "aidlc-t299-offline-secret",
+      },
+    });
+    const expectApplied = (applied: CliResult): void => {
+      expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+      const payload = JSON.parse(applied.stdout);
+      expect(payload.ok).toBe(true);
+      expect(payload.code).toBe(0);
+      expect(payload.data.distribution).toBe("claude");
+      expect(payload.data.counts.conflict).toBe(0);
+      expectDirectoryTransaction(filesystemTrace(trace), result.project, applied.pid);
+    };
+    expectApplied(result);
+    expectApplied(runConfig(result, [
+      "models", "--project", "--preset", "balanced", "--yes", "--json",
+    ]));
+    expectApplied(runConfig(result, [
+      "providers", "--provider", "amazon-bedrock", "--region", "us-east-2",
+      "--mark-done", "bedrock-model-access", "--yes", "--json",
+    ]));
+    expectConfiguredProject(result.project, "none");
+    const settingsBefore = readFileSync(join(result.project, "aidlc.settings.json"), "utf-8");
+    const userFile = join(result.project, ".claude", "user-notes.txt");
+    writeFileSync(userFile, "keep this unowned file\n");
+
+    expectApplied(runConfig(result, ["--yes", "--json"]));
+    expectConfiguredProject(result.project, "none");
+    expect(readFileSync(join(result.project, "aidlc.settings.json"), "utf-8")).toBe(settingsBefore);
+    expect(readFileSync(userFile, "utf-8")).toBe("keep this unowned file\n");
+    for (const section of ["models", "providers"]) {
+      const checked = runConfig(result, [section, "--check", "--json"]);
+      expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+      expect(JSON.parse(checked.stdout).ok).toBe(true);
+    }
+  }, 120_000);
+
+  for (const fault of REQUIRED_FILESYSTEM_FAILURES) {
+    for (const [label, harnesses] of [
+      ["one detected CLI", { claude: { found: true } }],
+      ["multiple detected CLIs", { claude: { found: true }, codex: { found: true } }],
+      ["no detected CLI", { claude: { found: false } }],
+    ] as const) {
+      test(`${fault.operation} rejection stops the wizard before selection with ${label}`, () => {
+        const { preload, trace } = filesystemPreload(fault);
+        let before: Record<string, string> = {};
+        // Empty stdin cannot answer either the harness picker or the setup gate.
+        const result = runWizard("", {
+          preload,
+          harnesses,
+          prepare: (project) => {
+            writeFileSync(join(project, "README.md"), "existing project\n");
+            writeFileSync(join(project, ".gitignore"), "# user-owned\n");
+            before = treeSnapshot(project);
+          },
+        });
+        const output = result.stdout + result.stderr;
+        expect(result.status, output).toBe(1);
+        expect(output).toContain("Setup stopped:");
+        expectFilesystemRemediation(output, output, fault);
+        expect(output).toMatch(/fix:/i);
+        expect(output).toContain("Nothing written.");
+        expect(output).not.toContain("Choose the harness for this project first.");
+        expect(output).not.toContain("Choose one to configure:");
+        expect(output).not.toContain("Set up AI-DLC for");
+        expect(output).not.toContain("Customize setup");
         expect(output).not.toContain('"schemaVersion"');
         expect(output).not.toContain('"actions"');
-        if (mode === "human") {
-          expect(output).toContain("Cannot create an AI-DLC transaction lock in");
-          expect(output).toContain("(EMLINK)");
-          expect(output).toMatch(/fix:/i);
+        expect(output.trim().split("\n").length).toBeLessThanOrEqual(4);
+        const events = filesystemTrace(trace);
+        expect(events).toContainEqual(expect.objectContaining({
+          event: "refused", code: fault.code,
+        }));
+        const links = events.filter((event) => event.event === "link");
+        expect(links).toHaveLength(1);
+        expect(basename(dirname(links[0].source!))).toMatch(/^\.aidlc-lock-probe-/);
+        expect(dirname(links[0].source!)).toBe(dirname(links[0].destination!));
+        expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
+        expect(events.some((event) => event.event === "spawn")).toBe(false);
+        expect(treeSnapshot(result.project)).toEqual(before);
+      }, 60_000);
+    }
+
+    for (const mode of ["json", "quiet", "human"] as const) {
+      test(`noninteractive ${mode} config preserves ${fault.operation} remediation without persistent writes`, () => {
+        const { preload, trace } = filesystemPreload(fault);
+        let before: Record<string, string> = {};
+        const result = runWizard("", {
+          preload,
+          configArgs: [
+            "--from", join(RUNTIME, "claude"),
+            "--harness", "claude",
+            "--mcp", "none",
+            "--yes",
+            ...(mode === "human" ? [] : [`--${mode}`]),
+          ],
+          env: { AIDLC_TEST_CONFIG_TTY: undefined },
+          prepare: (project) => {
+            writeFileSync(join(project, "README.md"), "existing project\n");
+            writeFileSync(join(project, ".gitignore"), "# user-owned\n");
+            before = treeSnapshot(project);
+          },
+        });
+        const output = result.stdout + result.stderr;
+        expect(result.status, output).toBeGreaterThan(0);
+        expect(output).not.toContain("<valid-release-data>");
+        if (mode === "json") {
+          const error = JSON.parse(result.stdout);
+          expect(error.ok).toBe(false);
+          expect(error.code).toBe(result.status);
+          expectFilesystemRemediation(error.message, error.remediation, fault);
+          expect(error).not.toHaveProperty("data");
+          expect(result.stderr).toBe("");
+        } else {
+          expect(output).toMatch(/mutable files/i);
+          expect(output).toMatch(/local storage|ext4|XFS/i);
+          expect(output).not.toContain('"schemaVersion"');
+          expect(output).not.toContain('"actions"');
+          expect(output.trim().split("\n").length).toBeLessThanOrEqual(3);
+          if (mode === "human") {
+            expectFilesystemRemediation(output, output, fault);
+            expect(output).toMatch(/fix:/i);
+          }
         }
-      }
-      expect(linkTrace(trace)).toEqual([expect.objectContaining({
-        destination: join(realpathSync(result.project), ".aidlc-transaction.lock"),
-      })]);
-      expect(treeSnapshot(result.project)).toEqual(before);
-    }, 60_000);
+        const events = filesystemTrace(trace);
+        expect(events).toContainEqual(expect.objectContaining({
+          event: "refused", code: fault.code,
+        }));
+        expectDirectoryTransaction(events, result.project, result.pid);
+        expect(treeSnapshot(result.project)).toEqual(before);
+      }, 60_000);
+    }
+  }
+
+  for (const fault of [undefined, ...REQUIRED_FILESYSTEM_FAILURES]) {
+    for (const mode of ["human", "json"] as const) {
+      test(`${mode} dry-run does not probe or write with ${fault?.operation ?? "hardlinks"} refused`, () => {
+        const { preload, trace } = filesystemPreload(fault);
+        let before: Record<string, string> = {};
+        const result = runWizard("", {
+          preload,
+          configArgs: [
+            "--from", join(RUNTIME, "claude"), "--harness", "claude",
+            "--mcp", "none", "--dry-run", ...(mode === "json" ? ["--json"] : []),
+          ],
+          prepare: (project) => {
+            writeFileSync(join(project, "README.md"), "existing project\n");
+            writeFileSync(join(project, ".gitignore"), "# user-owned\n");
+            before = treeSnapshot(project);
+          },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain("config plan for");
+        expect(result.stdout).not.toContain("Set up AI-DLC for");
+        if (mode === "json") {
+          const payload = JSON.parse(result.stdout);
+          expect(payload.ok).toBe(true);
+          expect(payload.data.counts.create).toBeGreaterThan(0);
+          expect(payload.data.planToken).toMatch(/^sha256:[0-9a-f]{64}$/);
+        }
+        // A trace containing only startup proves the mock was loaded without
+        // ever calling a project mutation, including a disposable probe.
+        expect(filesystemTrace(trace)).toEqual([
+          expect.objectContaining({ event: "preload", pid: result.pid }),
+        ]);
+        expect(treeSnapshot(result.project)).toEqual(before);
+      }, 60_000);
+    }
   }
 
   test("late first-run failure restores every wizard-owned path", () => {

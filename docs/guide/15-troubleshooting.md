@@ -22,7 +22,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
-| Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
+| Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
@@ -50,8 +50,8 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
 | `this project requires <version>, which is not installed completely` | Install or reinstall the exact strict-semver pin with `aidlc config --pin <version>`. The dispatcher fails closed instead of falling back to the active machine version; use `aidlc config --unpin` only when the team intends to stop pinning the project. |
 | An update was interrupted and `aidlc version` still shows the prior release | This is the safe restored state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc update --version <version>` command. |
-| `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
-| `EMLINK` (`too many links`) or `Cannot create an AI-DLC transaction lock` during config | Use project storage that supports the required filesystem operations; see [Config fails with a hard-link error](#config-fails-with-a-hard-link-error). |
+| `another AI-DLC mutation holds .../.aidlc-transaction.lock`, `cannot verify` a lock, or `belongs to another host or boot` | Let an active owner finish; otherwise follow [Transaction lock ownership](#transaction-lock-ownership). |
+| `EMLINK` (`too many links`), `Cannot create an AI-DLC transaction lock`, or `Cannot use the filesystem at ...` during config | Hard links have an automatic fallback; other filesystem requirements still apply. See [Config fails with a hard-link error](#config-fails-with-a-hard-link-error). |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
 | `update cache is invalid` or machine settings are rejected | Run `aidlc system config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\aidlc.settings.json` (Windows) or `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/aidlc.settings.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
 | `HTTPS_PROXY must use HTTP or HTTPS` or a release URL is rejected | Use an HTTP(S) proxy URL and an HTTPS release mirror without credentials, query, or fragment. The native client reads `HTTPS_PROXY` and `NO_PROXY`, not `HTTP_PROXY`, and redacts secret-like URL parts in errors. |
@@ -68,25 +68,41 @@ hooks and permission/trust entries consistently select the native command.
 
 ### Config fails with a hard-link error
 
-`aidlc config` creates a hard link to acquire its transaction lock. An
-`EMLINK` (`too many links`), `ENOTSUP`, `EOPNOTSUPP`, or `ENOSYS` error at this
-step means the filesystem rejected that operation. Compatibility depends on
-the mount's capabilities: S3-backed and FUSE mounts vary, so their names alone
-do not establish support.
+`aidlc config` first attempts a hard-link transaction lock. If the mount rejects
+it with `EMLINK`, `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`, or `EPERM`, config automatically
+tries a directory lock at the same `.aidlc-transaction.lock` path. No flag is
+needed, and config never proceeds with unlocked writes.
 
-The first-run wizard checks lock creation before offering setup choices. It
-removes its temporary probe files and stops without persistent setup changes
-if the check fails. Human output names the failure and remediation;
-`--quiet` prints the remediation, and `--json` returns a structured failure.
+The first-run wizard probes the required filesystem operations before offering
+setup choices, then removes its temporary probe files. A failed probe stops
+setup without persistent setup changes. Human output names the failure and
+remediation; `--quiet` prints the remediation, and `--json` returns a structured
+failure. Passing probes cannot certify atomicity or crash durability. See the
+capabilities and support matrix in [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
+An S3 mount name or hard-link error alone does not identify its driver, version,
+or options.
 
-Move or clone the project onto storage that supports hard links, exclusive
-file creation, `fsync`, and atomic rename, then rerun `aidlc config` there.
-On EC2, ext4 or XFS on an EBS volume is a suitable choice. For a failing
-S3-backed workspace, use a project directory outside that mount. An alias or
-symlink to the same mount does not change its capabilities. Neither `--force`
-nor `--from` repairs the destination filesystem, and deleting transaction locks
-does not fix this error. Config requires the lock and does not fall back to
-unlocked writes. See [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
+For an incompatible mount, move or clone the project onto compatible local
+storage, such as ext4 or XFS on an EC2 EBS volume, and rerun `aidlc config` there.
+Keep the working project outside the S3 mount; any later upload is a separate
+publication, without an atomic multi-file guarantee. An alias or symlink to the
+same mount does not change its capabilities. Neither `--force`, `--from`, nor
+deleting locks repairs missing filesystem semantics.
+
+### Transaction lock ownership
+
+Let a live init/lifecycle owner finish before retrying. A directory lock can be
+reclaimed on retry when its recorded host/boot identity matches and its owner
+PID is dead. Foreign, incomplete, or unverifiable directory owners are retained;
+a PID absent on this host is not proof that a foreign owner has stopped.
+
+For manual diagnosis, preserve the error, lock, and named staging/recovery
+paths. Inspect `.aidlc-transaction.lock/owner.json` (the lock file itself for a
+legacy file lock), and establish the owner process, host/boot, and mount history
+with the operator. All participants must share the same local temporary
+directory (`TMPDIR` on Unix) and PID namespace. Stop writers before corrective
+work and retain the evidence while ownership is uncertain. Do not blindly
+delete the project lock or its local coordination gate to make a retry proceed.
 
 ---
 
@@ -352,18 +368,13 @@ generation, a reused PID whose creation generation no longer matches, or an old
 lock whose owner stamp is genuinely missing. Matching/unknown live generations,
 malformed stamps, and unreadable stamps are reported but not removed.
 
-```bash
-# macOS / Linux
-rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
-
-# Windows (PowerShell)
-Remove-Item "$env:TEMP\.aidlc-audit-*.lock", "$env:TEMP\.aidlc-subagent-*.lock" -Recurse -Force
-```
-
-Manual removal is safe only after stopping all AI-DLC processes and confirming
-the project is quiescent. Locks and their owner-stamped `.reap` recovery gates
-are transient and recreated as needed. `.gate-mutex` files are persistent
-advisory-lock anchors and may remain empty in the temp directory.
+Before any manual cleanup, stop all AI-DLC processes using the affected locks,
+confirm ownership and that the projects are quiescent, and preserve diagnostic
+evidence. Investigate only the named lock; do not bulk-delete lock directories.
+Locks and their owner-stamped `.reap` recovery gates are transient and recreated
+as needed. `.gate-mutex` files are persistent advisory-lock anchors and may
+remain empty in the temp directory; an empty file is not evidence of a stale
+owner. Project transaction locks use the [ownership checks above](#transaction-lock-ownership).
 
 ---
 
