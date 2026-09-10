@@ -173,7 +173,10 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseWorkspaceCommand,
+  INTENT_SELECTOR_REGEX,
+  ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
+  SPACE_NAME_REGEX,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
   readAuditShardEvents,
@@ -1506,6 +1509,8 @@ interface ParsedFlags {
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
+  orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
+  orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   claim?: string;
@@ -1624,6 +1629,44 @@ function parseNextFlags(args: string[]): ParsedFlags {
     if (i === 0 && a === "compose") {
       flags.compose = true;
       continue;
+    }
+    // A SOLE `park` token parks (sole-token like `help`, because park mutates:
+    // `park` inside a longer description stays freeform). A leading `team-board`
+    // owns the rest of the argv, allowlisted the way --doctor's args are. A bare
+    // `unpark` is not a public verb; its spelling is --resume. Without these the
+    // tokens read as freeform work and the funnel offers a second intent.
+    if (i === 0 && a === "unpark" && args.length === 1) {
+      flags.parseError =
+        "unpark is not a command: a parked workflow resumes with /aidlc --resume.";
+      break;
+    }
+    const leadingVerb = i === 0 && ORCHESTRATOR_VERBS.has(a) ? a : undefined;
+    if (leadingVerb === "park" && args.length === 1) {
+      flags.orchestratorVerb = "park";
+      continue;
+    }
+    if (leadingVerb === "team-board") {
+      flags.orchestratorVerb = "team-board";
+      flags.orchestratorVerbArgs = [];
+      for (let j = 1; j < args.length; j++) {
+        const t = args[j];
+        if (t === "--snapshot") {
+          flags.orchestratorVerbArgs.push(t);
+          continue;
+        }
+        const value = args[j + 1];
+        // Both selectors become path segments downstream, so they must match
+        // the shared name grammars here, not merely avoid a leading dash.
+        const grammar = t === "--space" ? SPACE_NAME_REGEX : t === "--intent" ? INTENT_SELECTOR_REGEX : null;
+        if (grammar && value !== undefined && grammar.test(value)) {
+          flags.orchestratorVerbArgs.push(t, value);
+          j++;
+          continue;
+        }
+        flags.parseError = "Usage: /aidlc team-board [--space <name>] [--intent <name>] [--snapshot].";
+        break;
+      }
+      break;
     }
     if (a === "--resume") {
       flags.resume = true;
@@ -4047,7 +4090,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // rather than the ledger (a conductor that ran `next` and then bailed is
   // invisible to the ledger but visible here). Read-only utility flags and the
   // workspace verbs are excluded: they carry no workflow intent, so a status
-  // query stays a conversational turn.
+  // query stays a conversational turn. So is `team-board`, a read-only board;
+  // `park` is not, because the park it names mutates workflow state.
   //
   // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
   // latch swallows as a no-op still counts as engagement. That is the correct
@@ -4056,7 +4100,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // latch would make the two predicates disagree about the same command. The
   // same reasoning keeps it before the flag-validation early returns: an
   // errored command still counted on the transcript path.
-  if (!flags.readOnly && !flags.config && !flags.workspaceCommand) {
+  if (
+    !flags.readOnly &&
+    !flags.config &&
+    !flags.workspaceCommand &&
+    flags.orchestratorVerb !== "team-board"
+  ) {
     touchEngineMarker(projectDir);
   }
 
@@ -4074,6 +4123,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       flags.readOnly ||
       flags.config ||
       flags.workspaceCommand ||
+      flags.orchestratorVerb ||
       flags.compose ||
       flags.newScope ||
       flags.report ||
@@ -4122,7 +4172,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.config && !flags.workspaceCommand && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.config && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report &&
@@ -4248,7 +4298,28 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 1c - plugin utilities are terminal commands, never freeform intent
+  // Branch 1c - the orchestrator's own public verbs (`park`, `team-board`),
+  // dispatched BEFORE state inspection like Branches 1 and 1b. Without this a
+  // typed `/aidlc park` fell through scope detection into the freeform funnel
+  // and, over an active workflow, drew the new-work offer (a second intent).
+  // The engine names the exact public command; the mutation stays in `park`.
+  if (flags.orchestratorVerb === "park") {
+    emit(printDirective(
+      `Run \`${aidlcInvocation()} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with /aidlc --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
+    ));
+    return;
+  }
+  if (flags.orchestratorVerb === "team-board") {
+    const extra = flags.orchestratorVerbArgs && flags.orchestratorVerbArgs.length > 0
+      ? ` ${flags.orchestratorVerbArgs.join(" ")}`
+      : "";
+    emit(printDirective(
+      `Run \`${aidlcInvocation()} team-board${extra}\`, print its output verbatim, then stop. This is a read-only board, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
+    return;
+  }
+
+  // Branch 1d - plugin utilities are terminal commands, never freeform intent
   // text. The shared parser also feeds the binary dispatcher and Kiro seam, so
   // every harness preserves the same list/sync/select argv and error grammar.
   if (flags.pluginCommand) {
@@ -4267,7 +4338,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 1d - DocumentKB verbs are terminal commands, never freeform intent
+  // Branch 1e - DocumentKB verbs are terminal commands, never freeform intent
   // text. Same shape as 1c, but the directive names aidlc-knowledge.ts: this is
   // the first public noun whose verbs live in their own tool rather than in
   // aidlc-utility.ts, so the tool name is part of what each site must agree on.
@@ -9090,19 +9161,24 @@ function handleTeamBoard(
       if (existsSync(mainPath)) pd = mainPath;
     }
   }
-  const flagValue = (name: string): string | undefined => {
+  const flagValue = (name: string, grammar: RegExp): string | undefined => {
     const index = args.indexOf(name);
     if (index < 0) return undefined;
     const value = args[index + 1];
     if (!value || value.startsWith("-")) {
       throw new Error(`team-board ${name} requires a value.`);
     }
+    // The value is joined into record paths below; refuse anything outside the
+    // name grammar so a selector cannot read outside aidlc/spaces.
+    if (!grammar.test(value)) {
+      throw new Error(`team-board ${name} "${value}" is not a valid name.`);
+    }
     return value;
   };
-  const explicitSpace = flagValue("--space");
+  const explicitSpace = flagValue("--space", SPACE_NAME_REGEX);
   const defaultSelection = resolveWorkflowSelection(pd);
   const selectedSpace = explicitSpace ?? defaultSelection.space;
-  const selectedIntent = flagValue("--intent");
+  const selectedIntent = flagValue("--intent", INTENT_SELECTOR_REGEX);
   let stateContent: string;
   let board: TeamConstructionBoard;
   if (selectedIntent || explicitSpace) {

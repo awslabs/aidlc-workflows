@@ -723,6 +723,16 @@ export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
   "space-create",
   "intent",
 ]);
+// The orchestrator's own public verbs (`aidlc park`, `aidlc team-board`). A
+// leading one is routed by the engine as a print directive naming that command
+// (handleNext Branch 1c); it is NOT a terminal utility for a harness seam to run
+// off-band, because park mutates workflow state and team-board lives on the
+// orchestrator, not aidlc-utility. classifyTerminalCommand returns null for
+// them so they stay on the engine + conductor path, like `compose`.
+export const ORCHESTRATOR_VERBS: ReadonlySet<string> = new Set([
+  "park",
+  "team-board",
+]);
 
 export type WorkspaceNoun = "intent" | "space";
 
@@ -1307,6 +1317,9 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
+  // A leading orchestrator verb owns the command and stays on the engine path
+  // (see ORCHESTRATOR_VERBS); a read-only flag after it is that command's argv.
+  if (ORCHESTRATOR_VERBS.has(args[0])) return null;
   const workspaceCommand = parseWorkspaceCommand(args);
   if (workspaceCommand.kind !== "not-workspace") {
     // Intent creation mutates workflow state and must remain on the normal
@@ -1939,6 +1952,9 @@ export function knowledgeDir(projectDir: string, space?: string): string {
 // stage/artifact slugs, and space names are distinct domains that must be free
 // to tighten independently.
 export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+// A record dir (`<YYMMDD>-<slug>`), slug, or uuid: one path-safe segment, so a
+// selector can never escape `aidlc/spaces/<space>/intents/` through a join.
+export const INTENT_SELECTOR_REGEX = /^[a-z0-9][a-z0-9-]*$/i;
 
 export function validSpaceFlag(raw: string): string | null {
   return SPACE_NAME_REGEX.test(raw) ? raw : null;

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md
+// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX
 //
 // bun:test port of tests/unit/t114-orchestrate-next.sh (TAP plan 27),
 // mechanism = cli. Faithful, equal-or-stronger migration of the
@@ -84,6 +84,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { engineTouchMarkerPath } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -325,6 +326,65 @@ describe("t114 in-session config alias", () => {
 // Help-request routing: bare help tokens and `intent help`/`space help` must
 // print help, never enter the creation funnel or a switch attempt.
 // ===========================================================================
+describe("t114 orchestrator-verb routing", () => {
+  test("sole `park` on a fresh workspace -> print naming the park command, not a creation ask", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["park"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc.ts park`");
+    expect(out).toContain("parked");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("sole `park` over an active workflow -> print, never the new-work offer or a stage advance", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["park"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc.ts park`");
+    expect(out).not.toContain("new-work-routing");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("`park` inside a longer description stays freeform, like `help`", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["park", "the", "car", "rental", "feature"]).out;
+    expect(out).not.toContain("aidlc.ts park`");
+  });
+
+  test("`team-board` -> read-only print carrying only allowlisted args", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const bare = runNext(proj, ["team-board"]).out;
+    expect(bare).toContain('"kind":"print"');
+    expect(bare).toContain("aidlc.ts team-board`");
+    expect(bare).toContain("do NOT run `next`");
+    // Read-only: the turn stays conversational for the Stop hook, unlike park.
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
+    runNext(proj, ["park"]);
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
+    const withArgs = runNext(proj, ["team-board", "--snapshot", "--intent", "260901-x"]).out;
+    expect(withArgs).toContain("aidlc.ts team-board --snapshot --intent 260901-x`");
+    const stray = runNext(proj, ["team-board", "--status"]).out;
+    expect(stray).toContain('"kind":"error"');
+    expect(stray).toContain("Usage: /aidlc team-board");
+    // Selector values become path segments downstream: only the name grammars pass.
+    for (const bad of [["--space", "../../tmp"], ["--space", "Team"], ["--intent", "../x"], ["--intent", "a/b"]]) {
+      const out = runNext(proj, ["team-board", ...bad]).out;
+      expect(out).toContain('"kind":"error"');
+      expect(out).not.toContain("aidlc.ts team-board");
+    }
+  });
+
+  test("sole `unpark` -> error naming --resume, not a creation ask", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["unpark"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("/aidlc --resume");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+});
+
 describe("t114 help-request routing", () => {
   test("sole bare `help` on a fresh workspace -> help print, not a creation ask", () => {
     // Without the sole-token special case, `help` fell into intentWords and
