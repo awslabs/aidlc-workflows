@@ -2,8 +2,8 @@
 //
 // t-acp-kiro-reviewer.serial.test.ts — LIVE proof that the §12a reviewer step
 // fires on the Kiro harness: a reviewer-declaring stage driven over ACP through
-// the production `aidlc` conductor ends with the reviewer's `## Review` verdict
-// appended to the primary artifact on disk.
+// the production `aidlc` conductor ends with a separate review file committed
+// to a digest-bound review record by REVIEW_COMPLETED.
 //
 // WHY THIS TEST EXISTS. The reviewer mechanism has three Kiro-side wiring
 // contracts (conductor `subagent.trustedAgents` includes the two reviewer
@@ -20,13 +20,13 @@
 // `reviewer_max_iterations` fields (buildRunStageDirective attaches them from
 // the compiled node; Branch 4b short-circuits every mutating path, so the main
 // pointer is never touched). The conductor runs the stage body, invokes the
-// reviewer as a sub-agent, and the reviewer appends `## Review` to
-// `requirements.md` under the seeded intent record.
+// reviewer as a sub-agent, and the reviewer writes the request's reviewFile.
+// The conductor records its verdict without modifying requirements.md.
 //
 // TURN SHAPE (the ACP hazards, both live-verified by the workspace journey):
 //   1. The conductor's forwarding loop runs IN-TURN on ACP and does not
 //      voluntarily end after stage work — so the stop is a DISK-CONDITION
-//      cancel (poll for a verdict under `## Review`, then session/cancel),
+//      cancel (poll for a verified REVIEW_COMPLETED record, then session/cancel),
 //      the same pattern as driveCodekbUntilBothRepos, NOT a tool-title stop.
 //   2. The stage's clarifying questions render as numbered PROSE in the
 //      agent's text (question-rendering annex), not a protocol gate the driver
@@ -36,14 +36,15 @@
 //      recommended defaults. Two turns maximum; the disk poll spans both.
 //
 // ASSERTABLE SURFACES (on-disk + tool trace, never prose):
-//   - `<record>/inception/requirements-analysis/requirements.md` exists and
-//     carries a `## Review` section with a READY / NOT-READY verdict — the
-//     §12a contract (stage-protocol.md "Reviewer executes"), landing under
-//     `aidlc/spaces/**` (the tree the reviewer's write cap names).
+//   - requirements.md exists without an embedded review. REVIEW_COMPLETED
+//     names a digest-verified record under <record>/.aidlc-reviews/, paired
+//     with REVIEW_REQUESTED and containing the reviewer's canonical verdict.
+//   - The separate reviewFile was written through a completed native edit;
+//     its validated body survives in the committed record after draft cleanup.
 //   - No root-level `aidlc-docs/` appears: the retired flat layout must not
 //     be resurrected by a reviewer pointed at a dead path.
-//   - Some tool call in the turn references the reviewer agent slug — the
-//     reviewer ran as a SUB-AGENT invocation, not conductor-inline prose.
+//   - An actual sub-agent dispatch names the reviewer; a logger command that
+//     merely mentions the reviewer cannot stand in for that invocation.
 //
 // SPENDS Kiro credits — gated AIDLC_KIRO_ACP_LIVE=1; skip-with-reason when
 // unset OR kiro-cli absent/unauthenticated. Serial: one live ACP session.
@@ -52,6 +53,13 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  auditBlockField,
+  pairedReviewRecordForCompletion,
+  readAuditShardEvents,
+  reviewRecordRefFromBlock,
+  validateReviewAppendix,
+} from "../../dist/kiro/.kiro/tools/aidlc-lib.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
@@ -66,6 +74,8 @@ const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
 const DRIVE_MS = Math.max(300_000, Math.floor((TEST_TIMEOUT_MS - 120_000) / 2));
 
 const REVIEWER_SLUG = "aidlc-product-lead-agent";
+const STAGE = "requirements-analysis";
+const WORKFLOW = `single-stage:${STAGE}`;
 
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
@@ -82,24 +92,44 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
-/** The primary artifact the stage produces and the reviewer appends to. */
+/** The primary artifact is reviewed, never used as the reviewer's write target. */
 function requirementsPath(proj: string): string {
-  return join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements.md");
+  return join(seededRecordDir(proj), "inception", STAGE, "requirements.md");
 }
 
-function hasReviewerVerdict(artifact: string): boolean {
-  return /^## Review\b[\s\S]*?\b(?:NOT-READY|READY)\b/m.test(artifact);
-}
-
-function reviewLanded(proj: string): boolean {
+/** Stop only after the logger has committed a review paired to its request.
+ * A draft alone, an unrelated receipt, or a tampered record cannot stop the run. */
+function completedReview(proj: string) {
   try {
-    return hasReviewerVerdict(readFileSync(requirementsPath(proj), "utf-8"));
+    const events = readAuditShardEvents(proj);
+    for (const completion of events) {
+      if (
+        completion.event !== "REVIEW_COMPLETED" ||
+        auditBlockField(completion.block, "Stage") !== STAGE ||
+        auditBlockField(completion.block, "Workflow") !== WORKFLOW ||
+        auditBlockField(completion.block, "Reviewer") !== REVIEWER_SLUG
+      ) continue;
+      const record = pairedReviewRecordForCompletion(proj, completion.block);
+      const ref = reviewRecordRefFromBlock(completion.block);
+      if (!record || !ref || !record.request_id) continue;
+      const request = events.find((event) =>
+        event.event === "REVIEW_REQUESTED" &&
+        auditBlockField(event.block, "Request Id") === record.request_id &&
+        auditBlockField(event.block, "Stage") === STAGE &&
+        auditBlockField(event.block, "Workflow") === WORKFLOW &&
+        auditBlockField(event.block, "Reviewer") === REVIEWER_SLUG &&
+        auditBlockField(event.block, "Iteration") === String(record.iteration) &&
+        auditBlockField(event.block, "Artifact Fingerprint") === record.artifact_fingerprint
+      );
+      if (request) return { record, ref, request, completion };
+    }
   } catch {
-    return false;
+    // The poll can race a file write; the final assertion still requires a receipt.
   }
+  return null;
 }
 
-/** Drive one ACP turn and cancel it the moment a `## Review` verdict is on
+/** Drive one ACP turn and cancel it the moment a verified review receipt is on
  *  disk (the conductor's in-turn forwarding loop never voluntarily ends — the
  *  same hazard + pattern as the workspace journey's codekb turn). Resolves
  *  with the drive result either way; the caller asserts on disk. */
@@ -110,7 +140,7 @@ async function driveUntilReview(
 ): Promise<Awaited<ReturnType<typeof driveKiroAcp>>> {
   let cancelled = false;
   const poll = setInterval(() => {
-    if (!cancelled && session.sessionId && reviewLanded(proj)) {
+    if (!cancelled && session.sessionId && completedReview(proj)) {
       cancelled = true;
       session.notify("session/cancel", { sessionId: session.sessionId });
     }
@@ -130,7 +160,7 @@ async function driveUntilReview(
 
 describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kiro)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `a reviewer-declaring stage driven over ACP ends with the reviewer's ## Review verdict on the artifact${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
+    `a reviewer-declaring stage commits the separate review and matching REVIEW_COMPLETED receipt${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       // Greenfield stub + seeded ideation artifacts: intent-statement.md gives
       // the requirements pass its anchor (fewer/cheaper clarifying questions);
@@ -169,7 +199,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // stage's questions (live models sometimes do despite the grant),
         // answer once with the defaults and let the disk poll finish the job.
         let r2: Awaited<ReturnType<typeof driveKiroAcp>> | undefined;
-        if (!reviewLanded(proj) && r1.stopReason === "end_turn") {
+        if (!completedReview(proj) && r1.stopReason === "end_turn") {
           r2 = await driveUntilReview(
             session,
             proj,
@@ -178,22 +208,66 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
           );
         }
 
-        // §12a on disk: the artifact exists under the per-intent record
-        // (aidlc/spaces/** — the tree the reviewer's write grant names) and
-        // carries the appended ## Review verdict.
+        // §12a on disk: the primary artifact and the separately recorded review
+        // both exist. The completion verifies record bytes and receipt ownership.
         expect(existsSync(requirementsPath(proj))).toBe(true);
         const artifact = readFileSync(requirementsPath(proj), "utf-8");
-        expect(artifact).toMatch(/^## Review\b/m);
-        expect(hasReviewerVerdict(artifact)).toBe(true);
+        expect(artifact.trim().length).toBeGreaterThan(0);
+        expect(artifact).not.toMatch(/^## Review\b/m);
+        const review = completedReview(proj);
+        expect(review).not.toBeNull();
+        if (!review) throw new Error("Missing digest-bound REVIEW_COMPLETED and matching request");
+        expect(review.ref.path).toMatch(
+          /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/[1-9][0-9]*\.json$/,
+        );
+        expect(existsSync(join(seededRecordDir(proj), review.ref.path))).toBe(true);
+        expect(review.record).toMatchObject({
+          stage: STAGE,
+          workflow: WORKFLOW,
+          unit: null,
+          reviewer: REVIEWER_SLUG,
+        });
+        expect(["READY", "NOT-READY"]).toContain(review.record.verdict);
+        expect(review.record.body.trim().length).toBeGreaterThan(0);
+        expect(validateReviewAppendix(Buffer.from(review.record.body), {
+          verdict: review.record.verdict,
+          reviewer: REVIEWER_SLUG,
+          iteration: review.record.iteration,
+          reviewChallenge: null,
+          standalone: true,
+        })).toEqual({ valid: true });
 
         // The retired flat layout must not reappear: a reviewer (or conductor)
         // still pointed at the dead root path would recreate it here.
         expect(existsSync(join(proj, "aidlc-docs"))).toBe(false);
 
-        // The reviewer ran as a sub-agent: some tool call in the turn(s)
-        // references the reviewer slug (title, input, or output — tolerant of
-        // how kiro-cli surfaces the subagent invocation in its tool stream).
         const allCalls = [...r1.toolCalls, ...(r2?.toolCalls ?? [])];
+        // The request's project-relative reviewFile is the native write target.
+        // The logger deletes this draft on commit, so inspect the completed tool
+        // call and retained record body instead of requiring the draft to remain.
+        const requestOutput = allCalls.flatMap((call) =>
+          call.output.join("").split(/\r?\n/).flatMap((line) => {
+            try {
+              const value = JSON.parse(line);
+              return value?.emitted === "REVIEW_REQUESTED" &&
+                  value.requestId === review.record.request_id
+                ? [value as { reviewFile: string }]
+                : [];
+            } catch {
+              return [];
+            }
+          })
+        );
+        expect(requestOutput).toHaveLength(1);
+        const reviewFile = requestOutput[0]?.reviewFile;
+        expect(reviewFile).toStartWith(
+          `${seededRecordDir(proj).slice(proj.length + 1).replaceAll("\\", "/")}/.aidlc-reviews/${STAGE}/`,
+        );
+        expect(allCalls.some((call) => {
+          const input = call.rawInput as { path?: string } | undefined;
+          return call.kind === "edit" && call.status === "completed" &&
+            (input?.path === reviewFile || input?.path === join(proj, reviewFile!));
+        })).toBe(true);
         // Live agents fumble individual tool ARGUMENTS and recover in the
         // next call (observed: an orphan "Directory not found" validation
         // failure mid-run while the stage still completed - reproduced on
@@ -209,11 +283,17 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
               .length > 1,
         );
         expect(systematic).toEqual([]);
-        const reviewerInvoked = allCalls.some((tc) =>
-          [tc.title, JSON.stringify(tc.rawInput ?? ""), tc.output.join("")]
-            .join("\n")
-            .includes(REVIEWER_SLUG),
-        );
+        // Native crew dispatch has no ACP kind and carries mode/stages/task.
+        // Reads, edits, searches, and task-list calls mentioning the agent do not count.
+        const reviewerInvoked = allCalls.some((tc) => {
+          const input = tc.rawInput;
+          return tc.title === "Spawning agent crew" && tc.kind === "" &&
+            tc.status === "completed" &&
+            input !== null && typeof input === "object" && !Array.isArray(input) &&
+            Object.hasOwn(input, "mode") && Object.hasOwn(input, "stages") &&
+            Object.hasOwn(input, "task") &&
+            JSON.stringify(input).includes(REVIEWER_SLUG);
+        });
         expect(reviewerInvoked).toBe(true);
       } finally {
         session.close();
