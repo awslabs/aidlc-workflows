@@ -72,11 +72,13 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
+import { comparableTerminal, guardBypassCommands, nativeToolCalls } from "../harness/t139-fidelity.ts";
 import {
   assertTuiDriveKill,
   cleanupTuiProject,
@@ -163,6 +165,59 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
+/** The explicit session UUID binds native evidence to this fresh fixture. */
+class NativeFidelity {
+  readonly sessionId = randomUUID();
+  private transcriptPath: string | undefined;
+
+  inspect(final = false): void {
+    if (!this.transcriptPath) {
+      const projects = join(process.env.CLAUDE_CONFIG_DIR || join(os.homedir(), ".claude"), "projects");
+      if (existsSync(projects)) {
+        this.transcriptPath = readdirSync(projects, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => join(projects, entry.name, `${this.sessionId}.jsonl`))
+          .find((path) => existsSync(path));
+      }
+    }
+    if (!this.transcriptPath) {
+      if (final) throw new Error(`Missing native transcript for t139 session ${this.sessionId}`);
+      return;
+    }
+    const subagents = join(dirname(this.transcriptPath), this.sessionId, "subagents");
+    const paths = [
+      this.transcriptPath,
+      ...(existsSync(subagents)
+        ? readdirSync(subagents).filter((name) => name.endsWith(".jsonl")).map((name) => join(subagents, name))
+        : []),
+    ];
+    const transcripts = paths.map((path) => {
+      const raw = readFileSync(path, "utf8");
+      // Claude can be appending its last JSONL row during a polling read.
+      const complete = raw.endsWith("\n") ? raw : raw.slice(0, raw.lastIndexOf("\n") + 1);
+      return { path, complete };
+    });
+    const calls = transcripts.flatMap(({ complete }) => nativeToolCalls(complete));
+    const bypasses = guardBypassCommands(calls);
+    if (final || bypasses.length > 0) {
+      const logDir = process.env.AIDLC_TEST_LOG_DIR;
+      if (logDir) {
+        for (const { path, complete } of transcripts) {
+          writeFileSync(join(logDir, `t139-native-${this.sessionId}-${basename(path)}`), complete);
+        }
+      }
+    }
+    if (bypasses.length > 0) {
+      throw new Error(`t139 guard self-bypass in native tool calls:\n${bypasses.join("\n")}`);
+    }
+    if (final) {
+      const commands = calls.filter((call) => call.name === "Bash");
+      expect(commands.length).toBeGreaterThan(0);
+      console.log(`t139 native fidelity: ${commands.length} Bash calls, zero guard opt-outs (${this.sessionId})`);
+    }
+  }
+}
+
 /** Run the answer-gate primitive to the Completed milestone. Approve-only by
  *  default (Enter = Recommended per menu); when rejectFirstGate is true it selects
  *  "Request changes" on the FIRST approval gate once, then approves the rest —
@@ -176,8 +231,9 @@ function runAnswerGateToMilestone(
   sandbox: string,
   rejectFirstGate: boolean,
   overallMs: number,
+  fidelity: NativeFidelity,
 ): Promise<number> {
-  return new Promise<number>((resolve) => {
+  return new Promise<number>((resolve, reject) => {
     const child = spawn(
       DRIVE_BIN,
       [
@@ -195,14 +251,34 @@ function runAnswerGateToMilestone(
       ],
       { stdio: "inherit", env: LIVE_CHILD_ENV },
     );
-    child.on("exit", (code) => resolve(code ?? -1));
-    child.on("error", () => resolve(-1));
+    let fidelityFailure: unknown;
+    const monitor = setInterval(() => {
+      try {
+        fidelity.inspect();
+      } catch (error) {
+        fidelityFailure = error;
+        clearInterval(monitor);
+        // This is the exact child handle just spawned by this test. Its exit
+        // returns control to the existing finally, which reaps the owned TUI.
+        child.kill("SIGTERM");
+      }
+    }, 1_000);
+    child.on("exit", (code) => {
+      clearInterval(monitor);
+      if (fidelityFailure) reject(fidelityFailure);
+      else resolve(code ?? -1);
+    });
+    child.on("error", () => {
+      clearInterval(monitor);
+      resolve(-1);
+    });
   });
 }
 
 interface Terminal {
   scope: string | undefined;
   phase: string | undefined;
+  currentStage: string | undefined;
   revisionCount: number;
   completedCounter: number;
   completedGrid: number;
@@ -231,6 +307,7 @@ function readTerminal(sandbox: string): Terminal {
   return {
     scope,
     phase,
+    currentStage: /\*\*Current Stage\*\*:[ \t]*(\S+)/.exec(md)?.[1],
     revisionCount,
     completedCounter,
     completedGrid: completedSlugs.length,
@@ -241,7 +318,7 @@ function readTerminal(sandbox: string): Terminal {
 
 /** Launch claude on a fresh brownfield bugfix project, clear modals, submit the
  *  bugfix command. Returns the session name (caller drives gates + reads disk). */
-function launchBugfix(session: string, sandbox: string): void {
+function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity): void {
   // run-tests.ts disables the approve-time revision backstop globally because
   // most fixtures intentionally omit revision evidence. This test is the live
   // reject/revise proof, so its Claude child must not inherit that bypass. On
@@ -272,6 +349,8 @@ function launchBugfix(session: string, sandbox: string): void {
       "45",
       "--",
       ...claudeCommand,
+      "--session-id",
+      fidelity.sessionId,
     ]).rc,
   ).toBe(0);
   if (waitFor(session, "trust this folder", 60000, 600)) {
@@ -312,19 +391,28 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
       // ===================================================================
       const cleanSession = `aidlc_tui_t139_clean_${process.pid}`;
       const cleanSandbox = setupTuiProject({ brownfieldStub: true, noAidlcDocs: true });
+      const cleanFidelity = new NativeFidelity();
       let revisedSession = "";
       let revisedSandbox = "";
       try {
         const testStartMs = Date.now();
-        launchBugfix(cleanSession, cleanSandbox);
+        launchBugfix(cleanSession, cleanSandbox, cleanFidelity);
+        const cleanDeadline = Math.min(testStartMs + TEST_TIMEOUT_MS, Date.now() + CLEAN_RUN_OVERALL_MS);
         const cleanRc = await runAnswerGateToMilestone(
           cleanSession,
           cleanSandbox,
           false,
           CLEAN_RUN_OVERALL_MS,
+          cleanFidelity,
         );
         expect(cleanRc).toBe(0);
-        const clean = readTerminal(cleanSandbox);
+        // Completed is persisted before approve's nested advance. Wait for
+        // the cursor to leave the completed stage before sampling its phase.
+        const clean = await comparableTerminal(() => readTerminal(cleanSandbox), cleanDeadline);
+        cleanFidelity.inspect(true);
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t139-clean-terminal.json"), JSON.stringify(clean, null, 2));
+        }
         assertTuiDriveKill(
           drive(["kill", "--session", cleanSession]),
           cleanSession,
@@ -342,12 +430,13 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
         // ===================================================================
         revisedSession = `aidlc_tui_t139_revised_${process.pid}`;
         revisedSandbox = setupTuiProject({ brownfieldStub: true, noAidlcDocs: true });
+        const revisedFidelity = new NativeFidelity();
 
         // Render value-add: prove a gate painted at least once during the run.
         let sawMenu = false;
         let pollTimer: ReturnType<typeof setInterval> | undefined;
         try {
-          launchBugfix(revisedSession, revisedSandbox);
+          launchBugfix(revisedSession, revisedSandbox, revisedFidelity);
 
           // Drive the gates with --reject-first-gate: the answer-gate loop selects
           // "Request changes" on the FIRST APPROVAL gate (the menu whose options
@@ -372,17 +461,22 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
             300_000,
             TEST_TIMEOUT_MS - (Date.now() - testStartMs) - REVISED_SLACK_MS,
           );
+          const revisedDeadline = Math.min(testStartMs + TEST_TIMEOUT_MS, Date.now() + revisedOverallMs);
           const revisedRc = await runAnswerGateToMilestone(
             revisedSession,
             revisedSandbox,
             true, // reject the first approval gate once
             revisedOverallMs,
+            revisedFidelity,
           );
           if (pollTimer) clearInterval(pollTimer);
           pollTimer = undefined;
           expect(revisedRc).toBe(0);
-
-          const revised = readTerminal(revisedSandbox);
+          const revised = await comparableTerminal(() => readTerminal(revisedSandbox), revisedDeadline);
+          revisedFidelity.inspect(true);
+          if (process.env.AIDLC_TEST_LOG_DIR) {
+            writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t139-revised-terminal.json"), JSON.stringify(revised, null, 2));
+          }
 
           // --- VACUOUS-PASS GUARD: the reject ACTUALLY took. ----------------
           // Without this, a run that silently approved everything would make the
@@ -401,6 +495,7 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
           expect(revised.scope).toBe(clean.scope);
           // Same lifecycle phase at the milestone.
           expect(revised.phase).toBe(clean.phase);
+          expect(revised.currentStage).toBe(clean.currentStage);
           // Same SET of completed stages (order-independent) — the revision loop
           // neither added nor dropped a completed stage.
           expect(revised.completedSlugs).toEqual(clean.completedSlugs);
