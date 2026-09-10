@@ -169,9 +169,18 @@ const LEGACY_PLANNING_WRITE_TOOLS = new Set([
   "str_replace",
 ]);
 const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
+  "read",
   "fs_read",
+  "read_file",
+  "read_files",
+  "read_code",
+  "list_directory",
   "file_search",
+  "glob",
   "grep_search",
+  "grep",
+  "web_fetch",
+  "web_search",
   "thinking",
   "todo_list",
 ]);
