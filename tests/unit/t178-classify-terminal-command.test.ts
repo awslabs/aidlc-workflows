@@ -1,5 +1,5 @@
 // covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
-// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS
+// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -36,6 +36,7 @@ import {
   classifyTerminalCommand,
   KNOWLEDGE_VERBS,
   parseKnowledgeCommand,
+  ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
   RESERVED_RECORD_NAMES,
   WORKSPACE_VERBS,
@@ -203,6 +204,22 @@ describe("classifyTerminalCommand() — workspace verbs (leading token only)", (
       "space",
       "space-create",
     ]);
+  });
+});
+
+describe("classifyTerminalCommand() - orchestrator verbs stay on the engine path", () => {
+  test("ORCHESTRATOR_VERBS is exactly the dispatcher's public orchestrator routes", () => {
+    expect([...ORCHESTRATOR_VERBS].sort()).toEqual(["park", "team-board"]);
+  });
+
+  test("a leading park or team-board is never a terminal utility, even with a read-only flag after it", () => {
+    // Park mutates and team-board lives on the orchestrator, so neither may run
+    // off-band through a harness seam; the engine's Branch 1c names the command.
+    expect(classifyTerminalCommand(["park"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board", "--snapshot"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board", "--status"])).toBeNull();
+    expect(classifyTerminalCommand(["unpark"])).toBeNull();
   });
 });
 

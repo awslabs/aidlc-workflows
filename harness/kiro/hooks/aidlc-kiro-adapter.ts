@@ -46,6 +46,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
+  ORCHESTRATOR_VERBS,
   decodeHarnessPlainText,
   hasOpenGate,
   humanActedSinceGate,
@@ -500,6 +501,7 @@ if (target === "guard-tool-call") {
   const isBareAdvancing =
     m !== null &&
     nextArgs[0] !== "compose" &&
+    !ORCHESTRATOR_VERBS.has(nextArgs[0]) &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
     classifyTerminalCommand(nextArgs) === null;
 
