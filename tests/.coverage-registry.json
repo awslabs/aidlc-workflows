@@ -1721,6 +1721,10 @@
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t338-summary-questions-stage-level.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
