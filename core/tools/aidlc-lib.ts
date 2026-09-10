@@ -3806,7 +3806,8 @@ function writeSessionPidRecord(
   if (!path) return;
   try {
     mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+    // Readers and GC must never mistake an in-progress refresh for bad JSON.
+    writeFileAtomic(path, `${JSON.stringify(entry)}\n`);
   } catch {
     /* per-user runtime state; best-effort */
   }

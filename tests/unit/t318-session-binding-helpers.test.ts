@@ -35,6 +35,29 @@ const originalSessionOverrideSource =
 const originalTestSessionPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
 const originalTestPsDenied = process.env.AIDLC_TEST_PS_DENIED;
 
+function mockMacProcessTree(parents = new Map<number, number>()) {
+  let now = 1000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const ps = spyOn(childProcess, "spawnSync").mockImplementation(((
+    command: string,
+    args: readonly string[],
+  ) => {
+    expect(command).toBe("ps");
+    now += 5;
+    const pid = Number(args.at(-1));
+    const stdout = `${parents.get(pid) ?? 1} fixture-start-${pid}\n`;
+    return { pid: 123, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
+  }) as typeof childProcess.spawnSync);
+  process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+  return {
+    ps,
+    restore() {
+      ps.mockRestore();
+      clock.mockRestore();
+    },
+  };
+}
+
 beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE;
   delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
@@ -281,25 +304,31 @@ describe("t318 session binding helpers", () => {
   });
 
   test("a failed SessionStart cannot restore the previous session when process lookup recovers", () => {
-    writeSessionPidAncestry(proj, "previous-session");
-    expect(resolveSessionIdFromAncestry(proj)).toBe("previous-session");
     const current = createIntent(proj, "current", "default", "feature");
     writeSessionBinding(proj, "current-session", "default", current.dirName);
+    // Both fixture PIDs are alive; only their parent links and lookup time are
+    // simulated. Two levels also expose falling through to an older ancestor.
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
+    try {
+      writeSessionPidAncestry(proj, "previous-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("previous-session");
+      expect(readdirSync(sessionPidMapDir(proj))).toHaveLength(2);
 
-    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
-    process.env.AIDLC_TEST_PS_DENIED = "1";
-    writeSessionPidAncestry(proj, "current-session");
-    delete process.env.AIDLC_TEST_SESSION_PLATFORM;
-    delete process.env.AIDLC_TEST_PS_DENIED;
+      process.env.AIDLC_TEST_PS_DENIED = "1";
+      writeSessionPidAncestry(proj, "current-session");
+      delete process.env.AIDLC_TEST_PS_DENIED;
 
-    // Recovery must not make the superseded parent or an older ancestor win.
-    expect(resolveSessionIdFromAncestry(proj)).toBeNull();
-    process.env.AIDLC_SESSION_OVERRIDE = "current-session";
-    expect(resolveWorkflowSelection(proj).intent).toBe(current.dirName);
+      // Recovery must not make the superseded parent or an older ancestor win.
+      expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+      process.env.AIDLC_SESSION_OVERRIDE = "current-session";
+      expect(resolveWorkflowSelection(proj).intent).toBe(current.dirName);
 
-    // A later successful refresh restores normal ancestry selection.
-    writeSessionPidAncestry(proj, "current-session");
-    expect(resolveSessionIdFromAncestry(proj)).toBe("current-session");
+      // A later successful refresh restores normal ancestry selection.
+      writeSessionPidAncestry(proj, "current-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("current-session");
+    } finally {
+      lookup.restore();
+    }
   });
 
   test("a new session's nearest ancestor is written even when many stale entries are queued for GC", () => {
@@ -319,24 +348,7 @@ describe("t318 session binding helpers", () => {
     // Model a 5ms ps call deterministically: GC-first exhausts the 50ms budget
     // on stale entries. The current walk resolves its parent once and GC
     // reaps dead PIDs without ps, regardless of host scheduling.
-    let now = 1000;
-    const clock = spyOn(Date, "now").mockImplementation(() => now);
-    const ps = spyOn(childProcess, "spawnSync").mockImplementation(((
-      command: string,
-    ) => {
-      expect(command).toBe("ps");
-      now += 5;
-      return {
-        pid: 123,
-        output: [null, "1 Thu Sep 10 00:00:00 2026\n", ""],
-        stdout: "1 Thu Sep 10 00:00:00 2026\n",
-        stderr: "",
-        status: 0,
-        signal: null,
-      };
-    }) as typeof childProcess.spawnSync);
-    const priorPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
-    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    const lookup = mockMacProcessTree();
     try {
       writeSessionPidAncestry(proj, "fresh-session");
       const nearest = join(pidDir, String(process.ppid));
@@ -344,16 +356,10 @@ describe("t318 session binding helpers", () => {
       expect(
         JSON.parse(readFileSync(nearest, "utf-8")).sessionId,
       ).toBe("fresh-session");
-      expect(ps).toHaveBeenCalledTimes(1);
+      expect(lookup.ps).toHaveBeenCalledTimes(1);
       expect(readdirSync(pidDir)).toEqual([String(process.ppid)]);
     } finally {
-      ps.mockRestore();
-      clock.mockRestore();
-      if (priorPlatform === undefined) {
-        delete process.env.AIDLC_TEST_SESSION_PLATFORM;
-      } else {
-        process.env.AIDLC_TEST_SESSION_PLATFORM = priorPlatform;
-      }
+      lookup.restore();
     }
   });
 
