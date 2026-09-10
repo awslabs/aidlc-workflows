@@ -2544,12 +2544,20 @@ function buildForward(): Forward {
             },
           };
         }
-        if (state.active && !state.approved && !state.sourceFloorValid) {
+        if (
+          state.active &&
+          !state.approved &&
+          !state.sourceFloorValid &&
+          !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+        ) {
+          // The canonical planning writes stay open: re-presenting the plan is
+          // the remedy, and it is a questions-file write. Blocking it here made
+          // source drift before approval a dead end on this harness.
           return {
             hook: "__legacy_plan_approval_block__",
             input: {
               reason:
-                "Plan Approval fallback blocked this tool because workspace source changed after the Code Generation directive. Revert pre-approval source changes before continuing.",
+                "Plan Approval fallback blocked this tool because workspace source changed after the plan's source was recorded. Re-present the plan: write the Plan Approval section again with a blank [Answer]: so the write hook refreshes [Planned Source] and re-issues the decision, then approve.",
             },
           };
         }

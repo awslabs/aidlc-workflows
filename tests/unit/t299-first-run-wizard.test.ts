@@ -30,7 +30,6 @@ const HARNESS_NAMES = [
   "copilot",
   "cursor",
   "kiro",
-  "kiro-ide",
   "opencode",
 ] as const;
 
@@ -83,7 +82,7 @@ function detection(
       HARNESS_NAMES.map((name) => {
         const value = harnesses[name] ?? {
           found: false,
-          probed: name !== "kiro-ide",
+          probed: true,
         };
         return [
           name,

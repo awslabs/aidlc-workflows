@@ -3848,13 +3848,18 @@ function retainedTransportForCurrentState(
   let marker: ActiveDirectiveMarker | null = null;
   try {
     // One row serves both Kiro surfaces, so the name cannot say whether a legacy
-    // window is in play — ask the host. A session that derives a legacy identity
-    // at all is inside the VS Code-family host whose protected choices are
-    // rotated BY the publication this would skip, and the rotation has to happen
-    // on the FIRST publication too, before any window exists: requiring a live
-    // window here left that prefix on the reuse path (measured: t218's legacy
-    // mediation recorded no decision at all).
-    if (kiroIdeLegacyPlanApprovalSessionId() !== null) return null;
+    // window is in play — ask the window itself. A live legacy host means the
+    // publication this would skip is what rotates its protected choices. Reading
+    // the environment alone would catch a supported IDE 1.x session and a CLI run
+    // from a VS Code terminal, both of which keep the reuse.
+    const legacySession = kiroIdeLegacyPlanApprovalSessionId();
+    if (
+      legacySession !== null &&
+      readKiroIdeLegacyPlanApprovalHost(projectDir, legacySession)?.session ===
+        legacySession
+    ) {
+      return null;
+    }
     const state = loadStateFileIfPresent(projectDir);
     if (state === null) return null;
     marker = readActiveDirectiveMarker(projectDir, state);

@@ -345,7 +345,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("all seven harness SKILL.md files load the reviewer module, and every shipped module copy carries the delete rule, the canonical-verdict validation, and the retry contract", () => {
+  test("every harness SKILL.md file loads the reviewer module, and every shipped module copy carries the delete rule, the canonical-verdict validation, and the retry contract", () => {
     for (const harness of HARNESS_MATRIX) {
       // The SKILL reviewer bullet is now a module pointer: it must name the
       // module and keep the reviewer-field fallback trigger.
