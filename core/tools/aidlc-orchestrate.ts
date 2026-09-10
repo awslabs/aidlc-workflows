@@ -3826,7 +3826,8 @@ function steeringRouteHash(node: GraphStage, scope: string): string {
 //   - a Copilot-owned marker, whose attempt bookkeeping needs the write
 //   - a tracked attempt id, likewise
 //   - `--single`, which owns its own synthetic attempt
-//   - the legacy Kiro IDE window, whose protected choices are rotated BY the
+//   - a LIVE legacy Kiro window (asked of the window, not of the harness name:
+//     one row serves both surfaces), whose protected choices are rotated BY the
 //     publication this would skip
 //   - different stage, Unit, rule bundle, or directive body
 //   - for a partial delivery: a different part count, or a continuation token that
@@ -3846,7 +3847,17 @@ function retainedTransportForCurrentState(
   if (!stateHash) return null;
   let marker: ActiveDirectiveMarker | null = null;
   try {
-    if (installedHarnessName(projectDir) === "kiro-ide") return null;
+    // One row serves both Kiro surfaces, so the name cannot say whether a legacy
+    // window is in play — ask the window itself. A live legacy host means the
+    // publication this would skip is what rotates its protected choices.
+    const legacySession = kiroIdeLegacyPlanApprovalSessionId();
+    if (
+      legacySession &&
+      readKiroIdeLegacyPlanApprovalHost(projectDir, legacySession)?.session ===
+        legacySession
+    ) {
+      return null;
+    }
     const state = loadStateFileIfPresent(projectDir);
     if (state === null) return null;
     marker = readActiveDirectiveMarker(projectDir, state);
