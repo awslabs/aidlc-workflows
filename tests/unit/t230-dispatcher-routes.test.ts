@@ -1,5 +1,5 @@
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -49,8 +49,10 @@ import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   cleanupTestProject,
   createTestProject,
+  seedAidlcMemory,
   seededRecordDir,
   seededStateFile,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 import { setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -1596,6 +1598,121 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(directive.ask_type).toBe("new-work-routing");
     expect(directive.available_intents).toHaveLength(2);
   });
+});
+
+describe("t230 native review-brief dispatch", () => {
+  let executable: string;
+  let projectDir: string;
+  let otherCwd: string;
+  let artifact: string;
+  let questions: string;
+  let finding: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeAll(() => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t230-native-"));
+    tempProjects.add(root);
+    executable = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    // Compile the actual dispatcher once; the $bunfs import fixture above
+    // cannot establish that the native executable reaches its bundled delegate.
+    const built = spawnSync(
+      BUN,
+      ["build", "--compile", join(DIST_TOOLS_DIR, "aidlc.ts"), "--outfile", executable],
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: 60_000 },
+    );
+    if (built.error) throw built.error;
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+
+    projectDir = makeProject();
+    seedAidlcMemory(projectDir);
+    seedStateFile(projectDir, "state-mid-inception.md");
+    const stageDir = join(seededRecordDir(projectDir), "inception", "requirements-analysis");
+    mkdirSync(stageDir, { recursive: true });
+    const artifactPath = join(stageDir, "requirements.md");
+    const questionsPath = join(stageDir, "requirements-analysis-questions.md");
+    artifact = relative(projectDir, artifactPath).replaceAll("\\", "/");
+    questions = relative(projectDir, questionsPath).replaceAll("\\", "/");
+    finding = `| R-01 | Minor | ${artifact} > FR-1 | Deadline is missing | Add a delivery date | New |`;
+    writeFileSync(artifactPath, [
+      "# Requirements",
+      "",
+      "## Review",
+      "",
+      "**Verdict:** NOT-READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Iteration:** 1",
+      "",
+      "### Findings",
+      "",
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "|---|---|---|---|---|---|",
+      finding,
+      "",
+    ].join("\n"));
+    writeFileSync(questionsPath, "# Questions\n\n## Q1: Delivery scope\n[Answer]: A command-line application.\n");
+
+    otherCwd = join(root, "unrelated-cwd");
+    mkdirSync(otherCwd);
+    env = {
+      // Both forms read the same generated graph; project content must still
+      // resolve from --project-dir despite both project envs pointing at cwd.
+      AIDLC_RUNTIME_HARNESS_ROOT: dirname(DIST_TOOLS_DIR),
+      AIDLC_PROJECT_DIR: otherCwd,
+      PATH: "",
+    };
+  }, 65_000);
+
+  function native(args: string[]): RunResult {
+    return run(
+      [executable, "engine", "review-brief", ...args, "--project-dir", projectDir],
+      otherCwd,
+      { ...env, AIDLC_DISPATCH_TOOLS_DIR: "" },
+    );
+  }
+
+  for (const command of ["review", "context", "summary"]) {
+    test(`${command} matches Bun output from another cwd without Bun on PATH`, () => {
+      const args = [command, "--stage", "requirements-analysis"];
+      if (command === "review") args.push("--why", "first");
+      if (command === "summary") args.push("--questions-file", questions);
+      const source = viaDispatcher(
+        ["engine", "review-brief", ...args, "--project-dir", projectDir],
+        otherCwd,
+        env,
+      );
+      expect(source.exitCode, source.stderr.toString()).toBe(0);
+      expect(source.stderr.toString()).toBe("");
+      const result = native(args);
+      expectSameRun(result, source, `native review-brief ${command}`);
+      const output = result.stdout.toString();
+      if (command === "summary") {
+        expect(output).toContain("**Stage:** Requirements Analysis");
+        expect(output).toContain(`**Confirming:** Consolidated answers in \`${questions}\``);
+        expect(output).toContain(`before generating \`${artifact}\``);
+        expect(output).toContain("**Looks correct**");
+        expect(output).toContain("**Request changes**");
+      } else {
+        expect(output).toContain(`**Review artifact:** \`${artifact}\``);
+        expect(output).toContain(finding);
+        if (command === "review") {
+          expect(output).toContain("**Stage:** Requirements Analysis");
+          expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
+          expect(output).toContain("**Why now:** First review completed.");
+          expect(output).toContain("**Approve**");
+          expect(output).toContain("**Request Changes**");
+        }
+      }
+    }, 35_000);
+  }
+
+  test("missing --stage reaches the native renderer's argument error", () => {
+    const result = native(["review", "--why", "first"]);
+    expect(result.exitCode, result.stderr.toString()).toBe(1);
+    expect(result.stdout.toString()).toBe("");
+    expect(JSON.parse(result.stderr.toString())).toEqual({
+      error: "Missing --stage <slug>.",
+    });
+  }, 20_000);
 });
 
 describe("t230 dispatcher route completeness", () => {
