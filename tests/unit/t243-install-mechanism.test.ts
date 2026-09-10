@@ -1208,7 +1208,7 @@ describe("t243 project initialization", () => {
     expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
   }, 60_000);
 
-  test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {
+  test("exact legacy root signatures are adopted", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
     mkdirSync(join(project, ".git"));
     cpSync(join(CLAUDE_COPY, ".gitignore"), join(project, ".gitignore"));
@@ -1237,6 +1237,11 @@ describe("t243 project initialization", () => {
     const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
     expect(gitignore.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
     expect(gitignore.match(/END AI-DLC:gitignore/g)).toHaveLength(1);
+    expect(gitignore).toBe(
+      `# BEGIN AI-DLC:gitignore\n${
+        readFileSync(join(CLAUDE_RELEASE, ".gitignore"), "utf-8").trim()
+      }\n# END AI-DLC:gitignore\n`,
+    );
 
     const baseline = JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
@@ -1266,26 +1271,208 @@ describe("t243 project initialization", () => {
     expect(disabled.status, disabled.stdout + disabled.stderr).toBe(0);
     expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers)
       .toBeUndefined();
+  }, 60_000);
 
-    const ambiguous = temp("aidlc-t240-legacy-ambiguous-");
-    mkdirSync(join(ambiguous, ".git"));
-    writeFileSync(
-      join(ambiguous, ".gitignore"),
-      `${readFileSync(join(CLAUDE_COPY, ".gitignore"), "utf-8")}# local AI-DLC rule\n`,
-    );
+  for (const fixture of [
+    {
+      name: "ordinary ignore rules",
+      contents: () => "# Project build output\nnode_modules/\nbuild/\n\n",
+      newline: "\n",
+    },
+    {
+      name: "aidlc rules and an AI-DLC comment",
+      contents: () => "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n",
+      newline: "\n",
+    },
+    {
+      name: "CRLF rules without a final newline",
+      contents: () => "# AI-DLC output — project rules\r\naidlc/\r\nlocal-cache/",
+      newline: "\r\n",
+    },
+    {
+      name: "a locally edited shipped gitignore",
+      contents: () =>
+        `${readFileSync(join(CLAUDE_COPY, ".gitignore"), "utf-8")}# local AI-DLC rule\naidlc/custom/\n`,
+      newline: "\n",
+    },
+  ]) {
+    test(`unmarked gitignore preserves ${fixture.name} through dry-run, apply, and refresh`, () => {
+      const project = temp("aidlc-t243-user-gitignore-");
+      mkdirSync(join(project, ".git"));
+      const path = join(project, ".gitignore");
+      const original = Buffer.from(fixture.contents());
+      writeFileSync(path, original);
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        CLAUDE_RELEASE,
+        "--harness",
+        "claude",
+        "--json",
+      ];
+      type ConfigPlan = {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      };
+
+      const dry = run(INIT, [...args, "--dry-run", "--verbose"], project);
+      expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+      const dryPlan = JSON.parse(dry.stdout) as ConfigPlan;
+      expect(dryPlan.data.actions.find((action) => action.path === ".gitignore"))
+        .toEqual({ path: ".gitignore", action: "merge" });
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+
+      const applied = run(INIT, args, project);
+      expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+      const installed = readFileSync(path);
+      expect(installed.subarray(0, original.length)).toEqual(original);
+      const block = [
+        "# BEGIN AI-DLC:gitignore",
+        readFileSync(join(CLAUDE_RELEASE, ".gitignore"), "utf-8")
+          .trim().replace(/\r?\n/g, fixture.newline),
+        "# END AI-DLC:gitignore",
+      ].join(fixture.newline);
+      const appended = installed.subarray(original.length).toString();
+      expect(appended).toStartWith(fixture.newline);
+      expect(appended.trim()).toBe(block);
+      expect(appended).toEndWith(fixture.newline);
+      expect(installed.toString().match(/# BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
+      expect(installed.toString().match(/# END AI-DLC:gitignore/g)).toHaveLength(1);
+
+      const manifestPath = join(project, ".claude", "tools", "data", "aidlc-manifest.json");
+      const contribution = {
+        policy: "managed-block",
+        marker: "gitignore",
+        hash: sha256Bytes(block),
+      };
+      const baseline = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        files: Record<string, string>;
+        rootContributions: Record<string, unknown>;
+      };
+      expect(baseline.files[".gitignore"]).toBeUndefined();
+      expect(baseline.rootContributions[".gitignore"]).toEqual(contribution);
+
+      // An unchanged refresh is idempotent; subsequent user-prefix edits remain unowned.
+      for (const userEdit of ["", `# Later AI-DLC project rule${fixture.newline}`]) {
+        const beforeRefresh = Buffer.concat([Buffer.from(userEdit), installed]);
+        if (userEdit) writeFileSync(path, beforeRefresh);
+        const refreshed = run(INIT, args, project);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        const refreshPlan = JSON.parse(refreshed.stdout) as ConfigPlan;
+        expect(refreshPlan.data.actions.find((action) => action.path === ".gitignore"))
+          .toEqual({ path: ".gitignore", action: "preserve" });
+        expect(readFileSync(path)).toEqual(beforeRefresh);
+        const refreshedBaseline = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+          files: Record<string, string>;
+          rootContributions: Record<string, unknown>;
+        };
+        expect(refreshedBaseline.files[".gitignore"]).toBeUndefined();
+        expect(refreshedBaseline.rootContributions[".gitignore"]).toEqual(contribution);
+      }
+    }, 60_000);
+  }
+
+  test("unmarked gitignore with invalid UTF-8 refuses without changing its bytes even with --force", () => {
+    const project = temp("aidlc-t243-gitignore-encoding-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, ".gitignore");
+    const original = Buffer.concat([
+      Buffer.from("# AI-DLC\n"),
+      Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x2f, 0x0a]),
+    ]);
+    writeFileSync(path, original);
+    for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+      const refused = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        CLAUDE_RELEASE,
+        "--harness",
+        "claude",
+        ...flags,
+      ], project);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(
+        "gitignore is not valid UTF-8; convert its encoding before config",
+      );
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, 60_000);
+
+  for (const fixture of [
+    {
+      name: "missing end marker",
+      contents: "# BEGIN AI-DLC:gitignore\naidlc/\n",
+      error: "managed markers are missing, duplicated, or malformed",
+    },
+    {
+      name: "missing begin marker",
+      contents: "aidlc/\n# END AI-DLC:gitignore\n",
+      error: "managed markers are missing, duplicated, or malformed",
+    },
+    {
+      name: "duplicate blocks",
+      contents: "# BEGIN AI-DLC:gitignore\naidlc/\n# END AI-DLC:gitignore\n".repeat(2),
+      error: "managed markers are missing, duplicated, or malformed",
+    },
+    {
+      name: "reversed markers",
+      contents: "# END AI-DLC:gitignore\naidlc/\n# BEGIN AI-DLC:gitignore\n",
+      error: "managed end marker precedes its begin marker",
+    },
+  ]) {
+    test(`gitignore with ${fixture.name} still refuses even with --force`, () => {
+      const project = temp("aidlc-t243-gitignore-markers-");
+      mkdirSync(join(project, ".git"));
+      const path = join(project, ".gitignore");
+      writeFileSync(path, fixture.contents);
+      for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+        const refused = run(INIT, [
+          "config",
+          "--project-dir",
+          project,
+          "--from",
+          CLAUDE_RELEASE,
+          "--harness",
+          "claude",
+          ...flags,
+        ], project);
+        expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+        expect(refused.stdout).toContain(fixture.error);
+        expect(readFileSync(path, "utf-8")).toBe(fixture.contents);
+        expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+        expect(readdirSync(join(project, ".git"))).toEqual([]);
+      }
+    }, 60_000);
+  }
+
+  test("modified unmarked AGENTS.md still refuses as ambiguous even with --force", () => {
+    const project = temp("aidlc-t243-agents-ambiguous-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const original = `${readFileSync(join(KIRO_RELEASES[0], "AGENTS.md"), "utf-8")}\n# Local AI-DLC instructions\n`;
+    writeFileSync(path, original);
     const refused = run(INIT, [
       "config",
       "--project-dir",
-      ambiguous,
+      project,
       "--from",
-      CLAUDE_RELEASE,
+      KIRO_RELEASES[0],
       "--harness",
-      "claude",
+      "kiro",
       "--force",
-    ], ambiguous);
-    expect(refused.status).toBe(4);
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
     expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(existsSync(join(ambiguous, ".claude"))).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe(original);
+    expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
+    expect(readdirSync(join(project, ".git"))).toEqual([]);
   }, 60_000);
 
   test("--force does not replace a pre-existing user-owned JSON entry", () => {

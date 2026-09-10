@@ -235,18 +235,23 @@ On a human TTY, a bare first run starts with detection rather than questions:
 installed harness CLIs on `PATH`, project state, local AWS credentials and
 regions, and the non-interactive hook runtime. With one detected harness, the
 wizard names it and offers three choices: recommended defaults, six-step
-customization, or exit with nothing written. Multiple detected harnesses get a
-numbered harness picker first; no detected harness gets the complete picker
-without a default.
+customization, or exit without persistent setup changes. Multiple detected
+harnesses get a numbered harness picker first; no detected harness gets the
+complete picker without a default.
+
+Before any setup choices, the wizard probes transaction-lock creation on the
+project filesystem using temporary files, then removes them. A failed probe
+stops setup with storage remediation and no persistent setup changes; see
+[Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
 
 Recommended defaults state the bundle on the option line. Customization walks
 Harness, Model provider, Model effort preset, Plugins, MCP servers, and settings
 layer. Every numbered prompt has a bracketed default, invalid input re-asks in
 place, and each answer is echoed. A check-your-answers table accepts Enter to
-apply or a step number to edit. No files are written before that final gate.
-After apply, gerund receipts name the project files and settings layer,
-genuinely blocking actions follow, then the wizard prints the exact harness
-launch and first workflow command.
+apply or a step number to edit. No persistent setup files are written before
+that final gate. After apply, gerund receipts name the project files and
+settings layer, genuinely blocking actions follow, then the wizard prints the
+exact harness launch and first workflow command.
 
 An existing-project rerun keeps the seven-row map for Harnesses, Models,
 Runtime, Flags, Project, Providers, and Trust. Rows are lowercase `[ok]` or
@@ -632,8 +637,13 @@ project content.
 | `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
 
 Known unmarked files and JSON entries from historical shipped projections are
-adopted only when their exact recorded SHA-256 signature matches. Modified
-lookalikes remain ambiguous and are refused.
+adopted only when their exact recorded SHA-256 signature matches. Unknown or
+modified unmarked `.gitignore` content remains user-owned, including `aidlc/`
+rules and AI-DLC comments. Config preserves that content as a prefix and
+appends a fresh managed block; no rename or deletion is needed. Other modified
+legacy lookalikes, including ambiguous AI-DLC content in `AGENTS.md`, remain
+refused. A `.gitignore` that is not valid UTF-8 also remains untouched and
+requires an encoding conversion before config can merge it safely.
 
 `--force` can replace a modified, baseline-owned managed block or managed
 harness file. It cannot adopt ambiguous unmarked content, overwrite a
@@ -948,6 +958,15 @@ Project and machine mutations stage on the destination filesystem, validate
 the candidate, and commit through atomic renames. Concurrent changes detected
 against planned state abort instead of overwriting new bytes. Abandoned
 owner-private staging is swept only after lock and ownership checks.
+
+The destination filesystem must support hard links for the transaction lock,
+exclusive file creation, `fsync`, and atomic rename within the same filesystem.
+The first-run lock probe is an early check; it does not replace validation and
+lock acquisition when applying changes or certify every filesystem operation.
+S3-backed and FUSE mounts must provide these operations to be usable. If a
+mount rejects lock creation, use compatible project storage, such as ext4 or
+XFS on EBS for EC2, and rerun config. An alias or symlink to the same mount does
+not help; config never proceeds with unlocked writes.
 
 If rollback of an interrupted commit cannot be completed safely, evidence is
 retained in a named `.aidlc-recovery-*` quarantine under the machine install
