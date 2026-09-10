@@ -1503,6 +1503,48 @@ describe("t244 Windows and completion release surfaces", () => {
     }
   });
 
+  test("PowerShell installer -Version pattern tolerates the empty iex default", () => {
+    // `irm .../install.ps1 | iex` pipes the script into Invoke-Expression,
+    // which binds the typed [string]$Version parameter to its empty-string
+    // default and eagerly runs [ValidatePattern]. A pattern that rejects the
+    // empty string throws a ValidationMetadataException before the body runs,
+    // breaking the documented one-liner on Windows PowerShell 5.1. The pattern
+    // must accept an empty string, mirroring install.sh's `[ -n "$VERSION" ]`
+    // guard that only validates an explicitly supplied version.
+    const script = readFileSync(INSTALL_PS1, "utf-8");
+    expect(script).toContain(
+      "[ValidatePattern('^$|^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$')]",
+    );
+    expect(script).not.toContain(
+      "[ValidatePattern('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$')]",
+    );
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "PowerShell installer param block parses under iex with no arguments",
+    () => {
+      // A live guard on Windows: dot-piping the script into iex must not throw
+      // the ValidationMetadataException that the empty-string default produced.
+      // We stop before any network work by asserting only that the param block
+      // binds; the body's admin/network checks are out of scope here.
+      const script = readFileSync(INSTALL_PS1, "utf-8");
+      const paramBlock = script.slice(0, script.indexOf("$ErrorActionPreference"));
+      const probe = `${paramBlock}\nWrite-Output "PARAM_OK"\n`;
+      const result = spawnSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$input | Out-String | Invoke-Expression",
+        ],
+        { input: probe, encoding: "utf-8", timeout: 30_000 },
+      );
+      expect(result.stderr).not.toContain("ValidationMetadataException");
+      expect(result.stdout).toContain("PARAM_OK");
+    },
+  );
+
   test("doctor command-pointer text is grammatical without an active version", () => {
     const source = readFileSync(UTILITY, "utf-8");
     expect(source).toContain(
