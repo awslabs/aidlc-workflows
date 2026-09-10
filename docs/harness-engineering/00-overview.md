@@ -200,6 +200,9 @@ Read it in order the first time:
     emitted as a real host plugin per harness. Design in the Developer
     Reference's single chapter
     ([18 mechanism](../reference/18-plugin-mechanism.md)).
+11. **[Plugin Graduation](11-plugin-graduation.md)** — adoption and maintenance
+    criteria, moving a capability into core, tombstone releases, and marketplace
+    review ownership.
 
 ## Next
 

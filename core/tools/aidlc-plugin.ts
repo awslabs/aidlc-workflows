@@ -23,7 +23,9 @@ import {
 } from "./aidlc-lib.ts";
 import {
   compiledExecutable,
+  discoverProjectHarnesses,
   runtimeHarnessDir,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
@@ -32,6 +34,28 @@ import {
   type TransactionOperation,
   type TransactionPlan,
 } from "./aidlc-transaction.ts";
+import {
+  CATALOG_HARNESSES,
+  normalizeMarketplaceSource,
+  pluginTag,
+  PROJECTION_MARKER,
+  readProjectionMarker,
+  type CatalogHarness,
+  type SupersededBy,
+} from "./aidlc-plugin-catalog.ts";
+import { isPlainObject } from "./aidlc-lib.ts";
+
+export const MANAGED_PLUGINS_DIR = "plugins";
+
+export type PluginInstallRecord = {
+  schemaVersion: 1;
+  plugin: string;
+  version: string;
+  harness: CatalogHarness;
+  marketplace: { name: string; url: string };
+  tag: string;
+  sha256: string;
+};
 
 const SAFE_PLUGIN_KEY = /^[a-z][a-z0-9-]*$/;
 const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -55,6 +79,7 @@ export type InstalledPlugin = {
   manifestPath: string;
   enabled: boolean;
   sourceHash: string;
+  supersededBy?: SupersededBy;
 };
 
 export type InvalidInstalledPlugin = {
@@ -80,6 +105,7 @@ export type CompositionStamp = {
 
 export type PluginStatusName =
   | "current"
+  | "superseded"
   | "version-differs"
   | "source-changed"
   | "not-composed"
@@ -231,6 +257,7 @@ export function normalizeInstalledPlugin(
       `${manifestPath}: manifest version ${version} does not match host inventory version ${expectedVersion}`,
     );
   }
+  const marker = existsSync(join(canonicalRoot, PROJECTION_MARKER)) ? readProjectionMarker(canonicalRoot) : undefined;
   return {
     key,
     hostName,
@@ -239,6 +266,7 @@ export function normalizeInstalledPlugin(
     manifestPath,
     enabled,
     sourceHash: pluginSourceHash(canonicalRoot),
+    ...(marker?.supersededBy ? { supersededBy: marker.supersededBy } : {}),
   };
 }
 
@@ -250,8 +278,8 @@ function currentRoots(): string[] {
   ].map((value) => value?.trim() ?? "").filter(Boolean).map(absolute))];
 }
 
-function harnessKind(harnessDir = runtimeHarnessDir()): PluginInventory["harness"] {
-  const declared = process.env.AIDLC_HARNESS_NAME?.trim();
+function harnessKind(harnessDir = runtimeHarnessDir(), projectDir = resolveProjectDir()): PluginInventory["harness"] {
+  const declared = discoverProjectHarnesses(projectDir).find((item) => item.harnessDir === harnessDir)?.distribution ?? runtimeHarnessName(projectDir, harnessDir);
   if (
     declared === "claude" ||
     declared === "codex" ||
@@ -524,11 +552,41 @@ function codexInventory(): PluginInventory {
   };
 }
 
-export function discoverPluginInventory(harnessDir = runtimeHarnessDir()): PluginInventory {
-  const harness = harnessKind(harnessDir);
+export function discoverPluginInventory(harnessDir = runtimeHarnessDir(), projectDir = resolveProjectDir()): PluginInventory {
+  const harness = harnessKind(harnessDir, projectDir);
   if (harness === "claude") return claudeInventory();
   if (harness === "codex") return codexInventory();
-  return currentRootInventory(harness);
+  const source = join(projectDir, harnessDir, MANAGED_PLUGINS_DIR);
+  if (!existsSync(source)) return currentRootInventory(harness);
+  const installed: InstalledPlugin[] = [];
+  const invalid: InvalidInstalledPlugin[] = [];
+  for (const child of readdirSync(source, { withFileTypes: true })) {
+    const root = join(source, child.name);
+    if (!child.isDirectory()) {
+      invalid.push({ paths: [root], message: "managed plugin must be a directory" });
+      continue;
+    }
+    const entry = invalidFromRoot(root, harness, true);
+    if ("root" in entry) installed.push(entry);
+    else invalid.push(entry);
+  }
+  return { capability: "full-inventory", harness, source, ...deduplicateInventory(installed, invalid) };
+}
+
+export function readInstallRecord(projectDir: string, harnessDir: string, key: string): PluginInstallRecord | null {
+  if (!SAFE_PLUGIN_KEY.test(key)) throw new Error(`invalid plugin key ${key}`);
+  const path = join(projectDir, harnessDir, "tools", "data", `plugin-install-${key}.json`);
+  if (!existsSync(path)) return null;
+  const value = readJson(path);
+  if (!isPlainObject(value) || value.schemaVersion !== 1 || value.plugin !== key ||
+    typeof value.version !== "string" || !STRICT_SEMVER.test(value.version) ||
+    typeof value.harness !== "string" || !(CATALOG_HARNESSES as readonly string[]).includes(value.harness) ||
+    value.tag !== pluginTag(key, value.version) || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256) ||
+    !isPlainObject(value.marketplace) || typeof value.marketplace.name !== "string" || !SAFE_PLUGIN_KEY.test(value.marketplace.name) || typeof value.marketplace.url !== "string") {
+    throw new Error(`${path}: invalid plugin install record`);
+  }
+  normalizeMarketplaceSource(value.marketplace.url);
+  return value as PluginInstallRecord;
 }
 
 function harnessDataDir(projectDir: string, harnessDir: string): string {
@@ -688,6 +746,16 @@ export function comparePluginState(
         action: "current",
         message: "installed, disabled",
       });
+    } else if (plugin.supersededBy) {
+      rows.push({
+        key: plugin.key,
+        installedVersion: plugin.version,
+        composedVersion: stamp?.version ?? null,
+        state: "superseded",
+        action: "attention",
+        message: `superseded by core v${plugin.supersededBy.core}; remove the plugin after upgrading to aidlc ${plugin.supersededBy.core}` +
+          (plugin.supersededBy.note ? `: ${plugin.supersededBy.note}` : ""),
+      });
     } else if (!stamp) {
       const legacy = evidence.legacy.has(plugin.key);
       rows.push({
@@ -754,7 +822,7 @@ export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
 ): { inventory: PluginInventory; statuses: PluginStatus[] } {
-  const inventory = discoverPluginInventory(harnessDir);
+  const inventory = discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   return {
@@ -1308,10 +1376,10 @@ export async function syncPlugins(
   harnessDir = runtimeHarnessDir(projectDir),
   lockRetry = 0,
 ): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
-  const harness = harnessKind(harnessDir);
+  const harness = harnessKind(harnessDir, projectDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
-    : discoverPluginInventory(harnessDir);
+    : discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   const prune = argv.includes("--prune-missing");
@@ -1454,6 +1522,15 @@ export async function main(argv: string[]): Promise<void> {
   const projectDir = resolveProjectDir(flags["project-dir"]);
   try {
     if (command === "list") {
+      if (argv.includes("--check")) {
+        // The engine namespace is network-forbidden by route policy; the
+        // published-version check lives on the public `aidlc plugin list`.
+        const message = "list --check needs the network; run it as `aidlc plugin list --check`, not under `aidlc engine`";
+        if (flags.json === "true") process.stdout.write(jsonEnvelope(3, message, null));
+        else process.stderr.write(`aidlc engine plugin: ${message}\n`);
+        process.exitCode = 3;
+        return;
+      }
       const result = collectPluginStatus(projectDir);
       if (flags.json === "true") {
         process.stdout.write(jsonEnvelope(0, `${result.statuses.length} plugin state(s)`, result));

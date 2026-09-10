@@ -45,9 +45,9 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 
 - **Productization and distribution (#722)** - make AI-DLC straightforward to
   install, configure, upgrade, release and roll back across supported harnesses.
-- **Plugin ecosystem and marketplace (#723)** - make trusted extensions
-  discoverable, installable and reusable, with a clear path from external plugin
-  to first-party capability.
+- **Plugin ecosystem and marketplace (#723)** - shipped in 2.8.3: explicit
+  discovery, verified per-harness install/update, and a documented graduation
+  path. Dedicated first-party repository setup and the first graduation remain.
 
 ## Goal scorecard
 
@@ -56,7 +56,7 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | # | Goal | Status | Delivered by | Remaining work |
 | --- | --- | --- | --- | --- |
 | 1 | Real-world ensemble | Shipped | 2.5.0 independent collaborators and selectable topologies (#568), enforced reviewer receipts (#569), batch-parallel per-unit waves (#617), team-owned parallel Units (#879) | Harness-native live-team transports remain an enhancement |
-| 2 | Customization | Shipped, with follow-ups | 2.3.0 plugin seam, 2.3.5 content projection/selection (#550), deterministic rule delivery (#658), plugin scopes (#664), reusable plugin test kit (#792), plugin doctor extensions (#797), standalone authoring toolchain (#892) | Stage-specific rules, `when:` evaluation, remote discovery and marketplace (#723) |
+| 2 | Customization | Shipped, with follow-ups | 2.3.0 plugin seam, 2.3.5 content projection/selection (#550), deterministic rule delivery (#658), plugin scopes (#664), reusable plugin test kit (#792), plugin doctor extensions (#797), standalone authoring toolchain (#892), 2.8.3 marketplace discovery/install/trust (#723) | Stage-specific rules, `when:` evaluation, dedicated marketplace repository setup, first graduation |
 | 3 | Adaptiveness | Shipped | 2.2.0 composer, entropy-scored composition (#595), deterministic ARS (#644), unit-major Code Generation (#705), Classic/Express scopes and conditional protocol modules (#767), per-session workflow bindings (#858) | Boundary changes remain human-approved by design |
 | 4 | Verifier as adversary | Shipped | 2.4.0 adversarial evidence contract (#566), gate-and-completion enforcement (#569, #551), reviewer-class cost dial (#718), turn/recovery backstops (#613, #758), gate-bound blocking sensors (#836) | Pull-request-level adversarial review is under development in #799 |
 | 5 | Cyclic flows | Partial | Within-stage review/revision loops, bounded recovery mechanics, explicit human-authorized forward/backward/redo stage jumps, and bounded Build & Test to Code Generation loop-back (#616) | General governed cross-stage feedback loops remain unbuilt |
@@ -176,11 +176,18 @@ but do not yet have committed release versions.
   CREATE, VALIDATE, BUILD, and TEST authoring tiers ship as
   the standalone `aidlc-plugin-create.ts`, `aidlc-plugin-validate.ts`,
   `aidlc-plugin-build.ts`, and `aidlc-plugin-test.ts` tools. The top-level
-  `plugin validate` and `plugin build` routes also ship. Top-level
-  `plugin create` and `plugin test` routes remain proposed in
-  [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
-  Remote discovery, trust, a first-party marketplace and a graduation path are
-  also proposed in #723.
+  `plugin validate`, `plugin build`, and `plugin catalog` routes also ship.
+  Top-level `plugin create` and `plugin test` remain unexposed; their standalone
+  tools are available.
+- **2.8.3 (#723)** ships explicit marketplace registration and search,
+  tagged/checksum-verified install/update, opt-in `plugin list --check`,
+  Claude/Codex host-store handoff, and hook/tool-confirmed managed installation
+  for the other five harnesses. The packager emits a publishable marketplace
+  tree; machine `plugins.allowedMarketplaces` restricts sources. The
+  [graduation process](harness-engineering/11-plugin-graduation.md) and
+  `aidlc.supersededBy` tombstone notices are implemented. Creating the dedicated
+  `awslabs/aidlc-plugins` repository with its CI/CODEOWNERS, and completing the
+  first actual graduation, remain operational follow-ups.
   Product discovery
   ([#652](https://github.com/awslabs/aidlc-workflows/issues/652),
   [#782](https://github.com/awslabs/aidlc-workflows/pull/782)) and design
@@ -261,7 +268,8 @@ but do not yet have committed release versions.
 ## Known gaps
 
 - Stage-specific rules (`aidlc-stage-<slug>.md`) are reserved but unbuilt.
-- Plugin `when:` evaluation, remote discovery and marketplace trust remain open.
+- Plugin `when:` evaluation remains open. Marketplace discovery and trust ship
+  in 2.8.3; first-party repository setup and the first graduation remain.
 - Write-fired sensors remain advisory; gate-bound sensors support blocking
   severity and human-backed override.
 - General cross-stage cycles and progressive in-place artefact enrichment remain

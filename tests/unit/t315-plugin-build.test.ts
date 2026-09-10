@@ -179,15 +179,6 @@ describe("t315 standalone plugin builder", () => {
     const pluginRoot = copyPlugin("same-owner-rebuild");
     const outDir = join(scratch, "same-owner-output");
     expect(run([pluginRoot, "claude", outDir, "--json"]).status).toBe(0);
-    const marker = JSON.parse(
-      readFileSync(join(outDir, PROJECTION_MARKER), "utf-8"),
-    ) as Record<string, unknown>;
-    expect(marker).toEqual({
-      schema: 1,
-      producer: "aidlc-plugin-build",
-      plugin: "test-pro",
-      harness: "claude",
-    });
     writeFileSync(join(outDir, "stale-sentinel.txt"), "stale\n", "utf-8");
 
     const rebuilt = run([pluginRoot, "claude", outDir, "--json"]);

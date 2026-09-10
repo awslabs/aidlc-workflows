@@ -3,8 +3,9 @@ import {
   statSync,
   type Stats,
 } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { installRoot } from "./aidlc-install-paths.ts";
+import { isAbsolute, join, relative } from "node:path";
+import { installRoot, machineTransactionRoot } from "./aidlc-install-paths.ts";
+import { executePlan, transactionState, writeOperation } from "./aidlc-transaction.ts";
 import type {
   ModelAgentPolicy,
   ModelHarness,
@@ -55,11 +56,18 @@ export type SettingsModelPolicyRecord = Omit<ModelPolicyRecord, "agents"> & {
   agents?: Record<string, SettingsModelAgentPolicy>;
 };
 
+export type PluginsSettingsRecord = {
+  schemaVersion: 1;
+  marketplaces?: Record<string, { url: string }>;
+  allowedMarketplaces?: string[];
+};
+
 export type AidlcSettingsFile = {
   $schema?: string;
   schemaVersion: 1;
   models?: SettingsModelPolicyRecord;
   flags?: ProjectFlagsRecord;
+  plugins?: PluginsSettingsRecord;
   "update-check"?: boolean;
   offline?: boolean;
   "release-base-url"?: string;
@@ -70,6 +78,7 @@ export type ResolvedAidlcSettings = {
   value: AidlcSettingsFile;
   models: SettingsModelPolicyRecord | null;
   flags: ProjectFlagsRecord | null;
+  plugins: PluginsSettingsRecord | null;
   sources: Record<string, SettingsSource>;
   files: Record<SettingsLayer, { path: string; present: boolean }>;
 };
@@ -82,13 +91,17 @@ const MACHINE_KEYS = [
 ] as const;
 export type MachineSettingsKey = (typeof MACHINE_KEYS)[number];
 
-const TOP_LEVEL_KEYS = new Set([
-  "$schema",
-  "schemaVersion",
-  "models",
-  "flags",
-  ...MACHINE_KEYS,
-]);
+const TOP_LEVEL_KEYS: Record<string, true> = {
+  $schema: true,
+  schemaVersion: true,
+  models: true,
+  flags: true,
+  plugins: true,
+  "update-check": true,
+  offline: true,
+  "release-base-url": true,
+  "ca-bundle": true,
+};
 const PROJECT_FLAG_KEYS = new Set([
   "schemaVersion",
   "defaultScope",
@@ -313,13 +326,46 @@ export function normalizeSettingsModels(
   return out;
 }
 
+function normalizePluginsSettings(value: unknown, layer: SettingsLayer, path: string): PluginsSettingsRecord | null {
+  if (value === undefined) return null;
+  if (!isRecord(value) || value.schemaVersion !== 1) {
+    throw new Error(`${path}: plugins must be an object with schemaVersion 1`);
+  }
+  const keys: Record<string, true> = { schemaVersion: true, marketplaces: true, allowedMarketplaces: true };
+  const unknown = Object.keys(value).filter((key) => !Object.hasOwn(keys, key));
+  if (unknown.length) throw new Error(`${path}: plugins contain unknown key(s): ${unknown.join(", ")}`);
+  const result: PluginsSettingsRecord = { schemaVersion: 1 };
+  if (value.marketplaces !== undefined) {
+    if (!isRecord(value.marketplaces)) throw new Error(`${path}: plugins.marketplaces must be an object`);
+    const marketplaces: Record<string, { url: string }> = {};
+    for (const [name, entry] of Object.entries(value.marketplaces)) {
+      if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`${path}: invalid marketplace name ${name}`);
+      if (!isRecord(entry) || Object.keys(entry).some((key) => key !== "url") || typeof entry.url !== "string" || !entry.url.trim()) {
+        throw new Error(`${path}: plugins.marketplaces.${name} must contain only a non-empty url`);
+      }
+      marketplaces[name] = { url: entry.url.trim() };
+    }
+    result.marketplaces = marketplaces;
+  }
+  if (value.allowedMarketplaces !== undefined) {
+    if (layer !== "machine") {
+      throw new Error(`${path}: plugins.allowedMarketplaces is machine-only; write ${machineSettingsPath()} instead`);
+    }
+    if (!Array.isArray(value.allowedMarketplaces) || value.allowedMarketplaces.some((entry) => typeof entry !== "string" || !entry.trim())) {
+      throw new Error(`${path}: plugins.allowedMarketplaces must be an array of non-empty sources or URL prefixes`);
+    }
+    result.allowedMarketplaces = value.allowedMarketplaces.map((entry: string) => entry.trim());
+  }
+  return result;
+}
+
 export function normalizeAidlcSettings(
   value: unknown,
   layer: SettingsLayer,
   path: string,
 ): AidlcSettingsFile {
   if (!isRecord(value)) throw new Error(`${path}: settings must be a JSON object`);
-  const unknown = Object.keys(value).filter((key) => !TOP_LEVEL_KEYS.has(key));
+  const unknown = Object.keys(value).filter((key) => !Object.hasOwn(TOP_LEVEL_KEYS, key));
   if (unknown.length > 0) {
     throw new Error(`${path}: settings contain unknown key(s): ${unknown.join(", ")}`);
   }
@@ -367,11 +413,13 @@ export function normalizeAidlcSettings(
   }
   const models = normalizeSettingsModels(value.models, `${path}: models`);
   const flags = normalizeProjectFlagsRecord(value.flags, `${path}: flags`);
+  const plugins = normalizePluginsSettings(value.plugins, layer, path);
   return {
     ...(typeof value.$schema === "string" ? { $schema: value.$schema } : {}),
     schemaVersion: 1,
     ...(models ? { models } : {}),
     ...(flags ? { flags } : {}),
+    ...(plugins ? { plugins } : {}),
     ...(typeof value["update-check"] === "boolean"
       ? { "update-check": value["update-check"] }
       : {}),
@@ -492,6 +540,9 @@ function resolveWithLayers(
   ] as const) {
     if (value) mergeLeafValues(merged, value, layer, sources);
   }
+  for (const name of Object.keys((merged.plugins as PluginsSettingsRecord | undefined)?.marketplaces ?? {})) {
+    sources[`plugins.marketplaces.${name}`] = sources[`plugins.marketplaces.${name}.url`];
+  }
   const normalized = normalizeAidlcSettings(
     merged,
     "machine",
@@ -501,6 +552,7 @@ function resolveWithLayers(
     value: normalized,
     models: normalized.models ?? null,
     flags: normalized.flags ?? null,
+    plugins: normalized.plugins ?? null,
     sources,
     files,
   };
@@ -603,8 +655,8 @@ export function settingsModelsFromHarnessPolicy(
 
 export function updateSettingsSection(
   current: AidlcSettingsFile | null,
-  section: "models" | "flags",
-  value: SettingsModelPolicyRecord | ProjectFlagsRecord | null,
+  section: "models" | "flags" | "plugins",
+  value: SettingsModelPolicyRecord | ProjectFlagsRecord | PluginsSettingsRecord | null,
 ): AidlcSettingsFile | null {
   const next: AidlcSettingsFile = current
     ? JSON.parse(JSON.stringify(current)) as AidlcSettingsFile
@@ -632,6 +684,27 @@ export function settingsSource(
 export function invalidateSettingsCache(path?: string): void {
   if (path) settingsCache.delete(path);
   else settingsCache.clear();
+}
+
+export function writeSettingsLayer(
+  projectDir: string,
+  target: SettingsTarget,
+  mutate: (current: AidlcSettingsFile | null) => AidlcSettingsFile | null,
+): void {
+  const path = settingsPathForTarget(projectDir, target);
+  invalidateSettingsCache(path);
+  const expected = transactionState(path);
+  const next = mutate(readSettingsTarget(projectDir, target));
+  const root = target === "global" ? machineTransactionRoot() : projectDir;
+  if (next === null && expected === "absent") return;
+  executePlan({
+    schemaVersion: 1,
+    root,
+    operations: [next === null
+      ? { kind: "remove", path: relative(root, path), expected }
+      : writeOperation(relative(root, path), serializeAidlcSettings(normalizeAidlcSettings(next, layerForTarget(target), path)), expected, target === "global" ? 0o600 : 0o644)],
+  });
+  invalidateSettingsCache(path);
 }
 
 export function _settingsCacheStatsForTests(): {
@@ -666,6 +739,25 @@ export const AIDLC_SETTINGS_SCHEMA = {
     offline: { type: "boolean" },
     "release-base-url": { type: "string" },
     "ca-bundle": { type: "string" },
+    plugins: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schemaVersion"],
+      properties: {
+        schemaVersion: { const: 1 },
+        marketplaces: {
+          type: "object",
+          propertyNames: { pattern: "^[a-z][a-z0-9-]*$" },
+          additionalProperties: {
+            type: "object",
+            additionalProperties: false,
+            required: ["url"],
+            properties: { url: { type: "string", minLength: 1 } },
+          },
+        },
+        allowedMarketplaces: { type: "array", items: { type: "string", minLength: 1 } },
+      },
+    },
     models: {
       type: "object",
       additionalProperties: false,

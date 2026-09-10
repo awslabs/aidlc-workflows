@@ -39,6 +39,7 @@ import {
   trustedCommand,
 } from "./aidlc-command.ts";
 import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
+import { parseSupersededBy } from "./aidlc-plugin-catalog.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -85,7 +86,7 @@ const CONTENT_DIRS = [
   "knowledge",
 ] as const;
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -591,6 +592,10 @@ export function buildPluginProjection(
   const version = manifest.version || "0.0.1";
   const author = manifest.author || { name: "AIDLC" };
   const description = manifest.description || "";
+  const supersededBy = parseSupersededBy(
+    isPlainRecord(manifest.aidlc) ? manifest.aidlc.supersededBy : undefined,
+    join(pluginRoot, ".aidlc-plugin", "plugin.json"),
+  );
   const reviewers = new Set(
     options.reviewerAgents ?? pluginReviewerAgents(pluginRoot),
   );
@@ -616,6 +621,9 @@ export function buildPluginProjection(
             producer: PLUGIN_PROJECTION_PRODUCER,
             plugin: pluginName,
             harness: options.target.harnessName,
+            version,
+            description,
+            ...(supersededBy === undefined ? {} : { supersededBy }),
           },
           null,
           2,

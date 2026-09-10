@@ -31,6 +31,8 @@ import {
   validateStageFrontmatter,
 } from "./aidlc-stage-schema.ts";
 
+import { CatalogError, parseSupersededBy } from "./aidlc-plugin-catalog.ts";
+import { isPlainRecord } from "./aidlc-plugin-emit.ts";
 export type PluginValidationRule =
   | "plugin-root"
   | "manifest-missing"
@@ -150,13 +152,6 @@ type PluginAuthoringContext = {
   stages: string[];
 };
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  );
-}
 
 function posixRelative(root: string, file: string): string {
   const rel = relative(root, file).split(sep).join("/");
@@ -605,6 +600,18 @@ function validateManifest(
       'Add "aidlc": {"contributes": {...}}.',
     );
     return { pluginName: declaredName };
+  }
+  try {
+    parseSupersededBy(manifest.aidlc.supersededBy, displayFile);
+  } catch (error) {
+    if (!(error instanceof CatalogError)) throw error;
+    addError(
+      findings,
+      displayFile,
+      "manifest-shape",
+      error.message,
+      'Use "aidlc.supersededBy": {"core": "1.2.3", "note": "Optional explanation"} or remove the field.',
+    );
   }
   if (!isPlainRecord(manifest.aidlc.contributes)) {
     addError(

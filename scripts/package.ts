@@ -73,6 +73,10 @@ import {
   type PluginTargetTable,
 } from "../core/tools/aidlc-plugin-emit.ts";
 import {
+  assembleCatalog,
+  writeCatalogFiles,
+} from "../core/tools/aidlc-plugin-catalog.ts";
+import {
   type Harness,
   readEnvCap,
   readMemoryCap,
@@ -1584,17 +1588,29 @@ function emitPlugins(
   distRoot = join(REPO_ROOT, "dist"),
   log = true,
 ): void {
+  const pluginsRoot = join(distRoot, "plugins");
+  let emitted = false;
   for (const pluginName of discoverPluginNames()) {
     for (const harnessName of pluginHarnessesFor(harnesses)) {
       buildRepositoryPluginProjection(
         pluginName,
         harnessName,
-        join(distRoot, "plugins", pluginName, harnessName),
+        join(pluginsRoot, pluginName, harnessName),
         distRoot,
       );
+      emitted = true;
       if (log) {
         console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
       }
+    }
+  }
+  if (emitted) {
+    writeCatalogFiles(
+      pluginsRoot,
+      assembleCatalog(pluginsRoot, { name: "aidlc-plugins", owner: "AWS AIDLC" }),
+    );
+    if (log) {
+      console.log("[plugins] emitted dist/plugins/aidlc-marketplace.json (+ host aggregates)");
     }
   }
 }

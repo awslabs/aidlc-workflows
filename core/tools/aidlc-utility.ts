@@ -33,6 +33,7 @@ import {
   type AuditEntryInput,
 } from "./aidlc-audit.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
+import { main as handlePluginCatalog } from "./aidlc-plugin-catalog.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   type LegacyDoctorResult,
@@ -1328,6 +1329,7 @@ function handlePluginBuild(
   if (flags.json === "true") args.push("--json");
   pluginAuthorCommandCode(pluginBuildMain(args));
 }
+
 
 function pluginRootCandidatesFromEnv(): string[] {
   const roots = [
@@ -8924,6 +8926,9 @@ export async function main(argv: string[]): Promise<void> {
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);
       break;
+    case "plugin-catalog":
+      await handlePluginCatalog(rawArgs.slice(1));
+      break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is
     // still intent-create through the orchestrator.
@@ -8984,7 +8989,7 @@ export async function main(argv: string[]): Promise<void> {
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
+          "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, plugin-catalog, " +
           "recompose, scope-change, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"
