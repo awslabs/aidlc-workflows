@@ -910,6 +910,200 @@ describe("detector corpus", () => {
     )).toBe(true);
   });
 
+  test("observed workspace navigation through next is terminal", () => {
+    expect(
+      d1("bun .claude/tools/aidlc.ts engine orchestrate next space-create teamB"),
+    ).toBe(false);
+  });
+
+  test("workspace next uses the leading workspace grammar across command forms", () => {
+    for (const entry of [
+      "aidlc next",
+      "aidlc engine orchestrate next",
+      "bun .claude/tools/aidlc-orchestrate.ts next",
+      'bun "/workspace/project with spaces/.claude/tools/aidlc.ts" engine orchestrate next',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        "space teamb",
+        'space switch "team B"',
+        "space list --json",
+        "intent list --json",
+        "intent switch existing-intent",
+        "space help",
+        "space create",
+        "space archive",
+      ]) {
+        const command = `env MODE=test ${entry} ${args}`;
+        expect(d1(command), command).toBe(false);
+      }
+    }
+  });
+
+  test("workspace navigation never exempts actual workflow engagement", () => {
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next space teamb";
+    for (const command of [
+      "aidlc next",
+      "aidlc engine orchestrate next --scope feature",
+      "aidlc engine orchestrate next --stage intent-capture",
+      "aidlc engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc-orchestrate.ts next intent create --scope poc",
+      'aidlc next "space teamb"',
+      "aidlc next --scope feature space teamb",
+      'aidlc report --user-input "aidlc next space teamb"',
+      'aidlc state approve --user-input "aidlc next space teamb"',
+      `${terminal} && aidlc next`,
+      `${terminal}; aidlc report --result approved`,
+      `aidlc report --result approved; ${terminal}`,
+      `${terminal} & aidlc next`,
+      "aidlc next space $(aidlc next)",
+      // Config/flag refusals are a separate classification question.
+      "aidlc next --depth invalid",
+      "aidlc next --config project --stage intent-capture",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("workspace classification follows runtime global-argument normalization", () => {
+    for (const command of [
+      "aidlc engine orchestrate next intent --project-dir . create --scope poc",
+      "aidlc engine orchestrate next --project-dir . intent create --scope poc",
+      "aidlc engine orchestrate next intent --quiet create --scope poc",
+      "aidlc --project-dir . engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc.ts --project-dir . engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc-orchestrate.ts next intent --aidlc-attempt-id attempt-1 create --scope poc",
+      "aidlc engine orchestrate next -- intent --project-dir . create --scope poc",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    for (const command of [
+      "aidlc engine orchestrate next --project-dir . space teamb",
+      "aidlc engine orchestrate next space --project-dir . create teamB",
+      "aidlc engine orchestrate next space --quiet create teamB",
+      "aidlc --project-dir . engine orchestrate next space teamb",
+      "bun .claude/tools/aidlc.ts --project-dir . engine orchestrate next space teamb",
+      "bun .claude/tools/aidlc-orchestrate.ts --project-dir . next space teamb",
+    ]) {
+      expect(d1(command), command).toBe(false);
+    }
+  });
+
+  test("uncertain shell syntax cannot hide workflow calls behind workspace navigation", () => {
+    for (const command of [
+      'META="$(aidlc engine orchestrate next)" aidlc engine orchestrate next space teamb',
+      'META=`aidlc engine orchestrate next` aidlc engine orchestrate next space teamb',
+      String.raw`aidlc engine orchestrate next intent cr\eate --scope poc`,
+      String.raw`aidlc --project-dir . engine orchestrate next intent cr\eate --scope poc`,
+      String.raw`aidlc engine orchestrate next intent 'create' --scope poc`,
+      'aidlc next intent "$ACTION" --scope poc',
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("opaque script arguments are never selected as the engine executable", () => {
+    for (const command of [
+      "sh -c 'aidlc engine orchestrate report --stage intent-capture --result approved' aidlc next --status",
+      "sh -c 'aidlc engine orchestrate next' aidlc next space teamb",
+      "bash -c 'aidlc next' aidlc next --config project",
+      "opaque-runner 'aidlc report --result approved' aidlc next space teamb",
+      "bun opaque-script.ts 'aidlc next' aidlc next --status",
+      "node opaque-script.ts 'aidlc next' aidlc next --status",
+      '"META=literal" aidlc next --status',
+      '"X=one" aidlc next space teamb',
+      'X"Y"=one aidlc next space teamb',
+      "command META=literal aidlc next --status",
+      "exec META=literal aidlc next space teamb",
+      "command X=one aidlc next space teamb",
+      "exec X=one aidlc next space teamb",
+      "env X=one command aidlc next space teamb",
+      "exec command aidlc next space teamb",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    expect(d1('LABEL="team B" command aidlc next space "team B"')).toBe(false);
+    expect(d1('env "LABEL=team B" aidlc next space "team B"')).toBe(false);
+    expect(d1('X="one" aidlc next space teamb')).toBe(false);
+    expect(d1('env "X=one" aidlc next space teamb')).toBe(false);
+  });
+
+  test("unquoted glob and brace expansion cannot turn a workspace name into a verb", () => {
+    for (const name of ["cr*", "cr?ate", "cr[e]ate", "cr{ea,zz}te"]) {
+      expect(d1(`aidlc next intent ${name}`), name).toBe(true);
+      expect(d1(`aidlc next intent "${name}"`), name).toBe(false);
+    }
+  });
+
+  test("redirection and expansion cannot change workspace argv before classification", () => {
+    for (const command of [
+      "aidlc next intent >/tmp/out create",
+      "aidlc next intent > /tmp/out create",
+      "aidlc next intent </tmp/in create",
+      "aidlc next intent 2>&1 create",
+      "aidlc next intent --project-dir $SELECTOR",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    expect(d1('aidlc next intent ">/tmp/out"')).toBe(false);
+    expect(d1("aidlc next space teamb 2>&1")).toBe(false);
+    expect(d1("env X=one aidlc next space teamb")).toBe(false);
+  });
+
+  test("the unconditional configuration alias is terminal without exempting workflow modifiers", () => {
+    for (const args of ["--config", "--config project", "--config trust", "--config unknown"]) {
+      expect(d1(`aidlc engine orchestrate next ${args}`), args).toBe(false);
+    }
+    for (const command of [
+      "aidlc next --config project --scope feature",
+      "aidlc next --depth minimal --stage intent-capture",
+      "aidlc next --depth minimal --new-intent",
+      "aidlc next --config project && aidlc report --result approved",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("conditional configuration needs its exact authoritative dispatch output", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    const directive = {
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    };
+    const output = JSON.stringify(directive);
+    expect(d1(command)).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, output)).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, [{ type: "text", text: output }])).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, [{ type: "text", text: output }, { type: "image", data: "other" }])).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, directive)).toBe(true);
+    for (const other of [
+      "aidlc next",
+      "aidlc next --depth minimal",
+      "aidlc next --depth extreme --stage intent-capture",
+      "aidlc next --depth extreme --scope feature",
+      "aidlc next --depth extreme --new-intent",
+      `${command} && aidlc report --result approved`,
+      `sh -c 'aidlc next' aidlc next --depth extreme`,
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next --depth extreme',
+    ]) {
+      expect(isEngineToolCall("Bash", { command: other }, output), other).toBe(true);
+    }
+    for (const invalid of [
+      "",
+      output.slice(0, -1),
+      `${output}\n${output}`,
+      JSON.stringify({ ...directive, continue: true }),
+      JSON.stringify({ kind: "run-stage", stage: "intent-capture" }),
+      JSON.stringify({ ...directive, message: "Run the workflow, then continue." }),
+      JSON.stringify({ ...directive, unexpected: "field" }),
+      JSON.stringify({ ...directive, message: directive.message.replace("depth extreme`", "depth extreme --project-dir ;`") }),
+      `{"kind":"run-stage",${output.slice(1)}`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
+    }
+  });
+
   test("observed unified Bun report has native and legacy transition classifications", () => {
     const args = 'report --stage intent-capture --result awaiting-approval';
     for (const command of [

@@ -1430,7 +1430,7 @@ function canonicalEngineCommand(text: string): string {
 // conductor engaged the workflow this turn"; their presence in the turn that
 // answered the human disqualifies the turn from the conversational carve-out (a
 // conductor that ran the engine and then quit mid-loop must still be nudged).
-export function isEngineToolCall(name: string, input: unknown): boolean {
+export function isEngineToolCall(name: string, input: unknown, observedOutput?: unknown): boolean {
   const cmd =
     input !== null && typeof input === "object"
       ? String((input as Record<string, unknown>).command ?? "")
@@ -1439,23 +1439,19 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
   // surface the tool by name) the tool name itself.
   const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
   const text = canonicalEngineCommand(rawText);
-  // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
-  // workflow engagement (a chat turn that ran git/cat/ls etc.).
-  if (
-    !/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(text) &&
-    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(text)
-  ) {
-    return false;
-  }
   // Split on shell separators so a CHAINED command is judged per sub-command,
   // not as one blob. Otherwise a read-only flag anywhere in the line
   // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
   for (const seg of segments) {
-    // Path normalization can remove a substitution inside a quoted dispatcher
-    // path. Such a command cannot receive the static navigation exemption.
-    if (isEngineEngagementSegment(seg, !/\$\(|`/.test(rawText))) return true;
+    // Path normalization can remove substitutions from a quoted dispatcher path.
+    // Preserve that uncertainty rather than granting a terminal-command exemption.
+    if (isEngineEngagementSegment(
+      seg,
+      segments.length === 1 ? observedOutput : undefined,
+      !/\$\(|`/.test(rawText),
+    )) return true;
   }
   return false;
 }
@@ -1492,57 +1488,173 @@ function legacyEngineEngagementSegment(seg: string): boolean {
   return true;
 }
 
-// A next call that only routes workspace navigation does not engage a workflow.
-// Require a static, complete command before applying this exemption; unknown
-// wrappers, substitutions, redirects, and malformed quoting retain the existing
-// conservative classification. Shell chains are classified segment by segment.
-function isWorkspaceNavigationNext(seg: string): boolean {
-  if (/[\\`$<>&()[\]{}*?~^#]/.test(seg)) return false;
+// Kiro's prompt tokenizer deliberately preserves unquoted backslashes that a
+// shell removes. Use it only after ruling out that ambiguity and nested shell
+// execution throughout the segment, including executable prefixes/assignments.
+function literalEngineCommand(seg: string): { command: string; args: string[] } | "uncertain" | "opaque" | null {
+  // This one trailing descriptor merge changes output streams, not argv.
+  // Every other unquoted redirection remains outside literal classification.
+  seg = seg.replace(/(?:^|\s)2>&1\s*$/, "");
+  if (/\$\(|`/.test(seg)) return "uncertain";
   let quote: "'" | '"' | null = null;
+  const rawTokens: string[] = [];
+  let tokenStart = -1;
   for (let i = 0; i < seg.length; i++) {
-    const char = seg[i];
+    const ch = seg[i];
+    if (quote === null && /\s/.test(ch)) {
+      if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart, i));
+      tokenStart = -1;
+      continue;
+    }
+    if (tokenStart < 0) tokenStart = i;
     if (quote) {
-      if (char === quote) quote = null;
-    } else if (char === "'" || char === '"') {
-      quote = char;
+      if (ch === "\\" && quote === '"' && /["\\$`\n]/.test(seg[i + 1] ?? "")) {
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === "\\" || "()[]{}*?;|<>&$".includes(ch)) {
+      return "uncertain";
     }
   }
-  if (quote) return false;
-
-  const words = splitKiroCommandArgs(seg.trim());
-  if (words[0] === "env") words.shift();
-  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) words.shift();
-  if (words[0] === "command" || words[0] === "exec") {
-    words.shift();
-    if (words.at(0) === "--") words.shift();
+  if (quote) return "uncertain";
+  if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart));
+  const tokens = splitKiroCommandArgs(seg);
+  if (tokens.length !== rawTokens.length) return "uncertain";
+  const base = (token: string): string => token.replaceAll("\\", "/").split("/").pop() ?? "";
+  // Only transparent prefixes establish an executable position. In particular,
+  // words following sh -c (or an arbitrary script) are data, not an executable.
+  let commandIndex = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rawTokens[commandIndex] ?? "")) commandIndex++;
+  if (["command", "exec"].includes(tokens[commandIndex])) {
+    commandIndex++;
+    if (tokens[commandIndex] === "--") commandIndex++;
+    if (tokens[commandIndex]?.startsWith("-")) return "uncertain";
   }
-  let args: string[];
-  if (words[0] === "aidlc" && words[1] === "orchestrate" && words[2] === "next") {
-    args = words.slice(3);
-  } else if (words[0] === "aidlc" && words[1] === "next") {
-    args = words.slice(2);
+  if (base(tokens[commandIndex] ?? "") === "env") {
+    commandIndex++;
+    if (tokens[commandIndex] === "--") commandIndex++;
+    if (tokens[commandIndex]?.startsWith("-")) return "uncertain";
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex] ?? "")) commandIndex++;
+  }
+  if (commandIndex >= tokens.length) return null;
+  const viaBun = base(tokens[commandIndex]) === "bun";
+  if (viaBun) commandIndex++;
+  if (commandIndex >= tokens.length) return null;
+  if (!/^(?:aidlc|aidlc\.ts|aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?)$/.test(base(tokens[commandIndex]))) {
+    // Unsupported interpreters do not become Bun transports merely because a
+    // later argument names aidlc.ts. Opaque scripts remain conservative.
+    return "opaque";
+  }
+  let command = tokens[commandIndex].replaceAll("\\", "/").split("/").pop() ?? "";
+  if (command === "aidlc.ts") {
+    if (
+      !/(?:^|[/\\])bun$/.test(tokens[commandIndex - 1] ?? "") ||
+      !new RegExp(`${sourceEngineDispatcherPath}$`).test(tokens[commandIndex])
+    ) return "opaque";
+    command = "aidlc";
+  }
+  const native = command === "aidlc";
+  // Match dispatcher global extraction, then the orchestrator's own attempt
+  // selector extraction. Neither consumes options after the literal delimiter.
+  const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
+    const clean: string[] = [];
+    let literal = false;
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--") literal = true;
+      if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
+        if (i + 1 >= args.length) return null;
+        i++;
+      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
+        continue;
+      } else {
+        clean.push(arg);
+      }
+    }
+    return clean;
+  };
+  let args = stripGlobals(tokens.slice(commandIndex + 1), !native);
+  if (!args) return null;
+  if (native && args[0] === "engine") args.shift();
+  if (native && ["orchestrate", "next", "report", "park"].includes(args[0])) {
+    args = stripGlobals(args, true);
+    if (!args) return null;
+  }
+  return { command, args };
+}
+
+function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
+  const args = invocation.args.slice();
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") args.shift();
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return false;
+  }
+  if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  // The --config alias (including a refused section name) returns before
+  // workflow inspection. Depth/review modifiers do not share that guarantee.
+  if (args[0] === "--config" && args.length <= 2) return true;
+  const workspace = parseWorkspaceCommand(args);
+  return workspace.kind !== "not-workspace" && workspace.kind !== "create-intent";
+}
+
+// A modifier-only next can initialize work or dispatch configuration depending
+// on state. Its own successful result must prove the terminal branch ran; the
+// transcript reader owns call/result identity, ordering and human-turn binding.
+function isTerminalConfigurationDispatch(
+  invocation: { command: string; args: string[] },
+  observedOutput: unknown,
+): boolean {
+  let output: string;
+  if (typeof observedOutput === "string") {
+    output = observedOutput;
   } else if (
-    words[0] === "bun" &&
-    /(?:^|[/\\])aidlc-orchestrate\.ts$/.test(words[1] ?? "") &&
-    words[2] === "next"
+    Array.isArray(observedOutput) && observedOutput.length > 0 &&
+    observedOutput.every((part) => isPlainObject(part) && part.type === "text" && typeof part.text === "string")
   ) {
-    args = words.slice(3);
+    output = observedOutput.map((part) => part.text).join("");
   } else {
     return false;
   }
-  // Dispatcher/engine global options can be removed or moved before workspace
-  // parsing, revealing a different verb. Grant no exemption for those ambiguous
-  // forms. A trailing bare option cannot reveal another verb (`space --json`).
-  if (
-    args.some((arg) => arg === "--project-dir" || arg === "--aidlc-attempt-id") ||
-    args.slice(0, -1).some((arg) =>
-      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
-    )
-  ) return false;
-  // Intent creation explicitly returns null here: it starts workflow work and
-  // must retain the normal engagement and session-handoff rules.
-  return parseWorkspaceCommand(args).kind !== "not-workspace" &&
-    classifyTerminalCommand(args) !== null;
+  const args = invocation.args.slice();
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") args.shift();
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return false;
+  }
+  if (args.shift() !== "next" || args.length === 0 || args.length % 2 !== 0) return false;
+  const values = new Map<string, string>();
+  for (let i = 0; i < args.length; i += 2) {
+    if (!["--depth", "--test-strategy", "--review"].includes(args[i]) || values.has(args[i])) return false;
+    values.set(args[i], args[i + 1]);
+  }
+  const key = values.has("--depth") ? "depth" : values.has("--test-strategy") ? "test-strategy" : "review";
+  const expected = ["config", "set", key, values.get(`--${key}`)];
+  if (values.has("--depth") && values.has("--test-strategy")) {
+    expected.push("--test-strategy", values.get("--test-strategy"));
+  } else if (values.has("--review") && key !== "review") {
+    expected.push("--review", values.get("--review"));
+  }
+  try {
+    const parsed: unknown = JSON.parse(output);
+    // emit() uses canonical JSON; duplicate keys, concatenated objects and
+    // convenient embedded fragments cannot establish a dispatch receipt.
+    if (JSON.stringify(parsed) !== output.trim()) return false;
+    // Lazy load avoids the directive validator's import cycle with this module.
+    const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
+    const validated = validateDirective(parsed);
+    if (!validated.valid || validated.data.kind !== "print") return false;
+    const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
+    if (!match) return false;
+    const command = literalEngineCommand(canonicalEngineCommand(match[1]));
+    return command !== null && typeof command !== "string" && command.command === "aidlc" &&
+      JSON.stringify(command.args) === JSON.stringify(expected);
+  } catch {
+    return false;
+  }
 }
 
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
@@ -1558,9 +1670,19 @@ function isWorkspaceNavigationNext(seg: string): boolean {
 // "chat" - the conservative direction for loop integrity.
 export function isEngineEngagementSegment(
   seg: string,
-  allowWorkspaceNavigation = true,
+  observedOutput?: unknown,
+  allowLiteralCommand = true,
 ): boolean {
-  if (allowWorkspaceNavigation && isWorkspaceNavigationNext(seg)) return false;
+  const invocation = allowLiteralCommand ? literalEngineCommand(seg) : "uncertain";
+  if (invocation === "uncertain" || invocation === "opaque") {
+    return /\baidlc\s/.test(seg) ||
+      /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?\s/.test(seg) ||
+      (invocation === "uncertain" && /\baidlc\.ts["']?\s/.test(seg));
+  }
+  if (invocation) {
+    if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
+    seg = `${invocation.command} ${invocation.args.join(" ")}`;
+  }
   if (
     /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)
