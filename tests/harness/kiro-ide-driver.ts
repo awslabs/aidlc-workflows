@@ -494,7 +494,6 @@ export async function pageTarget(port: number): Promise<CdpTarget> {
 const CONTROL = 2;
 const META = 4;
 const PRIMARY_SHORTCUT_MODIFIER = platform() === "darwin" ? META : CONTROL;
-const SHIFT = 8;
 
 /** The prompt the Kiro chat input renders - the SAME signal the Kiro TUI test waits
  *  on (t-tui-kiro-status.serial.test.ts:95). Lowercased for a tolerant match. Kept as
@@ -745,18 +744,19 @@ export function prepareKiroIdeChat(
   );
 }
 
-/** Cmd+Shift+L on macOS or Ctrl+Shift+L on Windows focuses the Kiro chat input. */
+/** Cmd+L / Ctrl+L focuses the current chat, creating a session only if needed.
+ * Adding Shift requests a new session and discards the context for follow-ups. */
 export async function focusChat(t: CdpTarget): Promise<void> {
   await t.send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
-    modifiers: PRIMARY_SHORTCUT_MODIFIER | SHIFT,
+    modifiers: PRIMARY_SHORTCUT_MODIFIER,
     key: "L",
     code: "KeyL",
     windowsVirtualKeyCode: 76,
   });
   await t.send("Input.dispatchKeyEvent", {
     type: "keyUp",
-    modifiers: PRIMARY_SHORTCUT_MODIFIER | SHIFT,
+    modifiers: PRIMARY_SHORTCUT_MODIFIER,
     key: "L",
     code: "KeyL",
     windowsVirtualKeyCode: 76,
