@@ -108,8 +108,8 @@ function installedProject(): string {
   return root;
 }
 
-/** The adapter's project-local subagent ledger. Spawn records are `.json`;
- *  main-conversation markers are `.marker`. */
+/** The adapter's project-local identity ledger. Spawn records are `.json`;
+ *  top-level registration and typed session identities are `.marker`. */
 function ledgerDirFor(projectDir: string): string {
   return join(projectDir, "aidlc", ".aidlc-cursor-subagents");
 }
@@ -338,7 +338,7 @@ function registerTaskParent(projectDir: string): void {
   if (typeof conversation !== "string") {
     throw new Error("preToolUseTask fixture is missing conversation_id");
   }
-  runAdapter(
+  const started = runAdapter(
     projectDir,
     "session-start",
     payload("sessionStart", projectDir, {
@@ -346,6 +346,62 @@ function registerTaskParent(projectDir: string): void {
       session_id: conversation,
     }),
   );
+  expect(started.code, started.stderr).toBe(0);
+}
+
+/** Make a core Stop invocation observable even when no workflow state exists. */
+function installStopProbe(projectDir: string): string {
+  const marker = join(projectDir, "stop-hook-ran");
+  writeFileSync(
+    join(projectDir, ".cursor", "hooks", "aidlc-continue-workflow.ts"),
+    `await Bun.write(${JSON.stringify(marker)}, "ran");\n` +
+      'console.log(JSON.stringify({ decision: "block", reason: "Continue the foreground workflow." }));\n',
+  );
+  return marker;
+}
+
+/** Deliberately does not deliver lifecycle events or register a foreground. */
+function expectUnknownSessionRestricted(
+  projectDir: string,
+  identity: Record<string, unknown>,
+): void {
+  const stopPayload = payload("stop", projectDir, identity);
+  expect(JSON.parse(stopPayload)).not.toHaveProperty("is_background_agent");
+  const stopped = runAdapter(projectDir, "stop", stopPayload);
+  expect(stopped.code, stopped.stderr).toBe(0);
+  expect(stopped.stdout.trim()).toBe("");
+
+  for (const command of [
+    "bun .cursor/tools/aidlc-orchestrate.ts next",
+    "node --eval 'process.exit(0)'",
+  ]) {
+    const stdin = payload("preToolUseShell", projectDir, {
+      ...identity,
+      tool_input: { command, cwd: projectDir, timeout: 30000 },
+    });
+    expect(JSON.parse(stdin)).not.toHaveProperty("is_background_agent");
+    const denied = runAdapter(projectDir, "guards", stdin);
+    expect(denied.code, denied.stderr).toBe(0);
+    const out = JSON.parse(denied.stdout);
+    expect(out.permission, command).toBe("deny");
+    expect(out.agent_message, command).toContain("session identity");
+  }
+  for (const stdin of [
+    payload("preToolUseTask", projectDir, identity),
+    payload("preToolUseWrite", projectDir, {
+      ...identity,
+      tool_name: "Delete",
+      tool_input: { file_path: ledgerDirFor(projectDir) },
+    }),
+  ]) {
+    const denied = runAdapter(projectDir, "guards", stdin);
+    expect(denied.code, denied.stderr).toBe(0);
+    expect(JSON.parse(denied.stdout).permission).toBe("deny");
+  }
+  expectAllowJson(runAdapter(projectDir, "guards", payload("preToolUseShell", projectDir, {
+    ...identity,
+    tool_input: { command: "echo review" },
+  })));
 }
 
 function activateReviewer(project: string): { record: string; dispatch: string } {
@@ -452,6 +508,11 @@ describe("t276 cursor adapter payload conversion", () => {
   test("0: native Write, Shell, and Task paths enforce Plan Approval", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
+    registerTaskParent(proj);
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      conversation_id: PAYLOADS.preToolUseShell.conversation_id,
+      session_id: PAYLOADS.preToolUseShell.session_id,
+    }));
     const statePath = join(seededRecordDir(proj), "aidlc-state.md");
     const state = readFileSync(statePath, "utf-8").replace(
       /^- \*\*Current Stage\*\*:.*$/m,
@@ -666,7 +727,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(w.code).toBe(0);
     const t = runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj));
     expect(t.code).toBe(0);
-    const m = runAdapter(proj, "mint", payload("sessionStart", proj));
+    const m = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj));
     expect(m.code).toBe(0);
     const shard = readFileSync(seededAuditShard(proj), "utf-8");
     expect(shard).toContain("ARTIFACT_");
@@ -679,6 +740,7 @@ describe("t276 cursor adapter payload conversion", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     clearLedger(proj);
+    registerTaskParent(proj);
 
     const parent = runAdapter(proj, "guards", payload("preToolUseTask", proj));
     expectAllowJson(parent);
@@ -863,6 +925,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("11: postToolUseFailure clears only the failed Task record", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
+    registerTaskParent(proj);
     runAdapter(proj, "guards", payload("preToolUseTask", proj));
     expect(ledgerFilesFor(proj)).toHaveLength(1);
 
@@ -932,18 +995,17 @@ describe("t276 cursor adapter payload conversion", () => {
   test("14: stop converts a core block into an advisory followup_message", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
-    // An in-flight stage (state seeded mid-construction with no completed
-    // report) makes the core stop hook emit its pending-directive block.
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      conversation_id: PAYLOADS.stop.conversation_id,
+      session_id: PAYLOADS.stop.session_id,
+    }));
+    const probe = installStopProbe(proj);
     const r = runAdapter(proj, "stop", payload("stop", proj));
     expect(r.code).toBe(0);
-    if (r.stdout.trim().length > 0) {
-      const out = JSON.parse(r.stdout) as Record<string, unknown>;
-      // Whatever the core decided, the Cursor wire never carries the Claude
-      // block contract - only the advisory follow-up channel.
-      expect(out).not.toHaveProperty("decision");
-      expect(typeof out.followup_message).toBe("string");
-      expect((out.followup_message as string).length).toBeGreaterThan(0);
-    }
+    expect(readFileSync(probe, "utf-8")).toBe("ran");
+    expect(JSON.parse(r.stdout)).toEqual({
+      followup_message: "Continue the foreground workflow.",
+    });
   });
 
   test("15: malformed stdin denies guards and remains advisory elsewhere", () => {
@@ -1060,13 +1122,22 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(bg.code).toBe(0);
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
-    // The same payload from a human-driven conversation does mint.
-    const human = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj));
+    // A separate human-driven conversation still mints.
+    const human = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
+      conversation_id: "foreground-human",
+      session_id: "foreground-human",
+    }));
     expect(human.code).toBe(0);
     expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
   });
 
-  test("19b: concurrent background review retries cannot reset the foreground steering cursor", async () => {
+  test.each([
+    ["session-start", "sessionStart"],
+    ["mint", "beforeSubmitPrompt"],
+  ])("19b: %s identity keeps concurrent background reviews out of foreground steering", async (
+    lifecycleTarget,
+    lifecyclePayload,
+  ) => {
     const proj = installedProject();
     seedAidlcMemory(proj);
     seedStateFile(proj, "state-brownfield-feature.md");
@@ -1087,18 +1158,25 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(second.part).toBe(2);
 
     const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
-    const backgroundStop = payload("stop", proj, {
+    const backgroundIdentity = {
       conversation_id: "cursor-background-review",
       session_id: "cursor-background-review",
+    };
+    const started = runAdapter(proj, lifecycleTarget, payload(lifecyclePayload, proj, {
+      ...backgroundIdentity,
       is_background_agent: true,
+    }));
+    expect(started.code).toBe(0);
+    const backgroundStop = payload("stop", proj, {
+      ...backgroundIdentity,
     });
     const backgroundCommand = (command: string) =>
       payload("preToolUseShell", proj, {
-        conversation_id: "cursor-background-review",
-        session_id: "cursor-background-review",
-        is_background_agent: true,
+        ...backgroundIdentity,
         tool_input: { command, cwd: proj, timeout: 30000 },
       });
+    expect(JSON.parse(backgroundStop)).not.toHaveProperty("is_background_agent");
+    expect(JSON.parse(backgroundCommand("echo review"))).not.toHaveProperty("is_background_agent");
     const assertDenied = (result: { stdout: string; code: number }) => {
       expect(result.code).toBe(0);
       const denial = JSON.parse(result.stdout) as {
@@ -1284,12 +1362,324 @@ describe("t276 cursor adapter payload conversion", () => {
       ),
     );
     expectAllowJson(readOnly);
+    expectAllowJson(runAdapter(proj, "guards", backgroundCommand(
+      `bun .cursor/tools/aidlc-utility.ts --project-dir "${proj}" version`,
+    )));
+    for (const command of [
+      'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
+      'script=.cursor/tools/aidlc-orchestrate.ts; bun "$script" next',
+      'bun .cursor/tools/aidlc-orchestrate.ts "$(printf next)"',
+      "node --eval 'process.exit(0)'",
+      "python3 -c 'print(1)'",
+      "pwsh -Command 'Write-Output review'",
+      "cmd /c review.cmd",
+      "find . -exec sh review.sh \\;",
+      "sh review.sh",
+      "bun --preload ./review.ts .cursor/tools/aidlc-utility.ts version",
+    ]) {
+      assertDenied(runAdapter(proj, "guards", backgroundCommand(command)));
+      assertMarker(fourth);
+    }
+
+    // A background conversation cannot erase its own attribution or create
+    // untracked child conversations. The marker does not expire with idle time.
+    const backgroundMarkers = ledgerFilesFor(proj, ".marker")
+      .filter((path) => basename(path).startsWith("session-"));
+    expect(backgroundMarkers).toHaveLength(1);
+    expect(readFileSync(backgroundMarkers[0], "utf-8")).toBe("background");
+    const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    utimesSync(backgroundMarkers[0], old, old);
+    for (const [toolName, toolInput] of [
+      ["Delete", { file_path: ledgerDirFor(proj) }],
+      ["Write", { file_path: backgroundMarkers[0], content: "" }],
+      ["Task", { subagent_type: "aidlc-developer-agent", prompt: "review" }],
+    ] as const) {
+      const denied = runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+        ...backgroundIdentity,
+        tool_name: toolName,
+        tool_input: toolInput,
+      }));
+      expect(JSON.parse(denied.stdout).permission).toBe("deny");
+    }
+    expect(runAdapter(proj, "stop", backgroundStop).stdout.trim()).toBe("");
+    assertMarker(fourth);
+
+    // The protected identity is isolated from a concurrent foreground session.
+    const foregroundIdentity = {
+      conversation_id: "foreground-review-owner",
+      session_id: "foreground-review-owner",
+    };
+    const foregroundStarted = runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...foregroundIdentity,
+      is_background_agent: false,
+    }));
+    expect(foregroundStarted.code, foregroundStarted.stderr).toBe(0);
+    const foregroundCommand = payload("preToolUseShell", proj, {
+      ...foregroundIdentity,
+      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next" },
+    });
+    expectAllowJson(runAdapter(proj, "guards", foregroundCommand));
+
+    runAdapter(proj, "session-end", payload("sessionEnd", proj, {
+      ...backgroundIdentity,
+      is_background_agent: true,
+    }));
+    expect(existsSync(backgroundMarkers[0])).toBe(false);
+    expectAllowJson(runAdapter(proj, "guards", foregroundCommand));
+  });
+
+  test.each([
+    [true, false],
+    [false, false],
+    [true, true],
+  ])("19c: failed identity storage blocks submission (background=%s, sessionStart=%s)", (
+    isBackground,
+    deliverSessionStart,
+  ) => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    const probe = installStopProbe(proj);
+    const identity = {
+      conversation_id: "prompt-with-unwritable-identity",
+      session_id: "prompt-with-unwritable-identity",
+    };
+    // A file where mkdir expects a directory fails on every platform, including
+    // privileged test users for whom chmod-based write failures are ineffective.
+    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    if (deliverSessionStart) {
+      const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        ...identity,
+        is_background_agent: isBackground,
+      }));
+      expect(started.code, started.stderr).toBe(0);
+      expect(started.stdout.trim()).toBe("");
+    }
+    // Cover both an unavailable sessionStart and one whose marker write failed.
+    const prompt = payload("beforeSubmitPrompt", proj, {
+      ...identity,
+      is_background_agent: isBackground,
+    });
+    const blocked = runAdapter(proj, "mint", prompt);
+    expect(blocked.code, blocked.stderr).toBe(0);
+    expect(JSON.parse(blocked.stdout)).toMatchObject({
+      continue: false,
+      user_message: expect.stringContaining("session identity"),
+    });
+    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    expectUnknownSessionRestricted(proj, identity);
+    expect(existsSync(probe)).toBe(false);
+
+    // Repairing storage and resubmitting restores the supplied identity without
+    // having to restart the conversation or fabricate a sessionStart event.
+    rmSync(ledgerDirFor(proj));
+    const recovered = runAdapter(proj, "mint", prompt);
+    expect(recovered.code, recovered.stderr).toBe(0);
+    expect(recovered.stdout.trim()).toBe("");
+    const markers = ledgerFilesFor(proj, ".marker")
+      .filter((path) => basename(path).startsWith("session-"));
+    expect(markers).toHaveLength(1);
+    expect(readFileSync(markers[0], "utf-8")).toBe(isBackground ? "background" : "foreground");
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(stopped.code, stopped.stderr).toBe(0);
+    expect(existsSync(probe)).toBe(!isBackground);
+    if (isBackground) {
+      expect(stopped.stdout.trim()).toBe("");
+      expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    } else {
+      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+    }
+  });
+
+  test.each(["missing", "malformed", "directory"])(
+    "19d: a %s persisted identity cannot restore workflow control",
+    (damage) => {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      const probe = installStopProbe(proj);
+      const identity = {
+        conversation_id: "background-with-damaged-identity",
+        session_id: "background-with-damaged-identity",
+      };
+      const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        ...identity,
+        is_background_agent: true,
+      }));
+      expect(started.code, started.stderr).toBe(0);
+      const markers = ledgerFilesFor(proj, ".marker")
+        .filter((path) => basename(path).startsWith("session-"));
+      expect(markers).toHaveLength(1);
+      expect(readFileSync(markers[0], "utf-8")).toBe("background");
+      if (damage === "malformed") {
+        writeFileSync(markers[0], "background\nforeground");
+      } else {
+        rmSync(markers[0]);
+        // A directory cannot be consumed as a session identity file. This is
+        // portable and does not depend on the test user's access privileges.
+        if (damage === "directory") mkdirSync(markers[0]);
+      }
+      // The separate main marker remains; top-level registration alone must
+      // not be mistaken for confirmation that this conversation is foreground.
+      expect(ledgerFilesFor(proj, ".marker")
+        .filter((path) => basename(path).startsWith("main-"))).toHaveLength(1);
+      expectUnknownSessionRestricted(proj, identity);
+      expect(existsSync(probe)).toBe(false);
+      expect(ledgerFilesFor(proj)).toHaveLength(0);
+      expect(witnessFilesFor(proj)).toHaveLength(0);
+    },
+  );
+
+  test.each(["no lifecycle", "missing flag", "missing IDs"])(
+    "19e: %s leaves an unconfirmed session unable to control the workflow",
+    (source) => {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      seedAuditFile(proj);
+      const probe = installStopProbe(proj);
+      const identity = {
+        conversation_id: source === "missing IDs" ? undefined : "unconfirmed-conversation",
+        session_id: source === "missing IDs" ? undefined : "unconfirmed-conversation",
+      };
+      if (source !== "no lifecycle") {
+        const lifecycle = {
+          ...identity,
+          is_background_agent: source === "missing flag" ? undefined : true,
+        };
+        const started = runAdapter(proj, "session-start", payload("sessionStart", proj, lifecycle));
+        expect(started.code, started.stderr).toBe(0);
+        expect(started.stdout.trim()).toBe("");
+        const prompt = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, lifecycle));
+        expect(prompt.code, prompt.stderr).toBe(0);
+        expect(JSON.parse(prompt.stdout)).toMatchObject({
+          continue: false,
+          user_message: expect.stringContaining("session identity"),
+        });
+      }
+      expect(ledgerFilesFor(proj, ".marker")).toHaveLength(0);
+      expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+      expectUnknownSessionRestricted(proj, identity);
+      expect(existsSync(probe)).toBe(false);
+      expect(ledgerFilesFor(proj)).toHaveLength(0);
+      expect(witnessFilesFor(proj)).toHaveLength(0);
+    },
+  );
+
+  test("19f: session identity is project-local and cleanup permits a fresh foreground lifecycle", () => {
+    const backgroundProject = installedProject();
+    const foregroundProject = installedProject();
+    for (const project of [backgroundProject, foregroundProject]) {
+      seedStateFile(project, "state-construction.md");
+      seedAuditFile(project);
+    }
+    const backgroundProbe = installStopProbe(backgroundProject);
+    const foregroundProbe = installStopProbe(foregroundProject);
+    const identity = { conversation_id: "shared-conversation", session_id: "shared-conversation" };
+    const started = runAdapter(backgroundProject, "session-start", payload("sessionStart", backgroundProject, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(started.code, started.stderr).toBe(0);
+    // The same conversation key in another project has no identity until that
+    // project's own lifecycle event establishes it.
+    expectUnknownSessionRestricted(foregroundProject, identity);
+    expect(existsSync(foregroundProbe)).toBe(false);
+    const foregroundPrompt = (project: string) =>
+      payload("beforeSubmitPrompt", project, { ...identity, is_background_agent: false });
+    const foreground = runAdapter(foregroundProject, "mint", foregroundPrompt(foregroundProject));
+    expect(foreground.code, foreground.stderr).toBe(0);
+    expect(foreground.stdout.trim()).toBe("");
+
+    // A later false flag cannot downgrade the established background identity.
+    const stillBackground = runAdapter(backgroundProject, "mint", foregroundPrompt(backgroundProject));
+    expect(stillBackground.code, stillBackground.stderr).toBe(0);
+    expect(stillBackground.stdout.trim()).toBe("");
+    expect(readAllAuditShards(backgroundProject)).not.toContain("HUMAN_TURN");
+    const next = (project: string) => payload("preToolUseShell", project, {
+      ...identity,
+      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next" },
+    });
+    expect(JSON.parse(runAdapter(backgroundProject, "guards", next(backgroundProject)).stdout).permission)
+      .toBe("deny");
+    expectAllowJson(runAdapter(foregroundProject, "guards", next(foregroundProject)));
+    const backgroundStop = payload("stop", backgroundProject, identity);
+    expect(runAdapter(backgroundProject, "stop", backgroundStop).stdout.trim()).toBe("");
+    expect(existsSync(backgroundProbe)).toBe(false);
+    const foregroundStop = runAdapter(foregroundProject, "stop", payload("stop", foregroundProject, identity));
+    expect(foregroundStop.code, foregroundStop.stderr).toBe(0);
+    expect(readFileSync(foregroundProbe, "utf-8")).toBe("ran");
+
+    const ended = runAdapter(backgroundProject, "session-end", payload("sessionEnd", backgroundProject, identity));
+    expect(ended.code, ended.stderr).toBe(0);
+    expect(ledgerFilesFor(backgroundProject, ".marker")).toHaveLength(0);
+    expect(runAdapter(backgroundProject, "stop", backgroundStop).stdout.trim()).toBe("");
+    expect(existsSync(backgroundProbe)).toBe(false);
+    expectAllowJson(runAdapter(foregroundProject, "guards", next(foregroundProject)));
+
+    const restarted = runAdapter(backgroundProject, "mint", foregroundPrompt(backgroundProject));
+    expect(restarted.code, restarted.stderr).toBe(0);
+    expect(restarted.stdout.trim()).toBe("");
+    expect(readAllAuditShards(backgroundProject)).toContain("HUMAN_TURN");
+    expectAllowJson(runAdapter(backgroundProject, "guards", next(backgroundProject)));
+    const resumedStop = runAdapter(backgroundProject, "stop", backgroundStop);
+    expect(resumedStop.code, resumedStop.stderr).toBe(0);
+    expect(readFileSync(backgroundProbe, "utf-8")).toBe("ran");
+  });
+
+  test("19g: background utilities must resolve to the installed entrypoint", () => {
+    const proj = installedProject();
+    const identity = {
+      conversation_id: "background-utility-resolution",
+      session_id: "background-utility-resolution",
+    };
+    const started = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(started.code, started.stderr).toBe(0);
+    const commandPayload = (command: string, cwd = proj) =>
+      payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command, cwd, timeout: 30000 },
+      });
+    const installedCommand = "bun .cursor/tools/aidlc-utility.ts version";
+    expectAllowJson(runAdapter(proj, "guards", commandPayload(installedCommand)));
+
+    const helperRoot = join(proj, "helpers");
+    const copiedUtility = join(helperRoot, ".cursor", "tools", "aidlc-utility.ts");
+    mkdirSync(dirname(copiedUtility), { recursive: true });
+    writeFileSync(copiedUtility, "// Same filename, outside the installed AIDLC tools.\n");
+    const assertUntrusted = (command: string, cwd = proj) => {
+      const stdin = commandPayload(command, cwd);
+      expect(JSON.parse(stdin)).not.toHaveProperty("is_background_agent");
+      const denied = runAdapter(proj, "guards", stdin);
+      expect(denied.code, denied.stderr).toBe(0);
+      const out = JSON.parse(denied.stdout);
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message, command).toContain("background agents do not own");
+      expect(out.agent_message, command).not.toContain("classification unavailable");
+    };
+    assertUntrusted("bun helpers/.cursor/tools/aidlc-utility.ts version");
+    assertUntrusted(`bun ${JSON.stringify(copiedUtility)} version`);
+    assertUntrusted(installedCommand, helperRoot);
+    assertUntrusted("cd helpers && bun .cursor/tools/aidlc-utility.ts version");
+
+    // File symlinks require extra privileges on Windows; the copied-path and
+    // cwd cases above remain portable. On POSIX also exercise a redirected
+    // entrypoint whose lexical path is exactly the installed utility path.
+    if (process.platform !== "win32") {
+      const installedUtility = join(proj, ".cursor", "tools", "aidlc-utility.ts");
+      rmSync(installedUtility);
+      symlinkSync(copiedUtility, installedUtility, "file");
+      assertUntrusted(installedCommand);
+    }
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     clearLedger(proj);
+    registerTaskParent(proj);
     runAdapter(proj, "guards", payload("preToolUseTask", proj));
     const [record] = ledgerFilesFor(proj);
     // Backdate the record to one minute inside the 30-minute freshness window.
@@ -1955,7 +2345,8 @@ if (import.meta.main) {
         session_id: resumedMain,
       }),
     );
-    const [resumedMarker] = ledgerFilesFor(proj, ".marker");
+    const [resumedMarker] = ledgerFilesFor(proj, ".marker")
+      .filter((path) => basename(path).startsWith("main-"));
     expect(resumedMarker).toBeDefined();
 
     registerTaskParent(proj);
@@ -3248,7 +3639,9 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(staleManifestResult, staleManifestStatus);
-  }, 55_000);
+    // This matrix starts hundreds of hook/Git subprocesses. Leave enough
+    // elapsed-time headroom for the full assertions on a shared test host.
+  }, 120_000);
 
   test("30: existing symlink or junction aliases cannot hide protected attribution paths", () => {
     const proj = installedProject();
