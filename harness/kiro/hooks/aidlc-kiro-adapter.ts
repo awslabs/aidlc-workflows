@@ -206,6 +206,15 @@ const SESSION_ID_TARGETS = new Set([
 
 const TERMINAL_TOOLS = new Set(["execute_bash", "execute_pwsh", "shell"]);
 
+// Kiro names its shell tool `execute_bash` on POSIX hosts, `execute_pwsh` on
+// Windows, and `shell` in some generations. Every shell decision in this adapter
+// (terminal guard, Plan Approval recovery routing, the forward to the core guard
+// as `Bash`) goes through this one predicate so the three names cannot drift
+// apart: a name a branch did not recognise failed open on that host.
+function isKiroShellTool(toolName: string): boolean {
+  return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
+}
+
 // The payload as the platform sends it. Distinct from IdeHookContext above, which
 // is the normalized view: the targets merged in from the pre-merge kiro row pass
 // the platform's own field names straight through to the core hooks.
@@ -308,9 +317,18 @@ const LEGACY_PLANNING_WRITE_TOOLS = new Set([
   "str_replace",
 ]);
 const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
+  "read",
   "fs_read",
+  "read_file",
+  "read_files",
+  "read_code",
+  "list_directory",
   "file_search",
+  "glob",
   "grep_search",
+  "grep",
+  "web_fetch",
+  "web_search",
   "thinking",
   "todo_list",
 ]);
@@ -1261,7 +1279,7 @@ if (target === "verb-intercept") {
 if (target === "terminal-command-guard") {
   if ((ide.malformedFields?.length ?? 0) > 0) return 0;
   const tool = ide.toolName ?? "";
-  if (tool !== "execute_bash" && tool !== "execute_pwsh" && tool !== "shell") {
+  if (!isKiroShellTool(tool)) {
     return 0;
   }
   const rawCommand = typeof ide.toolArgs?.command === "string"
@@ -2350,7 +2368,7 @@ function buildForward(): Forward {
         } catch {
           // Missing host identity remains fail closed below.
         }
-        if (toolName === "execute_bash") {
+        if (isKiroShellTool(toolName)) {
           const recovery = runLegacyRecoveryNext(
             projectDir,
             recoverySession,
@@ -2388,7 +2406,7 @@ function buildForward(): Forward {
           (
             Object.keys(toolArgs).length === 0 ||
             (
-              toolName !== "execute_bash" &&
+              !isKiroShellTool(toolName) &&
               paths.length === 0
             )
           )
@@ -2401,7 +2419,7 @@ function buildForward(): Forward {
           (!state.active || state.target === null) &&
           writeWindows.length > 0
         ) {
-          if (toolName === "execute_bash") {
+          if (isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -2435,7 +2453,7 @@ function buildForward(): Forward {
           }
         }
         if (interruptedWrite && !state.approved) {
-          if (toolName === "execute_bash") {
+          if (isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -2460,7 +2478,7 @@ function buildForward(): Forward {
               ?.trim()
               .toLowerCase()
               .replace(/\s+/g, "-") === "code-generation";
-          if (durableCodeGeneration && toolName === "execute_bash") {
+          if (durableCodeGeneration && isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -2480,7 +2498,7 @@ function buildForward(): Forward {
           }
         }
         if (state.active && state.violated) {
-          if (toolName === "execute_bash") {
+          if (isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -2545,7 +2563,7 @@ function buildForward(): Forward {
           !state.approved &&
           (
             toolName === "" ||
-            toolName === "execute_bash" ||
+            isKiroShellTool(toolName) ||
             toolName === "fs_append"
           )
         ) {
@@ -2603,7 +2621,7 @@ function buildForward(): Forward {
               };
             }
           }
-          if (Object.keys(toolArgs).length > 0 && toolName !== "execute_bash") {
+          if (state.active && Object.keys(toolArgs).length > 0 && !isKiroShellTool(toolName)) {
             return {
               hook: "__legacy_plan_approval_block__",
               input: {
@@ -2634,7 +2652,7 @@ function buildForward(): Forward {
           },
         };
       }
-      if (toolName === "execute_bash") {
+      if (isKiroShellTool(toolName)) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
           input: {

@@ -247,6 +247,13 @@ guard below that must refuse sits on `PreToolUse`.
 | `aidlc-sync-workflow-state.json` | `PostToolUse` (`execute_bash`) | `sync-workflow-state` |
 | `aidlc-log-subagent.json` | `PreToolUse` + `PostToolUse` (delegation tools) | `log-subagent` |
 
+One shell tool under three names. Kiro calls it `execute_bash` on POSIX hosts,
+`execute_pwsh` on Windows, and `shell` in some generations, so the adapter tests
+all three through a single predicate and forwards whichever arrived to the shared
+core guard as `Bash`. Every shell decision — the terminal guard, Plan Approval
+recovery routing, and that forward — reads the same predicate, because a name one
+branch failed to recognise used to fail open on that host.
+
 `aidlc-log-subagent` is registered on BOTH edges of a delegation for a reason
 the payload forces: a Kiro hook payload carries no acting-agent field, so a
 delegate's own tool calls arrive anonymous. They do arrive — they are nested
