@@ -27,7 +27,7 @@ import {
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
 const ORCHESTRATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const HARNESSES = ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"];
+const HARNESSES = ["claude", "kiro", "codex", "cursor", "opencode", "copilot"];
 const tempDirs: string[] = [];
 
 afterEach(() => {

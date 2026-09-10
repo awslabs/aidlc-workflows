@@ -79,31 +79,34 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
-  decodeHarnessPlainText,
-  hasOpenGate,
   clearKiroIdeLegacyPlanApprovalHost,
+  clearPlanApprovalLegacyWindow,
   clearPlanApprovalViolation,
+  decodeHarnessPlainText,
   getField,
+  hasOpenGate,
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
-  clearPlanApprovalLegacyWindow,
-  recordHookDrop,
-  readPlanApprovalViolation,
+  readActiveDirectiveMarker,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
-  readActiveDirectiveMarker,
+  readPlanApprovalViolation,
+  recordHookDrop,
   resolveProjectDirFromHook,
   reviewerDispatchPath,
   sanitizeHarnessPlainText,
-  writePlanApprovalLegacyWindow,
-  writePlanApprovalViolation,
   sessionsDir,
   splitKiroCommandArgs,
   stateFilePath,
+  UNBINDABLE_FINGERPRINT,
+  workspaceSourceState,
+  writePlanApprovalLegacyWindow,
+  writePlanApprovalViolation,
+  writeWorkspaceSourceSnapshot,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -372,6 +375,11 @@ function legacyPlanApprovalSessionId(): string {
   );
 }
 
+// Thrown only once Plan Approval mediation is engaged for a canonical planning
+// write (the Testing Contract, decision, or answer step failed). Environment
+// preconditions that fail before any mediation is in play are plain errors.
+class LegacyPlanApprovalMediationError extends Error {}
+
 function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
   if (ide.sessionId?.trim()) return ide.sessionId.trim();
   try {
@@ -582,7 +590,7 @@ function processLegacyPlanApprovalWrite(
     const instructions = readFileSync(instructionsPath, "utf-8");
     const contract = resolveTestingPosture(projectDir);
     if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
-      throw new Error(
+      throw new LegacyPlanApprovalMediationError(
         "legacy Plan Approval mediation requires the current Testing Contract in code-generation-plan.md",
       );
     }
@@ -601,7 +609,28 @@ function processLegacyPlanApprovalWrite(
           /^(\[Answer\]:)/m,
           `[Approval Fingerprint]: ${fingerprint}\n$1`,
         );
-    writeFileSync(questionsPath, withFingerprint, "utf-8");
+    // Core refuses a decision whose Plan Approval section lacks the planned
+    // source. The legacy channel cannot run the fingerprint command itself, so
+    // record the live workspace source here, falling back to the unbindable
+    // marker when the workspace has no source fingerprint rather than refusing
+    // the whole mediation. The listing behind the source is kept exactly as the
+    // fingerprint command keeps it, so a later drift can be told to the human as
+    // the files that changed.
+    const plannedState = workspaceSourceState(projectDir);
+    if (plannedState !== null) {
+      writeWorkspaceSourceSnapshot(projectDir, "code-generation", plannedState);
+    }
+    const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    const withPlannedSource = /^\[Planned Source\]:.*$/m.test(withFingerprint)
+      ? withFingerprint.replace(
+          /^\[Planned Source\]:.*$/m,
+          `[Planned Source]: ${plannedSource}`,
+        )
+      : withFingerprint.replace(
+          /^(\[Answer\]:)/m,
+          `[Planned Source]: ${plannedSource}\n$1`,
+        );
+    writeFileSync(questionsPath, withPlannedSource, "utf-8");
     const decision = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
       "decision",
       "--stage",
@@ -623,7 +652,7 @@ function processLegacyPlanApprovalWrite(
       ...targetArgs,
     ]);
     if (decision.code !== 0) {
-      throw new Error(
+      throw new LegacyPlanApprovalMediationError(
         `legacy Plan Approval decision mediation failed: ${decision.stderr.trim() || decision.stdout.trim()}`,
       );
     }
@@ -656,7 +685,7 @@ function processLegacyPlanApprovalWrite(
     ...targetArgs,
   ]);
   if (recorded.code !== 0) {
-    throw new Error(
+    throw new LegacyPlanApprovalMediationError(
       `legacy Plan Approval answer mediation failed: ${recorded.stderr.trim() || recorded.stdout.trim()}`,
     );
   }
@@ -3144,6 +3173,7 @@ if (fwd.hook === "__audit_and_sensors__") {
     filePath &&
     Object.keys(ide.toolArgs ?? {}).length === 0
   ) {
+    let mediationFailure: string | null = null;
     try {
       processLegacyPlanApprovalWrite(
         projectDir,
@@ -3151,13 +3181,31 @@ if (fwd.hook === "__audit_and_sensors__") {
         ide.sessionId?.trim() || legacyPlanApprovalSessionId(),
       );
     } catch (error) {
-      recordHookDrop(
-        projectDir,
-        "kiro-adapter",
-        `legacy Plan Approval mediation: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+      if (error instanceof LegacyPlanApprovalMediationError) {
+        mediationFailure = error.message;
+      } else {
+        // An environment precondition (no host identity) failed before any
+        // mediation was in play; the write is not a Plan Approval write.
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `legacy Plan Approval mediation: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    if (mediationFailure !== null) {
+      // The write already happened; the two advisory hooks below still ride the
+      // event. The mediation failure itself is surfaced as a visible block
+      // reason rather than a silent drop, because the legacy write window stays
+      // latched until the human recovers and a silent exit 0 hid why.
+      runCore("aidlc-write-audit-log.ts", fwd.input);
+      runCore("aidlc-run-sensors.ts", fwd.input);
+      process.stderr.write(
+        `Legacy Plan Approval mediation did not complete for this write: ${mediationFailure}\n`,
       );
+      return 2;
     }
   }
   // Two core hooks ride the same write event, in audit-then-sensors order
