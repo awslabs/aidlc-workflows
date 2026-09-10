@@ -37,6 +37,7 @@ import {
   readPluginTargets,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 import { validatePluginRoot } from "../../dist/claude/.claude/tools/aidlc-plugin-validate.ts";
+import { hostHandoffCommands } from "../../dist/claude/.claude/tools/aidlc-plugin-market.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLUGINS_ROOT = join(REPO_ROOT, "dist", "plugins");
@@ -115,6 +116,36 @@ describe("t338 plugin marketplace catalog", () => {
     expect(projectionDigest(root)).toBe(digest);
     renameSync(hookPath, join(root, "hooks", "renamed-compose.ts"));
     expect(projectionDigest(root)).not.toBe(digest);
+  });
+
+  test("projection integrity frames every file so boundaries cannot be forged", () => {
+    // Unframed `path NUL bytes` concatenation makes these two trees hash the
+    // same byte stream (`a\0xb\0y`): a substituted archive could drop `b` and
+    // splice its bytes into `a` undetected.
+    const merged = join(scratch, "framing-merged");
+    const split = join(scratch, "framing-split");
+    mkdirSync(merged);
+    mkdirSync(split);
+    writeFileSync(join(merged, "a"), Buffer.from("xb\0y", "latin1"));
+    writeFileSync(join(split, "a"), "x");
+    writeFileSync(join(split, "b"), "y");
+    expect(projectionDigest(merged)).not.toBe(projectionDigest(split));
+  });
+
+  test("host handoff names the catalog's published marketplace, not the local alias, and needs a repository source", () => {
+    const catalog: PluginCatalog = { ...emittedCatalog, name: "acme-aidlc-plugins" };
+    const github = normalizeMarketplaceSource("acme/aidlc-plugins");
+    expect(hostHandoffCommands("claude", "install", "test-pro", github, catalog)).toEqual([
+      "/plugin marketplace add acme/aidlc-plugins",
+      "/plugin install aidlc-test-pro@acme-aidlc-plugins",
+    ]);
+    expect(hostHandoffCommands("codex", "update", "test-pro", github, catalog)).toEqual([
+      "codex plugin marketplace add https://github.com/acme/aidlc-plugins",
+      "codex plugin add aidlc-test-pro@acme-aidlc-plugins",
+    ]);
+    const direct = normalizeMarketplaceSource("https://market.example/x/aidlc-marketplace.json");
+    expect(() => hostHandoffCommands("claude", "install", "test-pro", direct, catalog))
+      .toThrow(/registered by direct catalog URL/);
   });
 
   test("execution disclosure includes compose hooks, IDE hook registrations, and tool scripts", () => {

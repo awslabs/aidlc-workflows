@@ -462,12 +462,15 @@ Its root `aidlc-marketplace.json` uses schema version 1:
 The all-zero digest above illustrates the field shape; generate real values
 with `aidlc plugin catalog`, never copy it into a published catalog. Harness keys
 are `claude`, `codex`, `kiro`, `kiro-ide`, `opencode`, `cursor`, and `copilot`.
-Each projection has a safe repository-relative path and lowercase hex SHA-256
-over sorted regular-file paths and raw bytes (`path`, NUL, then file bytes).
-Symlinks are refused. This digest covers the entire projection, unlike the
-composition stamp's normalized compose-input hash. Optional `archive` supplies
-a same-source-host tagged archive URL for direct catalog hosting; optional
-`supersededBy: {core, note?}` advertises graduation (§9).
+Each projection has a safe repository-relative path and a lowercase hex
+SHA-256 over every regular file in sorted relative-path order, each file
+contributing a length-framed record (`u64be(len(path)) path u64be(len(bytes))
+bytes`, raw bytes) so file boundaries cannot be forged by splicing one file's
+bytes into another. Symlinks are refused. This digest covers the entire
+projection, unlike the composition stamp's normalized compose-input hash.
+Optional `archive` supplies a same-source-host tagged archive URL for direct
+catalog hosting; optional `supersededBy: {core, note?}` advertises graduation
+(§9).
 
 ### Register, discover, and check
 
@@ -519,12 +522,17 @@ plugin/harness identity, and verifies the complete projection digest before
 installing or handing off. Updating an already-current version is a no-op.
 
 - **Claude/Codex:** after verification, the CLI prints host marketplace and
-  install/update commands and exits **5 (action needed)**. Claude uses
-  `/plugin marketplace add <url>` and
-  `/plugin install aidlc-<name>@<marketplace>` (or `/plugin update ...`). Codex
-  uses `codex plugin marketplace add <url>` and
-  `codex plugin add aidlc-<name>@<marketplace>`. Run those commands in the host;
-  its trust prompt gates hooks. The CLI does not write a competing host store.
+  install/update commands and exits **5 (action needed)**. The `@` suffix is
+  the catalog's published `name` (the identity the host reads from the
+  repository's aggregate `marketplace.json`), never your local registration
+  alias. Claude uses `/plugin marketplace add <owner>/<repo>` and
+  `/plugin install aidlc-<name>@<catalog name>` (or `/plugin update ...`); Codex
+  uses `codex plugin marketplace add <repository url>` and
+  `codex plugin add aidlc-<name>@<catalog name>`. Run those commands in the
+  host; its trust prompt gates hooks. The CLI does not write a competing host
+  store. Store hosts clone a git repository, so a marketplace registered by
+  direct catalog URL cannot be handed off: the CLI refuses (exit 1) before
+  fetching and names the repository form to register instead.
 - **Kiro CLI, Kiro IDE, opencode, Cursor, Copilot:** after listing every hook
   file and tool script, the CLI asks `Install? [y/N]`. A non-interactive caller
   must pass `--yes`. One project transaction replaces the managed projection

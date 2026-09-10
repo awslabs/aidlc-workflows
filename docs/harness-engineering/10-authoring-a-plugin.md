@@ -412,12 +412,17 @@ Registration can instead use `--local` or `--global`; `marketplaces remove`
 removes the chosen layer's entry, not the plugin itself.
 
 **Claude / Codex (host stores):** the CLI first verifies the tagged projection,
-then exits **5** with the host commands to run. Claude uses
-`/plugin marketplace add <url>` and `/plugin install aidlc-test-pro@team`;
-Codex uses `codex plugin marketplace add <url>` and
-`codex plugin add aidlc-test-pro@team`. Their native trust prompts still gate
-hooks. A bundled SessionStart hook invokes the same transactional sync as
-`aidlc engine plugin sync`, scoped to its injected plugin root.
+then exits **5** with the host commands to run. The `@` suffix is the catalog's
+published `name` (here `your-marketplace`'s catalog name), not the local `team`
+alias, because the host reads that identity from the repository's aggregate
+`marketplace.json`. Claude uses `/plugin marketplace add your-org/your-marketplace`
+and `/plugin install aidlc-test-pro@<catalog name>`; Codex uses
+`codex plugin marketplace add https://github.com/your-org/your-marketplace` and
+`codex plugin add aidlc-test-pro@<catalog name>`. Their native trust prompts
+still gate hooks. Store hosts clone a repository, so a marketplace registered
+by direct catalog URL is refused for these harnesses; register the repository
+form instead. A bundled SessionStart hook invokes the same transactional sync
+as `aidlc engine plugin sync`, scoped to its injected plugin root.
 
 **Kiro CLI / Kiro IDE / opencode / Cursor / Copilot (managed path):** the CLI
 verifies the projection digest, lists every hook file and tool script, and asks

@@ -196,6 +196,28 @@ async function listCommand(projectDir: string, argv: string[], settings: Resolve
   ])), { ...result, statuses });
 }
 
+/**
+ * The host-store commands a Claude/Codex user runs after verification. Store
+ * hosts clone a git repository and read the aggregate host catalog at its
+ * root, so the marketplace must be a repository source and the `@` suffix is
+ * the catalog's published `name` — never the local registration alias.
+ */
+export function hostHandoffCommands(
+  harness: "claude" | "codex", verb: "install" | "update", pluginName: string, source: MarketplaceSource, catalog: PluginCatalog,
+): string[] {
+  if (source.kind !== "github") {
+    throw new MarketError(
+      `${harness === "claude" ? "Claude Code" : "Codex"} installs plugins from a git marketplace repository, but this marketplace is registered by direct catalog URL (${source.url})`,
+      EXIT.failure,
+      "register the repository instead (owner/repo or https://github.com/owner/repo), or install on a managed harness: kiro, kiro-ide, opencode, cursor, copilot",
+    );
+  }
+  const host = `aidlc-${pluginName}@${catalog.name}`;
+  return harness === "claude"
+    ? [`/plugin marketplace add ${source.owner}/${source.repo}`, `/plugin ${verb} ${host}`]
+    : [`codex plugin marketplace add ${source.url}`, `codex plugin add ${host}`];
+}
+
 async function installCommand(
   verb: "install" | "update", name: string, argv: string[], projectDir: string, settings: ResolvedAidlcSettings, options: GlobalOptions,
 ): Promise<CommandResult> {
@@ -225,6 +247,7 @@ async function installCommand(
   if (verb === "install" && !hostStore && installed?.version === plugin.version) return success(`already installed: ${name} ${plugin.version}`);
   const projection = plugin.harnesses[harness];
   if (!projection) throw new MarketError(`plugin ${name} does not ship ${harness}; available harnesses: ${Object.keys(plugin.harnesses).join(", ")}`);
+  const handoff = hostStore ? hostHandoffCommands(harness as "claude" | "codex", verb, name, market.source, market.catalog) : null;
   const temporary = mkdtempSync(join(tmpdir(), "aidlc-plugin-install-"));
   try {
     const url = archiveUrl(market.source, plugin);
@@ -244,12 +267,9 @@ async function installCommand(
     }
     const fetched = `fetched ${name} ${plugin.version} (${plugin.tag}), checksum verified`;
     if (options.mode === "human") process.stdout.write(`${fetched}\n`);
-    if (hostStore) {
-      const commands = harness === "claude"
-        ? [`/plugin marketplace add ${market.source.url}`, `/plugin ${verb === "update" ? "update" : "install"} aidlc-${name}@${market.name}`]
-        : [`codex plugin marketplace add ${market.source.url}`, `codex plugin add aidlc-${name}@${market.name}`];
+    if (handoff) {
       const note = `${harness === "claude" ? "Claude Code" : "Codex"} installs plugins through its own store; its trust prompt gates the hooks.`;
-      return { ok: false, code: EXIT.actionNeeded, status: "handoff", message: `${commands.join("\n")}\n${note}`, data: { harness, commands } };
+      return { ok: false, code: EXIT.actionNeeded, status: "handoff", message: `${handoff.join("\n")}\n${note}`, data: { harness, commands: handoff } };
     }
     const executables = executableFiles(root);
     const consent = [`this plugin installs ${executables.hooks.length} hook file(s) that run in your shell:`, ...executables.hooks.map((file) => `  ${file}`)];

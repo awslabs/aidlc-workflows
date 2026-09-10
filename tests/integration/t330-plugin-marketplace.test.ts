@@ -219,14 +219,18 @@ describe("t330 plugin marketplace", () => {
     expect(offline.stdout).toContain("needs attention: superseded by core v9.0.0");
   }, 30_000);
 
-  test("Claude verifies the projection then hands off without managed installation", async () => {
+  test("Claude refuses a direct-URL marketplace before fetching and never installs a managed copy", async () => {
+    // Store hosts clone a git repository and read the aggregate host catalog at
+    // its root; a bare catalog URL cannot be handed to them. The repository
+    // handoff commands themselves are covered as a pure function in t338.
     const f = fixture("claude");
     await register(f);
-    const result = await f.run(["install", "test-pro", "--harness", "claude", "--yes"]);
-    expect(result.code).toBe(5);
-    expect(result.stdout).toContain("checksum verified");
-    expect(result.stdout).toContain(`/plugin marketplace add ${f.url}`);
-    expect(result.stdout).toContain("/plugin install aidlc-test-pro@local");
+    const result = await f.run(["install", "test-pro", "--harness", "claude", "--yes", "--json"]);
+    expect(result.code).toBe(1);
+    const body = JSON.parse(result.stdout);
+    expect(body.message).toContain("registered by direct catalog URL");
+    expect(body.remediation).toContain("owner/repo");
+    expect(result.stdout).not.toContain("checksum verified");
     expect(existsSync(join(f.project, ".claude", "plugins"))).toBe(false);
   });
 

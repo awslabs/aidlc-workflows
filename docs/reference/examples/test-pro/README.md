@@ -14,10 +14,10 @@ implemented; the historical lockfile example is not a runtime contract.
 
 ## What is real, and what is illustrative
 
-The catalog example follows the live schema. Its digest describes the emitted
-fixture when this example was generated; rebuild the projections and run
-`aidlc plugin catalog` before publishing your own marketplace. Do not treat the
-example as a live marketplace or copy its checksum onto different bytes.
+The catalog example follows the live schema; its `sha256` values are all-zero
+placeholders because real digests change with every fixture edit. Build the
+projections and run `aidlc plugin catalog` to generate real values before
+publishing your own marketplace. Do not treat the example as a live marketplace.
 
 The machine-setting example permits an organization URL prefix and one exact
 first-party repository URL. A trailing `/` denotes a prefix; a source without

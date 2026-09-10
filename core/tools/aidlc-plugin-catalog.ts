@@ -280,15 +280,23 @@ export function projectionFiles(root: string): string[] {
 /**
  * The integrity digest a catalog pins a projection to: sha256 over every
  * regular file in the projection (hooks and host manifests included), in
- * sorted relative-path order, each contributing `path NUL bytes`. Raw bytes,
- * no newline normalization: a fetched archive must match what CI emitted.
+ * sorted relative-path order. Each file contributes a length-framed record
+ * (`u64be(len(path)) path u64be(len(bytes)) bytes`), so the file boundary is
+ * unambiguous: `{a: "xb\0y"}` and `{a: "x", b: "y"}` hash differently. Raw
+ * bytes, no newline normalization: a fetched archive must match what CI emitted.
  */
 export function projectionDigest(root: string): string {
   const hash = createHash("sha256");
+  const frame = Buffer.alloc(8);
   for (const file of projectionFiles(root)) {
-    hash.update(file, "utf-8");
-    hash.update(Buffer.from([0]));
-    hash.update(readFileSync(join(root, file)));
+    const path = Buffer.from(file, "utf-8");
+    const bytes = readFileSync(join(root, file));
+    frame.writeBigUInt64BE(BigInt(path.byteLength));
+    hash.update(frame);
+    hash.update(path);
+    frame.writeBigUInt64BE(BigInt(bytes.byteLength));
+    hash.update(frame);
+    hash.update(bytes);
   }
   return hash.digest("hex");
 }
