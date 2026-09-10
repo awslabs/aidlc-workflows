@@ -392,9 +392,23 @@ export function isOwnedTuiFixture(cwd: string): boolean {
   }
 }
 
-function claudeFixtureCwd(cwd: string, command: string[]): string | null {
-  return CLAUDE_BASENAMES.has(commandBasename(command[0] ?? "")) &&
-      isOwnedTuiFixture(cwd)
+/** Recognize only direct Claude or env's structured, cwd-preserving -u form. */
+function claudeCommandIndex(command: string[]): number | null {
+  let index = 0;
+  if (commandBasename(command[0] ?? "") === "env") {
+    index = 1;
+    while (command[index] === "-u") {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(command[index + 1] ?? "")) return null;
+      index += 2;
+    }
+    // No assignments, -C/--chdir, split strings, nested or unknown wrappers.
+    if (index === 1) return null;
+  }
+  return CLAUDE_BASENAMES.has(commandBasename(command[index] ?? "")) ? index : null;
+}
+
+export function claudeFixtureCwd(cwd: string, command: string[]): string | null {
+  return claudeCommandIndex(command) !== null && isOwnedTuiFixture(cwd)
     ? realpathSync(cwd)
     : null;
 }
@@ -423,14 +437,18 @@ export function normalizeTuiCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (command.length === 0) return command;
-  const exe = commandBasename(command[0]);
-  if (!CLAUDE_BASENAMES.has(exe)) return command;
+  const index = claudeCommandIndex(command);
+  if (index === null) return command;
   if (hasSettingSourcesArg(command)) return command;
 
   const settingSources = tuiSettingSources(env);
   if (!settingSources) return command;
 
-  return [command[0], "--setting-sources", settingSources, ...command.slice(1)];
+  return [
+    ...command.slice(0, index + 1),
+    "--setting-sources", settingSources,
+    ...command.slice(index + 1),
+  ];
 }
 
 function answerGateTracePollMs(): number {
@@ -3011,26 +3029,57 @@ export async function acceptTuiFixtureTrust(
   backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
   session: string,
   screen: string,
+  timing: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<boolean> {
   const cwd = backend.fixtureCwd(session);
   if (!cwd || !isOwnedTuiFixture(cwd)) return false;
-  const navigation = claudeTrustNavigation(screen);
-  if (!navigation) return false;
-  writeTuiTrace(session, "fixture_trust_action", { cwd, navigation, screen });
+  if (!CLAUDE_TRUST_MODAL_RE.test(screen)) return false;
+  const now = timing.now ?? Date.now;
+  const pause = timing.sleep ?? sleep;
+  const startedAt = now();
+  const readyDeadline = startedAt + 5_000;
+  let previous = "";
+  let stableSince = startedAt;
+  let navigation: ReturnType<typeof claudeTrustNavigation> = null;
+  // First paint can precede Claude's input handler. Require the complete menu
+  // to remain byte-stable, as legacy `wait --stable-ms 600` callers do, before
+  // sending even one navigation key. Partial/repainting grids reset the wait.
+  while (now() < readyDeadline) {
+    screen = backend.capture(session, false);
+    navigation = claudeTrustNavigation(screen);
+    if (!navigation || screen !== previous) stableSince = now();
+    previous = screen;
+    if (navigation && now() - stableSince >= DEFAULT_STABLE_MS) break;
+    navigation = null;
+    await pause(POLL_INTERVAL_MS);
+  }
+  if (!navigation) {
+    throw new Error("fixture trust menu never became stable; refusing navigation");
+  }
+  if (backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) {
+    throw new Error("fixture trust context changed; refusing navigation");
+  }
+  writeTuiTrace(session, "fixture_trust_action", {
+    cwd, navigation, screen, readyAfterMs: now() - startedAt, stableMs: DEFAULT_STABLE_MS,
+  });
   if (navigation !== "Enter") {
     backend.send(session, navigation, false, true);
-    const deadline = Date.now() + 5_000;
+    const deadline = now() + 5_000;
     do {
-      await sleep(POLL_INTERVAL_MS);
+      await pause(POLL_INTERVAL_MS);
       screen = backend.capture(session, false);
       if (claudeTrustNavigation(screen) === "Enter") break;
-    } while (Date.now() < deadline);
+    } while (now() < deadline);
     if (claudeTrustNavigation(screen) !== "Enter") {
       throw new Error("fixture trust selection never moved to Yes; refusing Enter");
     }
   }
   // Revalidate both the fixture and visible selection immediately before Enter.
-  if (!isOwnedTuiFixture(cwd) || claudeTrustNavigation(backend.capture(session, false)) !== "Enter") {
+  screen = backend.capture(session, false);
+  if (
+    backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd) ||
+    claudeTrustNavigation(screen) !== "Enter"
+  ) {
     throw new Error("fixture trust context changed; refusing Enter");
   }
   backend.send(session, "Enter", false, true);
