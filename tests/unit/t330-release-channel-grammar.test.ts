@@ -103,11 +103,12 @@ function shellPattern(): string {
   return match[1];
 }
 
-function powershellPatterns(): string[] {
-  const validate = /\[ValidatePattern\('([^']+)'\)\]/.exec(INSTALL_PS1)?.[1];
-  const manifest = /\$manifest\.version -notmatch '([^']+)'/.exec(INSTALL_PS1)?.[1];
-  if (!validate || !manifest) throw new Error("install.ps1 has no version literals");
-  return [validate, manifest];
+function powershellPatterns(): { parameter: string; manifest: string } {
+  const validate = /\[ValidatePattern\('([^']+)',\s*Options\s*=\s*'None'\)\]/.exec(INSTALL_PS1)?.[1];
+  const manifest = /\$manifest\.version -cnotmatch '([^']+)'/.exec(INSTALL_PS1)?.[1];
+  if (!validate) throw new Error("install.ps1 -Version must use ValidatePattern with Options='None'");
+  if (!manifest) throw new Error("install.ps1 manifest version must use case-sensitive -cnotmatch");
+  return { parameter: validate, manifest };
 }
 
 function grepMatches(pattern: string, value: string): boolean {
@@ -226,13 +227,18 @@ describe("t330 release version-id grammar", () => {
     for (const value of REJECTED.filter((candidate) => !candidate.includes("\n"))) {
       expect(grepMatches(shell, value), `install.sh ${JSON.stringify(value)}`).toBe(false);
     }
-    for (const pattern of powershellPatterns()) {
-      // The PowerShell literal is a .NET regex; for these constructs the
-      // JavaScript engine agrees byte for byte.
+    for (const [context, pattern] of Object.entries(powershellPatterns())) {
+      // Extraction requires Options='None' and -cnotmatch so these JavaScript
+      // checks also pin PowerShell's case-sensitive matching settings.
       const regex = new RegExp(pattern);
-      for (const value of ACCEPTED) expect(regex.test(value), `install.ps1 ${value}`).toBe(true);
-      for (const value of REJECTED) {
-        expect(regex.test(value), `install.ps1 ${JSON.stringify(value)}`).toBe(false);
+      for (const value of ACCEPTED) {
+        expect(regex.test(value), `install.ps1 ${context} ${value}`).toBe(true);
+      }
+      // Only the parameter accepts the empty default/latest selector; a
+      // manifest must always name a concrete stable or preview version.
+      expect(regex.test(""), `install.ps1 ${context} empty`).toBe(context === "parameter");
+      for (const value of REJECTED.filter((candidate) => candidate !== "")) {
+        expect(regex.test(value), `install.ps1 ${context} ${JSON.stringify(value)}`).toBe(false);
       }
     }
     const lifecycle = /\\\\versions\\\\([^']+)\\\\aidlc\\\.exe\$'/.exec(RELEASE_WORKFLOW)?.[1];

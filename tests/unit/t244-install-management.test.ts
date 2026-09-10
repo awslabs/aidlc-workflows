@@ -1503,7 +1503,23 @@ describe("t244 Windows and completion release surfaces", () => {
     }
   });
 
-  test("PowerShell installer -Version pattern tolerates the empty iex default", () => {
+  const powershellVersionCases = [
+    { version: "", accepted: true },
+    { version: "2.7.2", accepted: true },
+    { version: "2.7.2-preview.20260903.1", accepted: true },
+    { version: "2.7.2-preview.20260903.10", accepted: true },
+    { version: " ", accepted: false },
+    { version: "v2.7.2", accepted: false },
+    { version: "02.7.2", accepted: false },
+    { version: "2.7.2-rc.1", accepted: false },
+    { version: "2.7.2-preview.20260903", accepted: false },
+    { version: "2.7.2-preview.20260903.0", accepted: false },
+    { version: "2.7.2-preview.20260903.01", accepted: false },
+    { version: "2.7.2-Preview.20260903.1", accepted: false },
+    { version: "2.7.2\n", accepted: false },
+  ];
+
+  test("PowerShell installer -Version pattern accepts the empty default and stable/preview ids only", () => {
     // `irm .../install.ps1 | iex` pipes the script into Invoke-Expression,
     // which binds the typed [string]$Version parameter to its empty-string
     // default and eagerly runs [ValidatePattern]. A pattern that rejects the
@@ -1512,38 +1528,58 @@ describe("t244 Windows and completion release surfaces", () => {
     // must accept an empty string, mirroring install.sh's `[ -n "$VERSION" ]`
     // guard that only validates an explicitly supplied version.
     const script = readFileSync(INSTALL_PS1, "utf-8");
-    expect(script).toContain(
-      "[ValidatePattern('^$|^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$')]",
-    );
-    expect(script).not.toContain(
-      "[ValidatePattern('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$')]",
-    );
+    // ValidatePattern defaults to IgnoreCase; require the actual PowerShell
+    // option before using JavaScript's case-sensitive regex engine.
+    const pattern = /\[ValidatePattern\('([^']+)',\s*Options\s*=\s*'None'\)\]/.exec(script)?.[1];
+    if (!pattern) throw new Error("install.ps1 -Version must use ValidatePattern with Options='None'");
+    const regex = new RegExp(pattern);
+    for (const { version, accepted } of powershellVersionCases) {
+      expect(regex.test(version), JSON.stringify(version)).toBe(accepted);
+    }
   });
 
-  test.skipIf(process.platform !== "win32")(
-    "PowerShell installer param block parses under iex with no arguments",
-    () => {
-      // A live guard on Windows: dot-piping the script into iex must not throw
-      // the ValidationMetadataException that the empty-string default produced.
-      // We stop before any network work by asserting only that the param block
-      // binds; the body's admin/network checks are out of scope here.
-      const script = readFileSync(INSTALL_PS1, "utf-8");
-      const paramBlock = script.slice(0, script.indexOf("$ErrorActionPreference"));
-      const probe = `${paramBlock}\nWrite-Output "PARAM_OK"\n`;
-      const result = spawnSync(
-        "powershell",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "$input | Out-String | Invoke-Expression",
-        ],
-        { input: probe, encoding: "utf-8", timeout: 30_000 },
-      );
-      expect(result.stderr).not.toContain("ValidationMetadataException");
-      expect(result.stdout).toContain("PARAM_OK");
-    },
-  );
+  for (const { version, accepted } of [
+    { version: undefined, accepted: true },
+    ...powershellVersionCases,
+  ]) {
+    const label = version === undefined ? "iex with no arguments" : `-Version ${JSON.stringify(version)}`;
+    test.skipIf(process.platform !== "win32")(
+      `PowerShell installer param binding ${accepted ? "accepts" : "rejects"} ${label}`,
+      () => {
+        // Exercise the real parameter block, including the iex default, without
+        // reaching the installer's admin/network checks.
+        const script = readFileSync(INSTALL_PS1, "utf-8");
+        const bodyStart = script.indexOf("$ErrorActionPreference");
+        expect(bodyStart).toBeGreaterThan(0);
+        const paramBlock = script.slice(0, bodyStart);
+        const probe = `${paramBlock}\nWrite-Output ("PARAM_OK:<{0}>" -f $Version)\n`;
+        const invocation = version === undefined
+          ? "$input | Out-String | Invoke-Expression"
+          : `& ([scriptblock]::Create(($input | Out-String))) -Version '${version.replaceAll("'", "''")}'`;
+        const result = spawnSync(
+          "powershell",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `$ErrorActionPreference = 'Stop'; ${invocation}`,
+          ],
+          { input: probe, encoding: "utf-8", timeout: 30_000 },
+        );
+        if (result.error) throw result.error;
+        if (accepted) {
+          expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+          expect(result.stderr).not.toContain("ValidationMetadataException");
+          expect(result.stdout.trim()).toBe(`PARAM_OK:<${version ?? ""}>`);
+        } else {
+          expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+          expect(result.stderr).toMatch(/ParameterArgumentValidationError|ValidationMetadataException/);
+          expect(result.stdout).not.toContain("PARAM_OK");
+        }
+      },
+      35_000,
+    );
+  }
 
   test("doctor command-pointer text is grammatical without an active version", () => {
     const source = readFileSync(UTILITY, "utf-8");

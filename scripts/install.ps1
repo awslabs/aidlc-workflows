@@ -19,8 +19,9 @@ param(
   # x.y.z-preview.YYYYMMDD.N. PowerShell literal of PREVIEW_CHANNEL / VERSION_ID
   # in core/tools/aidlc-channel.ts. Empty selects latest for the Windows one-liner;
   # the manifest check below requires a non-empty version.
+  # Use a strict end assertion and explicit case sensitivity in .NET.
   [Parameter()]
-  [ValidatePattern('^$|^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}\.[1-9][0-9]*)?$')]
+  [ValidatePattern('^(?:(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}\.[1-9][0-9]*)?)?(?![\s\S])', Options = 'None')]
   [string]$Version,
 
   [Parameter()]
@@ -273,7 +274,7 @@ try {
     }
   }
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-  if ($manifest.schemaVersion -ne 1 -or $manifest.version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}\.[1-9][0-9]*)?$') {
+  if ($manifest.schemaVersion -ne 1 -or $manifest.version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}\.[1-9][0-9]*)?(?![\s\S])') {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'version.json has an invalid schema or version'
   }
