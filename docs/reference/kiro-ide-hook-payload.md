@@ -179,6 +179,11 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   later mutation calls remain blocked even when live authority can no longer be
   parsed. Adapter-owned `next` recovery clears that poison only after the engine
   returns a valid non-error directive. Raw audit appends have no authority.
+  In native installs, adapter-owned recovery and decision/answer mediation use
+  `AIDLC_COMPILED_EXECUTABLE` with `engine orchestrate next`/`continue` and
+  `engine log decision`/`answer`. Bun source mode retains the direct
+  `aidlc-orchestrate.ts` and `aidlc-log.ts` invocations. Both modes preserve the
+  existing project/session arguments, working directory, and inherited environment.
   A new stage attempt retires the approval; a fresh directive for the same target
   and attempt does not. Generation start re-baselines the source the plan is bound
   to, and refuses rather than deletes if the workspace source moved first.
