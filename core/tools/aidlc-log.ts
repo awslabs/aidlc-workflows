@@ -1647,6 +1647,79 @@ function handleReview(args: string[]): void {
     };
   };
 
+  // Requests and terminal verdicts use one summary admission contract. In
+  // particular, a Unit's gate state may differ from the global stage checkbox,
+  // and relaxed acceptance must be recorded rather than silently continued.
+  const admitReviewSummary = (
+    context: ReturnType<typeof loadContext>,
+    action: "review-request" | "review-verdict",
+    notices: string[],
+  ) => {
+    const { state, node, attempt, budget, receipts, requireRequiredArtifacts, unitResolution, mergedBoltUnits } = context;
+    const teamGate = teamUnitGateStatus(pd, state, node.slug, flags.unit);
+    const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
+      stateContent: state,
+      unit: flags.unit,
+      workflow: fields.Workflow,
+      selection: { intent, space },
+    });
+    // Verdict success already takes an authoritative artifact/source snapshot.
+    // Only a refusal needs the additional pending-request view for its remedies.
+    const pendingStatus = action === "review-request" || !summaryEvidence.ok
+      ? pendingReviewRequestStatus(pd, node, flags.unit, attempt, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+          mergedBoltUnits,
+          single: flags.single === "true",
+        })
+      : null;
+    if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
+      governedChangeControl(pd, state, { intent, space });
+      notices.push(...recordAcceptedChanges(pd, [
+        ...(receipts?.acceptedChanges ?? []),
+        ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
+      ], { intent, space }));
+    }
+    if (!summaryEvidence.ok) {
+      const message = action === "review-request"
+        ? reviewSummaryEvidenceMessage(flags.stage, summaryEvidence.message)
+        : `Cannot record a review verdict: ${summaryEvidence.message}`;
+      const snapshot = guardAttemptState(pd, state, node, {
+        ...(flags.unit ? { unit: flags.unit } : {}),
+        ...(receipts ? { receipts } : {}),
+        summaryCoverage: summaryEvidence.summaryCoverage,
+        reviewBudget: budget,
+        pendingStatus,
+        accounting: attempt,
+        requireRequiredArtifacts,
+      });
+      const evaluated = evaluateGuardRefusal({
+        code: summaryEvidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
+        blockedAction: action,
+        stage: flags.stage,
+        ...(flags.unit ? { unit: flags.unit } : {}),
+        stateContent: state,
+        invariant: summaryEvidence.refusal?.invariant ??
+          "A review requires current human-backed summary authorization and output descent.",
+        userMessage: message,
+        attempt: snapshot.attempt,
+        humanAuthority: humanAuthorityState(pd),
+        ...(teamGate ? { teamGate } : {}),
+      });
+      const refusal = summaryEvidence.refusal === undefined
+        ? evaluated
+        : {
+            ...summaryEvidence.refusal,
+            blockedAction: action,
+            state: evaluated.state,
+            userMessage: message,
+            remedies: evaluated.remedies,
+          };
+      refuseReviewGuard(pd, refusal, snapshot.attempt, snapshot.resources);
+    }
+    return { teamGate, pendingStatus };
+  };
+
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
   // requests in the current attempt, and append under the same lock. This closes
   // duplicate/missing-label bypasses and makes concurrent requests serialize.
@@ -1681,6 +1754,7 @@ function handleReview(args: string[]): void {
     };
     try {
       withAuditLock(pd, () => {
+        const context = loadContext(true, !retryPending);
         const {
           state,
           node,
@@ -1691,88 +1765,8 @@ function handleReview(args: string[]): void {
           requireRequiredArtifacts,
           unitResolution,
           mergedBoltUnits,
-        } = loadContext(true, !retryPending);
-        const pendingStatus = pendingReviewRequestStatus(
-          pd,
-          node,
-          flags.unit,
-          attempt,
-          {
-            requireRequiredArtifacts,
-            boltDag: unitResolution ?? undefined,
-            mergedBoltUnits,
-            single: flags.single === "true",
-          },
-        );
-        const teamGate = teamUnitGateStatus(
-          pd,
-          state,
-          node.slug,
-          flags.unit,
-        );
-        // The review request is a governed Change Control checkpoint when the
-        // receipt scan or the summary check met an input change after an
-        // approval and read the setting: resolve it again here as the mutating
-        // caller (an invalid memory value is its own error; a memory edit that
-        // moved it is recorded), then record what they accepted under relaxed.
-        // The human line rides on this command's JSON.
-        const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
-          stateContent: state,
-          unit: flags.unit,
-          workflow: fields.Workflow,
-          selection: { intent, space },
-        });
-        if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
-          governedChangeControl(pd, state, { intent, space });
-          requestChangeNotices.push(
-            ...recordAcceptedChanges(
-              pd,
-              [
-                ...(receipts?.acceptedChanges ?? []),
-                ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
-              ],
-              { intent, space },
-            ),
-          );
-        }
-        if (!summaryEvidence.ok) {
-          const message = reviewSummaryEvidenceMessage(
-            flags.stage,
-            summaryEvidence.message,
-          );
-          const guardAttempt = guardAttemptState(pd, state, node, {
-            ...(flags.unit ? { unit: flags.unit } : {}),
-            ...(receipts ? { receipts } : {}),
-            summaryCoverage: summaryEvidence.summaryCoverage,
-            reviewBudget: budget,
-            pendingStatus,
-            accounting: attempt,
-          }).attempt;
-          const evaluated = evaluateGuardRefusal({
-            code: summaryEvidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
-            blockedAction: "review-request",
-            stage: flags.stage,
-            ...(flags.unit ? { unit: flags.unit } : {}),
-            stateContent: state,
-            invariant:
-              summaryEvidence.refusal?.invariant ??
-              "A review starts only after current human-backed summary authorization.",
-            userMessage: message,
-            attempt: guardAttempt,
-            humanAuthority: humanAuthorityState(pd),
-            ...(teamGate ? { teamGate } : {}),
-          });
-          const refusal = summaryEvidence.refusal === undefined
-            ? evaluated
-            : {
-                ...summaryEvidence.refusal,
-                blockedAction: "review-request",
-                state: evaluated.state,
-                userMessage: message,
-                remedies: evaluated.remedies,
-              };
-          refuseReviewGuard(pd, refusal, guardAttempt);
-        }
+        } = context;
+        const { pendingStatus, teamGate } = admitReviewSummary(context, "review-request", requestChangeNotices);
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
           receipts?.newestSourceUnit === (flags.unit ?? null);
@@ -2169,16 +2163,18 @@ function handleReview(args: string[]): void {
   fields.Verdict = verdict;
   const reviewFileFlag = flags["review-file"];
   let recordPath: string | null = null;
+  const verdictChangeNotices: string[] = [];
 
   try {
     withAuditLock(pd, () => {
+      const context = loadContext(false, false);
       const {
         node,
         attempt,
         requireRequiredArtifacts,
         unitResolution,
         mergedBoltUnits,
-      } = loadContext(false, false);
+      } = context;
       const pendingRequest = attempt.pendingRequests.get(iteration);
       if (!pendingRequest) {
         refuseReview(
@@ -2194,6 +2190,10 @@ function handleReview(args: string[]): void {
           "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
+      // A review can outlive a confirmation/retraction. Recheck the same
+      // summary/output admission used at request time before issuing terminal
+      // authority; an unchanged artifact snapshot alone cannot establish it.
+      admitReviewSummary(context, "review-verdict", verdictChangeNotices);
       const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
         requireRequiredArtifacts,
         boltDag: unitResolution ?? undefined,
@@ -2465,14 +2465,15 @@ function handleReview(args: string[]): void {
       }
     }, intent, space);
   } catch (e) {
-    if (e instanceof ReviewRefusal) error(e.message);
-    error(`Audit emission failed: ${errorMessage(e)}`);
+    if (e instanceof ReviewRefusal) error(e.message, verdictChangeNotices);
+    error(`Audit emission failed: ${errorMessage(e)}`, verdictChangeNotices);
   }
 
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
+    ...(verdictChangeNotices.length > 0 ? { change_notices: verdictChangeNotices } : {}),
   }));
 }
 
@@ -2530,10 +2531,10 @@ export function main(argv: string[]): void {
 
 // --- Utility ---
 
-function error(msg: string): never {
+function error(msg: string, changeNotices: readonly string[] = []): never {
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-log ${process.argv.slice(2).join(" ")}`.trim();
-  emitError(pd, "aidlc-log", command, msg);
+  emitError(pd, "aidlc-log", command, msg, undefined, undefined, changeNotices);
 }
 
 if (import.meta.main) {

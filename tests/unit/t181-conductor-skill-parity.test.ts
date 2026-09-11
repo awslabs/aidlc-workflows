@@ -702,17 +702,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
-  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+  test("every conductor distinguishes recovery work from separate human feedback", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const token of [
-        "A remedy without `command` is action-only",
-        "render that follow-up and END THE TURN",
+        "branch on its `interaction`",
+        "`command`: execute the exact returned `command`",
+        "`human-input`: render the action's follow-up and END THE TURN",
+        "`external-work`: perform the described `action`",
+        "wait for a separate answer; the selection itself is not feedback",
         "their exact text",
-        "Never synthesize a missing command",
+        "Never reconstruct a command from prose, invent missing arguments",
         "process its returned directive through the table above",
-        "whose last line is a guard-recovery ask JSON is the same directive",
+        "whose last line is a guard-recovery ask JSON follows the same ask contract",
+        "surface the actual error and stop that recovery attempt",
         "When `directive.remedies` is empty the ask is terminal",
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);

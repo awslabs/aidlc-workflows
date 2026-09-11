@@ -56,7 +56,14 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  guardOperationMatchesRemedy,
+  isGuardRecoveryEngineInvocation,
+  parseGuardRestartContinuationCommand,
+  sameGuardOperation,
+} from "../tools/aidlc-guard-operation.ts";
+import {
   acquireAuditLock,
+  type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
@@ -64,10 +71,15 @@ import {
   docsRoot,
   errorMessage,
   getField,
+  GUARD_RECOVERY_ASK_TYPE,
   harnessDir,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  loadScopeMapping,
+  loadStageGraph,
+  parseCheckboxes,
+  parseStateStageSuffixes,
   readActiveDirectiveMarker,
   recordHookDrop,
   releaseAuditLock,
@@ -556,6 +568,11 @@ function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean
 
 function isPlanApprovalPrerequisite(args: string[]): boolean {
   if (args[0] !== "engine") return false;
+  // Direct log refusals can offer this abort without publishing a selection
+  // marker. Preserve the trusted source-tool recovery route in native installs:
+  // human selection remains the conductor's responsibility for abort, while
+  // isSelectedGuardRestartContinuation verifies the published restart choice.
+  if (isGuardRecoveryEngineInvocation(args)) return true;
 
   const noun = args[1];
   const verb = args[2];
@@ -579,6 +596,61 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
     lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
     lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
   );
+}
+
+function isSelectedGuardRestartContinuation(
+  command: string,
+  state: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const continuation = parseGuardRestartContinuationCommand(command);
+  if (
+    continuation === null ||
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.state_present !== true ||
+    marker.needs_rehydrate !== false ||
+    // An issued ask becomes consumed only when its human selection is recorded.
+    marker.delivery !== "consumed" ||
+    marker.guard_recovery_response?.status !== "ready" ||
+    marker.guard_recovery_response.feedback_sha256 !== undefined
+  ) return false;
+
+  const selected = marker.remedies?.filter(
+    (remedy) => remedy.op === marker.guard_recovery_response?.selected_op,
+  ) ?? [];
+  if (
+    selected.length !== 1 ||
+    selected[0].interaction !== "command" ||
+    !sameGuardOperation(selected[0].operation, continuation.operation) ||
+    !guardOperationMatchesRemedy(
+      continuation.operation, selected[0].op, marker.stage, marker.unit,
+    ) ||
+    continuation.scope !== getField(state, "Scope")
+  ) return false;
+
+  const scope = loadScopeMapping()[continuation.scope];
+  if (!scope) return false;
+  const graph = loadStageGraph();
+  const target = continuation.operation.stage;
+  const current = getField(state, "Current Stage");
+  const targetIndex = graph.findIndex((stage) => stage.slug === target);
+  const currentIndex = graph.findIndex((stage) => stage.slug === current);
+  if (
+    targetIndex < 0 || currentIndex < 0 || targetIndex > currentIndex ||
+    graph[targetIndex].phase === "initialization"
+  ) return false;
+  const checkboxes = parseCheckboxes(state);
+  if (
+    checkboxes.filter((entry) => entry.slug === target).length !== 1 ||
+    checkboxes.filter((entry) => entry.slug === current).length !== 1 ||
+    (parseStateStageSuffixes(state).get(target) ?? scope.stages[target]) !== "EXECUTE"
+  ) return false;
+
+  // Match aidlc-jump resolve's graph-order calculation, not the caller's
+  // claimed direction. A selection cannot turn a forward move into a reset.
+  return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
 }
 
 function gitSubcommand(args: string[]): string | null {
@@ -766,6 +838,8 @@ async function mutationIntent(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
   cwd: string,
+  state: string,
+  activeDirective: ActiveDirectiveMarker | null,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
@@ -776,6 +850,9 @@ async function mutationIntent(
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
+    if (isSelectedGuardRestartContinuation(command, state, activeDirective)) {
+      return { targets: [], opaqueShell: false, shellCommand };
+    }
     const {
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
@@ -932,7 +1009,7 @@ export async function run(input: string): Promise<number> {
     const mutation = guardedDispatch
       ? { targets: [], opaqueShell: false, shellCommand: null }
       : knownMutationTool
-        ? await mutationIntent(projectDir, toolName, toolInput, cwd)
+        ? await mutationIntent(projectDir, toolName, toolInput, cwd, state, activeDirective)
         : {
             targets: [],
             opaqueShell: true,

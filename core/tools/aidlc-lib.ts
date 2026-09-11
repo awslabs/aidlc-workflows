@@ -10,7 +10,16 @@ import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
   resolveHarnessPath,
+  runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
+import {
+  guardOperationInvocation,
+  guardOperationMatchesRemedy,
+  type GuardRecoveryInteraction,
+  type GuardRecoveryOperation,
+  isGuardRecoveryOperation,
+  renderGuardOperation,
+} from "./aidlc-guard-operation.ts";
 import {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
@@ -4790,6 +4799,9 @@ interface ActiveDirectiveAttempt {
   cursor_input_sha256?: string; result_sha256?: string; result_revision?: number;
   resume_request?: boolean; resume_action?: ResumeAction;
   resume_gate_revision?: number;
+  // Present only when this claim started from a delivered, consumed restart
+  // choice. It is not a result receipt and grants no Plan Approval.
+  guard_recovery_selection_sha256?: string;
 }
 
 interface ActiveDirectiveResume {
@@ -4800,6 +4812,8 @@ interface ActiveDirectiveResume {
 export interface ActiveDirectiveGuardRemedy {
   op: GuardRemedyOp;
   action: string;
+  operation?: GuardRecoveryOperation;
+  interaction?: GuardRecoveryInteraction;
 }
 
 // The human's answer to a guard-recovery ask, kept on the ask marker so the
@@ -5455,12 +5469,16 @@ function validActiveDirectiveGuardRemedies(
 ): value is ActiveDirectiveGuardRemedy[] {
   return Array.isArray(value) && value.every((remedy) => {
     if (!isPlainObject(remedy)) return false;
-    const keys = Object.keys(remedy).sort();
-    return keys.length === 2 &&
-      keys[0] === "action" &&
-      keys[1] === "op" &&
+    return Object.keys(remedy).every((key) =>
+      ["op", "action", "operation", "interaction"].includes(key)
+    ) &&
       isGuardRemedyOp(remedy.op) &&
-      typeof remedy.action === "string";
+      typeof remedy.action === "string" &&
+      (!("operation" in remedy) || isGuardRecoveryOperation(remedy.operation)) &&
+      (!("interaction" in remedy) ||
+        ["command", "human-input", "external-work"].includes(String(remedy.interaction))) &&
+      (!("operation" in remedy) || remedy.interaction === "command") &&
+      (remedy.interaction !== "command" || isGuardRecoveryOperation(remedy.operation));
   });
 }
 
@@ -5477,6 +5495,11 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const guardRecovery = isPlainObject(parsed.guard_recovery_response)
     ? parsed.guard_recovery_response
     : null;
+  const selectedRecovery = guardRecovery && validActiveDirectiveGuardRemedies(parsed.remedies)
+    ? parsed.remedies.find((remedy) => remedy.op === guardRecovery.selected_op)
+    : undefined;
+  const recoveryNeedsFeedback =
+    selectedRecovery?.interaction !== "command" && selectedRecovery?.interaction !== "external-work";
   const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"];
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
@@ -5533,7 +5556,9 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
         !/^[0-9a-f]{64}$/.test(String(guardRecovery.selection_sha256 ?? "")) ||
         (
           guardRecovery.status === "ready"
-            ? !/^[0-9a-f]{64}$/.test(String(guardRecovery.feedback_sha256 ?? ""))
+            ? recoveryNeedsFeedback
+              ? !/^[0-9a-f]{64}$/.test(String(guardRecovery.feedback_sha256 ?? ""))
+              : "feedback_sha256" in guardRecovery
             : "feedback_sha256" in guardRecovery
         )
       )) ||
@@ -5554,6 +5579,8 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
     ("result_sha256" in attempt && !/^[0-9a-f]{64}$/.test(String(attempt.result_sha256 ?? ""))) ||
     ("result_revision" in attempt && !integer(attempt.result_revision)) ||
     ("resume_gate_revision" in attempt && !integer(attempt.resume_gate_revision)) ||
+    ("guard_recovery_selection_sha256" in attempt &&
+      !/^[0-9a-f]{64}$/.test(String(attempt.guard_recovery_selection_sha256 ?? ""))) ||
     (resume !== null &&
       (!["waiting", "selected", "superseded"].includes(String(resume.status)) ||
         typeof resume.issuing_stage !== "string" || !/^[0-9a-f]{64}$/.test(String(resume.issuing_state_sha256 ?? "")) ||
@@ -6308,18 +6335,19 @@ export function consumeSharedDirectiveAsk(
     if (marker.delivery !== "issued" && marker.delivery !== "delivered") {
       return { marker, result: false, preserve: true };
     }
+    const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    const selected = marker.remedies?.find((remedy) => remedy.op === selectedOp);
     return {
       marker: {
         ...marker,
         revision: (marker.revision ?? 0) + 1,
         delivery: "consumed",
         guard_recovery_response: {
-          status: "awaiting-feedback",
+          status: selected?.interaction === "command" || selected?.interaction === "external-work"
+            ? "ready"
+            : "awaiting-feedback",
           selection_sha256: responseSha256,
-          selected_op: resolveGuardRecoverySelection(
-            marker.remedies,
-            humanResponseText,
-          ),
+          selected_op: selectedOp,
         },
       },
       result: true,
@@ -6852,6 +6880,71 @@ export function recordCopilotHumanSequence(
   });
 }
 
+// The adapter and orchestrator hash JSON.stringify([verb, ...args]) after
+// removing the dispatcher prefix, --project-dir and --aidlc-attempt-id. Compare
+// that identity to the operation's argv, not to shell spelling or jumpRequest.
+// emitJumpDirective emits this exact {kind,message} print before stage-validity
+// decoration. The adapter retains only its byte-exact resultSha256, so enumerate
+// aidlcToolInvocation("jump")'s source/native representations here. Both command
+// representations share one claim identity; either may run through this adapter.
+function copilotGuardRestartPrintHashes(
+  marker: ActiveDirectiveMarker,
+  stateContent: string | null,
+  input: CopilotCommandClaim,
+): string[] {
+  if (
+    stateContent === null ||
+    marker.version !== 2 ||
+    marker.state_present !== true ||
+    marker.state_sha256 !== stateDigest(stateContent) ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.delivery !== "consumed" ||
+    marker.guard_recovery_response?.status !== "ready" ||
+    marker.guard_recovery_response.feedback_sha256 !== undefined ||
+    input.commandKind !== "next"
+  ) return [];
+  const selected = marker.remedies?.filter(
+    (remedy) => remedy.op === marker.guard_recovery_response?.selected_op,
+  ) ?? [];
+  if (selected.length !== 1 || selected[0].interaction !== "command") return [];
+  const operation = selected[0].operation;
+  if (
+    operation?.kind !== "restart-stage" ||
+    !guardOperationMatchesRemedy(operation, selected[0].op, marker.stage, marker.unit) ||
+    input.commandSha256 !== contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
+  ) return [];
+  try {
+    const scope = getField(stateContent, "Scope");
+    const mapping = scope ? loadScopeMapping()[scope] : undefined;
+    if (!scope || !mapping) return [];
+    const graph = loadStageGraph();
+    const targetIndex = graph.findIndex((stage) => stage.slug === operation.stage);
+    const current = getField(stateContent, "Current Stage");
+    const currentIndex = graph.findIndex((stage) => stage.slug === current);
+    if (
+      targetIndex < 0 || currentIndex < 0 || targetIndex > currentIndex ||
+      graph[targetIndex].phase === "initialization"
+    ) return [];
+    const checkboxes = parseCheckboxes(stateContent);
+    if (
+      checkboxes.filter((entry) => entry.slug === operation.stage).length !== 1 ||
+      checkboxes.filter((entry) => entry.slug === current).length !== 1 ||
+      (parseStateStageSuffixes(stateContent).get(operation.stage) ?? mapping.stages[operation.stage]) !== "EXECUTE"
+    ) return [];
+    const direction = targetIndex === currentIndex ? "redo" : "backward";
+    return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
+      (invocation) => contentSha256(JSON.stringify({
+        kind: "print",
+        message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      })),
+    );
+  } catch {
+    // Unresolvable plan evidence cannot authorize retaining a recovery choice.
+    return [];
+  }
+}
+
 export function claimCopilotCommand(
   projectDir: string,
   stateContent: string | null,
@@ -6935,22 +7028,29 @@ export function claimCopilotCommand(
     const sequence = (marker.event_sequence ?? 0) + 1;
     const nextRevision = (marker.revision ?? 0) + 1;
     const attemptId = input.attemptId ?? randomUUID();
-      const attempt: ActiveDirectiveAttempt = {
+    const recoverySelection =
+      installedHarnessNameForTarget(target) === "copilot" &&
+      marker.needs_rehydrate === false &&
+      copilotGuardRestartPrintHashes(marker, stateContent, input).length > 0
+        ? marker.guard_recovery_response?.selection_sha256
+        : undefined;
+    const attempt: ActiveDirectiveAttempt = {
       id: attemptId,
       command_kind: input.commandKind,
       command_sha256: input.commandSha256,
       issued_state_sha256: context.stateSha256,
       session_id: input.sessionId,
       owner_epoch: ownerEpoch,
-        context_epoch: marker.context_epoch ?? 0,
-        claim_revision: nextRevision,
-        status: "pending",
+      context_epoch: marker.context_epoch ?? 0,
+      claim_revision: nextRevision,
+      status: "pending",
       ...(input.commandKind === "continue" && input.continueToken
         ? { cursor_input_sha256: contentSha256(input.continueToken) }
         : {}),
       ...(input.resumeRequest ? { resume_request: true } : {}),
       ...(input.resumeAction ? { resume_action: input.resumeAction } : {}),
       ...(waitingExact ? { resume_gate_revision: nextRevision } : {}),
+      ...(recoverySelection ? { guard_recovery_selection_sha256: recoverySelection } : {}),
     };
     return {
       marker: {
@@ -7018,6 +7118,40 @@ export function settleCopilotCommand(
         active_attempt: { ...attempt, status: "failed" },
       }, result: "settled" as const };
     }
+    // A selected restart's next --stage transports a print rather than issuing
+    // a new directive. Preserve its consumed ask only for the same pending
+    // claim, unchanged context/revision and the exact expected successful
+    // result. Claiming still requires rehydration, and until this settlement
+    // the Plan Approval hook continues to reject the returned jump.
+    if (
+      directive.kind === "print" &&
+      !stateChanged &&
+      exactCopilotMarker(marker, target, context) &&
+      marker.owner_session === input.sessionId &&
+      marker.needs_rehydrate === true &&
+      attempt.claim_revision === marker.revision &&
+      attempt.result_sha256 === undefined &&
+      attempt.result_revision === undefined &&
+      attempt.guard_recovery_selection_sha256 !== undefined &&
+      attempt.guard_recovery_selection_sha256 === marker.guard_recovery_response?.selection_sha256 &&
+      typeof directive.resultSha256 === "string" &&
+      copilotGuardRestartPrintHashes(marker, stateContent, input).includes(directive.resultSha256)
+    ) {
+      const revision = (marker.revision ?? 0) + 1;
+      return {
+        marker: {
+          ...marker,
+          revision,
+          delivery: "consumed",
+          needs_rehydrate: false,
+          active_attempt: {
+            ...attempt, status: "settled",
+            result_sha256: directive.resultSha256, result_revision: revision,
+          },
+        },
+        result: "settled" as const,
+      };
+    }
     const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
       (directive.kind === "load-steering" || directive.kind === "run-stage");
@@ -7080,6 +7214,11 @@ export function settleCopilotCommand(
       state_present: context.statePresent,
       state_sha256: context.stateSha256,
       kind: directive.kind,
+      // An ordinary print (or another non-ask result) supersedes the ask. Its
+      // old remedies/selection must not survive on a different directive kind.
+      ...(directive.kind !== "ask"
+        ? { ask_type: undefined, remedies: undefined, guard_recovery_response: undefined }
+        : {}),
       stage: directive.stage ?? marker.stage,
       ...(unit ? { unit } : { unit: undefined }),
       ...(directive.part ? { part: directive.part } : { part: undefined }),
@@ -8201,6 +8340,31 @@ function summaryQuestionFiles(
   return files;
 }
 
+function summaryFlowStartedInAttempt(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { workflow?: string; unit?: string; stateContent?: string | null },
+): boolean {
+  const events = readAuditShardEvents(projectDir);
+  const unitMajor = isPerUnitStage(stage) &&
+    getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major";
+  const floors = summaryAttemptFloors(events, stage.slug, options.workflow, unitMajor);
+  return events.some((entry) => {
+    if (entry.event !== "DECISION_RECORDED" && entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
+    if (auditBlockField(entry.block, "Stage") !== stage.slug ||
+      auditBlockField(entry.block, "Checkpoint") !== SUMMARY_CONFIRMATION_CHECKPOINT) return false;
+    const workflow = auditBlockField(entry.block, "Workflow");
+    if (options.workflow !== undefined ? workflow !== options.workflow : workflow?.startsWith("single-stage:")) return false;
+    const unit = auditBlockField(entry.block, "Unit");
+    if (options.unit !== undefined && unit !== options.unit) return false;
+    if (unit && !eventMatchesClaimAttempt(projectDir, entry.block, unit)) return false;
+    // A cross-shard tie cannot prove that this obligation predates the reset.
+    return floors.every((floor) => entry.shard === floor.shard
+      ? entry.pos > floor.pos
+      : entry.timestamp >= floor.timestamp);
+  });
+}
+
 function summaryAnswerFromFile(path: string): string | null {
   try {
     return summaryConfirmationAnswer(readFileSync(path, "utf-8"));
@@ -8667,7 +8831,9 @@ export function checkSummaryConfirmationEvidence(
     }
   }
   if (questions.length === 0) {
-    if (!declared) return { ok: true, required: false };
+    if (!declared && !summaryFlowStartedInAttempt(projectDir, stage, options)) {
+      return { ok: true, required: false };
+    }
     const unitText = options.unit ? ` for unit "${options.unit}"` : "";
     return failure(
       "SUMMARY_QUESTIONS_MISSING",
@@ -9732,6 +9898,31 @@ export interface ReviewFingerprintStage {
   produces?: string[];
   optional_produces?: string[];
   produces_kinds?: Record<string, string[]>;
+  summary_confirmation?: "required" | "if-present";
+}
+
+// Summary questions are mutable human inputs. Re-presenting their confirmation
+// answer does not change the reviewed input, but all substantive content does.
+// A plugin explicitly reviewing questions retains ordinary byte binding.
+function summaryOwnedReviewInput(
+  stage: Pick<ReviewFingerprintStage, "summary_confirmation" | "review_artifact">,
+  artifact: string,
+): boolean {
+  return stage.summary_confirmation !== undefined &&
+    artifact.endsWith("-questions") &&
+    artifact !== stage.review_artifact;
+}
+
+export function reviewedArtifactUnit(
+  stage: Pick<ReviewFingerprintStage, "slug" | "for_each" | "produces" | "optional_produces" | "review_artifact" | "summary_confirmation">,
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  return producesArtifactUnit({
+    ...stage,
+    produces: stage.produces?.filter((name) => !summaryOwnedReviewInput(stage, name)),
+    optional_produces: stage.optional_produces?.filter((name) => !summaryOwnedReviewInput(stage, name)),
+  }, file, recordedRepos);
 }
 
 export interface ReviewArtifactEntry {
@@ -9740,6 +9931,47 @@ export interface ReviewArtifactEntry {
   boundary: string;
   required: boolean;
   reviewAppendixTarget: boolean;
+  summaryInput?: true;
+}
+
+export function summaryInputReviewFingerprint(content: string | Uint8Array): string {
+  let decoded: string;
+  try {
+    decoded = typeof content === "string" ? content : new TextDecoder("utf-8", { fatal: true }).decode(content);
+  } catch {
+    // Invalid UTF-8 never collapses distinct bytes through replacement chars.
+    return createHash("sha256").update(content).digest("hex");
+  }
+  const normalized = decoded.replace(/\r\n?/g, "\n");
+  const source = normalized.split("\n");
+  const visible = visibleMarkdownLines(normalized, { preserveCommentBoundaries: true });
+  let inSummary = false;
+  let summaries = 0;
+  let answers = 0;
+  const answerLine = /^\[Answer\]:[ \t]*(?:Looks correct|Request changes)?[ \t]*$/;
+  for (let index = 0; index < visible.length; index++) {
+    const heading = visibleH2Title(visible[index]);
+    if (heading !== null) {
+      inSummary = heading === SUMMARY_CONFIRMATION_CHECKPOINT;
+      if (inSummary) summaries++;
+    }
+    // Match the visible answer, never an example hidden by a code fence or
+    // comment. Preserve trailing comment bytes: only the confirmation value
+    // and its surrounding presentation whitespace may be normalized.
+    if (!inSummary || !answerLine.test(restoreVisibleMarkdownMarkers(visible[index]))) continue;
+    const commentStart = source[index].indexOf("<!--");
+    const prefix = commentStart < 0 ? source[index] : source[index].slice(0, commentStart);
+    const comments = commentStart < 0 ? "" : source[index].slice(commentStart);
+    if (
+      !answerLine.test(prefix) ||
+      comments.replace(/<!--(?:.*?-->|.*$)/g, "").trim().length > 0
+    ) continue;
+    source[index] = `[Answer]: [summary confirmation]${comments ? ` ${comments}` : ""}`;
+    answers++;
+  }
+  return createHash("sha256")
+    .update(summaries === 1 && answers === 1 ? source.join("\n") : normalized, "utf-8")
+    .digest("hex");
 }
 
 export interface ReviewArtifactBytesEntry extends ReviewArtifactEntry {
@@ -9773,6 +10005,7 @@ export function reviewArtifactEntries(
         name,
         required: true,
         reviewAppendixTarget: name === stage.review_artifact,
+        summaryInput: summaryOwnedReviewInput(stage, name),
       })),
       ...filterProducesByKind(
         stage.produces_kinds,
@@ -9782,6 +10015,7 @@ export function reviewArtifactEntries(
         name,
         required: false,
         reviewAppendixTarget: false,
+        summaryInput: summaryOwnedReviewInput(stage, name),
       })),
     ];
   };
@@ -9806,6 +10040,7 @@ export function reviewArtifactEntries(
         boundary: root,
         required: artifact.required,
         reviewAppendixTarget: artifact.reviewAppendixTarget,
+        ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
       }));
     }
     return repos.flatMap((repo) =>
@@ -9815,6 +10050,7 @@ export function reviewArtifactEntries(
         boundary: root,
         required: artifact.required,
         reviewAppendixTarget: artifact.reviewAppendixTarget,
+        ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
       })),
     );
   }
@@ -9828,6 +10064,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     }));
   }
 
@@ -9838,6 +10075,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     }));
   const stageLevelPresent = allArtifacts.some((artifact) =>
     existsSync(
@@ -9907,6 +10145,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     }));
   }
   return units.flatMap((name) =>
@@ -9916,6 +10155,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     })),
   );
 }
@@ -10124,6 +10364,16 @@ function reviewArtifactContentsFingerprint(
   const manifest: Array<[string, string]> = [];
   let matchedAppendix = options.appendixArtifact === undefined;
   for (const entry of contents) {
+    if (entry.summaryInput) {
+      if (entry.state !== "file" && entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([
+        entry.logicalPath,
+        entry.state === "file"
+          ? `summary-input:sha256:${summaryInputReviewFingerprint(entry.body)}`
+          : entry.state,
+      ]);
+      continue;
+    }
     if (entry.state === "missing") {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "missing"]);
@@ -11628,7 +11878,12 @@ export function reviewArtifactBytesSnapshot(
         `review artifact ${entry.logicalPath}`,
       );
       const digest = createHash("sha256").update(bytes).digest("hex");
-      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+      manifest.push([
+        entry.logicalPath,
+        entry.summaryInput
+          ? `summary-input:sha256:${summaryInputReviewFingerprint(bytes)}`
+          : `sha256:${digest}`,
+      ]);
       snapshot.push({
         ...entry,
         state: "file",
@@ -12976,6 +13231,7 @@ export function freshReviewReceipts(
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
+    summary_confirmation?: "required" | "if-present";
   },
   options: {
     boltDag?: BoltDagResolution;
@@ -13260,7 +13516,7 @@ export function freshReviewReceipts(
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
-      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      const targetUnit = reviewedArtifactUnit(stage, file, recordedRepos);
       if (targetUnit === undefined) continue;
       // The governed input change: a produces[] write after a terminal receipt
       // for its scope. A write with no receipt in play reads nothing and takes
@@ -20948,6 +21204,8 @@ export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 export interface GuardRemedy {
   op: GuardRemedyOp;
   action: string;
+  operation?: GuardRecoveryOperation;
+  interaction?: GuardRecoveryInteraction;
   command?: string;
   requiresHuman: boolean;
   executableNow: boolean;
@@ -21045,16 +21303,11 @@ function guardLifecycleState(
   );
 }
 
-function guardToolCommand(tool: string, args: string[]): string {
-  return [
-    "bun",
-    `${harnessDir()}/tools/${tool}`,
-    ...args.map((value) =>
-      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
-        ? value
-        : `'${value.replaceAll("'", "'\"'\"'")}'`
-    ),
-  ].join(" ");
+function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "operation" | "command"> {
+  return {
+    operation,
+    command: renderGuardOperation(operation, { harnessDir: harnessDir() }),
+  };
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {
@@ -21063,11 +21316,7 @@ function restartStageRemedy(stage: string): GuardRemedy {
     action:
       `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
       "survive, and the stage will ask for confirmation again.",
-    command: guardToolCommand("aidlc-orchestrate.ts", [
-      "next",
-      "--stage",
-      stage,
-    ]),
+    ...guardOperation({ kind: "restart-stage", stage }),
     requiresHuman: true,
     executableNow: true,
   };
@@ -21156,11 +21405,7 @@ function lifecycleResetRemedies(
           "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
           `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
           "re-confirm the summary once).",
-        command: guardToolCommand("aidlc-orchestrate.ts", [
-          "next",
-          "--stage",
-          input.stage,
-        ]),
+        ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
       },
@@ -21176,11 +21421,7 @@ function lifecycleResetRemedies(
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
             `jump back with /aidlc --stage ${input.stage} to redo it.`,
-      command: guardToolCommand("aidlc-orchestrate.ts", [
-        "next",
-        "--stage",
-        input.stage,
-      ]),
+      ...guardOperation({ kind: "restart-stage", stage: input.stage }),
       requiresHuman: true,
       executableNow: true,
     },
@@ -21212,22 +21453,16 @@ export function evaluateGuardRefusal(
         `"${input.autonomousBolt.unit}". On approval, abort and discard the old ` +
         `attempt, then rerun the current prepare step in${batch} so a fresh ` +
         "BOLT_STARTED boundary creates a new review allowance.",
-      command: guardToolCommand("aidlc-bolt.ts", [
-        "abort",
-        "--name",
-        input.autonomousBolt.unit,
-        "--slug",
-        slug,
-        "--reason",
-        "stale review recovery exhausted",
-        "--discard",
-      ]),
+      ...guardOperation({ kind: "abort-bolt", unit: input.autonomousBolt.unit, slug }),
       requiresHuman: true,
       executableNow: true,
     });
   } else {
     if (input.attempt.pendingReview) {
-      if (input.attempt.pendingReview.verdictRecordable !== false) {
+      if (
+        input.attempt.pendingReview.verdictRecordable !== false &&
+        input.attempt.summaryCoverage === "current"
+      ) {
         remedies.push({
           op: "record-verdict",
           action:
@@ -21337,7 +21572,9 @@ export function evaluateGuardRefusal(
           "Present the current consolidated summary, record the human's " +
           "confirmation, then regenerate or re-save the produced artifacts.",
         requiresHuman: true,
-        executableNow: openForWork,
+        // The summary owner accepts a fresh confirmation during revision too.
+        // Withdrawing a pending review's summary need not discard the attempt.
+        executableNow: openForWork || state === "revising",
       });
     }
     remedies.push(...lifecycleResetRemedies(input, state));
@@ -21351,7 +21588,12 @@ export function evaluateGuardRefusal(
     state,
     invariant: input.invariant,
     userMessage: input.userMessage,
-    remedies,
+    remedies: remedies.map((remedy) => ({
+      ...remedy,
+      interaction: remedy.operation
+        ? "command"
+        : remedy.requiresHuman ? "human-input" : "external-work",
+    })),
   };
 }
 
@@ -21381,18 +21623,12 @@ export interface GuardAttemptSnapshot {
 export function guardAttemptState(
   projectDir: string,
   stateContent: string,
-  stage: {
-    slug: string;
+  // Share the fingerprint input contract so partial stage views cannot
+  // accidentally drop newly supported inputs such as summary_confirmation.
+  stage: Omit<ReviewFingerprintStage, "phase"> & {
     phase?: string;
-    for_each?: string;
-    reviewer?: string;
-    review_artifact?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
-    workspace_requires?: boolean;
-    produces?: string[];
-    optional_produces?: string[];
-    produces_kinds?: Record<string, string[]>;
   },
   options: {
     unit?: string;
@@ -27468,7 +27704,8 @@ export function emitError(
   command: string,
   msg: string,
   intent?: string,
-  space?: string
+  space?: string,
+  changeNotices: readonly string[] = [],
 ): never {
   const auditCommand = redactProjectDirPrefix(command, projectDir);
   const auditMessage = redactProjectDirPrefix(msg, projectDir);
@@ -27522,7 +27759,14 @@ export function emitError(
       // Audit write failed — we're already in an error path, swallow.
     }
   }
-  console.error(JSON.stringify({ error: msg }));
+  // A caller may have persisted a Change Control acceptance before a later
+  // validation failed. Carry its notice on the failure too: a retry will
+  // correctly deduplicate that already-recorded acceptance. Keep the text in
+  // `error` for existing consumers and expose it structurally for newer ones.
+  console.error(JSON.stringify({
+    error: changeNotices.length > 0 ? `${changeNotices.join("\n")}\n${msg}` : msg,
+    ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+  }));
   process.exit(1);
 }
 

@@ -338,6 +338,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     for (const remedy of remedies) {
       expect(typeof remedy.op).toBe("string");
       expect(remedy.executableNow).toBe(true);
+      expect(remedy.interaction).toBe("human-input");
     }
     expect(remedies.some((remedy) => remedy.op === "reconfirm-summary")).toBe(true);
     expect(remedies.some((remedy) => remedy.op === "request-changes")).toBe(true);
@@ -350,7 +351,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
     expect(marker?.remedies).toEqual(
-      remedies.map(({ op, action }) => ({ op, action })),
+      remedies.map(({ op, action }) => ({ op, action, interaction: "human-input" })),
     );
 
     // The observer sees the same ask and publishes nothing.
