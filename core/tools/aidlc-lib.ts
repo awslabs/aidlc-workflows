@@ -7627,6 +7627,26 @@ export function isAutonomousConstructionDecision(
   return stagePhase === "construction" && isAutonomousMode(stateContent);
 }
 
+// Completion approvals have a narrower grant than ordinary Construction
+// decisions. In particular, an early on-demand grant cannot approve the first
+// Construction stage, and the existing unit-major walk keeps its stage gates.
+// Keep report and state mutation on the same policy instead of interpreting
+// gate:true independently in each caller.
+export function isAutonomousConstructionGate(
+  stateContent: string | null,
+  stage: { slug: string; phase: string; for_each?: string },
+): boolean {
+  if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
+  const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
+  if (!scope) return false;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  if (first === null || first.slug === stage.slug) return false;
+  return !(
+    getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&
+    stage.for_each === "unit-of-work"
+  );
+}
+
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
 // "a gate is actually OPEN" predicate for the per-harness preToolUse floors.
 // Without it a floor would keep refusing tool calls AFTER a legitimate approval

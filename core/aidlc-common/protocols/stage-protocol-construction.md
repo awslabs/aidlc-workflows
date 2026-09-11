@@ -42,9 +42,9 @@ EXECUTE stage (`isSkeletonGateStage`) always presents a stage-level approval
 gate regardless of autonomy mode. That gate covers that stage's artifacts
 across the Units that have settled — not a Bolt's combined design artifacts
 and generated code. Audit: emit `GATE_APPROVED` as usual. `BOLT_COMPLETED`
-is not emitted on this gate. Skeleton-off uses the ordinary first-stage gate,
-which follows `Construction Autonomy Mode` like every other Construction stage
-gate — so an on-demand `autonomous` grant made before that stage runs skips it;
+is not emitted on this gate. Skeleton-off retains the ordinary first-stage
+approval too. An on-demand `autonomous` grant may be recorded before that stage,
+but it waives only subsequent eligible completion gates, not this first review;
 a zero-Unit stage has no skeleton or Bolt ceremony at all.
 
 > **Planned (non-executable).** A later Bolt-major walk would present a
@@ -58,9 +58,10 @@ Construction stage gates. Two paths set it, and both record it exactly the same
 way, through `aidlc-bolt.ts set-autonomy --mode <choice>`:
 
 - **The ladder prompt** — the prompted path, under skeleton-on. Present exactly
-  one per intent, after the walking-skeleton gate approves: the skeleton is the
-  evidence that the path works end to end, so the prompted grant follows it. Do
-  not present it for zero-Unit execution.
+  one per intent, after the walking-skeleton stage gate approves, if no autonomy
+  choice has already been recorded. On the shipped stage-major walk this is a
+  review of the first Construction stage, not proof that a whole Bolt shipped.
+  Do not present it for zero-Unit execution or repeat an on-demand choice.
 - **On demand** — at ANY point during Construction, whenever the human asks in
   a typed message ("run the rest autonomously", "gate every stage from here").
   This is the only path available under `skeleton: off`, where there is no
@@ -71,6 +72,12 @@ way, through `aidlc-bolt.ts set-autonomy --mode <choice>`:
 Either way the escalation to `autonomous` still requires a fresh human turn —
 `set-autonomy` refuses otherwise — so an unattended run cannot grant itself more
 autonomy. De-escalation to `gated` carries no presence requirement.
+
+The grant changes completion approval policy; it does not approve unanswered
+Code Generation plans, change iteration order, or turn unit-major execution
+into a swarm. The first Construction-stage approval remains human-owned in
+every stance. Under the existing unit-major walk, per-unit stages also retain
+their late human approval cascade.
 
 ```question
 prompt: "How should the remaining Construction stages run?"
