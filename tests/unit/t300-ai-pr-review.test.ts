@@ -344,10 +344,8 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).toContain(`role-to-assume: \${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}`);
     expect(WORKFLOW).toContain('model = "openai.gpt-5.6-sol"');
     expect(WORKFLOW).toContain('exclude = ["AWS_*", "ACTIONS_*", "GITHUB_*", "GH_*"]');
-    expect(WORKFLOW).toContain("step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920");
-    expect(WORKFLOW).toContain("egress-policy: block");
-    expect(WORKFLOW).toContain("results-receiver.actions.githubusercontent.com:443");
-    expect(WORKFLOW).toContain("*.blob.core.windows.net:443");
+    expect(WORKFLOW).not.toContain("step-security/harden-runner");
+    expect(WORKFLOW).not.toContain("egress-policy:");
     expect(WORKFLOW).toContain("codex exec --sandbox read-only");
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
     expect(WORKFLOW).toContain("current_head");
@@ -386,8 +384,8 @@ describe("t300 adversarial AI PR review", () => {
       WORKFLOW.indexOf("  synthesize:"),
       WORKFLOW.indexOf("  publish:"),
     );
-    expect(synthesisJob.indexOf("oven-sh/setup-bun")).toBeLessThan(
-      synthesisJob.indexOf("step-security/harden-runner"),
+    expect(synthesisJob.indexOf("Install pinned review CLI")).toBeLessThan(
+      synthesisJob.indexOf("configure-aws-credentials"),
     );
   });
 

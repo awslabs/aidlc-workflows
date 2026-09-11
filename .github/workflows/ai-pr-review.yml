@@ -216,20 +216,6 @@ jobs:
       - name: Install pinned review CLI before assuming AWS role
         run: npm install --global "@openai/codex@$CODEX_VERSION"
 
-      - name: Restrict model-phase network egress
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: block
-          disable-telemetry: true
-          allowed-endpoints: >
-            bedrock-runtime.us-east-1.amazonaws.com:443
-            bedrock.us-east-1.amazonaws.com:443
-            sts.amazonaws.com:443
-            sts.us-east-1.amazonaws.com:443
-            token.actions.githubusercontent.com:443
-            results-receiver.actions.githubusercontent.com:443
-            *.blob.core.windows.net:443
-
       - name: Configure ChatGPT Sol
         run: |
           mkdir -p "$HOME/.codex"
@@ -318,20 +304,6 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.3.14'
-
-      - name: Restrict model-phase network egress
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: block
-          disable-telemetry: true
-          allowed-endpoints: >
-            bedrock-runtime.us-east-1.amazonaws.com:443
-            bedrock.us-east-1.amazonaws.com:443
-            sts.amazonaws.com:443
-            sts.us-east-1.amazonaws.com:443
-            token.actions.githubusercontent.com:443
-            results-receiver.actions.githubusercontent.com:443
-            *.blob.core.windows.net:443
 
       - name: Configure ChatGPT Sol
         run: |
