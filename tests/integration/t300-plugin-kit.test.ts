@@ -1,6 +1,7 @@
 // covers: file:scripts/package.ts (plugin build), file:tests/harness/plugin-kit.ts
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -20,6 +21,7 @@ import {
   liveGateFor,
   validatePluginContent,
 } from "../harness/plugin-kit.ts";
+import type { DriveResult } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_MS = 60_000;
 setDefaultTimeout(TIMEOUT_MS);
@@ -170,4 +172,101 @@ describe("t300 reusable plugin test kit", () => {
       }
     }
   });
+
+  test.skipIf(
+    process.env.AIDLC_CLAUDE_SDK_LIVE !== "1" ||
+      process.env.AIDLC_NO_LLM === "1" ||
+      !Bun.which("claude"),
+  )("Claude lists the composed test-pro plugin through the live harness", async () => {
+    const fixture = composePluginFixture({
+      plugin: "test-pro",
+      harness: "claude",
+      projectDir: join(tmp, "live-claude-project"),
+    });
+    const manifest = JSON.parse(
+      readFileSync(join(fixture.pluginBuilt, ".claude-plugin", "plugin.json"), "utf-8"),
+    ) as { name: string; version: string };
+    // Supply only this fixture's host inventory; the SDK owns an isolated config dir.
+    const registry = join(tmp, "live-installed-plugins.json");
+    const settings = join(tmp, "live-settings.json");
+    writeFileSync(registry, JSON.stringify({
+      version: 2,
+      plugins: {
+        [`${manifest.name}@fixture`]: [{
+          installPath: fixture.pluginBuilt,
+          version: manifest.version,
+        }],
+      },
+    }));
+    writeFileSync(settings, "{}");
+    const pluginEnv = {
+      AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
+      AIDLC_CLAUDE_SETTINGS: settings,
+    };
+    // The fixture composer installs content; native sync also records its provenance.
+    const sync = spawnSync(process.execPath, [
+      join(fixture.projectDir, ".claude", "tools", "aidlc.ts"),
+      "engine", "plugin", "sync", "--project-dir", fixture.projectDir, "--json",
+    ], {
+      cwd: fixture.projectDir,
+      env: { ...process.env, ...pluginEnv },
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS,
+    });
+    expect(sync.status, sync.stderr || sync.stdout).toBe(0);
+    expect(JSON.parse(sync.stdout)).toMatchObject({
+      ok: true,
+      data: { synced: ["test-pro"] },
+    });
+
+    const invocation = await invokeHarness(
+      fixture.projectDir,
+      "claude",
+      "/aidlc plugin list --json",
+      {
+        claude: {
+          timeoutMs: 300_000,
+          persistSession: true,
+          env: pluginEnv,
+        },
+      },
+    );
+    expect(invocation.status).toBe("completed");
+    if (invocation.status !== "completed") {
+      throw new Error(invocation.reason);
+    }
+    const result = invocation.result as DriveResult;
+    expect(result.timedOut).toBe(false);
+    expect(result.resultEvent?.subtype).toBe("success");
+    expect(result.resultEvent?.is_error).toBe(false);
+    expect(result.resultEvent?.permissionDenialsCount).toBe(0);
+    expect(result.toolResults.filter((tool) => tool.isError)).toEqual([]);
+    const listCall = result.toolResults.find((tool) =>
+      tool.toolName === "Bash" &&
+      /\bplugin\s+list\s+--json\b/.test(String(tool.input.command)) &&
+      !/\borchestrate\b/.test(String(tool.input.command))
+    );
+    expect(listCall).toBeDefined();
+    if (!listCall) throw new Error("Claude did not execute plugin list --json");
+    console.log("Claude plugin list tool result:", listCall.resultText);
+    const output = JSON.parse(listCall.resultText);
+    expect(output).toMatchObject({ ok: true, code: 0, status: "ok" });
+    expect(output.data.inventory.capability).toBe("full-inventory");
+    expect(output.data.inventory.invalid).toEqual([]);
+    expect(output.data.inventory.installed).toContainEqual(expect.objectContaining({
+      key: "test-pro",
+      enabled: true,
+      version: manifest.version,
+    }));
+    expect(output.data.statuses).toContainEqual(expect.objectContaining({
+      key: "test-pro",
+      installedVersion: manifest.version,
+      composedVersion: manifest.version,
+      state: "current",
+      action: "current",
+    }));
+    expect(graphSlugs(fixture.projectDir, ".claude")).toContain("test-pro-integration");
+    expect(result.askedQuestions).toEqual([]);
+    expect(result.stateFile).toBeUndefined();
+  }, 360_000);
 });

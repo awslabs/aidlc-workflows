@@ -54,6 +54,12 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+const PREVIEW_RELEASE_WORKFLOW = join(
+  REPO_ROOT,
+  ".github",
+  "workflows",
+  "preview-release.yml",
+);
 const V1_RELEASE_DISPATCH_WORKFLOW = join(
   REPO_ROOT,
   ".github",
@@ -89,11 +95,12 @@ const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);
 const RUNTIME_ASSET = `aidlc-runtime-${AIDLC_VERSION}.tar.gz`;
 
+// Removing the whole suite's copied release trees needs its own bounded budget.
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+}, 30_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
 // the canonical temp root (macOS aliases /var to /private/var).
@@ -166,7 +173,7 @@ function writeVerifierCandidate(root: string): void {
 
 function workflowJob(workflow: string, name: string): string {
   const match = new RegExp(
-    `\\n  ${name}:\\n[\\s\\S]*?(?=\\n  [a-z][a-z0-9-]*:\\n|$)`,
+    `\\n  ${name}:\\n[\\s\\S]*?(?=\\n  [a-z][a-z0-9_-]*:\\n|$)`,
   ).exec(workflow);
   if (!match) throw new Error(`release workflow has no ${name} job`);
   return match[0];
@@ -1502,6 +1509,84 @@ describe("t244 Windows and completion release surfaces", () => {
     }
   });
 
+  const powershellVersionCases = [
+    { version: "", accepted: true },
+    { version: "2.7.2", accepted: true },
+    { version: "2.7.2-preview.20260903.1", accepted: true },
+    { version: "2.7.2-preview.20260903.10", accepted: true },
+    { version: " ", accepted: false },
+    { version: "v2.7.2", accepted: false },
+    { version: "02.7.2", accepted: false },
+    { version: "2.7.2-rc.1", accepted: false },
+    { version: "2.7.2-preview.20260903", accepted: false },
+    { version: "2.7.2-preview.20260903.0", accepted: false },
+    { version: "2.7.2-preview.20260903.01", accepted: false },
+    { version: "2.7.2-Preview.20260903.1", accepted: false },
+    { version: "2.7.2\n", accepted: false },
+  ];
+
+  test("PowerShell installer -Version pattern accepts the empty default and stable/preview ids only", () => {
+    // `irm .../install.ps1 | iex` pipes the script into Invoke-Expression,
+    // which binds the typed [string]$Version parameter to its empty-string
+    // default and eagerly runs [ValidatePattern]. A pattern that rejects the
+    // empty string throws a ValidationMetadataException before the body runs,
+    // breaking the documented one-liner on Windows PowerShell 5.1. The pattern
+    // must accept an empty string, mirroring install.sh's `[ -n "$VERSION" ]`
+    // guard that only validates an explicitly supplied version.
+    const script = readFileSync(INSTALL_PS1, "utf-8");
+    // ValidatePattern defaults to IgnoreCase; require the actual PowerShell
+    // option before using JavaScript's case-sensitive regex engine.
+    const pattern = /\[ValidatePattern\('([^']+)',\s*Options\s*=\s*'None'\)\]/.exec(script)?.[1];
+    if (!pattern) throw new Error("install.ps1 -Version must use ValidatePattern with Options='None'");
+    const regex = new RegExp(pattern);
+    for (const { version, accepted } of powershellVersionCases) {
+      expect(regex.test(version), JSON.stringify(version)).toBe(accepted);
+    }
+  });
+
+  for (const { version, accepted } of [
+    { version: undefined, accepted: true },
+    ...powershellVersionCases,
+  ]) {
+    const label = version === undefined ? "iex with no arguments" : `-Version ${JSON.stringify(version)}`;
+    test.skipIf(process.platform !== "win32")(
+      `PowerShell installer param binding ${accepted ? "accepts" : "rejects"} ${label}`,
+      () => {
+        // Exercise the real parameter block, including the iex default, without
+        // reaching the installer's admin/network checks.
+        const script = readFileSync(INSTALL_PS1, "utf-8");
+        const bodyStart = script.indexOf("$ErrorActionPreference");
+        expect(bodyStart).toBeGreaterThan(0);
+        const paramBlock = script.slice(0, bodyStart);
+        const probe = `${paramBlock}\nWrite-Output ("PARAM_OK:<{0}>" -f $Version)\n`;
+        const invocation = version === undefined
+          ? "$input | Out-String | Invoke-Expression"
+          : `& ([scriptblock]::Create(($input | Out-String))) -Version '${version.replaceAll("'", "''")}'`;
+        const result = spawnSync(
+          "powershell",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `$ErrorActionPreference = 'Stop'; ${invocation}`,
+          ],
+          { input: probe, encoding: "utf-8", timeout: 30_000 },
+        );
+        if (result.error) throw result.error;
+        if (accepted) {
+          expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+          expect(result.stderr).not.toContain("ValidationMetadataException");
+          expect(result.stdout.trim()).toBe(`PARAM_OK:<${version ?? ""}>`);
+        } else {
+          expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+          expect(result.stderr).toMatch(/ParameterArgumentValidationError|ValidationMetadataException/);
+          expect(result.stdout).not.toContain("PARAM_OK");
+        }
+      },
+      35_000,
+    );
+  }
+
   test("doctor command-pointer text is grammatical without an active version", () => {
     const source = readFileSync(UTILITY, "utf-8");
     expect(source).toContain(
@@ -1829,6 +1914,7 @@ describe("t244 Windows and completion release surfaces", () => {
 
   test("release workflow keeps actions pinned, lints installers, and regenerates before consumers", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
+    const previewWorkflow = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs: Record<string, {
@@ -1836,6 +1922,7 @@ describe("t244 Windows and completion release surfaces", () => {
       }>;
     };
     expect(parsed.permissions).toEqual({ contents: "read" });
+    expect(parsed.jobs.test_unit.strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["native-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["musl-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(workflow).toContain("name: Validate release tag and source");
@@ -1856,14 +1943,21 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("origin/v2");
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
-    const actionRefs = [...workflow.matchAll(
-      /^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm,
-    )].map((match) => match[1]);
+    // Third-party actions are pinned to a full commit SHA. A same-repository
+    // reusable workflow (`./.github/workflows/...`) is referenced by path and
+    // resolves to the commit already being run, so it carries no ref to pin.
+    const actionRefs = [workflow, previewWorkflow].flatMap(
+      (workflowText) =>
+        [...workflowText.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)]
+          .map((match) => match[1]),
+    );
     expect(actionRefs.length).toBeGreaterThan(0);
     for (const ref of actionRefs) {
+      if (ref.startsWith("./.github/workflows/")) continue;
       expect(ref).toMatch(/^[^@\s]+@[a-f0-9]{40}$/);
     }
     expect(workflow).not.toMatch(/^\s*(?:-\s+)?uses:\s+[^@\s]+@v\d/m);
+    expect(actionRefs).toContain("./.github/workflows/ci.yml");
     expect(workflow).toContain("shellcheck scripts/install.sh");
     expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
     expect(workflow).toContain("unix-lifecycle:");
@@ -1874,6 +1968,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain(`build-results-\${{ matrix.directory }}.json`);
     expect(workflow).not.toContain("python3 -m http.server");
     expect(workflow).toContain('env PATH="/usr/bin:/bin"');
+    expect(workflow).not.toContain("duplicate full-suite run disabled");
 
     // Release artifacts must build from projections regenerated ON the runner,
     // never from checkout residue: every dist-consuming job regenerates
@@ -1886,12 +1981,40 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     expect(verifyJob).toContain(regen);
     expect(verifyJob.indexOf(regen)).toBeLessThan(verifyJob.indexOf("- run: bun run check"));
+    const smokeTests = workflowJob(workflow, "test_smoke");
+    expect(smokeTests).toContain("needs: validate");
+    expect(smokeTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
+    expect(smokeTests).toContain(regen);
+    expect(smokeTests).toContain("bun tests/run-tests.ts --smoke");
+    const unitTests = workflowJob(workflow, "test_unit");
+    expect(unitTests).toContain("needs: validate");
+    expect(unitTests).toContain("shard: [1, 2, 3, 4]");
+    expect(unitTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
+    expect(unitTests).toContain(regen);
+    expect(unitTests).toContain("sudo apt-get install -y -qq zsh");
+    expect(unitTests).toContain(
+      `bun tests/run-tests.ts --unit --shard \${{ matrix.shard }}/4`,
+    );
+    const deepTests = workflowJob(workflow, "test_deep");
+    expect(deepTests).toContain("needs: validate");
+    expect(deepTests).toContain("timeout-minutes: 90");
+    expect(deepTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
+    expect(deepTests).toContain(regen);
+    expect(deepTests).toContain(
+      "bun tests/run-tests.ts --integration --e2e --no-llm --parallel 8",
+    );
+    const releaseTests = workflowJob(workflow, "test");
+    expect(releaseTests).toContain(`if: \${{ always() }}`);
+    expect(releaseTests).toContain("needs: [test_smoke, test_unit, test_deep]");
+    expect(releaseTests).toContain('test "$SMOKE_RESULT" = "success"');
+    expect(releaseTests).toContain('test "$UNIT_RESULT" = "success"');
+    expect(releaseTests).toContain('test "$DEEP_RESULT" = "success"');
     const nativeSmokeJob = workflow.slice(
       workflow.indexOf("  native-smoke:"),
       workflow.indexOf("  build:"),
     );
     expect(nativeSmokeJob).toContain(regen);
-    expect(nativeSmokeJob).toContain("needs: [validate, verify]");
+    expect(nativeSmokeJob).toContain("needs: [validate, verify, test]");
     expect(nativeSmokeJob).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
     expect(nativeSmokeJob.indexOf(regen))
       .toBeLessThan(nativeSmokeJob.indexOf("t238-build-binaries.test.ts"));

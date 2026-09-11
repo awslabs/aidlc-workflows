@@ -179,13 +179,15 @@ function orchestrationProject(): string {
 function compiledBinary(): string | null {
   const explicit = process.env.AIDLC_TEST_COMPILED_EXECUTABLE;
   if (explicit && existsSync(explicit)) return realpathSync(explicit);
-  const results = join(REPO_ROOT, "build", "binaries", "build-results.json");
+  const results = join(REPO_ROOT, "build", "binaries", "build-results-native.json");
   if (!existsSync(results)) return null;
   const doc = JSON.parse(readFileSync(results, "utf-8")) as { results?: Array<{ name?: string; artifact?: string }> };
   const artifact = doc.results?.find((entry) => entry.name === "native")?.artifact;
   return artifact && existsSync(artifact) ? realpathSync(artifact) : null;
 }
 const COMPILED_BINARY = compiledBinary();
+const COMPILED_COVERAGE_REQUIRED =
+  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 
 function readAudit(dir: string): string {
   const auditDir = seededAuditDir(dir);
@@ -385,6 +387,10 @@ function driveToRunStage(dir: string, session: string) {
 }
 
 describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
+  test("0a: sharded unit execution has compiled dispatcher coverage", () => {
+    expect(!COMPILED_COVERAGE_REQUIRED || COMPILED_BINARY !== null).toBe(true);
+  });
+
   test("0: native write, shell, and Agent paths enforce Plan Approval", () => {
     const dir = scratchProject(true);
     seedUnapprovedCodeGeneration(dir);

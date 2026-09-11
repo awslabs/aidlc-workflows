@@ -1416,11 +1416,24 @@ export function decodeHarnessPlainText(
 // strings match, which is a pre-existing class shared with the old detectors.
 // That direction fails closed: over-detection nudges, never releases.
 
+const engineCommandHarnessPattern = KNOWN_HARNESS_DIRS
+  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+const sourceEngineDispatcherPath =
+  String.raw`(?:${engineCommandHarnessPattern})[/\\]tools[/\\]aidlc\.ts`;
+// Normalize the source dispatcher's executable token, including quoted project
+// roots. Leave surrounding shell wrappers, arguments, and legacy tools intact.
+const sourceEngineDispatcher = new RegExp(
+  String.raw`\bbun[ \t]+(?:"(?:[^"\r\n]*[/\\])?${sourceEngineDispatcherPath}"|'(?:[^'\r\n]*[/\\])?${sourceEngineDispatcherPath}'|(?:[^\s"';&|<>]*[/\\])?${sourceEngineDispatcherPath})[ \t]+(?=engine\b)`,
+  "g",
+);
+
 // Authored methodology uses the native dispatcher's hidden engine namespace.
 // Canonicalize only the engine tools these detectors own so the Bun and native
 // spellings share one classification policy. Other engine tools remain untouched.
 function canonicalEngineCommand(text: string): string {
   return text
+    .replace(sourceEngineDispatcher, "aidlc ")
     .replace(
       /\baidlc\s+engine\s+orchestrate\s+help\b/g,
       "aidlc help",
@@ -1444,9 +1457,8 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const text = canonicalEngineCommand(
-    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
-  );
+  const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  const text = canonicalEngineCommand(rawText);
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
@@ -1461,7 +1473,9 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
   for (const seg of segments) {
-    if (isEngineEngagementSegment(seg)) return true;
+    // Path normalization can remove a substitution inside a quoted dispatcher
+    // path. Such a command cannot receive the static navigation exemption.
+    if (isEngineEngagementSegment(seg, !/\$\(|`/.test(rawText))) return true;
   }
   return false;
 }
@@ -1498,6 +1512,59 @@ function legacyEngineEngagementSegment(seg: string): boolean {
   return true;
 }
 
+// A next call that only routes workspace navigation does not engage a workflow.
+// Require a static, complete command before applying this exemption; unknown
+// wrappers, substitutions, redirects, and malformed quoting retain the existing
+// conservative classification. Shell chains are classified segment by segment.
+function isWorkspaceNavigationNext(seg: string): boolean {
+  if (/[\\`$<>&()[\]{}*?~^#]/.test(seg)) return false;
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < seg.length; i++) {
+    const char = seg[i];
+    if (quote) {
+      if (char === quote) quote = null;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    }
+  }
+  if (quote) return false;
+
+  const words = splitKiroCommandArgs(seg.trim());
+  if (words[0] === "env") words.shift();
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) words.shift();
+  if (words[0] === "command" || words[0] === "exec") {
+    words.shift();
+    if (words.at(0) === "--") words.shift();
+  }
+  let args: string[];
+  if (words[0] === "aidlc" && words[1] === "orchestrate" && words[2] === "next") {
+    args = words.slice(3);
+  } else if (words[0] === "aidlc" && words[1] === "next") {
+    args = words.slice(2);
+  } else if (
+    words[0] === "bun" &&
+    /(?:^|[/\\])aidlc-orchestrate\.ts$/.test(words[1] ?? "") &&
+    words[2] === "next"
+  ) {
+    args = words.slice(3);
+  } else {
+    return false;
+  }
+  // Dispatcher/engine global options can be removed or moved before workspace
+  // parsing, revealing a different verb. Grant no exemption for those ambiguous
+  // forms. A trailing bare option cannot reveal another verb (`space --json`).
+  if (
+    args.some((arg) => arg === "--project-dir" || arg === "--aidlc-attempt-id") ||
+    args.slice(0, -1).some((arg) =>
+      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
+    )
+  ) return false;
+  // Intent creation explicitly returns null here: it starts workflow work and
+  // must retain the normal engagement and session-handoff rules.
+  return parseWorkspaceCommand(args).kind !== "not-workspace" &&
+    classifyTerminalCommand(args) !== null;
+}
+
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately
 // ask "what stage am I on?" answered with `--status` / `next --status` /
@@ -1509,7 +1576,11 @@ function legacyEngineEngagementSegment(seg: string): boolean {
 // state/jump/bolt/swarm verb we do not specifically recognise is treated as
 // engagement (BLOCK), so an unrecognised mutating verb can never leak through as
 // "chat" - the conservative direction for loop integrity.
-export function isEngineEngagementSegment(seg: string): boolean {
+export function isEngineEngagementSegment(
+  seg: string,
+  allowWorkspaceNavigation = true,
+): boolean {
+  if (allowWorkspaceNavigation && isWorkspaceNavigationNext(seg)) return false;
   if (
     /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)
@@ -1599,17 +1670,14 @@ function shellCommandSegments(command: string): string[] {
 // Classify commands for the rebuild-stage-graph hook's cheap PostToolUse gate.
 // Transition matching stays intentionally lexical, but the recursion guard
 // only examines real unquoted shell-command segments.
-const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
-  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  .join("|");
 const runtimeCompileTool = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
 );
 const runtimeCompileReport = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
 );
 const runtimeCompileSelf = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
 );
 
 export function classifyRuntimeCompileCommand(
@@ -1617,7 +1685,7 @@ export function classifyRuntimeCompileCommand(
 ): "reject" | "fire" | "pass" {
   const canonical = canonicalEngineCommand(command);
   const invokesRuntime = shellCommandSegments(command).some((segment) =>
-    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(segment)
+    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(canonicalEngineCommand(segment))
   );
   if (runtimeCompileSelf.test(command) || invokesRuntime) {
     return "reject";
@@ -5011,7 +5079,8 @@ function contentSha256(value: string): string {
 // Lifecycle and Phase Progress, Scope, Depth, Test Strategy, Revision Count,
 // Unit Ownership, Unit Gate Rhythm, Construction Iteration, Skeleton Stance,
 // Parked, Project Type, State Version, Total Stages, In Progress), and the cache
-// layer is dropped. Changing a routing field still invalidates the directive.
+// layer and empty separator lines are dropped. Changing a routing field still
+// invalidates the directive.
 //
 // Blacklist rather than allowlist, deliberately: a new routing field must be
 // covered by default, and only a field someone consciously classifies as cache
@@ -5061,7 +5130,7 @@ const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
 // Drop the cache layer from aidlc-state.md. Deliberately line-based and
 // field-named rather than section-wide: dropping a whole section would also drop
 // anything appended after it (the template's last section is a cache section), so
-// an unrecognised line anywhere in the file still binds the directive.
+// an unrecognised nonempty line anywhere in the file still binds the directive.
 export function projectStateForDigest(stateContent: string): string {
   const kept: string[] = [];
   let inDerivedTable = false;
@@ -5071,6 +5140,11 @@ export function projectStateForDigest(stateContent: string): string {
   // field's physical line and drop both, leaving a live routing change invisible to
   // the digest.
   for (const line of stateContent.split(/\r\n|[\n\r\u2028\u2029]/)) {
+    // setOrInsertField adds Markdown separators through appendUnderHeading.
+    // Removing or projecting out its field leaves those empty lines behind.
+    // They carry no state authority; retain every other line byte-exact, including
+    // whitespace-only lines, rather than trimming potentially meaningful content.
+    if (line === "") continue;
     if (line.startsWith("## ")) {
       inDerivedTable = line.trim() === STATE_DIGEST_DERIVED_TABLE_SECTION;
       kept.push(line);
@@ -7600,6 +7674,27 @@ function visibleHeading(
 // Hash the normalized semantic questions content the human confirmed. The
 // shared protocol does not impose names on pre-checkpoint sections, while
 // follow-up Q<n> sections after an assumption decision remain hashable.
+// A thematic break (`---`, `***`, `___`) placed before the sanctioned
+// `## Assumption Confirmation` heading is presentation, not confirmed content.
+// It must fall inside the excluded range so appending that section — with or
+// without a leading rule — leaves the confirmed-content digest unchanged.
+const ASSUMPTION_THEMATIC_BREAK = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
+function assumptionExclusionStart(lines: string[], headingLine: number): number {
+  let i = headingLine - 1;
+  while (i >= 0 && lines[i].trim() === "") i--;
+  // Only a blank-delimited rule is a thematic break; a rule immediately under
+  // text is a setext underline and must not be swept into the exclusion.
+  if (
+    i >= 0 &&
+    ASSUMPTION_THEMATIC_BREAK.test(lines[i]) &&
+    (i === 0 || lines[i - 1].trim() === "")
+  ) {
+    return i;
+  }
+  return headingLine;
+}
+
 export function summaryConfirmationContentHash(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
@@ -7654,7 +7749,9 @@ export function summaryConfirmationContentHash(content: string): string {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }
       postSummaryAssumptionSeen = true;
-      openExcludedAssumption = line;
+      // Heading visibility blanks code blocks. Only actual source whitespace
+      // may be crossed when excluding an adjacent thematic break.
+      openExcludedAssumption = assumptionExclusionStart(lines, line);
       continue;
     }
 
@@ -10673,6 +10770,27 @@ export function parseReviewSection(
   const findings: ReviewFinding[] = [];
   for (const line of table.slice(2)) {
     const cells = splitMarkdownRow(line);
+    // Check arity before positional reads: a missing cell can shift later
+    // values left, but its intended column cannot be recovered reliably.
+    // Show the expected order and offer a hint when a trailing status fits.
+    if (cells.length !== headers.length) {
+      const rowId = cells[index.get("ID") ?? 0]?.trim() || "?";
+      if (cells.length < headers.length) {
+        const lastCell = cells.at(-1) ?? "";
+        const hint = headers.at(-1) === "Status" && validReviewFindingStatus(lastCell)
+          ? `The last cell ${JSON.stringify(lastCell)} looks like Status; check earlier cells for a missing value or "|" separator`
+          : 'Check for a missing cell or "|" separator';
+        throw new Error(
+          `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}. ` +
+            `Expected columns: ${headers.join(" | ")}. ${hint}`,
+        );
+      }
+      throw new Error(
+        `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}: ${
+          cells.length - headers.length
+        } unexpected extra cell(s)`,
+      );
+    }
     const value = (name: string): string =>
       cells[index.get(name) ?? -1]?.trim() ?? "";
     const id = value("ID");
@@ -27966,7 +28084,17 @@ export function appendUnderHeading(
   const remainder = content.slice(bodyStart);
   const nextMatch = nextHeading.exec(remainder);
   const insertAt = nextMatch ? bodyStart + nextMatch.index : content.length;
-  return content.slice(0, insertAt) + newContent + content.slice(insertAt);
+  // When the insertion point is a following `## ` heading, callers that pass
+  // single-`\n`-terminated content would abut the heading with no separating
+  // blank line, producing malformed markdown (e.g. a bullet directly above
+  // `## Scope Overrides` in project.md). Add exactly one blank line in that
+  // case — but only when a heading actually follows (never in the terminal
+  // end-of-file append) and the content does not already end with a blank line.
+  const separator =
+    nextMatch && newContent.endsWith("\n") && !newContent.endsWith("\n\n")
+      ? "\n"
+      : "";
+  return content.slice(0, insertAt) + newContent + separator + content.slice(insertAt);
 }
 
 export function replaceSection(

@@ -119,7 +119,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
-  against resurrecting a finished workflow). Matched to `execute_bash` — the
+  against resurrecting a finished workflow). Both audit-tail hooks match
+  `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
@@ -179,6 +180,11 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   later mutation calls remain blocked even when live authority can no longer be
   parsed. Adapter-owned `next` recovery clears that poison only after the engine
   returns a valid non-error directive. Raw audit appends have no authority.
+  In native installs, adapter-owned recovery and decision/answer mediation use
+  `AIDLC_COMPILED_EXECUTABLE` with `engine orchestrate next`/`continue` and
+  `engine log decision`/`answer`. Bun source mode retains the direct
+  `aidlc-orchestrate.ts` and `aidlc-log.ts` invocations. Both modes preserve the
+  existing project/session arguments, working directory, and inherited environment.
   A new stage attempt retires the approval; a fresh directive for the same target
   and attempt does not. Generation start re-baselines the source the plan is bound
   to, and refuses rather than deletes if the workspace source moved first.

@@ -132,6 +132,8 @@ const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
 const fixtures: string[] = [];
+// Serial Git worktree removal across this file's fixtures can exceed Bun's
+// default 5s hook budget; bound cleanup separately from the product test cases.
 afterAll(() => {
   for (const f of fixtures) {
     // chmod the parent (and any chmod'd children) back to writable so cleanup
@@ -143,7 +145,7 @@ afterAll(() => {
     }
     cleanupWorktreeFixture(f);
   }
-});
+}, 30_000);
 
 // The MAIN per-clone audit shard (the seeded fixed-clone-id shard). The header is
 // written here so audit-fork copies it and audit-merge hashes/extends it.

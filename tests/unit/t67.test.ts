@@ -460,6 +460,69 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
   // §9 >5-word input with keywords -> feature default.
   test('23: ">5-word input with keywords -> classic default"', fallbackCase("I want to fix the broken auth flow quickly today", "classic"));
 
+  // §9b (issue #1072): affirmative high-specificity keywords in long prose
+  // resolve to their scope; generic or explicitly negated mentions defer.
+  test('23b: ">5-word input with a high-specificity keyword -> keyword scope, not freeform default"', () => {
+    const p = proj();
+    const input =
+      "refactor the legacy authentication module to improve long-term maintainability";
+    expect(input.trim().split(/\s+/).length).toBeGreaterThan(5); // guard: this IS a >5-word input
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe("refactor");
+    const f = readAudit(p);
+    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("refactor");
+    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
+  });
+
+  test.each([
+    ["Resolve the security vulnerability CVE-2026-12345 in our authentication service", "security-patch"],
+    ["Build a POC prototype for the customer onboarding workflow", "poc"],
+    ["Build a minimum  viable product for customer onboarding", "mvp"],
+    ["Build a proof  of  concept for the authentication service", "poc"],
+    ["Fix and refactor the authentication flow today", "refactor"],
+    ["Build a poc and mvp for customer onboarding", "mvp"],
+    ["Refactor the authentication module without changing its behavior", "refactor"],
+    ["Do not deploy today; refactor the authentication module", "refactor"],
+    ["Do not build a prototype, but build an MVP for onboarding", "mvp"],
+    ["Do not refactor the UI; refactor the authentication module", "refactor"],
+    ["Not only refactor authentication but also improve its tests", "refactor"],
+  ])("long affirmative description: %s -> %s", (input, expected) => {
+    const p = proj();
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe(expected);
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("keyword");
+  });
+
+  test.each([
+    "Do not refactor anything; add a new login screen",
+    "Build a production service, not a proof of concept",
+    "Build a new login screen without a refactor",
+    "Please don't refactor anything; add a new login screen",
+    "Please don’t refactor anything; add a new login screen",
+    "Avoid building a POC for the customer onboarding workflow",
+    "Do not build an MVP for the customer onboarding workflow",
+    "Create refactorings and mvps and apocryphal documentation today",
+  ])("long negated or substring-only description stays freeform: %s", (input) => {
+    const p = proj();
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe("classic");
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
+  });
+
+  test("short multi-scope input keeps alphabetical precedence and diagnostic shape", () => {
+    const p = proj();
+    const r = detectFromText("fix refactor this", p);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      scope: "bugfix",
+      source: "keyword",
+      matches: ["fix", "refactor"],
+    });
+  });
+
   // §10 empty input -> feature default (valid CLI path under --from-text).
   test("24: empty input -> classic default", () => {
     const p = proj();

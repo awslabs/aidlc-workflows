@@ -1625,9 +1625,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       ),
     ) as { unit?: string; state_sha256?: string };
     expect(syncedMarker.unit).toBe("alpha");
-    expect(syncedMarker.state_sha256).toBe(
-      createHash("sha256").update(syncedState, "utf-8").digest("hex"),
-    );
+    expect(syncedMarker.state_sha256).toBe(stateDigest(syncedState));
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
@@ -2399,6 +2397,32 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
+  }, 30000);
+
+  test("(h) workspace navigation ends without starting the pending workflow", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const entry of [
+        "aidlc engine orchestrate",
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "bun .claude/tools/aidlc-orchestrate.ts",
+      ]) {
+        const proj = makeProject();
+        seedActive(proj, "intent-capture");
+        const transcript = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc space-create teamB" },
+          { kind: "bash", command: `${entry} next space-create teamB` },
+          { kind: "bash", command: "bun .claude/tools/aidlc.ts engine space create teamB" },
+          { kind: "text" },
+        ]);
+        const result = runHook(
+          proj,
+          JSON.stringify({ stop_hook_active: false, transcript_path: transcript }),
+          "run-stage",
+        );
+        expect(result.rc, result.out).toBe(0);
+        expect(result.out).toBe("");
+      }
+    }
   }, 30000);
 
   test("(h) chat + `aidlc-orchestrate --doctor` / `--help` / `--version` each allow the stop", () => {

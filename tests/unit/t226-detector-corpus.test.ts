@@ -868,4 +868,124 @@ describe("detector corpus", () => {
     // Intended delta: new-shape `aidlc engine orchestrate park` mutates workflow state.
     expect(d1("aidlc engine orchestrate park")).toBe(true);
   });
+
+  test("workspace navigation through next is terminal in native and source forms", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      'bun "/project with spaces/.claude/tools/aidlc.ts" engine orchestrate',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        'space switch "team B"',
+        "space --json",
+        "intent list",
+        "intent switch existing",
+        "space help",
+      ]) {
+        const command = `${entry} next ${args}`;
+        expect(d1(command), command).toBe(false);
+        expect(d1(`cd project && ${command}`), command).toBe(false);
+        expect(d1(`${command} && aidlc engine state advance`), command).toBe(true);
+        expect(d1(`aidlc engine state advance; ${command}`), command).toBe(true);
+      }
+      expect(d1(`${entry} next intent create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent \\create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent creat? --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent cr*ate --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --project-dir . create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --aidlc-attempt-id run-1 create --scope poc --arguments app`)).toBe(true);
+      for (const flag of ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"]) {
+        expect(d1(`${entry} next intent ${flag} create --scope poc --arguments app`)).toBe(true);
+      }
+      expect(d1(`${entry} next --arguments "space-create teamB"`)).toBe(true);
+      expect(d1(`${entry} next space-create "$(aidlc engine state advance)"`)).toBe(true);
+      expect(d1(`${entry} next space-create "unterminated`)).toBe(true);
+    }
+    expect(d1(
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB',
+    )).toBe(true);
+  });
+
+  test("observed unified Bun report has native and legacy transition classifications", () => {
+    const args = 'report --stage intent-capture --result awaiting-approval';
+    for (const command of [
+      `aidlc engine orchestrate ${args}`,
+      `bun .claude/tools/aidlc-orchestrate.ts ${args}`,
+      `bun .claude/tools/aidlc.ts engine orchestrate ${args}`,
+    ]) {
+      expect(classifyRuntimeCompileCommand(command), command).toBe("fire");
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("unified Bun transport preserves every native engine corpus label", () => {
+    const nativeCases = corpus.filter((c) => /\baidlc\s+engine\b/.test(c.cmd));
+    expect(nativeCases.length).toBeGreaterThan(0);
+    for (const c of nativeCases) {
+      const command = c.cmd.replace(/\baidlc(?=\s+engine\b)/g, "bun .claude/tools/aidlc.ts");
+      expect(d1(command), `${c.id} unified D1`).toBe(c.d1);
+      expect(classifyRuntimeCompileCommand(command), `${c.id} unified D2`).toBe(c.d2);
+    }
+  });
+
+  test("source dispatcher paths preserve quoting and transition wrappers", () => {
+    for (const entry of [
+      "bun .claude/tools/aidlc.ts",
+      'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+      "bun '/workspace/project with spaces/.claude/tools/aidlc.ts'",
+      'bun "C:\\workspace\\project with spaces\\.claude\\tools\\aidlc.ts"',
+      "bun .kiro/tools/aidlc.ts",
+      "bun .codex/tools/aidlc.ts",
+      "bun .aidlc/tools/aidlc.ts",
+      "bun .cursor/tools/aidlc.ts",
+    ]) {
+      for (const prefix of ["", "cd app && ", "env MODE=test ", "command "]) {
+        const report = `${prefix}${entry} engine orchestrate report --result approved`;
+        expect(d1(report), report).toBe(true);
+        expect(classifyRuntimeCompileCommand(report), report).toBe("fire");
+        const status = `${prefix}${entry} engine orchestrate next --status`;
+        expect(d1(status), status).toBe(false);
+        expect(classifyRuntimeCompileCommand(status), status).toBe("pass");
+      }
+    }
+  });
+
+  test("unified runtime recursion wins in composites but not quoted argument text", () => {
+    for (const entry of [
+      "bun .claude/tools/aidlc.ts",
+      'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+      "bun '/workspace/project with spaces/.claude/tools/aidlc.ts'",
+    ]) {
+      const compile = `${entry} engine runtime compile`;
+      const report = `${entry} engine orchestrate report --result approved`;
+      for (const command of [compile, `cd app && ${compile}`, `${compile} && ${report}`, `${report}; ${compile}`]) {
+        expect(classifyRuntimeCompileCommand(command), command).toBe("reject");
+      }
+      for (const command of [
+        `${report} --user-input "notes; bun .claude/tools/aidlc.ts engine runtime compile"`,
+        `${report} --user-input 'notes && bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine runtime compile'`,
+        `echo 'bun .claude/tools/aidlc.ts engine runtime compile' && ${report}`,
+      ]) {
+        expect(classifyRuntimeCompileCommand(command), command).toBe("fire");
+      }
+      expect(classifyRuntimeCompileCommand(`${entry} engine runtime summary --json`)).toBe("pass");
+    }
+  });
+
+  test("unrelated executables and non-dispatcher paths remain outside normalization", () => {
+    for (const entry of [
+      "node .claude/tools/aidlc.ts",
+      "bun app/aidlc.ts",
+      "bun .claude/tools/aidlc.ts.bak",
+      "bun .claude/tools/other.ts",
+    ]) {
+      const command = `${entry} engine orchestrate report --result approved`;
+      expect(d1(command), command).toBe(false);
+      expect(classifyRuntimeCompileCommand(command), command).toBe("pass");
+    }
+  });
 });

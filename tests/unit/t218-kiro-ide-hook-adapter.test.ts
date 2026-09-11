@@ -526,6 +526,37 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  for (const tool of ["execute_bash", "execute_pwsh", "shell"]) {
+    test(`registered PostToolUse hooks dispatch audit-tail updates for ${tool}`, () => {
+      for (const target of ["sync-workflow-state", "rebuild-stage-graph"]) {
+        const dir = scratchProject(true);
+        try {
+          const registration = JSON.parse(
+            readFileSync(join(dir, ".kiro", "hooks", `aidlc-${target}.json`), "utf-8"),
+          ) as { hooks: Array<{ trigger: string; matcher: string }> };
+          const hook = registration.hooks.find((candidate) =>
+            candidate.trigger === "PostToolUse" &&
+            new RegExp(`^(?:${candidate.matcher})$`).test(tool)
+          );
+          expect(hook, `${target} must receive ${tool} events`).toBeDefined();
+          expect(new RegExp(`^(?:${hook?.matcher})$`).test("fs_write")).toBe(false);
+          appendStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
+          const result = runIdeStdin(dir, target, ctx1x(tool, "Output:\nok\n\nExit Code: 0"));
+          expect(result.code, result.stderr).toBe(0);
+          if (target === "sync-workflow-state") {
+            expect(readFileSync(seededStateFile(dir), "utf-8")).toMatch(
+              /\*\*Current Stage\*\*:\s*user-stories/,
+            );
+          } else {
+            expect(existsSync(join(seededRecordDir(dir), "runtime-graph.json"))).toBe(true);
+          }
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    }, 15_000);
+  }
+
   test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
     const dir = scratchProject(true);
     try {
@@ -1631,6 +1662,73 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   }, 60000);
 
+  for (const toolName of ["execute_bash", "execute_pwsh"]) {
+    test(`${toolName} forwards native planning commands to the core guard without Plan Approval (#1047)`, () => {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        seedCodeGenerationDirective(dir);
+        const questions = seedStageLevelPlanApproval(dir);
+        const unansweredQuestions = readFileSync(questions, "utf-8");
+        expect(evaluateCodeGenerationApproval(dir, { unit: null })).toMatchObject({
+          ok: false,
+          planExists: true,
+          instructionsExist: true,
+          contractValid: true,
+          approved: false,
+          receiptValid: false,
+        });
+
+        // Exercise populated modern stdin payloads through the real adapter and
+        // core guard. The hook inspects these commands without executing them;
+        // the continuation token is opaque and no human receipt is seeded.
+        const cases = [
+          { command: "aidlc engine orchestrate next", code: 0 },
+          {
+            command: 'aidlc engine orchestrate next "Please explain this plan before I approve"',
+            code: 0,
+          },
+          {
+            command: 'aidlc engine orchestrate continue "opaque-rule-delivery-token"',
+            code: 0,
+          },
+          { command: "aidlc engine state advance", code: 2 },
+          {
+            command: "aidlc engine orchestrate report --stage code-generation --result completed",
+            code: 2,
+          },
+          { command: "echo blocked > src/blocked.ts", code: 2 },
+        ];
+        // Collect every verdict even when a regression blocks the first next.
+        const results = cases.map(({ command, code }) => ({
+          command,
+          expectedCode: code,
+          ...runIdeStdin(dir, "plan-approval-guard", shellPayload(dir, toolName, command)),
+        }));
+
+        expect(readFileSync(questions, "utf-8")).toBe(unansweredQuestions);
+        expect(evaluateCodeGenerationApproval(dir, { unit: null })).toMatchObject({
+          ok: false,
+          approved: false,
+          receiptValid: false,
+        });
+        for (const result of results) {
+          expect(result.code, `${toolName}: ${result.command}\n${result.stderr}`).toBe(
+            result.expectedCode,
+          );
+          expect(result.stdout, result.command).toBe("");
+          if (result.expectedCode === 2) {
+            expect(result.stderr, result.command).toContain("Code generation");
+          } else {
+            expect(result.stderr, result.command).toBe("");
+          }
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 60000);
+  }
+
   test("execute_pwsh and shell are routed to legacy recovery exactly like execute_bash", () => {
     const dir = scratchProject(true);
     const ownerHost = { VSCODE_IPC_HOOK: `pwsh-owner:${dir}`, VSCODE_PID: "501" };
@@ -1673,6 +1771,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   }, 60000);
 
+  // Multiple adapter subprocesses need a bounded setup budget under full gate load.
   test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
     const dir = scratchProject(true);
     try {
@@ -1809,7 +1908,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+  }, 60000);
 
   test("legacy file-tool mediation injects the contract and records a valid human approval", () => {
     const dir = scratchProject(true);
@@ -1898,7 +1997,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+  }, 60000);
 
   test("legacy mediation records both approval tags from a section that carries neither", () => {
     const dir = scratchProject(true);
@@ -2658,6 +2757,94 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           }),
         ).code,
       ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("umbrella dispatcher preserves native human-turn and Plan Approval payloads", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "sess_ide_dispatcher_payload";
+      const human = runIdeDispatcherStdin(
+        dir,
+        "record-human-turn",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: session,
+          cwd: dir,
+          prompt: "Approve",
+        }),
+      );
+      expect(human.code, human.stderr).toBe(0);
+      expect(readAudit(dir)).toContain(`**Session**: ${session}`);
+
+      seedCodeGenerationDirective(dir);
+      const read = runIdeDispatcherStdin(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "fs_read",
+          tool_input: { path: "README.md" },
+        }),
+      );
+      expect(read.code, read.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("IDE read aliases remain available before approval without admitting writes or unknown tools", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const path = join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory", "org.md");
+      for (const toolName of [
+        "read", "fs_read", "read_file", "read_files", "read_code",
+        "list_directory", "file_search", "glob", "grep_search", "grep",
+        "web_fetch", "web_search",
+      ]) {
+        const modern = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: "ide-read-alias-regression",
+            tool_name: toolName,
+            tool_input: toolName === "read_files" ? { paths: [path] } : { path },
+          }),
+        );
+        expect(modern.code, `${toolName}: ${modern.stderr}`).toBe(0);
+        const legacy = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName, toolArgs: {} }),
+        );
+        expect(legacy.code, `${toolName}: ${legacy.stderr}`).toBe(0);
+      }
+      for (const toolName of ["fs_write", "str_replace", "execute_bash", "read_file_and_write"]) {
+        const result = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: toolName,
+            tool_input: toolName === "execute_bash"
+              ? { command: "echo mutation > app.ts" }
+              : { path: join(dir, "app.ts"), content: "mutation" },
+          }),
+        );
+        expect(result.code, `${toolName}: ${result.stderr}`).toBe(2);
+      }
+      const malformed = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({ tool_name: "read_file", tool_input: [] }),
+      );
+      expect(malformed.code, malformed.stderr).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

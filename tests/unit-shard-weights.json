@@ -1,0 +1,26 @@
+{
+  "defaultSeconds": 1,
+  "weights": {
+    "t115.test.ts": 19.1,
+    "t218-kiro-ide-hook-adapter.test.ts": 60,
+    "t238-build-binaries.test.ts": 93.1,
+    "t243-install-mechanism.test.ts": 48.3,
+    "t244-install-management.test.ts": 49.5,
+    "t249-copilot-adapter.test.ts": 110,
+    "t255-workspace-sync.test.ts": 15.7,
+    "t272-unit-major-code-gen.test.ts": 15.9,
+    "t276-cursor-adapter.test.ts": 39.4,
+    "t293-knowledge-journey.test.ts": 14.5,
+    "t294-document-extractors-seam.test.ts": 56,
+    "t298-knowledge-transaction.test.ts": 24.9,
+    "t305-per-unit-attribution-receipts.test.ts": 59.3,
+    "t314-source-freshness-receipts.test.ts": 102.9,
+    "t324-team-unit-progress-gates.test.ts": 69.3
+  },
+  "affinityGroups": [
+    [
+      "t238-build-binaries.test.ts",
+      "t249-copilot-adapter.test.ts"
+    ]
+  ]
+}

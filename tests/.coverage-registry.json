@@ -8055,6 +8055,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-claude-hook-project-root.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
           "mechanism": "cli"
         },
@@ -9818,6 +9822,10 @@
         },
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-kiro-ide-native-recovery.test.ts",
           "mechanism": "cli"
         },
         {

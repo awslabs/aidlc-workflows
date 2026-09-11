@@ -659,6 +659,10 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+// A serial verb refused by a live wave must leave the audit unchanged too.
+// Unwind the transaction lock before reporting this error without ERROR_LOGGED.
+class UnitWaveRouteRefusalError extends StateCommandError {}
+
 export function main(argv: string[]): void {
   const args = [...argv];
 
@@ -810,6 +814,10 @@ export function main(argv: string[]): void {
         );
     }
   } catch (e) {
+    if (e instanceof UnitWaveRouteRefusalError) {
+      console.error(JSON.stringify({ error: e.message }));
+      process.exit(1);
+    }
     if (e instanceof StateGuardRefusalError) {
       const pd = resolveProjectDir(projectDir);
       exitWithError(
@@ -1941,6 +1949,29 @@ function handleUnit(args: string[]): void {
 
     const checkpoint = activeUnitCheckpoint(pd, slug);
 
+    // Consult the live route before any serial receipt can change it. A fresh
+    // wave has no completion receipt yet, and old wave receipts can remain
+    // after an explicit switch to unit-major, so ledger mode is insufficient.
+    // The route check is read-only and shares this lock's ledger snapshot.
+    const routed = action === "complete"
+      ? {}
+      : readEngineUnitDirective(pd, slug, unit, action);
+    if (
+      routed.kind === "run-stage" &&
+      routed.stage === slug &&
+      routed.wave
+    ) {
+      throw new UnitWaveRouteRefusalError(
+        `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
+          "(the orchestration engine currently routes it as a batch). " +
+          "A wave has no single active unit — every entry settles through " +
+          `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
+          `\`${action}\` would append a serial receipt and ` +
+          "drop the deterministic batch path for every remaining unit of the stage. " +
+          "Use `unit complete --wave` instead.",
+      );
+    }
+
     if (waveMode) {
       if (checkpoint) {
         error(
@@ -1964,7 +1995,7 @@ function handleUnit(args: string[]): void {
         console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
         return;
       }
-      requireEngineRoutedUnit(pd, slug, unit);
+      requireEngineRoutedUnit(routed, slug, unit);
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(
@@ -2093,7 +2124,19 @@ function validateStateLineValue(label: string, value: string | undefined): void 
   }
 }
 
-function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void {
+interface EngineUnitDirective {
+  kind?: unknown;
+  stage?: unknown;
+  unit?: unknown;
+  wave?: unknown;
+}
+
+function readEngineUnitDirective(
+  pd: string,
+  stage: string,
+  unit: string,
+  action: string,
+): EngineUnitDirective {
   const executable = compiledExecutable();
   let subargs = ["next", "--project-dir", pd];
   let directive: unknown = null;
@@ -2120,7 +2163,7 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
     });
     if (result.status !== 0) {
       error(
-        `Refusing to start unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
+        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
           `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
       );
     }
@@ -2128,7 +2171,7 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
       directive = JSON.parse((result.stdout ?? "").trim());
     } catch {
       error(
-        `Refusing to start unit "${unit}" for "${stage}": the orchestration engine returned an ` +
+        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine returned an ` +
           "unparseable directive.",
       );
     }
@@ -2142,16 +2185,22 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
       transport.continue_token.length === 0
     ) {
       error(
-        `Refusing to start unit "${unit}" for "${stage}": the engine's steering directive ` +
+        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's steering directive ` +
           "did not include a continuation token.",
       );
     }
     subargs = ["continue", transport.continue_token, "--project-dir", pd];
   }
-  const routed =
-    directive !== null && typeof directive === "object"
-      ? directive as { kind?: unknown; stage?: unknown; unit?: unknown }
-      : {};
+  return directive !== null && typeof directive === "object"
+    ? directive as EngineUnitDirective
+    : {};
+}
+
+function requireEngineRoutedUnit(
+  routed: EngineUnitDirective,
+  stage: string,
+  unit: string,
+): void {
   if (
     routed.kind !== "run-stage" ||
     routed.stage !== stage ||

@@ -400,8 +400,8 @@ export function mutationBlockReason(
     : `modify workspace path "${target}"`;
   return (
     `Code generation cannot ${action} for ${scope} because ` +
-    `the plan, unit-test instructions, and current Testing Contract are fingerprinted and ` +
-    `approved.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
+    `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
+    `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for Steps 2-3. Record the human's explicit "Approve Plan" answer before beginning ` +
     `Step 4 generation.`
   );
@@ -534,6 +534,53 @@ function normalizedCommandName(name: string): string {
   return basename(name).toLowerCase().replace(/\.exe$/, "");
 }
 
+function lastFlagValue(args: string[], flag: string): string | null {
+  let value: string | null = null;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== flag) continue;
+    const candidate = args[index + 1];
+    if (!candidate || candidate.startsWith("--")) return null;
+    value = candidate;
+    index++;
+  }
+  return value;
+}
+
+function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean {
+  const command = name.toLowerCase();
+  return (
+    (command === "aidlc" || command === "aidlc.exe") &&
+    isPlanApprovalPrerequisite(args)
+  );
+}
+
+function isPlanApprovalPrerequisite(args: string[]): boolean {
+  if (args[0] !== "engine") return false;
+
+  const noun = args[1];
+  const verb = args[2];
+  // The conductor re-enters through next on each human turn, and continue
+  // delivers the remaining stage rules. Requiring approval for that transport
+  // traps installations before they can finish presenting or answering it.
+  // Lifecycle reports and generation remain subject to the approval guard.
+  if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
+    return true;
+  }
+  if (
+    noun === "testing-posture" &&
+    ["resolve", "render", "fingerprint", "verify"].includes(verb)
+  ) {
+    return true;
+  }
+  if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
+
+  const routeArgs = args.slice(3);
+  return (
+    lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
+    lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
+  );
+}
+
 function gitSubcommand(args: string[]): string | null {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -559,7 +606,13 @@ function isFrameworkToolInvocation(
   cwd: string,
   name: string,
   args: string[],
+  executableResolutionChanged = false,
+  dataDriven = false,
+  wrapped = false,
 ): boolean {
+  if (isNativePlanApprovalPrerequisite(name, args)) {
+    return !executableResolutionChanged && !dataDriven;
+  }
   if (normalizedCommandName(name) !== "bun") return false;
   if (
     args.some((arg) =>
@@ -579,9 +632,26 @@ function isFrameworkToolInvocation(
   const projectLexical = resolve(projectDir);
   const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
+  const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
   if (
     dirname(absolute) !== trustedToolsDir ||
-    !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute))
+    (!unifiedEntryPoint && !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute)))
+  ) {
+    return false;
+  }
+  // The installed Bun entry point dispatches both planning and mutation routes.
+  // Give it the native planning exceptions only, after checking the interpreter
+  // and arguments. Wrappers may change cwd after parsing, so require a direct
+  // invocation. The same real-file/no-symlink boundary below still applies.
+  if (
+    unifiedEntryPoint &&
+    (
+      !["bun", "bun.exe"].includes(name.toLowerCase()) ||
+      wrapped ||
+      executableResolutionChanged ||
+      dataDriven ||
+      !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1))
+    )
   ) {
     return false;
   }
@@ -600,7 +670,14 @@ function isFrameworkToolInvocation(
 function shellInvocationNeedsApproval(
   projectDir: string,
   cwd: string,
-  invocation: { name: string; args: string[] },
+  invocation: {
+    name: string;
+    args: string[];
+    executable?: string;
+    launchers?: string[];
+    dataDriven?: boolean;
+    executableResolutionChanged?: boolean;
+  },
   hasConcreteTargets: boolean,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
@@ -628,7 +705,19 @@ function shellInvocationNeedsApproval(
     }
     return subcommand === null || !READ_ONLY_GIT_SUBCOMMANDS.has(subcommand);
   }
-  if (isFrameworkToolInvocation(projectDir, cwd, name, invocation.args)) return false;
+  if (
+    isFrameworkToolInvocation(
+      projectDir,
+      cwd,
+      invocation.executable ?? invocation.name,
+      invocation.args,
+      invocation.executableResolutionChanged,
+      invocation.dataDriven,
+      (invocation.launchers?.length ?? 0) > 0,
+    )
+  ) {
+    return false;
+  }
   if (
     TRACKED_SHELL_MUTATORS.has(name) &&
     hasConcreteTargets &&
@@ -687,13 +776,16 @@ async function mutationIntent(
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
-    const { shellCommandInvocations, shellWriteTargets } = await import(
-      "./aidlc-review-freeze.ts"
-    );
+    const {
+      shellCommandAltersExecutableResolution,
+      shellCommandInvocationDetails,
+      shellWriteTargets,
+    } = await import("./aidlc-review-freeze.ts");
     targets = shellWriteTargets(command, cwd);
     opaqueShell =
       shellUsesDynamicEvaluation(command) ||
-      shellCommandInvocations(command).some((invocation) =>
+      shellCommandAltersExecutableResolution(command) ||
+      shellCommandInvocationDetails(command).some((invocation) =>
         shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0)
       );
   } else if (WRITE_TOOLS.has(toolName)) {

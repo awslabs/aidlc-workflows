@@ -22,12 +22,20 @@ import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildMeta, renderMeta, type MetaCounts } from "./lib/bun-junit-to-meta.ts";
+import {
+  parseShardSpec,
+  selectShard,
+  type ShardConfig,
+  type ShardSpec,
+} from "./lib/test-sharding.ts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
+const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
+const REQUIRE_COMPILED_COVERAGE_ENV = "AIDLC_REQUIRE_COMPILED_COVERAGE";
 
 // Platform null device, used for the system config after the protected
 // safe.directory entries have been copied into the suite's isolated config.
@@ -56,6 +64,7 @@ interface ParsedArgs {
   debug: boolean;
   filter: string;
   parallel: number;
+  shard: ShardSpec | null;
   fullProfile: boolean;
   // Force every live-model gate closed so deterministic tests in integration
   // and e2e still run. Also via AIDLC_NO_LLM=1.
@@ -96,6 +105,8 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
                   Default: 1 (serial). Smoke and unit tiers always run serially.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
+  --shard N/M     Run one deterministic, duration-balanced unit-test shard.
+                  Requires --unit with no other level or profile flags.
 
   -h, --help      Show this help and exit
 
@@ -109,6 +120,7 @@ EXAMPLES:
   bash tests/run-tests.sh --all --debug          # Everything with traces
   bash tests/run-tests.sh --integration --filter "t25|t26" --debug
   bash tests/run-tests.sh --all --parallel 4     # 4-way parallel for larger levels
+  bash tests/run-tests.sh --unit --shard 1/4    # CI-style isolated unit shard
 `;
 }
 
@@ -127,6 +139,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     debug: false,
     filter: "",
     parallel: 1,
+    shard: null,
     fullProfile: false,
     noLlm: process.env.AIDLC_NO_LLM === "1",
   };
@@ -193,6 +206,16 @@ function parseArgs(argv: string[]): ParsedArgs {
         out.parallel = Number(value);
         break;
       }
+      case "--shard": {
+        const value = argv[++i] ?? "";
+        try {
+          out.shard = parseShardSpec(value);
+        } catch (error) {
+          process.stderr.write(`ERROR: ${error instanceof Error ? error.message : String(error)}\n`);
+          process.exit(2);
+        }
+        break;
+      }
       case "--help":
         process.stdout.write(usage());
         process.exit(0);
@@ -210,6 +233,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     out.runSmoke = true;
     out.runUnit = true;
     out.runIntegration = true;
+  }
+  if (
+    out.shard &&
+    (!out.runUnit || out.runSmoke || out.runIntegration || out.runE2e)
+  ) {
+    process.stderr.write("ERROR: --shard requires --unit with no other level or profile flags\n");
+    process.exit(2);
   }
   return out;
 }
@@ -836,6 +866,19 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
       return !excludeSet.has(qualified);
     }));
   }
+  if (level === "unit" && args.shard) {
+    const config = JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig;
+    const names = files.map((file) => basename(file));
+    try {
+      const selected = new Set(selectShard(names, args.shard, config));
+      return files.filter((file) => selected.has(basename(file)));
+    } catch (error) {
+      process.stderr.write(
+        `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(2);
+    }
+  }
   return files;
 }
 
@@ -889,9 +932,15 @@ async function runFilesPartitioned(
 
 async function runTier(level: Level, label: string): Promise<void> {
   const effectiveParallel = level === "smoke" || level === "unit" ? 1 : args.parallel;
+  const modifiers: string[] = [];
+  if (effectiveParallel > 1) modifiers.push(`parallel=${effectiveParallel}`);
+  if (level === "unit" && args.shard) {
+    modifiers.push(`shard=${args.shard.index}/${args.shard.total}`);
+    process.env[REQUIRE_COMPILED_COVERAGE_ENV] = "1";
+  }
   process.stdout.write("\n");
   process.stdout.write(
-    effectiveParallel > 1 ? `## ${label} (parallel=${effectiveParallel})\n` : `## ${label}\n`,
+    modifiers.length > 0 ? `## ${label} (${modifiers.join(", ")})\n` : `## ${label}\n`,
   );
   await runFilesPartitioned(level, effectiveParallel);
   await withStdoutLock(() => undefined);

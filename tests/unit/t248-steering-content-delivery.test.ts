@@ -84,9 +84,10 @@ function project(): string {
   return proj;
 }
 
+// Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-});
+}, 120_000);
 
 function invoke(
   proj: string,

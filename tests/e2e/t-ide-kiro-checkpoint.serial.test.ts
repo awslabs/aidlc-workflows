@@ -49,6 +49,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -59,8 +60,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { platform, tmpdir } from "node:os";
-import { join } from "node:path";
-import { seededAuditShard, seededRecordDir } from "../harness/fixtures.ts";
+import { join, relative } from "node:path";
+import {
+  stateDigest,
+  workspaceSourceFingerprint,
+  writeActiveDirectiveMarker,
+  writePlanApprovalReceipt,
+} from "../../core/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../core/tools/aidlc-testing-posture.ts";
+import { seededAuditShard, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTuiProject, KIRO_IDE_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 import {
   autoApprove,
@@ -194,7 +208,53 @@ function seedApprovalGate(sandbox: string): void {
   seedGateFor(sandbox, COMMITTED_SLUG);
 }
 
-function seedGateFor(sandbox: string, slug: string): void {
+// This test isolates completion-gate human presence. Seed the earlier Plan Approval
+// prerequisite with the same receipt helper used by t265; do not mint a human turn
+// or approve either completion gate. The live assertions still exercise those.
+function seedApprovedPlanFixture(sandbox: string): void {
+  const state = readFileSync(seededStateFile(sandbox), "utf-8");
+  writeActiveDirectiveMarker(sandbox, {
+    kind: "run-stage",
+    stage: BLOCKED_SLUG,
+    state_sha256: stateDigest(state),
+  });
+  const authority = resolveCodeGenerationAuthority(sandbox, { unit: null });
+  const contract = resolveTestingPosture(sandbox);
+  const planPath = join(authority.stageDir, "code-generation-plan.md");
+  const plan = `${readFileSync(planPath, "utf-8").trimEnd()}\n\n${renderTestingContract(contract)}`;
+  writeFileSync(planPath, plan);
+  const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
+  const fingerprint = approvalFingerprint(plan, instructions, contract.contract_sha256, authority);
+  const plannedSource = workspaceSourceFingerprint(sandbox);
+  if (plannedSource === null) throw new Error("Completion-gate fixture source must be bindable");
+  const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+  const prompt = `## Plan Approval\n[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: ${plannedSource}\n[Answer]:\n`;
+  const questions = prompt.replace("[Answer]:", "[Answer]: Approve Plan");
+  writeFileSync(questionsPath, questions);
+  writePlanApprovalReceipt(sandbox, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: relative(sandbox, questionsPath).replace(/\\/g, "/"),
+    promptSha256: createHash("sha256").update(prompt).digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    plannedSourceSha256: plannedSource,
+    session: "completion-gate-fixture-prerequisite",
+    challengeId: "completion-gate-fixture-prerequisite",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
+  const approval = evaluateCodeGenerationApproval(sandbox, { unit: null });
+  if (!approval.ok) throw new Error(`Invalid Plan Approval fixture: ${approval.reason}`);
+}
+
+function seedGateFor(sandbox: string, slug: string, openGate = true): void {
   const phase = slug === COMMITTED_SLUG ? "inception" : "construction";
   const stageDir = join(seededRecordDir(sandbox), phase, slug);
   mkdirSync(stageDir, { recursive: true });
@@ -258,6 +318,7 @@ function seedGateFor(sandbox: string, slug: string): void {
       )}\n`,
       "utf-8",
     );
+    seedApprovedPlanFixture(sandbox);
   }
   const reviewer =
     slug === COMMITTED_SLUG
@@ -292,7 +353,43 @@ function seedGateFor(sandbox: string, slug: string): void {
     ].join("\n"),
   );
   runSetupTool(sandbox, "aidlc-log.ts", [...reviewArgs, "--verdict", "READY"]);
-  runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", slug]);
+  if (openGate) runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", slug]);
+}
+
+function installNextGateReviewFixture(sandbox: string): void {
+  const hooks = join(sandbox, ".kiro", "hooks");
+  writeFileSync(join(hooks, "aidlc-test-codegen-review.ts"), [
+    'import { spawnSync } from "node:child_process";',
+    'import { createHash } from "node:crypto";',
+    'import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { dirname, join, relative, resolve } from "node:path";',
+    'import { getField, stateFilePath, stateDigest, workspaceSourceFingerprint, writeActiveDirectiveMarker, writePlanApprovalReceipt } from "../tools/aidlc-lib.ts";',
+    'import { approvalFingerprint, evaluateCodeGenerationApproval, renderTestingContract, resolveCodeGenerationAuthority, resolveTestingPosture } from "../tools/aidlc-testing-posture.ts";',
+    `const COMMITTED_SLUG = ${JSON.stringify(COMMITTED_SLUG)};`,
+    `const BLOCKED_SLUG = ${JSON.stringify(BLOCKED_SLUG)};`,
+    'const seededRecordDir = (project) => dirname(stateFilePath(project));',
+    'const seededStateFile = stateFilePath;',
+    runSetupTool.toString(),
+    seedApprovedPlanFixture.toString(),
+    seedGateFor.toString(),
+    'const project = resolve(import.meta.dir, "../..");',
+    'const state = readFileSync(stateFilePath(project), "utf8");',
+    'const marker = join(seededRecordDir(project), ".aidlc-fixture-codegen-review-ready");',
+    'if (getField(state, "Current Stage") === BLOCKED_SLUG && !existsSync(marker)) {',
+    '  seedGateFor(project, BLOCKED_SLUG, false);',
+    '  writeFileSync(marker, "plan prerequisite and review prepared; completion gate not opened\\n");',
+    '}',
+  ].join("\n"));
+  writeFileSync(join(hooks, "aidlc-test-codegen-review.json"), JSON.stringify({
+    version: "v1",
+    hooks: [{
+      name: "aidlc-test-codegen-review",
+      trigger: "PostToolUse",
+      matcher: "^(execute_bash|execute_pwsh|shell)$",
+      description: "Prepare the next stage's fixture review after its attempt starts; never open or approve its gate.",
+      action: { type: "command", command: "bun .kiro/hooks/aidlc-test-codegen-review.ts" },
+    }],
+  }, null, 2));
 }
 
 function skipReason(): string | null {
@@ -413,6 +510,25 @@ function gateOpenedCountFor(sandbox: string, slug: string): number {
   return auditEventCountFor(sandbox, "STAGE_AWAITING_APPROVAL", slug);
 }
 
+const CONTINUATION_LABELS = ["alpha", "bravo", "charlie", "delta", "echo"];
+
+function completedContinuationLabels(sandbox: string): string[] {
+  const path = join(seededRecordDir(sandbox), ".aidlc-hooks-health", "hook-debug.log");
+  if (!existsSync(path)) return [];
+  const completed = new Set<string>();
+  for (const line of readFileSync(path, "utf-8").split("\n")) {
+    if (!line.includes('target="rebuild-stage-graph"')) continue;
+    const field = line.match(/\btoolResult=("(?:\\.|[^"\\])*")/);
+    if (!field) continue;
+    const output = JSON.parse(field[1]) as string;
+    const label = output.match(
+      /^Output:\s*(alpha|bravo|charlie|delta|echo)\s+Exit Code:\s*0\s*$/,
+    )?.[1];
+    if (label) completed.add(label);
+  }
+  return CONTINUATION_LABELS.filter((label) => completed.has(label));
+}
+
 describe("kiro-ide-driver startup overlay reconciliation", () => {
   test("the real DOM probe rejects a non-ARIA element intercepting the chat iframe", () => {
     const rect = {
@@ -459,6 +575,47 @@ describe("kiro-ide-driver startup overlay reconciliation", () => {
       "opaque-startup-overlay",
       "opaque-startup-overlay",
     ]);
+  });
+
+  test("an unrelated extension webview covered by Kiro chat is not a chat blocker", () => {
+    const rect = {
+      x: 354,
+      y: 35,
+      left: 354,
+      top: 35,
+      right: 1434,
+      bottom: 878,
+      width: 1080,
+      height: 843,
+      toJSON: () => ({}),
+    };
+    const makeFrame = () => ({
+      tagName: "IFRAME",
+      className: "webview ready",
+      getBoundingClientRect: () => rect,
+      contains: () => false,
+    }) as unknown as Element;
+    const welcome = makeFrame();
+    const chat = makeFrame();
+    const doc = {
+      querySelectorAll: (selector: string) => {
+        if (selector === "iframe.webview.ready") return [welcome, chat];
+        if (selector === "iframe[src*='extensionId=kiro.kiroAgent']") return [chat];
+        return [];
+      },
+      elementFromPoint: () => chat,
+    } as unknown as Document;
+    const styleOf = (() => ({
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      pointerEvents: "auto",
+    })) as unknown as typeof getComputedStyle;
+
+    const surface = inspectKiroIdeChatSurfaceDocument(doc, styleOf);
+    expect(surface.chatFrameCount).toBe(1);
+    expect(surface.blockingOverlays).toHaveLength(0);
+    expect(surface.blockedHitPoints).toHaveLength(0);
   });
 
   test("dismisses the current session-migration modal and waits for a clear chat hit-test", async () => {
@@ -508,6 +665,34 @@ describe("kiro-ide-driver startup overlay reconciliation", () => {
     expect(prepared.surface).toEqual(CLEAR_CHAT_SURFACE);
   });
 
+  test("dismisses a notification covering chat and rechecks the actual hit-test", async () => {
+    let dismissed = false;
+    const prepared = await settleKiroIdeChatSurface({
+      inspect: async () => dismissed ? CLEAR_CHAT_SURFACE : {
+        chatFrameCount: 1,
+        blockedHitPoints: [{
+          x: 1208.5,
+          y: 798,
+          hitTag: "DIV",
+          hitClassName: "notification-list-item-message",
+          hitText: "Extension setup notification",
+        }],
+        blockingOverlays: [],
+      },
+      dismissMigration: async () => null,
+      dismissNotification: async () => {
+        dismissed = true;
+        return "clicked:clear notification";
+      },
+      wait: async () => {},
+      now: () => 0,
+    });
+
+    expect(dismissed).toBe(true);
+    expect(prepared.surface.blockedHitPoints).toHaveLength(0);
+    expect(prepared.dismissed).toBe("clicked:clear notification");
+  });
+
   test("does not accept CDP-reachable chat behind a persistent blocking overlay", async () => {
     let now = 0;
     let dismissCalls = 0;
@@ -534,6 +719,7 @@ describe("kiro-ide-driver startup overlay reconciliation", () => {
 });
 
 describe("t-ide-kiro-checkpoint fixture", () => {
+  // Real git/tool setup can exceed Bun's 5s default under concurrent live-gate load.
   test("code-generation gate review binds to a real source fingerprint", () => {
     const sandbox = setupTuiProject({
       harness: "kiro-ide",
@@ -546,14 +732,21 @@ describe("t-ide-kiro-checkpoint fixture", () => {
         "checkbox",
         `${BLOCKED_SLUG}=in-progress`,
       ]);
-      seedGateFor(sandbox, BLOCKED_SLUG);
+      const humanTurnsBefore = humanTurnCount(sandbox);
+      const approvalsBefore = gateApprovedCountFor(sandbox, BLOCKED_SLUG);
+      seedGateFor(sandbox, BLOCKED_SLUG, false);
+      expect(gateOpenedCountFor(sandbox, BLOCKED_SLUG)).toBe(0);
+      expect(humanTurnCount(sandbox)).toBe(humanTurnsBefore);
+      expect(gateApprovedCountFor(sandbox, BLOCKED_SLUG)).toBe(approvalsBefore);
+      expect(evaluateCodeGenerationApproval(sandbox, { unit: null }).ok).toBe(true);
+      runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", BLOCKED_SLUG]);
       const audit = readFileSync(seededAuditShard(sandbox), "utf-8");
       expect(audit).not.toContain("**Source Fingerprint**: unbindable");
       expect(audit).toMatch(/\*\*Source Fingerprint\*\*: [0-9a-f]{40,64}/);
     } finally {
       cleanupTuiProject(sandbox);
     }
-  });
+  }, 30_000);
 });
 
 describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
@@ -575,6 +768,12 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       });
       seedBindableWorkspace(sandbox);
       seedApprovalGate(sandbox);
+      // The second stage needs fresh review evidence after its STAGE_STARTED.
+      // Prepare only that prerequisite; the model must still open the gate.
+      installNextGateReviewFixture(sandbox);
+      if (DIAGNOSTICS_PATH) {
+        writeFileSync(join(sandbox, "aidlc", ".aidlc-hook-debug"), "");
+      }
 
       // One human prompt forces the constructed same-turn cascade: approve the open
       // gate (legit - the prompt recorded one HUMAN_TURN), then in the SAME un-ended
@@ -730,6 +929,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         withAudit: true,
       });
 
+      // Observe all five PostToolUse results before evaluating the mint ratio.
+      writeFileSync(join(sandbox, "aidlc", ".aidlc-hook-debug"), "");
       const seedDir = makeSeedDir();
       const handle = launchKiroIde({
         workspace: sandbox,
@@ -755,16 +956,22 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         );
         t.close();
 
-        // Wait until the one HUMAN_TURN event is recorded (the mint fired for the one
-        // human prompt) while auto-clicking Kiro's Run/Allow so the continuations
-        // proceed and fire their postToolUse hooks.
-        await watchMarkers(
-          () => humanTurnCount(sandbox) >= 1,
+        // A HUMAN_TURN can arrive before the first command. Wait for every distinct
+        // successful echo result so the ratio covers all five model continuations.
+        const allContinuationsCompleted = await watchMarkers(
+          () => completedContinuationLabels(sandbox).length === CONTINUATION_LABELS.length,
           TEST_TIMEOUT_MS - 120_000,
           async () => {
             await autoApprove(handle.port);
           },
         );
+        diagnostic("continuations-complete", {
+          allContinuationsCompleted,
+          completed: completedContinuationLabels(sandbox),
+          humanTurns: humanTurnCount(sandbox),
+        });
+        expect(allContinuationsCompleted).toBe(true);
+        expect(completedContinuationLabels(sandbox)).toEqual(CONTINUATION_LABELS);
         // Settle so any (wrongly) re-fired mint on a continuation would have landed.
         await new Promise((r) => setTimeout(r, 8000));
 

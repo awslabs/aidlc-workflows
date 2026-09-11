@@ -32,6 +32,7 @@ import {
   appendAuditEntryUnlocked,
   type AuditEntryInput,
 } from "./aidlc-audit.ts";
+import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
@@ -2741,11 +2742,11 @@ export async function collectDoctorReport(
   const pinPath = join(projectDir, ".aidlc-version");
   if (existsSync(pinPath)) {
     const pinned = readFileSync(pinPath, "utf-8").trim();
-    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(pinned)) {
+    if (!VERSION_ID.test(pinned)) {
       results.push({
         pass: false,
         label: `Project pin is malformed: ${JSON.stringify(pinned)}`,
-        fix: `run \`${aidlcInvocation()} config --unpin\` or write one strict semver`,
+        fix: `run \`${aidlcInvocation()} config --unpin\` or write one release version id`,
       });
     } else {
       const distribution = (() => {
@@ -8339,9 +8340,9 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 // helper resolves the scope using word-boundary matching (so "debug"
 // does not match "bug"),
 // alphabetical iteration over scopes (so first-match-wins is
-// deterministic), and a ">5 word" heuristic that falls back to the
-// selection-aware default scope when the input looks like a project description
-// that happens to contain a keyword.
+// deterministic), and a ">5 word" heuristic that requires an affirmative
+// high-specificity keyword. Generic or negated mentions in long descriptions
+// fall back to the selection-aware default scope.
 //
 // Exported for t67 unit tests; not a stable public API.
 
@@ -8351,12 +8352,38 @@ export interface InferResult {
   matches: Array<{ scope: string; keyword: string }>;
 }
 
+// These core-owned keywords can identify a scope in a long description
+// (issue #1072). Generic words still defer to the word-count heuristic.
+// Plugin vocabularies remain owned by their plugins; declaring specificity
+// in scope frontmatter is a separate follow-up.
+const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
+  "refactor",
+  "mvp",
+  "minimum viable",
+  "poc",
+  "proof of concept",
+  "cve",
+]);
+
+function isNegatedScopeKeyword(text: string, index: number): boolean {
+  // Keep this local to the occurrence: "refactor without changing behavior"
+  // is affirmative, and a new clause can request a different scope. This is
+  // a conservative lexical guard, not a general natural-language parser.
+  const prefix = text
+    .slice(0, index)
+    .split(/[.!?;:\n]|\b(?:but|however|instead)\b/)
+    .pop() ?? "";
+  const normalized = prefix.replace(/\bnot\s+(?:only|just|merely)\b/g, "");
+  return /\b(?:no|not|never|without|avoid(?:ing)?|skip(?:ping)?|exclud(?:e|ing)|[a-z]+n['’]t)\b(?:[\s"'“”‘’()-]+\w+){0,4}[\s"'“”‘’()-]*$/.test(normalized);
+}
+
 export function inferScopeFromText(input: string): InferResult {
   const text = input.toLowerCase();
   const trimmed = input.trim();
   const wordCount = trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
   const mapping = loadScopeMapping();
   const allMatches: Array<{ scope: string; keyword: string }> = [];
+  let specificMatch: { scope: string; keyword: string } | undefined;
 
   // Iterate in alphabetical order for determinism (not JSON insertion
   // order). validScopes() already returns a sorted set. Multi-word
@@ -8364,19 +8391,30 @@ export function inferScopeFromText(input: string): InferResult {
   // tokens, so "proof  of  concept" (double-spaced) still matches.
   for (const scope of [...validScopes()]) {
     const keywords = mapping[scope]?.keywords ?? [];
+    let firstMatch: { scope: string; keyword: string } | undefined;
     for (const kw of keywords) {
-      const tokens = kw.toLowerCase().trim().split(/\s+/).map(escapeRegex);
-      const re = new RegExp(`\\b${tokens.join("\\s+")}\\b`, "i");
-      if (re.test(text)) {
-        allMatches.push({ scope, keyword: kw });
-        break; // One keyword per scope is enough to mark it matched.
+      const normalized = kw.toLowerCase().trim().replace(/\s+/g, " ");
+      const tokens = normalized.split(" ").map(escapeRegex);
+      const re = new RegExp(`\\b${tokens.join("\\s+")}\\b`, "gi");
+      for (const match of text.matchAll(re)) {
+        firstMatch ??= { scope, keyword: kw };
+        if (
+          wordCount > 5 &&
+          specificMatch === undefined &&
+          HIGH_SPECIFICITY_KEYWORDS.has(normalized) &&
+          !isNegatedScopeKeyword(text, match.index)
+        ) {
+          specificMatch = { scope, keyword: kw };
+        }
       }
     }
+    // Preserve one diagnostic match per scope and short-input precedence,
+    // while checking every keyword for the long-input exemption.
+    if (firstMatch) allMatches.push(firstMatch);
   }
 
-  // Disambiguation: keyword + >5 words → likely a project description
-  // containing the keyword incidentally. Also: no matches at all → default.
-  if (allMatches.length === 0 || wordCount > 5) {
+  // No matches at all → default (freeform).
+  if (allMatches.length === 0) {
     return {
       scope: selectionAwareDefaultScope().scope,
       source: "freeform",
@@ -8384,9 +8422,22 @@ export function inferScopeFromText(input: string): InferResult {
     };
   }
 
-  // First alphabetical match wins (deterministic across calls).
+  // Long descriptions need an affirmative high-specificity match.
+  if (wordCount > 5 && specificMatch === undefined) {
+    return {
+      scope: selectionAwareDefaultScope().scope,
+      source: "freeform",
+      matches: allMatches,
+    };
+  }
+
+  // First alphabetical match wins (deterministic across calls). In long
+  // prose a high-specificity match takes precedence over an alphabetically
+  // earlier incidental low-specificity one.
+  const winner =
+    wordCount > 5 && specificMatch !== undefined ? specificMatch : allMatches[0];
   return {
-    scope: allMatches[0].scope,
+    scope: winner.scope,
     source: "keyword",
     matches: allMatches,
   };

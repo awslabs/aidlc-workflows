@@ -243,22 +243,28 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
 // stage: the spike-F trap this branch exists to close).
 // ===========================================================================
 describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
-  test("bare compose over an active workflow names the in-flight composer", () => {
-    proj = createTestProject();
-    seedAidlcMemory(proj);
-    seedStateFile(proj, MID_IDEATION);
-    const d = directiveOf(runNext(proj, ["compose"]).out);
-    expect(d.kind).toBe("print");
-    expect(String(d.message)).toContain("aidlc-composer-agent");
-    expect(String(d.message)).toContain("RUNNING workflow");
-    expect(String(d.message)).toContain("mode in-flight");
-    expect(String(d.message)).toContain("stock-distance rankings are advisory only");
-    expect(String(d.message)).toContain("changes.skip and changes.add");
-    expect(String(d.message)).toContain("Never write scope registry files");
-    // The counterfactual: a guard-less engine routes this to the current
-    // run-stage. Pin the absence.
-    expect(d.kind).not.toBe("run-stage");
-  });
+  test.each(["", "drop market-research and team-formation"])(
+    "compose over an active workflow commits to the in-flight composer: %s",
+    (task) => {
+      proj = createTestProject();
+      seedAidlcMemory(proj);
+      seedStateFile(proj, MID_IDEATION);
+      const d = directiveOf(runNext(proj, ["compose", ...(task ? [task] : [])]).out);
+      expect(d.kind).toBe("print");
+      expect(String(d.message)).toContain("aidlc-composer-agent");
+      expect(String(d.message)).toContain("RUNNING workflow");
+      expect(String(d.message)).toContain("mode in-flight");
+      expect(String(d.message)).toContain("stock-distance rankings are advisory only");
+      expect(String(d.message)).toContain("changes.skip and changes.add");
+      expect(String(d.message)).toContain("Never write scope registry files");
+      expect(String(d.message)).toContain("fast path is available only BEFORE calling next compose");
+      expect(String(d.message)).toContain("Dispatch the composer subagent with this message as its task");
+      expect(String(d.message)).toContain("use its validated proposal at the approval gate");
+      // The counterfactual: a guard-less engine routes this to the current
+      // run-stage. Pin the absence.
+      expect(d.kind).not.toBe("run-stage");
+    },
+  );
 
   test("bare next (no compose) still advances - the dispatch branch is inert when unused", () => {
     proj = createTestProject();
@@ -291,6 +297,27 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.kind).toBe("ask");
     expect(String(d.question)).toContain("compose");
     expect(String(d.question)).not.toContain('"feature" workflow');
+  });
+
+  test("long affirmative refactor description -> confirm the refactor plan", () => {
+    proj = createTestProject();
+    const d = directiveOf(
+      runNext(proj, ["Please refactor the authentication module without changing its behavior"]).out,
+    );
+    expect(d.kind).toBe("ask");
+    expect(String(d.question)).toContain('This looks like "refactor" work');
+    expect(String(d.question)).toContain("Say go ahead");
+  });
+
+  test.each([
+    "Do not refactor anything; add a new login screen",
+    "Build a production service, not a proof of concept",
+  ])("negated scope in long prose -> compose offer: %s", (input) => {
+    proj = createTestProject();
+    const d = directiveOf(runNext(proj, [input]).out);
+    expect(d.kind).toBe("ask");
+    expect(String(d.question)).toContain("None of the ready-made plans is an obvious fit");
+    expect(String(d.question)).toContain("compose");
   });
 
   test("known-scope positional still creates (Branch 7b untouched)", () => {

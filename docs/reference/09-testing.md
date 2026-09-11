@@ -46,6 +46,20 @@ Distribution coverage is split by contract:
 - `t244-install-management.test.ts` covers machine configuration, update
   discovery, installer harness selection, Windows lifecycle surfaces,
   completions, and release-workflow candidate continuity.
+- `t330-release-channel-grammar.test.ts` pins the closed stable and preview
+  version-id grammar, the installer and lifecycle literals of it, and a preview
+  install that runs through the launcher shim.
+- `t331-preview-channel-lifecycle.test.ts` covers `config --channel`,
+  channel-aware `update` and `update --check`, API failure as unavailable,
+  switching back to stable, preview retention, and preview pins.
+- `t332-preview-release-pipeline.test.ts` covers the annotated-tag prerelease
+  publication, the preview planner and notes, and the plan record. It checks
+  the cap of at most one published preview per UTC day even after `main`
+  advances or a later manual run starts, including overnight publication
+  timestamps. Unchanged sources skip; drafts and orphan tags permit retry
+  planning with unoccupied ids. Workflow assertions cover isolation of stable
+  tags from scheduled/manual previews, shared `release-preview` concurrency,
+  CI gate ancestry, channel-specific provenance signers, and build stamping.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
@@ -381,6 +395,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --filter PAT    # Only run tests whose filename matches extended regex PAT
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
+--shard N/M     # Run one duration-balanced unit shard.
+                # Requires --unit with no other level or profile flags.
 ```
 
 `--no-llm` (or `AIDLC_NO_LLM=1`) closes the derived Claude gate and forces every
@@ -417,10 +433,32 @@ explicitly to keep those files on their in-test SKIP path.
 
 All 8 parallel calls observed `cache_read=73789` — Bedrock prompt caching stays warm across concurrent workers. No throttling or corruption observed at 8-way.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially regardless. They already complete in seconds and their interleaved output would hurt debuggability for no wall-clock gain. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each GitHub Actions job owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live (several can appear back-to-back before the first `DONE` — that's the visible signal workers are concurrent). In normal/verbose mode, each worker's TAP body is buffered and flushed to stdout as one contiguous block under a directory-mutex (`mkdir $LOG_DIR/.stdout.lock`, atomic on POSIX — works on macOS bash 3.2 without `flock`). So `ok`/`not ok` lines from different files never interleave; stdout reads top-to-bottom like a serial run, just with the file completion order determined by how long each test took rather than dispatch order. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping live workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; their exact filenames depend on process IDs and TUI session names, so the runner prints the glob at startup and at each test start. The Kiro-ACP trace records the live `kiro-cli acp` turn event-by-event (spawn, prompt start, each `tool_call`/`tool_call_update` with its verbatim output preview, permission answers, the spawned process's stderr, and the terminal `result`/`timeout`/`end`), so a `session/prompt` timeout can be diagnosed after the fact — distinguishing a turn that was progressing (real tool calls firing) from one that stalled.
 
 **Worker coordination.** The parent backgrounds `run_bun_test_file` with `&` and holds a slot gate via `jobs -rp | wc -l`. Each worker writes an atomic `.meta` sidecar to `$LOG_DIR/_results/`; the parent reads them after `wait` to populate the summary tables. macOS ships bash 3.2.57 (no `wait -n`), so the gate polls every 200ms — negligible next to minute-long LLM calls.
 
 **Guidance.** Start with `--parallel 4`. Raise to `8` if Bedrock capacity and your bill tolerate it. Drop back to serial for debugging a single failing test — or use `--filter` to isolate it.
+
+## Unit Sharding
+
+`--unit --shard N/M` assigns every discovered unit file to exactly one of `M`
+duration-balanced shards. Assignment is deterministic and uses
+`tests/unit-shard-weights.json` for the slowest files. Unlisted files receive a
+one-second default weight, so new tests join the least-loaded shard without
+changing the command. The runner exits 2 when `M` exceeds the number of
+assignable groups, so no valid shard command can report success after running
+zero files.
+
+Each shard remains serial. Run separate shards in separate checkouts or CI jobs.
+Do not run them concurrently against one repository tree because packaging
+tests regenerate `dist/` and can race tests that read generated files.
+
+The affinity list keeps cross-file prerequisites explicit. The native binary
+builder test currently runs before the Copilot compiled-adapter coverage in the
+same shard. Sharded unit execution requires that compiled coverage to resolve
+the producer's native build result, so a missing artifact fails instead of
+silently skipping the compiled cases. The smoke runner contract verifies that
+all four CI shards are non-empty, disjoint, cover the complete unit inventory,
+and preserve this ordering.

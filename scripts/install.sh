@@ -3,7 +3,7 @@ set -eu
 
 RELEASE_REPOSITORY=${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}
 BASE_URL=${AIDLC_RELEASE_BASE_URL:-https://github.com/$RELEASE_REPOSITORY/releases}
-RELEASE_WORKFLOW=${AIDLC_RELEASE_WORKFLOW:-$RELEASE_REPOSITORY/.github/workflows/release.yml}
+RELEASE_WORKFLOW=${AIDLC_RELEASE_WORKFLOW:-}
 GH_BIN=${AIDLC_GH_BIN:-}
 PROVENANCE_VERIFIER_AVAILABLE=0
 VERSION=
@@ -13,6 +13,10 @@ CA_BUNDLE=${AIDLC_CA_BUNDLE:-}
 MODE=human
 PROFILE=
 PROGRESS_ACTIVE=0
+# Release version grammar: stable x.y.z, or a preview id
+# x.y.z-preview.YYYYMMDD.N. Shell literal of PREVIEW_CHANNEL / VERSION_ID in
+# core/tools/aidlc-channel.ts; keep the two in step.
+VERSION_PATTERN='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}\.[1-9][0-9]*)?$'
 
 clear_progress() {
   if [ "$PROGRESS_ACTIVE" -eq 1 ]; then
@@ -77,7 +81,7 @@ fail() {
 }
 
 usage_text() {
-  echo "Usage: install.sh [--version <x.y.z>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes]"
+  echo "Usage: install.sh [--version <x.y.z|x.y.z-preview.YYYYMMDD.N>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes]"
 }
 
 usage() {
@@ -117,7 +121,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" -ne 0 ] || fail 4 failed "refusing a root install; run as the target user"
-if [ -n "$VERSION" ] && ! printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+if [ -n "$VERSION" ] && ! printf '%s\n' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then
   usage "invalid --version: $VERSION"
 fi
 [ "$OFFLINE" -eq 0 ] || [ -n "$FROM" ] ||
@@ -244,7 +248,7 @@ if [ -e "$command_target" ] || [ -L "$command_target" ]; then
       existing_version=${existing_target#"$canonical_install_root"/versions/}
       existing_version=${existing_version%/aidlc}
       if ! printf '%s\n' "$existing_version" |
-        grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+        grep -Eq "$VERSION_PATTERN"; then
         fail 4 failed \
           "existing $command_target has an invalid installer-owned target" \
           "choose an empty AIDLC_BIN_DIR or remove the mixed-ownership command"
@@ -348,6 +352,16 @@ for metadata in version.json checksums.txt aidlc-release.intoto.jsonl; do
     fail 4 failed "$metadata exceeds the 1 MiB metadata limit"
 done
 
+candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9A-Za-z.-]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
+printf '%s\n' "$candidate_version" |
+  grep -Eq "$VERSION_PATTERN" ||
+  fail 4 failed "version.json has no valid version."
+if [ -z "$RELEASE_WORKFLOW" ]; then
+  case "$candidate_version" in
+    *-preview.*) RELEASE_WORKFLOW="$RELEASE_REPOSITORY/.github/workflows/preview-release.yml" ;;
+    *) RELEASE_WORKFLOW="$RELEASE_REPOSITORY/.github/workflows/release.yml" ;;
+  esac
+fi
 requested_version=$VERSION
 if [ -z "$GH_BIN" ]; then
   GH_BIN=$(command -v gh 2>/dev/null || true)
@@ -380,13 +394,13 @@ actual_manifest=$(sha256_file "$TMP/version.json")
 [ "$actual_manifest" = "$expected_manifest" ] || {
   fail 4 failed "Checksum mismatch for version.json."
 }
-candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
-printf '%s\n' "$candidate_version" |
-  grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
-  fail 4 failed "version.json has no valid version."
 source_ref=$(sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 source_digest=$(sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
-[ "$source_ref" = "refs/tags/v$candidate_version" ] ||
+case "$candidate_version" in
+  *-preview.*) expected_source_ref=refs/heads/main ;;
+  *) expected_source_ref="refs/tags/v$candidate_version" ;;
+esac
+[ "$source_ref" = "$expected_source_ref" ] ||
   fail 4 failed "version.json has an invalid release source ref"
 printf '%s\n' "$source_digest" | grep -Eq '^[a-f0-9]{40}$' ||
   fail 4 failed "version.json has an invalid release source digest"

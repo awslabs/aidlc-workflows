@@ -64,13 +64,14 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertToolResultContains } from "../harness/assert.ts";
+import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
 import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
 } from "../harness/fixtures.ts";
 import {
   type CapturedToolResult,
+  type DriveResult,
   driveAidlc,
 } from "../harness/sdk-drive.ts";
 import {
@@ -80,7 +81,7 @@ import {
   readIntentRegistry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// This is the suite's heaviest live test: SIX SDK turns across one journey, one
+// This is the suite's heaviest live test: seven SDK turns across one journey, one
 // of which (the per-repo reverse-engineering codekb beat) writes many artifacts
 // over two repos. Budget it like the other multi-stage live journeys (2400s
 // default), and split the budget so the cheap deterministic-verb beats get a
@@ -160,6 +161,49 @@ function shellCommand(result: CapturedToolResult): string | undefined {
     : undefined;
 }
 
+/** Session audit rows may grow; workflow state and stage artifacts must not. */
+function workflowMarkdownSnapshot(recordDir: string): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  function visit(dir: string, prefix = ""): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (relative !== "audit") visit(join(dir, entry.name), relative);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        snapshot[relative] = readFileSync(join(dir, entry.name), "utf-8");
+      }
+    }
+  }
+  visit(recordDir);
+  return snapshot;
+}
+
+function assertTerminalWorkspaceTurn(result: DriveResult, output: string): void {
+  expect(result.timedOut, `terminal workspace command timed out: ${output}`).toBe(false);
+  expect(result.stoppedAfterToolResult).toBe(false);
+  expect(result.stoppedAfterAskUserQuestion).toBe(false);
+  assertResultOk(result);
+  assertToolResultContains(result, "Bash", output);
+  expect(
+    result.toolResults.at(-1)?.resultText,
+    "workspace navigation must end with the requested utility output",
+  ).toContain(output);
+  expect(result.askedQuestions, "workspace navigation must not start workflow intake").toEqual([]);
+  expect(
+    result.toolResults.filter((tool) => {
+      if (tool.toolName !== "Bash") return false;
+      try {
+        const directive = JSON.parse(tool.resultText) as { kind?: string };
+        return ["run-stage", "load-steering", "dispatch-subagent", "invoke-swarm"]
+          .includes(directive.kind ?? "");
+      } catch {
+        return false; // ordinary utility output, not an engine directive
+      }
+    }),
+    "terminal workspace navigation must not deliver workflow work",
+  ).toEqual([]);
+}
+
 /** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
  *  intact. Brownfield: reverse-engineering EXECUTEs and writes a per-repo codekb
  *  store, so the codekbFiles asserts below hold. Greenfield: the engine stamps
@@ -225,6 +269,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
+        expect(r1.timedOut).toBe(false);
         // The conductor acted on the engine's creation print: intent-create ran and
         // its verbatim summary landed.
         assertToolResultContains(r1, "Bash", INIT_STATE_SUMMARY);
@@ -346,6 +391,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
+        expect(r3.timedOut).toBe(false);
         assertToolResultContains(r3, "Bash", INIT_STATE_SUMMARY);
 
         // Two isolated rows, distinct UUIDs, both in-flight.
@@ -364,16 +410,27 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         // WORKFLOW_STARTED — A's own).
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
+        const recordB = activeRecordDir(root);
+        expect(recordB).toBeDefined();
+        const recordBDir = join(root, "aidlc", "spaces", "default", "intents", recordB!);
+        const stateAndArtifactsA = workflowMarkdownSnapshot(recordADir);
+        const stateAndArtifactsB = workflowMarkdownSnapshot(recordBDir);
 
         // --- Step 4: a non-default space, no learnings leak -------------------
         // The user TYPES "teamB"; the engine slugifies it to "teamb" on disk
         // (slugify lowercases — lib:463), so every on-disk path/assertion uses the
         // slug while the command string keeps the human spelling.
-        await driveAidlc(`/aidlc space-create teamB`, {
+        const createSpace = await driveAidlc(`/aidlc space-create teamB`, {
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
+          // Exercise the real Stop hook with a readable transcript and wait
+          // for its natural terminal result, not just the utility tool result.
+          persistSession: true,
         });
+        assertTerminalWorkspaceTurn(createSpace, `Space created: ${TEAM_B_SLUG}`);
+        expect(workflowMarkdownSnapshot(recordADir)).toEqual(stateAndArtifactsA);
+        expect(workflowMarkdownSnapshot(recordBDir)).toEqual(stateAndArtifactsB);
         const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
         // org.md copied from default's baseline.
         const defaultOrg = readFileSync(
@@ -400,13 +457,16 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         // `aidlc-utility.ts space teamB` (Branch 1b, before state inspection — so
         // the active intent is never advanced); the conductor runs that tool and
         // stops. The on-disk cursor moving to teamb is the proof the real path ran.
-        await driveAidlc(`/aidlc space teamB`, {
+        const switchTeam = await driveAidlc(`/aidlc space teamB`, {
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolResult: { resultIncludes: `Active space -> ${TEAM_B_SLUG}` },
+          persistSession: true,
         });
+        assertTerminalWorkspaceTurn(switchTeam, `Active space -> ${TEAM_B_SLUG}`);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG); // the active-space cursor moved
+        expect(workflowMarkdownSnapshot(recordADir)).toEqual(stateAndArtifactsA);
+        expect(workflowMarkdownSnapshot(recordBDir)).toEqual(stateAndArtifactsB);
 
         const r4b = await driveAidlc(
           intentCreationToolPrompt("poc", "teamB onboarding flow"),
@@ -417,6 +477,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
+        expect(r4b.timedOut).toBe(false);
         assertToolResultContains(r4b, "Bash", INIT_STATE_SUMMARY);
         // teamB now holds exactly one intent, isolated from default's two.
         expect(readIntentRegistry(root, TEAM_B_SLUG).length).toBe(1);
@@ -427,13 +488,21 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
 
         // --- Step 5: switch back to default; intent A still resumable ---------
         // Same plain conductor-routed switch as beat 4, back the other way.
-        await driveAidlc(`/aidlc space default`, {
+        const teamRecord = activeRecordDir(root);
+        expect(teamRecord).toBeDefined();
+        const teamRecordDir = join(root, "aidlc", "spaces", TEAM_B_SLUG, "intents", teamRecord!);
+        const teamStateAndArtifacts = workflowMarkdownSnapshot(teamRecordDir);
+        const switchDefault = await driveAidlc(`/aidlc space default`, {
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolResult: { resultIncludes: "Active space -> default" },
+          persistSession: true,
         });
+        assertTerminalWorkspaceTurn(switchDefault, "Active space -> default");
         expect(activeSpace(root)).toBe("default");
+        expect(workflowMarkdownSnapshot(recordADir)).toEqual(stateAndArtifactsA);
+        expect(workflowMarkdownSnapshot(recordBDir)).toEqual(stateAndArtifactsB);
+        expect(workflowMarkdownSnapshot(teamRecordDir)).toEqual(teamStateAndArtifacts);
         // A's WORKFLOW STATE survived the round trip untouched (the cursor flip is
         // a pure write; nothing rewrote A's state), and no foreign creation bled into
         // its shard. The audit shard itself may carry session-lifecycle events

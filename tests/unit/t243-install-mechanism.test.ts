@@ -114,11 +114,12 @@ function releaseBinaryName(): string {
   return `aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
 }
 
+// Removing the accumulated temporary trees can exceed bun's 5s hook default.
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+}, 120_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
 // the canonical temp root (macOS aliases /var to /private/var).
@@ -1309,7 +1310,7 @@ describe("t243 project initialization", () => {
     };
     expect(merged.mcpServers.context7).toEqual(custom);
     expect(merged.projectSetting).toBe(true);
-  });
+  }, 60_000);
 
   test("MCP consent and managed AGENTS blocks preserve user-owned configuration", () => {
     const claudeProject = temp("aidlc-t240-mcp-matrix-");
