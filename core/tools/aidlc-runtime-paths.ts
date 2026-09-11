@@ -142,6 +142,21 @@ export function compiledExecutable(
   return isCompiledExecutable(moduleUrl, executable) ? executable : null;
 }
 
+// Child calls and human-facing command rendering describe the same dispatcher
+// operations. Child calls use argv and an absolute source path so neither cwd
+// changes nor a native executable's process.execPath can turn a script into a
+// dispatcher command.
+export function aidlcEngineCommand(
+  route: "orchestrate" | "log" | "state" | "bolt",
+  args: readonly string[],
+  sourceToolPath?: string,
+): string[] {
+  const executable = compiledExecutable();
+  return executable
+    ? [executable, "engine", route, ...args]
+    : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
+}
+
 export function aidlcInvocation(): string {
   if (isCompiledExecutable()) return "aidlc";
   if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
