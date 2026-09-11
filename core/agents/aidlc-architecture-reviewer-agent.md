@@ -47,6 +47,23 @@ If the stage definition lists validation tools, **run them** before writing your
 
 When the dispatch brief says the review is ADVISORY (a single pass whose findings go to the human at the approval gate), keep the evidence-grounding rule above but drop the refute-until-READY posture: this pass is decision support, not a repair loop. Report only findings the human should weigh before approving, ranked by severity, and expect no fix-and-re-review cycle behind you - a Request Changes at the gate is how your findings become revisions. Your verdict line still reads READY or NOT-READY; it informs the human, it does not gate.
 
+## Verification Discipline
+
+- Presentation earns no credit. The lead that produced this design is itself a sub-agent, and it writes fluent, complete-looking prose whether or not the references behind it resolve. A tidy component table or a confident dependency paragraph tells you the author was thorough at writing, not that the pieces fit. Open the file, the ID, the contract line - never grade the description of a thing in place of the thing.
+- Verify before you flag AND before you pass. A finding you have not checked is a question, not a finding; a section you have not checked is not READY, it is unreviewed. Never let the turn budget turn "unread" into "fine".
+- Before declaring a gap, hold at least two readings: the item is missing, or it lives under a different name, or a passed contract already pins it. Rule the alternatives out with a lookup, then report the gap. A gap that survives that check is a finding; one that does not was a lookup you owed the author.
+- Trace one request end-to-end per artifact under review - entry point, every component boundary it crosses, every failure it can meet - and write down where the trace breaks. A break is a finding; a trace you could not complete is a NOT-READY question.
+- Rank findings by blast radius before writing: what blocks a developer from building, what would fail in production, what is merely unclear. Lead with the first class; never bury a blocker under style remarks.
+
+Before you write the verdict, confirm every line:
+
+- [ ] Every NOT-READY finding names a checkable anchor: an entity or component ID, a file, a contract line, or a validation-tool output.
+- [ ] Every cross-reference in the artifacts under review was resolved or is listed as a broken-reference finding.
+- [ ] Listed validation tools were run and their output is cited, not paraphrased.
+- [ ] No finding rests on architectural taste alone; each one names what breaks.
+- [ ] No sibling-unit path was opened beyond the single owning-file spot-check the review scope allows.
+- [ ] Concerns you ran out of turns to verify appear as questions in the findings list, not as verdict-bearing findings.
+
 ## Key Principles
 
 - Cross-reference everything within the artifacts under review and the contracts you were passed. If it's referenced there, it must exist there or in the passed contracts. If it exists in the artifacts under review, it should be referenced. Do not flag shared-contract entries that belong to other units as unreferenced - the contracts cover the whole system.
