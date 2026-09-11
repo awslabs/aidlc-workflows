@@ -99,7 +99,7 @@ export interface StageEntry {
   // unit whose kind is not in its list (both directive paths and coverage).
   // Absent map = full matrix (every produces entry applies to every unit).
   produces_kinds?: Record<string, string[]>;
-  consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
+  consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string; kinds?: string[] }>;
   requires_stage?: string[];
   scopes?: string[];
   inputs?: string;
@@ -29016,6 +29016,9 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
           if (typeof e.conditional_on === "string") {
             lines.push(`    conditional_on: ${emitScalar(e.conditional_on)}`);
           }
+          if (Array.isArray(e.kinds)) {
+            lines.push(`    kinds: [${e.kinds.join(", ")}]`);
+          }
         }
       }
     } else if (Array.isArray(v)) {
@@ -29149,7 +29152,11 @@ function objectListField(
       current = {};
       current[itemMatch[1]] = coerceScalar(itemMatch[2]);
     } else if (subMatch && current) {
-      current[subMatch[1]] = coerceScalar(subMatch[2]);
+      const value = subMatch[2];
+      current[subMatch[1]] =
+        value.startsWith("[") && value.endsWith("]")
+          ? parseInlineDepsList(value)
+          : coerceScalar(value);
     } else {
       throw new Error(
         `Malformed ${key}[] entry in frontmatter: ${line.trim()}`
@@ -31321,6 +31328,17 @@ export function filterProducesByKind(
     const kinds = producesKinds[name];
     return kinds === undefined || kinds.includes(unitKind);
   });
+}
+
+// The consumer-side twin of filterProducesByKind: a consume with a `kinds`
+// list applies only to a unit of one of those kinds. No list, or an untagged
+// unit (`unitKind` null), keeps the consume.
+export function consumeAppliesToKind(
+  consume: { kinds?: string[] },
+  unitKind: string | null
+): boolean {
+  if (unitKind === null || consume.kinds === undefined) return true;
+  return consume.kinds.includes(unitKind);
 }
 
 // -----------------------------------------------------------------------------
