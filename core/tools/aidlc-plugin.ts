@@ -1011,10 +1011,10 @@ function removeListValues(
 }
 
 function removeConsumes(content: string, artifacts: ReadonlySet<string>): string {
-  const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
+  const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on|kinds):.*\n)*)*)/m;
   const match = content.match(block);
   if (!match) return content;
-  const kept = [...match[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
+  const kept = [...match[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on|kinds):.*\n)*/gm)]
     .filter((entry) => !artifacts.has(entry[1]))
     .map((entry) => entry[0]);
   return content.replace(block, kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n");

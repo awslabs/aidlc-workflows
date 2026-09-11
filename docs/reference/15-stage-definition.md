@@ -303,6 +303,35 @@ For unconditional consumes, **omit the field entirely**. There is no
 `always` value — an unconditional consume simply has no `conditional_on`
 key.
 
+### `consumes[].kinds`
+
+Optional inline list on one consume of a `for_each: unit-of-work` stage: the
+Unit kinds (`service | spec | ui | packaging | library`, the same set
+`produces_kinds` uses) that input applies to. Omit it for an input every Unit
+reads.
+
+```yaml
+for_each: unit-of-work
+consumes:
+  - artifact: functional-spec
+    required: true
+  - artifact: mockups
+    required: false
+    kinds: [ui]
+```
+
+Why it exists: `produces_kinds` prunes what a Unit must *write*, but a consume
+had no kind axis. A once-per-workflow artifact such as a UI mockup is a real
+input of `ui` Units and noise for a `service` Unit — and `upstream-coverage`
+threads every consume whose file exists, so the backend Unit's deliverables
+were asked to reference mockups they never read, a false `SENSOR_FAILED` on
+correct output. With `kinds`, the directive builder (`resolveConsumes`) and the
+sensor dispatcher apply the same rule: a Unit whose kind is not listed does not
+see the consume; an untagged Unit (no `kind` in the DAG) keeps it, exactly as
+`produces_kinds` keeps the full matrix for an untagged Unit. Declaring `kinds`
+on a stage that is not per-unit is a schema error, since there would be no
+Unit kind to filter on and the list would be silently inert.
+
 ### `optional_produces`
 
 A plain kebab-case string list, parallel to `produces:`. It names artifacts
