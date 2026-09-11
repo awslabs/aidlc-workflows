@@ -92,6 +92,8 @@ function install(harness = "claude", mcp: "defaults" | "none" = "none"): string 
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+    // Host active-version runtimes must not join this fixture's source discovery.
+    AIDLC_INSTALL_ROOT: temp("aidlc-t295-runtime-machine-"),
     ...extra,
   };
 }

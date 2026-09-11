@@ -939,7 +939,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t173-session-switch-restamp.test.ts",
     "integration/t175-space-create-memory-isolation.test.ts",
     "integration/t185-stage-artifact-guard.test.ts",
-    "integration/t188-plugin-compose.test.ts",
+    "integration/t188-plugin-compose.serial.test.ts",
     "integration/t224-plugin-selection.test.ts",
     "integration/t300-plugin-kit.test.ts",
     "integration/t304-loopback-review-receipt-replay.test.ts",
@@ -1105,6 +1105,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.
     "unit/t305-per-unit-attribution-receipts.test.ts",
+    // t312 spawns aidlc-attest/aidlc-log because commit-provenance acceptance
+    // is defined over real receipts, manual git commits, and CLI exit codes.
+    "unit/t312-attest-resolve-anchor.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",
@@ -1139,7 +1142,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t94-sensor-fire-hook.test.ts",
     "unit/t96.test.ts",
     "unit/t97.test.ts",
-    "integration/t311-session-binding-writers.test.ts",
+    "integration/t311-session-binding-writers.serial.test.ts",
     "e2e/t113.test.ts",
     "e2e/t122-stop-hook-e2e.test.ts",
     "e2e/t126-emitter-pairing-cofire.test.ts",

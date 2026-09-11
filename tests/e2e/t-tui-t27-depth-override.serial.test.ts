@@ -27,13 +27,16 @@
 //     Minimal) in both the rendered confirmation and the implicit audit delta.
 //
 //   Case C — invalid depth is REFUSED and leaves state untouched:
-//     setup the same fixture, type `/aidlc --depth extreme`. SKILL.md step 2
-//     (SKILL.md:112) now surfaces an interactive invalid-depth recovery menu
-//     ("isn't valid" / "Which depth level do you want?") before any tool writes.
-//     Even if it reached config-change the CLI dies (`Unknown depth:
-//     "extreme"...`, aidlc-utility.ts:2367) BEFORE writeStateFile. Assert
-//     RENDERED: the pane describes the invalid depth and offers the recovery
-//     choices. Assert ON DISK: the state file is BYTE-IDENTICAL to the seed —
+//     setup the same fixture, type `/aidlc --depth extreme`. The orchestrator's
+//     config-change print directive runs the config command and stops; the
+//     authored SKILL's "When an action is refused" rule calls for refusal prose,
+//     not an AskUserQuestion menu. The CLI rejects the unknown depth BEFORE
+//     writeStateFile. Wait for native turn completion after Stop and the TUI's
+//     settled input prompt, then require the correlated CLI rejection, a final
+//     reply, no subsequent tool calls, and no workflow artifact changes. Refusal
+//     semantics are checked in the retained live trace, not a prose regex.
+//     Assert ON DISK: the state file is
+//     BYTE-IDENTICAL to the seed —
 //     the .sh's md5-before/md5-after equality, here a full readFileSync compare,
 //     which is strictly stronger than an md5 hash match.
 //
@@ -79,14 +82,17 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
+import { type NativeToolCall, nativeToolCalls } from "../harness/t139-fidelity.ts";
 import {
   cleanupTuiProjectAfterKill,
+  completedClaudeTurnPattern,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 
@@ -150,6 +156,66 @@ async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<bool
   return pred();
 }
 
+interface NativeRow {
+  type: string;
+  subtype?: string;
+  hookErrors?: string[];
+  message?: {
+    content?: Array<{
+      type: string;
+      text?: string;
+      tool_use_id?: string;
+      is_error?: boolean;
+      content?: unknown;
+    }>;
+  };
+}
+
+// Bind completion evidence to this fresh CLI session, as t139 does. A rendered
+// error can precede Stop; turn_duration is emitted after the Stop cycle finishes.
+function nativeTurn(sessionId: string): { raw: string; rows: NativeRow[] } | undefined {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR || join(os.homedir(), ".claude"), "projects");
+  if (!existsSync(projects)) return undefined;
+  const path = readdirSync(projects, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(projects, entry.name, `${sessionId}.jsonl`))
+    .find((candidate) => existsSync(candidate));
+  if (!path) return undefined;
+  const text = readFileSync(path, "utf8");
+  const raw = text.slice(0, text.lastIndexOf("\n") + 1);
+  const rows = raw.split("\n").filter(Boolean).map((line) => JSON.parse(line) as NativeRow);
+  return { raw, rows };
+}
+
+// The native tool result prefixes CLI JSON with e.g. "Exit code 1". Parse the
+// diagnostic only from the rejected result belonging to the canonical call.
+function rejectedCliError(row: NativeRow, callId: string): string | undefined {
+  if (row.type !== "user" || !Array.isArray(row.message?.content)) return undefined;
+  const result = row.message.content.find((block) =>
+    block.type === "tool_result" && block.tool_use_id === callId && block.is_error === true,
+  );
+  if (typeof result?.content !== "string") return undefined;
+  for (const line of result.content.split(/\r?\n/)) {
+    try {
+      const parsed = JSON.parse(line) as { error?: unknown } | null;
+      if (parsed && typeof parsed.error === "string") return parsed.error;
+    } catch {
+      // Human-readable tool wrapper lines are not the CLI's JSON diagnostic.
+    }
+  }
+  return undefined;
+}
+
+function workflowArtifacts(statePath: string): Record<string, string> {
+  const record = dirname(statePath);
+  return Object.fromEntries(
+    readdirSync(record, { recursive: true, encoding: "utf8" })
+      .filter((path) => /^(ideation|inception|construction|operation)[/\\]/.test(path))
+      .filter((path) => statSync(join(record, path)).isFile())
+      .map((path) => [path, readFileSync(join(record, path)).toString("base64")]),
+  );
+}
+
 // Does the per-intent audit shard dir carry a canonical `**Event**: <name>` line?
 // (line-anchored so a stray token in a field value cannot satisfy it — the
 // aidlc-audit.ts:259 format.) Reads every `.md` shard under <record>/audit/ and
@@ -198,7 +264,7 @@ const SKIP_REASON = skipReason();
 // TUI, clear the two startup modals, and wait for the WORKFLOW statusline (not
 // `ready`) so we KNOW the override lands against a live workflow row. Returns the
 // session name + project path; the caller drives the slash command and cleans up.
-function bootSeededWorkflow(tag: string): { session: string; proj: string } {
+function bootSeededWorkflow(tag: string, sessionId?: string): { session: string; proj: string } {
   const session = `aidlc_tui_t27_${tag}_${process.pid}`;
   const proj = setupTuiProject({ withState: "state-mid-ideation.md", withAudit: true });
   // launch
@@ -216,6 +282,7 @@ function bootSeededWorkflow(tag: string): { session: string; proj: string } {
       "--",
       "claude",
       "--dangerously-skip-permissions",
+      ...(sessionId ? ["--session-id", sessionId] : []),
     ]).rc,
   ).toBe(0);
   // clear the two startup modals (idempotent — only act if present)
@@ -308,28 +375,68 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
 
   // --- Case C: invalid depth is refused; state byte-unchanged -----------------
   test.skipIf(SKIP_REASON !== null)(
-    `--depth extreme renders the invalid-depth recovery menu and leaves state byte-identical${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
-    () => {
-      const { session, proj } = bootSeededWorkflow("err");
+    `--depth extreme refuses, settles without workflow continuation, and leaves state byte-identical${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
+    async () => {
+      const sessionId = randomUUID();
+      const { session, proj } = bootSeededWorkflow("err", sessionId);
+      let settledToolCount: number | undefined;
       try {
         const statePath = seededStateFile(proj);
         // Snapshot the exact bytes BEFORE the invalid override (the .sh's
         // md5-before). A full-content compare is strictly stronger than md5.
         const before = readFileSync(statePath, "utf8");
+        const artifactsBefore = workflowArtifacts(statePath);
 
         // type the invalid override
         sendSlash(session, "/aidlc --depth extreme");
 
-        // --- DRIVER: a recovery menu surfaces. Synchronize on the structural
-        // AskUserQuestion footer, not rewordable/possibly-collapsed pane prose.
-        // The disk assertions below own the actual refusal contract.
-        const recoveryMenuRendered = waitFor(
-          session,
-          "Enter to select|Submit answers",
-          120000,
-          0,
+        // A config error or the word "extreme" can render before Stop finishes.
+        // First require native completion of the whole turn, then the existing
+        // TUI completion pattern with a stable screen. Never inspect state early.
+        expect(await waitForDisk(
+          () => nativeTurn(sessionId)?.rows.some(
+            (row) => row.type === "system" && row.subtype === "turn_duration",
+          ) ?? false,
+          120_000,
+        )).toBe(true);
+        expect(waitFor(session, completedClaudeTurnPattern("extreme"), 10_000, 1_000)).toBe(true);
+
+        const native = nativeTurn(sessionId);
+        expect(native).toBeDefined();
+        const rows = native!.rows;
+        const stops = rows.filter((row) => row.type === "system" && row.subtype === "stop_hook_summary");
+        expect(stops.length).toBeGreaterThan(0);
+        expect(stops.flatMap((row) => row.hookErrors ?? [])).toEqual([]);
+        const calls = nativeToolCalls(native!.raw);
+        const refused = calls.findIndex((call) =>
+          call.name === "Bash" &&
+          String(call.input.command).trim().replace(/\s+2>&1$/, "") ===
+            "bun .claude/tools/aidlc.ts engine config set depth extreme",
         );
-        expect(recoveryMenuRendered).toBe(true);
+        expect(refused).toBeGreaterThanOrEqual(0);
+        expect(calls.slice(refused + 1)).toEqual([]);
+        settledToolCount = calls.length;
+        const callId = (calls[refused] as NativeToolCall & { id: string }).id;
+        expect(callId).toBeString();
+        const rejectedResult = rows.findIndex((row) =>
+          row.type === "user" && Array.isArray(row.message?.content) &&
+          row.message.content.some((block) =>
+            block.type === "tool_result" && block.tool_use_id === callId && block.is_error === true,
+          ),
+        );
+        expect(rejectedResult).toBeGreaterThanOrEqual(0);
+        // handleConfigChange rejects the value before any state/audit mutation.
+        // Pin its diagnostic and the tool identity, never the model's wording.
+        expect(rejectedCliError(rows[rejectedResult], callId)).toContain('Unknown depth: "extreme".');
+        const finalReply = rows.slice(rejectedResult + 1)
+          .filter((row) => row.type === "assistant" &&
+            row.message?.content?.some((block) => block.type === "text"))
+          .at(-1);
+        expect(finalReply).toBeDefined();
+        const refusal = (finalReply!.message?.content ?? [])
+          .filter((block) => block.type === "text").map((block) => block.text ?? "")
+          .join("\n");
+        expect(refusal.trim().length).toBeGreaterThan(0);
 
         // --- ON DISK: state must be BYTE-IDENTICAL (the .sh's md5 equality). The
         // refusal short-circuits before writeStateFile, so nothing — not even Last
@@ -337,12 +444,22 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         const after = readFileSync(statePath, "utf8");
         expect(after).toBe(before);
         expect(readAllAuditShards(proj)).not.toMatch(/^\*\*Event\*\*: DEPTH_CHANGED$/m);
+        expect(workflowArtifacts(statePath)).toEqual(artifactsBefore);
       } finally {
+        const killed = drive(["kill", "--session", session]);
+        const native = nativeTurn(sessionId);
+        if (native && process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `t27-native-${sessionId}.jsonl`), native.raw);
+        }
         cleanupTuiProjectAfterKill(
           proj,
           session,
-          drive(["kill", "--session", session]),
+          killed,
         );
+        // Include every call through teardown, not just the earlier settled read.
+        if (settledToolCount !== undefined) {
+          expect(native ? nativeToolCalls(native.raw).length : -1).toBe(settledToolCount);
+        }
       }
     },
     TEST_TIMEOUT_MS,

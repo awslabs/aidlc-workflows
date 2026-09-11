@@ -1269,6 +1269,32 @@ bun .claude/tools/aidlc-runtime.ts read requirements-analysis
 
 `runtime-graph.json` is gitignored. See [Artifacts Reference](14-artifacts-reference.md) for the artifact's shape and the [Runtime Graph](../reference/13-runtime-graph.md) reference chapter for the full schema.
 
+### `aidlc attest` — commit provenance
+
+Answers "which reviewed unit of work owns this commit's changes, and does the committed content still match what the reviewer approved?" Attribution is derived purely from committed content — the review receipts in the `audit/` shards plus the committed `reviewed-source-*.tsv` evidence files, read out of a git tree rather than your checkout — so it works on plain manual `git commit`s, in any clone, with no hooks, no commit-message trailers, and no pushed refs, and the same commit always resolves the same way.
+
+| Subcommand | What it does |
+|------------|--------------|
+| `resolve [<commit>]` | Read-only. Attribute the commit's first-parent delta (default `HEAD`) to reviewed units and classify each changed path: `verified` (committed content equals the reviewed content), `drifted` (reviewed but edited since), `unattested` (no unit claims it), `unverifiable` (evidence missing, tampered, or only in the gitignored local snapshot — fails closed), `indeterminate` (ambiguous receipts — fails closed), `excluded` (framework shell/record paths — harness shells already established in the range's base tree, not manifests introduced by the change or shells installed only in your checkout). JSON report on stdout. `--commit <rev>` is accepted as a flag form of the positional |
+| `resolve --diff <base>..<head>` | Same classification over an arbitrary range (`...` uses the merge-base, matching merge-request semantics) |
+| `resolve … --fail-on drifted,unattested,unverifiable,indeterminate` | Exit 3 when any path matches one of the named statuses — the gate form. Accepts any subset of the four; **name all four unless you mean to let unverified paths through** — omitting `unverifiable` passes paths whose reviewed content nothing could check |
+| `resolve … --record-ref <ref>` | Read receipts and evidence from `<ref>`'s tree instead of the commit under test. Point it at a ref the change cannot write (a protected branch, a records-only ref) so a change cannot supply its own approvals |
+| `resolve … --require-trust <level>` | Exit 3 unless the report's own basis reaches `informational` \| `reproducible` \| `independent` \| `signed` (`signed` means every input the verdict rests on — each relied-upon receipt's audit shard as well as the evidence file it selects — arrived in a signed commit). Every report carries a `trust` object saying which it achieved and why |
+| `anchor [--commit <rev>]` | Append a `SOURCE_COMMITTED` audit row recording that the commit landed reviewed claims. Enrichment only — `resolve` never reads anchors, so unanchored manual commits lose nothing. Explicit by default; set `AIDLC_SESSION_ANCHOR=1` to also sweep recent commits at session start |
+| `anchor --reconcile [--max-commits <n>]` | Sweep first-parent history (default 100 commits) and backfill anchors for attributable commits; already-anchored and swarm-merged commits are skipped, unattributable ones reported |
+
+```
+# Gate a branch: three-dot (merge-base) range, all four failable statuses,
+# receipts read from a ref the branch cannot write
+bun .claude/tools/aidlc-attest.ts resolve --diff origin/main...HEAD \
+  --record-ref origin/aidlc-records --require-trust independent \
+  --fail-on drifted,unattested,unverifiable,indeterminate
+```
+
+Three details make or break that recipe. Use `...` (three dots): `origin/main..HEAD` diffs the *tips*, so anything that landed on `origin/main` after the branch point shows up as a change of this branch and false-fails. Fetch enough history — a shallow checkout (`actions/checkout` defaults to depth 1) has no parent commit for the boundary, which `resolve` reports as an error rather than silently classifying the whole tree; set `fetch-depth: 0`. And decide deliberately whether you are *reporting* or *enforcing*: without `--record-ref`, a change that writes its own receipts can verify itself, which the report states (`trust.level: reproducible`) but does not prevent. Drop both trust flags and you get an honest informational report.
+
+Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `--intent <dir>`; each verb rejects the other's flags rather than ignoring them. See the [Commit Provenance](../reference/20-commit-provenance.md) reference chapter for the threat model, the trust ladder, and status semantics.
+
 ### Session skills — report on a workflow
 
 Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in readable output. Type them like commands:

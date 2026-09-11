@@ -23,13 +23,13 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 | [Stage Protocol](04-stage-protocol.md) | Behavioral contract: approval gates, compliance checklist |
 | [Stages](04-stages/) | Per-phase stage documentation (5 files) |
 | [Agent System](05-agent-system.md) | Agent structure, frontmatter contract, configuration matrix |
-| [Hooks and Tools](06-hooks-and-tools.md) | Hook system, CLI tools, 97-event audit taxonomy |
+| [Hooks and Tools](06-hooks-and-tools.md) | Hook system, CLI tools, 98-event audit taxonomy |
 | [Sensor System](07-sensor-system.md) | Sensor manifest schema, PULL imports, fire model, default severity |
 | [Rule System](08-rule-system.md) | Rule file layout, scope derivation, the layer-chain resolver, conflict gates |
 | [Testing](09-testing.md) | Test pyramid, tiers, stubs, fixtures, test registry |
 | [Knowledge System](10-knowledge-system.md) | Two-tier architecture, DocumentKB derived catalog, loading order, templates |
 | [Contributing](11-contributing.md) | Development workflow, utility handler checklist, documentation policy |
-| [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 97-event taxonomy, audit-first rules |
+| [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 98-event taxonomy, audit-first rules |
 | [Runtime Graph](13-runtime-graph.md) | The compiled `runtime-graph.json` artifact: data-plane mirror of the stage graph |
 | [Harness Primitives Mapping](14-claude-features.md) | How each AI-DLC concept maps to a harness's native primitives (Claude Code in depth) |
 | [Stage Definition](15-stage-definition.md) | YAML frontmatter contract, three-compartment body, compile pipeline |
@@ -37,6 +37,7 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 | [Engine and Skill System](17-skill-system.md) | The orchestration engine (`next`/`report`/`park`), the typed directive contract, the conductor, plural skills, scope shape, and the swarm referee |
 | [Plugin Mechanism](18-plugin-mechanism.md) | The AIDLC plugin system: manifest, install-time composition as a real host plugin, the additive contribution seam, multi-tenant guards, and as-built status. Authoring walkthrough at [harness-engineering/10](../harness-engineering/10-authoring-a-plugin.md) |
 | [Supply-Chain Security](19-supply-chain-security.md) | Release attestations, SLSA provenance, checksums, workflow hardening, installer defenses, ownership, and enterprise transport |
+| [Commit Provenance](20-commit-provenance.md) | Content-derived attribution from commits to reviewed units: committed reviewed-source evidence, `aidlc attest resolve`, `SOURCE_COMMITTED` anchors |
 | [Diagrams](diagrams.md) | All Mermaid diagrams in one place |
 | [Agents](agents/) | Technical agent reference (frontmatter, tooling, stage ownership) |
 

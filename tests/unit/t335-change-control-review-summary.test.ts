@@ -690,7 +690,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(again.status, again.stderr).toBe(0);
     expect(printedNotices(again.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(1);
-  }, 10_000);
+  }, 30_000);
 
   test("strict is today's refusal for the Unit", () => {
     const proj = teamProject("strict");

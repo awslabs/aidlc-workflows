@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 951,
+    "total": 965,
     "enumeratedByClass": {
-      "function": 646,
-      "audit": 97,
+      "function": 656,
+      "audit": 98,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 139,
+      "subcommand": 142,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 386,
-      "audit": 55,
+      "function": 390,
+      "audit": 56,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 126,
+      "subcommand": 129,
       "render-surface": 7
     }
   },
@@ -643,6 +643,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SOURCE_COMMITTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -3047,6 +3059,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:HARNESS_SHELL_MANIFEST_REL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:harnessDataPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3476,6 +3495,20 @@
     {
       "unitClass": "function",
       "unitId": "function:isGitRepoDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isHarnessDirName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isHarnessShellManifest",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4300,6 +4333,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:normalizeManifestSourcePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:numericStageOrder",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4320,6 +4365,13 @@
     {
       "unitClass": "function",
       "unitId": "function:parseArgs",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseAuditShardEvents",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4538,6 +4590,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseUnitSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5867,6 +5931,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceEvidencePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedSourceEvidenceRelPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewedSourceRef",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6456,6 +6539,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourcePathIsExcluded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7206,6 +7301,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitStageRecordRelPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateCopilotStopCount",
       "minMechanism": "none",
       "coveredBy": [
@@ -7803,7 +7905,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -8181,7 +8283,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -8956,6 +9058,42 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest anchor",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest help",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest resolve",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -10984,7 +11122,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11040,7 +11178,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11284,7 +11422,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11320,7 +11458,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
