@@ -43,6 +43,12 @@
       }
     },
     {
+      "includes": ["core/tools/aidlc-lib.ts"],
+      "files": {
+        "maxSize": 1100000
+      }
+    },
+    {
       "includes": ["core/tools/aidlc-knowledge.ts"],
       "linter": {
         "rules": {
