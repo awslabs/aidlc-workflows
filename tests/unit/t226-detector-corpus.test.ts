@@ -899,7 +899,8 @@ describe("detector corpus", () => {
       expect(d1(`${entry} next intent --project-dir . create --scope poc --arguments app`)).toBe(true);
       expect(d1(`${entry} next intent --aidlc-attempt-id run-1 create --scope poc --arguments app`)).toBe(true);
       for (const flag of ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"]) {
-        expect(d1(`${entry} next intent ${flag} create --scope poc --arguments app`)).toBe(true);
+        const command = `${entry} next intent ${flag} create --scope poc --arguments app`;
+        expect(d1(command), command).toBe(true);
       }
       expect(d1(`${entry} next --arguments "space-create teamB"`)).toBe(true);
       expect(d1(`${entry} next space-create "$(aidlc engine state advance)"`)).toBe(true);

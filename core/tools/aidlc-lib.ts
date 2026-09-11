@@ -1594,6 +1594,14 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
     return false;
   }
   if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  // Legacy entry points do not extract the dispatcher's bare global flags.
+  // Keep mixed positional/global forms conservative; trailing list flags remain valid.
+  if (
+    invocation.command !== "aidlc" &&
+    args.slice(0, -1).some((arg) =>
+      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
+    )
+  ) return false;
   // The --config alias (including a refused section name) returns before
   // workflow inspection. Depth/review modifiers do not share that guarantee.
   if (args[0] === "--config" && args.length <= 2) return true;
