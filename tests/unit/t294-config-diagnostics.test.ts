@@ -381,8 +381,14 @@ describe("t294 provider diagnostics", () => {
     cpSync(join(DIST, "kiro"), kiro, { recursive: true });
     applyConfigDiagnosticRecords(kiro, ".kiro", "kiro", emptyRecords(record));
     const kiroMcp = readFileSync(join(kiro, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(kiroMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
-    expect(kiroMcp).toContain("AWS_REGION=eu-west-1");
+    // The Kiro row ships two keyless HTTP entries and no `aws-mcp` launcher, so
+    // the region rewriter has nothing to rewrite here — it must leave the
+    // registry byte-identical rather than inventing an entry. Claude's registry
+    // above is where the rewrite is proven.
+    expect(kiroMcp).toBe(
+      readFileSync(join(DIST, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
+    );
+    expect(kiroMcp).not.toContain("aws-mcp");
 
     const opencode = temp("aidlc-t294-provider-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });

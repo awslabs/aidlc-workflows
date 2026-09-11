@@ -15,20 +15,26 @@ const MCP_JSON = join(KIRO_ROOT, "settings", "mcp.json");
 const CLAUDE_MCP_JSON = join(REPO_ROOT, "dist", "claude", ".mcp.json");
 const AGENTS_DIR = join(KIRO_ROOT, "agents");
 
-const EXPECTED_SERVERS = [
+// The Kiro row ships two keyless HTTP entries. It no longer ships the four uvx
+// AWS launchers: each spawns a local process from a `@latest` package, which is
+// a heavier default than a row serving both surfaces wants, and the knowledge
+// server covers the AWS documentation case over plain HTTP. Claude keeps its own
+// five-entry registry, so the cross-harness test below states each side's set
+// separately instead of sharing one list.
+const EXPECTED_SERVERS = ["context7", "aws-knowledge-mcp-server"] as const;
+const EXPECTED_GRANTS = EXPECTED_SERVERS.map((server) => `@${server}`);
+
+const EXPECTED_CLAUDE_SERVERS = [
   "context7",
   "aws-mcp",
   "aws-pricing",
   "aws-iac",
   "aws-serverless",
 ] as const;
-const EXPECTED_GRANTS = EXPECTED_SERVERS.map((server) => `@${server}`);
 
-const AWS_PKG_PINS: Record<string, string> = {
-  "aws-mcp": "mcp-proxy-for-aws@latest",
-  "aws-pricing": "awslabs.aws-pricing-mcp-server@latest",
-  "aws-iac": "awslabs.aws-iac-mcp-server@latest",
-  "aws-serverless": "awslabs.aws-serverless-mcp-server@latest",
+const EXPECTED_URLS: Record<string, string> = {
+  context7: "https://mcp.context7.com/mcp",
+  "aws-knowledge-mcp-server": "https://knowledge-mcp.global.api.aws",
 };
 
 const SECRET_SHAPE_RE =
@@ -96,27 +102,21 @@ describe("t281 Kiro CLI MCP registry integrity", () => {
     expect(Array.isArray(servers)).toBe(false);
   });
 
-  test("registry declares exactly the five expected servers", () => {
+  test("registry declares exactly the two expected servers", () => {
     const { servers } = loadRegistry(MCP_JSON);
     expect(Object.keys(servers).sort()).toEqual([...EXPECTED_SERVERS].sort());
   });
 
-  test("context7 is keyless HTTP with its expected URL", () => {
+  test("every entry is keyless HTTP with its expected URL and spawns nothing", () => {
     const { servers } = loadRegistry(MCP_JSON);
-    const context7 = servers.context7;
-    expect(context7.type).toBe("http");
-    expect(context7.url).toBe("https://mcp.context7.com/mcp");
-    expect(Object.hasOwn(context7, "headers")).toBe(false);
-  });
-
-  test("AWS servers use the expected uvx @latest launchers", () => {
-    const { servers } = loadRegistry(MCP_JSON);
-    for (const [server, pkg] of Object.entries(AWS_PKG_PINS)) {
-      expect(servers[server]?.command, `${server} command`).toBe("uvx");
-      expect(Array.isArray(servers[server]?.args), `${server} args`).toBe(true);
-      expect((servers[server]?.args as unknown[])[0], `${server} package`).toBe(pkg);
+    for (const [server, url] of Object.entries(EXPECTED_URLS)) {
+      expect(servers[server]?.type, `${server} type`).toBe("http");
+      expect(servers[server]?.url, `${server} url`).toBe(url);
+      // A row serving both surfaces ships no launcher: `command`/`args` would
+      // spawn a local process from a floating package version.
+      expect(Object.hasOwn(servers[server], "command"), `${server} command`).toBe(false);
+      expect(Object.hasOwn(servers[server], "args"), `${server} args`).toBe(false);
     }
-    expect(servers["aws-mcp"].args as unknown[]).toContain("AWS_REGION=us-east-1");
   });
 
   test("the Kiro registry declares no headers and its raw bytes are secret-free", () => {
@@ -138,10 +138,13 @@ describe("t281 Kiro CLI MCP registry integrity", () => {
     }
   });
 
-  test("AWS entries equal Claude after removing disabled; context7 matches transport only", () => {
+  test("the two registries are independent; the shared context7 matches transport only", () => {
     const { servers: kiroServers } = loadRegistry(MCP_JSON);
     const { servers: claudeServers } = loadRegistry(CLAUDE_MCP_JSON);
-    expect(Object.keys(claudeServers).sort()).toEqual([...EXPECTED_SERVERS].sort());
+    // Claude keeps the five-entry set this row no longer ships. Stating it here
+    // makes a later change to Claude's registry fail loudly rather than silently
+    // widening what this test believes about the Kiro row.
+    expect(Object.keys(claudeServers).sort()).toEqual([...EXPECTED_CLAUDE_SERVERS].sort());
 
     // Claude can expand its context7 API-key placeholder; Kiro CLI 2.12.1
     // passes header values verbatim, so Kiro intentionally matches only the
@@ -153,16 +156,11 @@ describe("t281 Kiro CLI MCP registry integrity", () => {
       type: claudeServers.context7.type,
       url: claudeServers.context7.url,
     });
-
-    for (const server of Object.keys(AWS_PKG_PINS)) {
-      const { disabled: _disabled, ...enabledShape } = kiroServers[server];
-      expect(enabledShape, server).toEqual(claudeServers[server]);
-    }
   });
 });
 
 describe("t281 Kiro CLI dynamic agent grant model", () => {
-  test("all 14 personas opt in with exactly the five grants; conductor gets none", () => {
+  test("all 14 personas opt in with exactly the two grants; conductor gets none", () => {
     const agents = loadAgents();
     const conductor = agents.find(({ doc }) => doc.name === "aidlc");
     const personas = agents.filter(({ doc }) => doc.name !== "aidlc");

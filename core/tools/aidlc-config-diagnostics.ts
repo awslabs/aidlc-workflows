@@ -1372,13 +1372,25 @@ export function completionInstruction(
   return `eval "$(${invoke} system completions ${shell})"`;
 }
 
-const SHIPPED_MCP_SERVERS = [
+// The shipped registry differs per harness, so the drift checks below cannot use
+// one list. Claude ships the four uvx AWS servers plus context7; the Kiro row
+// ships two keyless HTTP entries. A single list would report a false
+// `project-mcp-defaults-drift` on whichever harness ships fewer.
+const SHIPPED_MCP_SERVERS_CLAUDE = [
   "aws-iac",
   "aws-mcp",
   "aws-pricing",
   "aws-serverless",
   "context7",
 ] as const;
+const SHIPPED_MCP_SERVERS_KIRO = [
+  "aws-knowledge-mcp-server",
+  "context7",
+] as const;
+
+function shippedMcpServers(harness: ModelHarness): readonly string[] {
+  return harness === "kiro" ? SHIPPED_MCP_SERVERS_KIRO : SHIPPED_MCP_SERVERS_CLAUDE;
+}
 
 export function projectChoiceFiles(
   projectDir: string,
@@ -1485,7 +1497,7 @@ export function projectChoiceIssues(
   }
   if (
     record.mcp === "defaults" &&
-    SHIPPED_MCP_SERVERS.some((name) => !servers.has(name))
+    shippedMcpServers(harness).some((name) => !servers.has(name))
   ) {
     issues.push({
       id: "project-mcp-defaults-drift",
@@ -1496,7 +1508,7 @@ export function projectChoiceIssues(
   if (
     surface.kind === "claude" &&
     record.mcp === "none" &&
-    SHIPPED_MCP_SERVERS.some((name) => servers.has(name))
+    shippedMcpServers(harness).some((name) => servers.has(name))
   ) {
     issues.push({
       id: "project-mcp-none-drift",
