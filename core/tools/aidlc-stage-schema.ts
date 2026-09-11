@@ -64,6 +64,11 @@ export interface StageFrontmatter {
     artifact: string;
     required: boolean;
     conditional_on?: "brownfield" | "greenfield";
+    // kinds - optional per-kind applicability of ONE consume on a per-unit
+    // stage: the unit kinds (UNIT_KINDS) this input applies to. Absent = every
+    // kind. Mirrors produces_kinds on the consumer side, so a once-per-workflow
+    // artifact (a UI mockup) can be an input of `ui` units only.
+    kinds?: string[];
   }>;
   requires_stage: string[];
   sensors?: string[];
@@ -575,6 +580,23 @@ export function validateStageFrontmatter(
             errors.push(
               `consumes[${i}].conditional_on must be one of ${VALID_CONDITIONAL_ON.join(" | ")}, got "${e.conditional_on}"`
             );
+          }
+        }
+
+        // kinds - only a per-unit stage has a unit kind to filter on; anywhere
+        // else the list would be silently inert, so it is rejected outright.
+        if ("kinds" in e && e.kinds !== undefined) {
+          if (o.for_each !== "unit-of-work") {
+            errors.push(`consumes[${i}].kinds requires for_each: unit-of-work`);
+          }
+          if (!Array.isArray(e.kinds) || e.kinds.length === 0) {
+            errors.push(`consumes[${i}].kinds must be a non-empty list of unit kinds`);
+          } else {
+            for (const k of e.kinds) {
+              if (typeof k !== "string" || !(UNIT_KINDS as readonly string[]).includes(k)) {
+                errors.push(`consumes[${i}].kinds lists unknown kind "${typeof k === "string" ? k : describe(k)}"`);
+              }
+            }
           }
         }
       });
