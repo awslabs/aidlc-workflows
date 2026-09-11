@@ -118,6 +118,7 @@ jobs:
 
   verify:
     needs: [validate, gate-result]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.gate-result.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -768,3 +769,24 @@ jobs:
           gh release view "$RELEASE_TAG" --json assets --jq ".assets[].name" |
             LC_ALL=C sort >"$RUNNER_TEMP/remote-assets.txt"
           diff -u "$RUNNER_TEMP/local-assets.txt" "$RUNNER_TEMP/remote-assets.txt"
+
+  release-result:
+    name: Release result
+    if: ${{ !cancelled() }}
+    needs: [validate, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require publication or an intentional preview skip
+        env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          RELEASE_SKIP: ${{ needs.validate.outputs.skip }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          test "$VALIDATE_RESULT" = success
+          if [ "$RELEASE_CHANNEL" = preview ] && [ "$RELEASE_SKIP" = true ]; then
+            test "$RELEASE_RESULT" = skipped
+            exit 0
+          fi
+          test "$RELEASE_RESULT" = success

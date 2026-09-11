@@ -1043,12 +1043,25 @@ describe("t332 preview publication pipeline", () => {
     expect(jobs["gate-result"].if).toContain("needs.gate.result == 'success'");
     expect(jobs["gate-result"].if).toContain("needs.validate.outputs.skip != 'true'");
     expect(jobs.verify.needs).toEqual(["validate", "gate-result"]);
+    expect(jobs.verify.if).toContain("!cancelled()");
+    expect(jobs.verify.if).toContain("needs.validate.result == 'success'");
+    expect(jobs.verify.if).toContain("needs.gate-result.result == 'success'");
     expect(jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
     expect(jobs.release.needs).toEqual(["validate", "publish"]);
     expect(jobs.release.environment).toBe(
       `\${{ needs.validate.outputs.channel == 'preview' && 'preview' || 'release' }}`,
     );
     expect(jobs.release.permissions).toEqual({ contents: "write" });
+    expect(jobs["release-result"].needs).toEqual(["validate", "release"]);
+    expect(jobs["release-result"].if).toContain("!cancelled()");
+    const releaseResult = jobs["release-result"].steps?.find(
+      (step) => step.name === "Require publication or an intentional preview skip",
+    );
+    expect(releaseResult?.run).toContain('test "$VALIDATE_RESULT" = success');
+    expect(releaseResult?.run).toContain(
+      '[ "$RELEASE_CHANNEL" = preview ] && [ "$RELEASE_SKIP" = true ]',
+    );
+    expect(releaseResult?.run).toContain('test "$RELEASE_RESULT" = success');
 
     for (const key of ["channel", "tag", "sha", "skip", "preview_version", "preview_plan"]) {
       expect(jobs.validate.outputs?.[key], key).toBeDefined();
