@@ -1,8 +1,7 @@
 name: Adversarial AI PR Review
 
 on:
-  # Same-repository branches use the ordinary PR event. Fork PRs are skipped
-  # here and reviewed by the trusted-default-branch workflow_run lane below.
+  # Only same-repository branches are reviewed. Fork PRs are skipped.
   pull_request:
     branches:
       - main
@@ -12,13 +11,6 @@ on:
       - reopened
       - ready_for_review
       - edited
-  # Fork lane: wait for the unprivileged PR CI run, then execute this workflow's
-  # default-branch definition. No fork-controlled workflow YAML is trusted.
-  workflow_run:
-    workflows:
-      - CI
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       pr_number:
@@ -29,7 +21,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: ai-pr-review-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event_name == 'workflow_run' && format('{0}-{1}', github.event.workflow_run.head_repository.id, github.event.workflow_run.head_branch) || inputs.pr_number }}
+  group: ai-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 env:
@@ -41,17 +33,11 @@ jobs:
     name: Build immutable review context
     if: >-
       (github.event_name == 'workflow_dispatch'
-          && (vars.AWS_AI_PR_REVIEW_ROLE_ARN != ''
-              || vars.AWS_AI_PR_REVIEW_FORK_ROLE_ARN != ''))
+          && vars.AWS_AI_PR_REVIEW_ROLE_ARN != '')
       || (github.event_name == 'pull_request'
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository
           && vars.AWS_AI_PR_REVIEW_ROLE_ARN != '')
-      || (github.event_name == 'workflow_run'
-          && github.event.workflow_run.event == 'pull_request'
-          && github.event.workflow_run.conclusion == 'success'
-          && github.event.workflow_run.head_repository.full_name != github.repository
-          && vars.AWS_AI_PR_REVIEW_FORK_ROLE_ARN != '')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -62,7 +48,6 @@ jobs:
       base: ${{ steps.context.outputs.base }}
       context_id: ${{ steps.context.outputs.context_id }}
       head: ${{ steps.context.outputs.head }}
-      is_fork: ${{ steps.context.outputs.is_fork }}
       already_reviewed: ${{ steps.context.outputs.already_reviewed }}
       pr: ${{ steps.context.outputs.pr }}
       skip: ${{ steps.context.outputs.skip }}
@@ -83,25 +68,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REQUESTED_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
-          INTERNAL_ROLE_CONFIGURED: ${{ vars.AWS_AI_PR_REVIEW_ROLE_ARN != '' }}
-          FORK_ROLE_CONFIGURED: ${{ vars.AWS_AI_PR_REVIEW_FORK_ROLE_ARN != '' }}
-          TRIGGER_EVENT: ${{ github.event_name }}
-          TRIGGER_HEAD: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
-          TRIGGER_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.event.workflow_run.head_repository.full_name }}
+          TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ -z "${REQUESTED_PR:-}" ]; then
-            if [ -z "${TRIGGER_HEAD:-}" ]; then
-              echo "::error::No PR number or workflow-run head SHA was provided"
-              exit 1
-            fi
-            REQUESTED_PR="$(gh api "repos/$REPO/pulls?state=open&per_page=100" --paginate \
-              --jq "[.[] | select(.head.sha == \"$TRIGGER_HEAD\" and .head.repo.full_name == \"$TRIGGER_HEAD_REPO\" and .base.ref == \"main\")][0].number // empty" \
-              | head -n1)"
-            if [ -z "$REQUESTED_PR" ]; then
-              echo "::error::No open PR matches workflow-run head $TRIGGER_HEAD"
-              exit 1
-            fi
+            echo "::error::No PR number was provided"
+            exit 1
           fi
           pr_json="$(gh api "repos/$REPO/pulls/$REQUESTED_PR")"
           base="$(jq -r '.base.sha' <<<"$pr_json")"
@@ -132,18 +104,8 @@ jobs:
             echo "::error::PR head $head does not match triggering head $TRIGGER_HEAD"
             exit 1
           fi
-          is_fork="$([ "$head_repo" != "$REPO" ] && echo true || echo false)"
-          if [ "$TRIGGER_EVENT" = "pull_request" ] && [ "$is_fork" = "true" ]; then
-            echo "::error::Fork PRs must enter through the trusted workflow_run lane"
-            exit 1
-          fi
-          if [ "$TRIGGER_EVENT" = "workflow_run" ] && [ "$is_fork" != "true" ]; then
-            echo "::error::workflow_run review lane is fork-only"
-            exit 1
-          fi
-          if { [ "$is_fork" = "true" ] && [ "$FORK_ROLE_CONFIGURED" != "true" ]; } \
-            || { [ "$is_fork" != "true" ] && [ "$INTERNAL_ROLE_CONFIGURED" != "true" ]; }; then
-            echo "::notice::The required AI review role variable is not configured; skipping review"
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::notice::PR #$REQUESTED_PR comes from a fork; AI review is disabled for forks"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -174,7 +136,6 @@ jobs:
             echo "base=$base"
             echo "context_id=$context_id"
             echo "head=$head"
-            echo "is_fork=$is_fork"
             echo "pr=$REQUESTED_PR"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
@@ -230,7 +191,7 @@ jobs:
       - start
     if: needs.context.outputs.skip != 'true' && needs.context.outputs.already_reviewed != 'true'
     runs-on: ubuntu-latest
-    environment: ${{ needs.context.outputs.is_fork == 'true' && 'ai-pr-review-fork' || 'ai-pr-review' }}
+    environment: ai-pr-review
     timeout-minutes: 45
     permissions:
       contents: read
@@ -291,7 +252,7 @@ jobs:
       - name: Assume dedicated Bedrock review role through OIDC
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
-          role-to-assume: ${{ needs.context.outputs.is_fork == 'true' && vars.AWS_AI_PR_REVIEW_FORK_ROLE_ARN || vars.AWS_AI_PR_REVIEW_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_AI_PR_REVIEW_ROLE_ARN }}
           role-session-name: aidlc-pr-${{ needs.context.outputs.pr }}-${{ matrix.lens }}
           aws-region: ${{ env.AWS_REGION }}
 
@@ -329,7 +290,7 @@ jobs:
       - context
       - lenses
     runs-on: ubuntu-latest
-    environment: ${{ needs.context.outputs.is_fork == 'true' && 'ai-pr-review-fork' || 'ai-pr-review' }}
+    environment: ai-pr-review
     timeout-minutes: 45
     permissions:
       contents: read
@@ -394,7 +355,7 @@ jobs:
       - name: Assume dedicated Bedrock review role through OIDC
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
-          role-to-assume: ${{ needs.context.outputs.is_fork == 'true' && vars.AWS_AI_PR_REVIEW_FORK_ROLE_ARN || vars.AWS_AI_PR_REVIEW_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_AI_PR_REVIEW_ROLE_ARN }}
           role-session-name: aidlc-pr-${{ needs.context.outputs.pr }}-synthesis
           aws-region: ${{ env.AWS_REGION }}
 
