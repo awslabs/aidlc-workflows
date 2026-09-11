@@ -589,23 +589,23 @@ describe("t312 aidlc-attest resolve/anchor", () => {
   }, 90000);
 
   test("resolve excludes the harness shell of a repo that carries the workspace shell", () => {
-    const { project, record } = runtimeFixture();
-    // A real install ships its shell dir beside the record; nobody reviews it,
-    // so it must classify `excluded` (framework surface), not `unattested`.
+    const { project } = runtimeFixture();
+    // Establish the real shell in the base tree. A changed head cannot create its
+    // own exclusions, but an already-installed shell remains framework surface.
     mkdirSync(join(project, ".claude", "tools", "data"), { recursive: true });
     writeFileSync(join(project, ".claude", "tools", "data", "harness.json"), `${JSON.stringify({ name: "claude" })}\n`);
     writeFileSync(join(project, ".claude", "settings.json"), "{}\n");
-    review(project, record, "alpha", [{ path: "app.ts" }]);
-    const head = commitAll(project, "install the harness shell");
+    commitAll(project, "install the harness shell");
+    writeFileSync(join(project, ".claude", "settings.json"), '{"updated":true}\n');
+    const head = commitAll(project, "update the established harness shell");
 
     const first = attest(["resolve", head, "--fail-on", "unattested"], project);
     const report = JSON.parse(first.stdout);
     expect(pathStatus(report, ".claude/settings.json")?.status).toBe("excluded");
-    expect(pathStatus(report, ".claude/tools/data/harness.json")?.status).toBe("excluded");
     expect(report.summary.unattested).toBe(0);
 
-    // Which dot-dirs are harness shells is read from the QUERIED TREE, so it is
-    // a property of the commit and not of whoever happens to be resolving it.
+    // Which dot-dirs are established harness shells is read from the BASE TREE,
+    // so it is a property of the range and not of whoever resolves it.
     // Uninstalling the shell from this checkout cannot reclassify the same SHA
     // (it used to flip these paths to `unattested`).
     rmSync(join(project, ".claude"), { recursive: true, force: true });
@@ -619,6 +619,39 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(pathStatus(after, ".claude/settings.json")?.status).toBe("excluded");
     expect(after.summary.unattested).toBe(0);
   }, 60000);
+
+  test("a changed head cannot self-declare an arbitrary hidden directory as a harness shell", () => {
+    const { project } = fixture();
+    mkdirSync(join(project, ".github", "tools", "data"), { recursive: true });
+    mkdirSync(join(project, ".github", "workflows"), { recursive: true });
+    writeFileSync(
+      join(project, ".github", "tools", "data", "harness.json"),
+      `${JSON.stringify({ name: "fake" })}\n`,
+    );
+    writeFileSync(
+      join(project, ".github", "workflows", "unreviewed.yml"),
+      "name: unreviewed\n",
+    );
+    const head = commitAll(project, "self-declare .github as a harness shell");
+
+    const gated = attest([
+      "resolve",
+      head,
+      "--require-trust",
+      "independent",
+      "--fail-on",
+      "drifted,unattested,unverifiable,indeterminate",
+    ], project);
+    const report = JSON.parse(gated.stdout);
+    expect(gated.rc).toBe(3);
+    expect(report.trust.level).toBe("independent");
+    expect(pathStatus(report, ".github/tools/data/harness.json")?.status).toBe(
+      "unattested",
+    );
+    expect(pathStatus(report, ".github/workflows/unreviewed.yml")?.status).toBe(
+      "unattested",
+    );
+  }, 30000);
 
   test("resolve and anchor refuse a shallow-clone boundary instead of diffing the root tree", () => {
     const { project, record } = runtimeFixture();

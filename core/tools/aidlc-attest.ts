@@ -54,8 +54,9 @@
 //                 causally unordered — in different shards, or in different
 //                 records claiming the same path (fail closed both ways)
 //   excluded      framework shell/record path (aidlc/, .aidlc/, sensor dirs, and
-//                 the harness shell dirs the QUERIED TREE carries — read from the
-//                 commit, so the same SHA excludes the same paths everywhere)
+//                 the harness shell dirs established by the range's BASE tree —
+//                 read from the commit, so the same SHA excludes the same paths
+//                 everywhere without letting a change declare its own exclusion)
 //
 // Report `warnings` name conditions that can distort a report without changing
 // any single path's classification — today repository byte-form conversion, and
@@ -510,21 +511,18 @@ function commitHarnessShellDirs(dir: string, commit: string): ReadonlySet<string
   return shells;
 }
 
-/** Exclusion context for a range: a shell present at either end is excluded at
- *  both, so installing or removing a harness does not leak framework paths into
- *  `unattested` from the side of the range that lacks the manifest. A repo that
- *  does not carry the workspace shell has no shell dirs to find. */
+/** Exclusion context for a range. Only the base may establish a harness shell:
+ *  trusting a manifest introduced by the head would let the change under test
+ *  self-declare an arbitrary dot-directory (for example `.github`) as excluded.
+ *  Existing shell modifications and removals remain excluded; a new installation
+ *  is intentionally unattested until it becomes part of the trusted baseline. */
 function rangeExclusionContext(
   query: RepoQuery,
   base: string | null,
-  head: string,
 ): SourceExclusionContext {
   const shells = new Set<string>();
-  if (query.carriesShell) {
-    for (const name of commitHarnessShellDirs(query.dir, head)) shells.add(name);
-    if (base !== null) {
-      for (const name of commitHarnessShellDirs(query.dir, base)) shells.add(name);
-    }
+  if (query.carriesShell && base !== null) {
+    for (const name of commitHarnessShellDirs(query.dir, base)) shells.add(name);
   }
   return { harnessShellDirs: shells };
 }
@@ -1436,7 +1434,7 @@ export function runResolve(
 
   const record = resolveRecordView(projectDir, query, options.recordRef, head);
   const { ownerships } = buildOwnershipIndex(record.view, options.space, options.intent);
-  const exclusion = rangeExclusionContext(query, base, head);
+  const exclusion = rangeExclusionContext(query, base);
   const pathReports = paths
     .sort()
     .map((path) => classifyPath(path, query, ownerships, headListing, exclusion));
@@ -1619,7 +1617,7 @@ export function runAnchor(
     const paths = changedPaths(query.dir, parents[0] ?? null, commit);
     if (paths === null) throw new Error(`git diff failed for commit ${commit} in ${query.dir}`);
     const attributed = new Map<string, { space: string; intent: string; units: Set<string>; paths: number }>();
-    const exclusion = rangeExclusionContext(query, parents[0] ?? null, commit);
+    const exclusion = rangeExclusionContext(query, parents[0] ?? null);
     for (const path of paths) {
       if (sourcePathIsExcluded(path, query.carriesShell, undefined, exclusion)) {
         continue;
