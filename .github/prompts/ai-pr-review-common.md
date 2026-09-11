@@ -43,6 +43,13 @@ callers, consumers, tests, generated projections, protocols, and documentation
 from the base tree when they are needed to judge a changed line. Do not mistake
 a green test or a PR-description claim for proof.
 
+Classify the change as a bug fix, feature, or mixed change and use the
+highest-risk contract that applies. Check whether the trusted base already
+contains work that supersedes, duplicates, or invalidates the proposed
+implementation. Treat accepted product direction and stated scope as human
+authority: do not relitigate them unless the current diff contradicts an
+authoritative repository contract or expands beyond that scope.
+
 Priority is impact, never confidence:
 
 - P0: reachable credential exposure, severe security compromise, irreversible

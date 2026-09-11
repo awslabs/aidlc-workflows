@@ -30,6 +30,7 @@ export interface ChangedFile {
   status: string;
   added: LineRange[];
   deleted: LineRange[];
+  fileLevelEvidence: boolean;
   snapshot?: string;
 }
 
@@ -46,12 +47,17 @@ export interface DiffEvidence {
   side: DiffSide;
 }
 
+export interface FileEvidence {
+  source: "DIFF_FILE";
+  path: string;
+}
+
 export interface MetadataEvidence {
   source: "PR_TITLE" | "PR_BODY";
   quote: string;
 }
 
-export type FindingEvidence = DiffEvidence | MetadataEvidence;
+export type FindingEvidence = DiffEvidence | FileEvidence | MetadataEvidence;
 
 export interface ReviewMetadata {
   title: string;
@@ -136,28 +142,33 @@ function parseNameStatus(raw: Buffer): Array<{ status: string; path: string; pre
   return entries;
 }
 
-function rangesForFile(
-  base: string,
-  head: string,
-  path: string,
-  repoDir: string,
-): { added: LineRange[]; deleted: LineRange[] } {
-  const patch = git(
-    ["diff", "--unified=0", "--no-color", `${base}...${head}`, "--", path],
-    "utf8",
-    repoDir,
-  ) as string;
-  const added: LineRange[] = [];
-  const deleted: LineRange[] = [];
-  for (const match of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
-    const oldStart = Number(match[1]);
-    const oldCount = Number(match[2] ?? "1");
-    const newStart = Number(match[3]);
-    const newCount = Number(match[4] ?? "1");
-    if (oldCount > 0) deleted.push({ start: oldStart, end: oldStart + oldCount - 1 });
-    if (newCount > 0) added.push({ start: newStart, end: newStart + newCount - 1 });
+function rangesFromDiff(
+  patch: string,
+  expectedFiles: number,
+): Array<{ added: LineRange[]; deleted: LineRange[]; fileLevelEvidence: boolean }> {
+  const sections = patch.split(/(?=^diff --git )/m).filter(section => section.startsWith("diff --git "));
+  if (sections.length !== expectedFiles) {
+    throw new Error(
+      `git diff section count ${sections.length} does not match changed-file count ${expectedFiles}`,
+    );
   }
-  return { added, deleted };
+  return sections.map(section => {
+    const added: LineRange[] = [];
+    const deleted: LineRange[] = [];
+    for (const match of section.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+      const oldStart = Number(match[1]);
+      const oldCount = Number(match[2] ?? "1");
+      const newStart = Number(match[3]);
+      const newCount = Number(match[4] ?? "1");
+      if (oldCount > 0) deleted.push({ start: oldStart, end: oldStart + oldCount - 1 });
+      if (newCount > 0) added.push({ start: newStart, end: newStart + newCount - 1 });
+    }
+    return {
+      added,
+      deleted,
+      fileLevelEvidence: added.length === 0 && deleted.length === 0,
+    };
+  });
 }
 
 function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoDir: string): number {
@@ -207,7 +218,7 @@ export function buildContext(
   mkdirSync(outputDir, { recursive: true });
 
   const diff = git(
-    ["diff", "--binary", "--find-renames", `${base}...${head}`],
+    ["diff", "--binary", "--find-renames", "--unified=0", `${base}...${head}`],
     undefined,
     repoDir,
   ) as Buffer;
@@ -226,11 +237,11 @@ export function buildContext(
   if (entries.length > MAX_CHANGED_FILES) {
     throw new Error(`PR changes ${entries.length} files; limit is ${MAX_CHANGED_FILES}`);
   }
+  const ranges = rangesFromDiff(diff.toString("utf8"), entries.length);
 
   let snapshotBytes = 0;
-  const files = entries.map(entry => {
-    const ranges = rangesForFile(base, head, entry.path, repoDir);
-    const file: ChangedFile = { ...entry, ...ranges };
+  const files = entries.map((entry, index) => {
+    const file: ChangedFile = { ...entry, ...ranges[index] };
     snapshotBytes += writeSnapshot(outputDir, head, file, repoDir);
     if (snapshotBytes > MAX_SNAPSHOT_BYTES) {
       throw new Error(`head snapshots exceed ${MAX_SNAPSHOT_BYTES} bytes`);
@@ -255,6 +266,8 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
 }
 
 function isChangedLine(file: ChangedFile, evidence: DiffEvidence): boolean {
+  const expectedPath = evidence.side === "RIGHT" ? file.path : (file.previousPath ?? file.path);
+  if (evidence.path !== expectedPath) return false;
   const ranges = evidence.side === "RIGHT" ? file.added : file.deleted;
   return ranges.some(range => evidence.line >= range.start && evidence.line <= range.end);
 }
@@ -332,6 +345,14 @@ export function validateStructuredReview(
         }
         return { source: record.source, quote };
       }
+      if (record.source === "DIFF_FILE") {
+        const path = typeof record.path === "string" ? record.path : "";
+        const changed = manifest.files.find(file => file.path === path);
+        if (!changed?.fileLevelEvidence) {
+          throw new Error(`file evidence ${path} is not a changed file without line hunks`);
+        }
+        return { source: "DIFF_FILE", path };
+      }
       if (record.source !== "DIFF") {
         throw new Error(`findings[${index}].evidence[${evidenceIndex}].source is invalid`);
       }
@@ -399,13 +420,16 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       "",
       `Evidence: ${finding.evidence
         .map(item => {
-          if (item.source !== "DIFF") {
-            const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
-            return `${label}: “${markdownText(item.quote)}”`;
+          if (item.source === "DIFF") {
+            return `<code>${codeText(item.path)}:${item.line}</code>${
+              item.side === "LEFT" ? " (deleted line)" : ""
+            }`;
           }
-          return `<code>${codeText(item.path)}:${item.line}</code>${
-            item.side === "LEFT" ? " (deleted line)" : ""
-          }`;
+          if (item.source === "DIFF_FILE") {
+            return `<code>${codeText(item.path)}</code> (file-level change)`;
+          }
+          const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
+          return `${label}: “${markdownText(item.quote)}”`;
         })
         .join(", ")}.`,
       "",
