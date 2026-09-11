@@ -4304,6 +4304,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       return;
     }
   }
+  // Archived is terminal for routing, including scoped Unit checkouts. Keep
+  // this before Unit jump/park handling so every next shape returns the same
+  // archived result instead of reviving or locally parking retired work.
+  if (
+    stateContent &&
+    !flags.newIntent &&
+    getField(stateContent, "Status") === "Archived"
+  ) {
+    const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+    emit({
+      kind: "done",
+      reason:
+        `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
+        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+    });
+    return;
+  }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
@@ -4351,30 +4369,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     emit(printDirective(
       `Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` to clear this checkout's Unit park marker, then re-run \`next --resume\`.`,
     ));
-    return;
-  }
-
-  // Branch 2.4 - ARCHIVED intent (issue #980). `aidlc-utility intent archive`
-  // flips the record's Status to `Archived` (and its registry row to
-  // `archived`) without touching stage progress, so a per-user cursor or a
-  // session binding that still names the record must not resume its stages on
-  // a bare `next`, a `--resume`, or a jump. Emit a terminal `done` that names
-  // the way back (`intent unarchive`) and the read-only listing; the Stop hook
-  // honours `done` as a clean turn-end. Only `--new-intent` passes: starting
-  // unrelated work never needs the archived record.
-  if (
-    stateContent &&
-    !flags.newIntent &&
-    getField(stateContent, "Status") === "Archived"
-  ) {
-    const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
-    emit({
-      kind: "done",
-      reason:
-        `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
-        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
-        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
-    });
     return;
   }
 
@@ -8314,6 +8308,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const stale = staleStateVersionError(sc);
       if (stale) {
         emit(errorDirective(stale));
+        return;
+      }
+      if (getField(sc, "Status") === "Archived") {
+        const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+        emit(errorDirective(
+          `Intent "${archivedIntent}" is archived, so report cannot mutate its workflow state. ` +
+            `Bring it back with /aidlc intent unarchive ${archivedIntent}.`,
+        ));
         return;
       }
     }

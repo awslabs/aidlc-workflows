@@ -659,6 +659,14 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+function assertWorkflowNotArchived(content: string, operation: string): void {
+  if (getField(content, "Status") !== "Archived") return;
+  error(
+    `Workflow is Archived, so ${operation} is refused. Bring it back first with ` +
+      "`/aidlc intent unarchive <name>`.",
+  );
+}
+
 // A serial verb refused by a live wave must leave the audit unchanged too.
 // Unwind the transaction lock before reporting this error without ERROR_LOGGED.
 class UnitWaveRouteRefusalError extends StateCommandError {}
@@ -717,6 +725,37 @@ export function main(argv: string[]): void {
   }
 
   try {
+    const archivedProtectedCommands = new Set([
+      "set",
+      "set-skeleton-stance",
+      "set-construction-iteration",
+      "set-unit-ownership",
+      "set-unit-gate-rhythm",
+      "refresh-unit-progress",
+      "sync-unit-scope-stage",
+      "fold-unit-merge",
+      "checkbox",
+      "advance",
+      "finalize",
+      "complete-workflow",
+      "gate-start",
+      "approve",
+      "reject",
+      "revise",
+      "skip",
+      "resume",
+      "acknowledge-compaction",
+      "reuse-artifact",
+      "unit",
+      "park",
+      "unpark",
+    ]);
+    if (subcommand && archivedProtectedCommands.has(subcommand)) {
+      assertWorkflowNotArchived(
+        readStateFile(resolveProjectDir(projectDir)),
+        `aidlc-state.ts ${subcommand}`,
+      );
+    }
     switch (subcommand) {
       case "get":
         handleGet(args.slice(1));
@@ -5030,6 +5069,7 @@ function admitStageAction(
   stage: StageEntry,
   options: StageAdmissionOptions,
 ): void {
+  assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
   if (options.unit !== undefined) {
     const team = teamGateContext(
       stateContent,
@@ -7179,6 +7219,7 @@ function handleFork(args: string[]): void {
       errorWithSlug(slug, `failed to read main state: ${errorMessage(e)}`);
       return ""; // unreachable
     }
+    assertWorkflowNotArchived(mainContent, "fork");
     const sha = sha256(mainContent);
 
     // Dedup BEFORE emit: if the slug is already in Bolt Refs, fail without
@@ -7337,6 +7378,7 @@ function handleMerge(args: string[]): void {
     // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
     const mainContent = readStateFile(pd, resolvedIntent, space);
+    assertWorkflowNotArchived(mainContent, "merge");
 
     // Idempotency: if slug is not in main's Bolt Refs, this is a re-run after
     // a prior successful merge (or a never-forked slug). Either way, no work

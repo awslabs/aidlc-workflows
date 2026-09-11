@@ -59,6 +59,7 @@ setDefaultTimeout(TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+const STATE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const SESSION_START = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-start.ts");
 const SESSION_END = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-end.ts");
 const CONTINUE_WORKFLOW = join(
@@ -1004,6 +1005,16 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(rows).toEqual([`${a}=archived`, `${b}=in-flight`].sort());
   });
 
+  test("a stale cursor to a hidden archived row does not suppress the no-active hint", () => {
+    const { a, b } = createTwo();
+    expect(util(["intent", "archive", a]).status).toBe(0);
+    setActiveIntentCursor(proj, a);
+    const plain = util(["intent"]).stdout;
+    expect(plain).toContain(b);
+    expect(plain).not.toContain(a);
+    expect(plain).toContain("(no active intent");
+  });
+
   test("a space whose only intent is archived reads as empty: no implicit resolution, creation proceeds", () => {
     expect(util(["intent-create", "--scope", "poc", "--label", "only one"]).status).toBe(0);
     const only = activeIntent(proj) as string;
@@ -1050,6 +1061,18 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(util(["intent", a]).status).toBe(0);
     expect(activeIntent(proj)).toBe(a);
     expect(util(["intent"]).stdout).not.toContain("hidden");
+  });
+
+  test("unarchive repairs a crash-window state/registry mismatch", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "recoverable"]).status).toBe(0);
+    const only = activeIntent(proj) as string;
+    expect(util(["intent", "archive", only]).status).toBe(0);
+    expect(updateIntentStatus(proj, only, "in-flight")).toBe(true);
+    expect(stateStatus(only)).toBe("Archived");
+    const recovered = util(["intent", "unarchive", only]);
+    expect(recovered.status, recovered.out).toBe(0);
+    expect(registryStatus(only)).toBe("in-flight");
+    expect(stateStatus(only)).toBe("Running");
   });
 
   test("archive refuses nameless, unknown, completed, worktree-bearing, and already-archived targets; unarchive refuses in-flight", () => {
@@ -1126,6 +1149,40 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(d.message).toContain("/aidlc intent unarchive <name>");
     expect(d.message).not.toContain("aidlc-utility");
     expect(d.message).toContain("Archived");
+    expect(stateStatus(only)).toBe("Archived");
+  });
+
+  test("report and direct state mutations cannot revive an archived workflow", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "terminal"]).status).toBe(0);
+    const only = activeIntent(proj) as string;
+    expect(util(["intent", "archive", only]).status).toBe(0);
+    setActiveIntentCursor(proj, only);
+
+    const reported = Bun.spawnSync({
+      cmd: [BUN, ORCH, "report", "--result", "completed", "--project-dir", proj],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    });
+    const directive = JSON.parse(reported.stdout.toString().trim());
+    expect(directive.kind).toBe("error");
+    expect(directive.message).toContain("is archived");
+
+    const direct = Bun.spawnSync({
+      cmd: [
+        BUN,
+        STATE,
+        "set",
+        "Status=Running",
+        "--project-dir",
+        proj,
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+    });
+    expect(direct.exitCode).not.toBe(0);
+    expect(`${direct.stdout}${direct.stderr}`).toContain("Workflow is Archived");
     expect(stateStatus(only)).toBe("Archived");
   });
 });

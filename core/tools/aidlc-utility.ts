@@ -1114,11 +1114,16 @@ function activeWorkflowDependencyViolations(
   }
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
-      if (intent.status === "complete" || !intent.dirName) continue;
+      if (
+        intent.status === "complete" ||
+        isArchivedIntent(intent) ||
+        !intent.dirName
+      ) continue;
       const sp = stateFilePath(projectDir, intent.dirName, space.name);
       if (!existsSync(sp)) continue;
       const content = readFileSync(sp, "utf-8");
-      if ((getField(content, "Status") ?? "") === "Completed") continue;
+      const status = getField(content, "Status") ?? "";
+      if (status === "Completed" || status === "Archived") continue;
       const where = `workflow "${intent.dirName}" (space ${space.name})`;
       const scope = getField(content, "Scope");
       if (scope) {
@@ -6575,6 +6580,7 @@ function printIntentListing(
     return;
   }
   let out = `Intents in space "${space}":\n`;
+  const visibleActive = visible.some((intent) => intent.active);
   for (const i of visible) {
     const marker = i.active ? "*" : " ";
     out += `${marker} ${i.dirName ?? i.slug}  [${i.status}]\n`;
@@ -6582,7 +6588,7 @@ function printIntentListing(
   if (hidden > 0) {
     out += `\n(${hidden} archived intent${hidden === 1 ? "" : "s"} hidden - /aidlc intent list --all shows them)\n`;
   }
-  if (!active) {
+  if (!visibleActive) {
     out += `\n(no active intent - switch with /aidlc intent <name>)\n`;
   }
   process.stdout.write(out);
@@ -6727,8 +6733,8 @@ function auditReason(raw: string | undefined): string | null {
 // The refusals that keep `intent archive` from hiding live work. A completed
 // intent is already terminal (nothing to retire). A record with Bolt worktrees
 // or claimed team Units still has work in flight in other checkouts that the
-// archive would orphan. A claim-registry read failure is not evidence of a live
-// claim, so it never blocks; only a positive claim does.
+// archive would orphan. Claim inspection fails closed: inability to prove the
+// registry is claim-free is not permission to retire shared work.
 function refuseUnlessArchivable(
   projectDir: string,
   space: string,
@@ -6736,7 +6742,9 @@ function refuseUnlessArchivable(
   row: IntentRegistryEntry,
   state: string,
 ): void {
-  if (isArchivedIntent(row)) die(`Intent "${dirName}" is already archived.`);
+  if (isArchivedIntent(row) || getField(state, "Status") === "Archived") {
+    die(`Intent "${dirName}" is already archived.`);
+  }
   if (row.status === "complete" || getField(state, "Status") === "Completed") {
     die(
       `Intent "${dirName}" is complete. A completed workflow is already terminal and is not archived.`,
@@ -6749,20 +6757,21 @@ function refuseUnlessArchivable(
     );
   }
   if (!isTeamUnitOwnership(state)) return;
-  let claimed: string[] = [];
+  const dependencyPath = unitDependencyPath(projectDir, dirName, space);
+  if (!existsSync(dependencyPath)) return;
+  let claimed: string[];
   try {
-    const dependencyBody = readFileSync(
-      unitDependencyPath(projectDir, dirName, space),
-      "utf-8",
-    );
+    const dependencyBody = readFileSync(dependencyPath, "utf-8");
     claimed = localUnitClaimOverviewForIntent(projectDir, {
       space,
       intentUuid: row.uuid,
       stateContent: state,
       dependencyBody,
     }).claimed.map((claim) => claim.unit);
-  } catch {
-    // No dependency body or no claim cache: no positive evidence of a live claim.
+  } catch (cause) {
+    die(
+      `Intent "${dirName}" cannot be archived because team Unit claims could not be verified: ${errorMessage(cause)}`,
+    );
   }
   if (claimed.length > 0) {
     die(
@@ -6778,9 +6787,10 @@ function refuseUnlessArchivable(
 // so the engine refuses to route its stages; and the default listing hides it.
 // Unarchiving reverses exactly those two field writes. Both run under the
 // WORKSPACE lock (invariant 2: every intents.json mutation takes the sentinel
-// bucket, the same critical section intent-create and complete-workflow use),
-// and both emit their audit row FIRST (audit-first atomicity) into the target
-// intent's own shard, so the row lands even when that intent is not active.
+// bucket), then the target intent lock, so registry and state changes cannot
+// race either another registry writer or a workflow-local mutation. Both emit
+// their audit row FIRST (audit-first atomicity) into the target intent's own
+// shard, so the row lands even when that intent is not active.
 function handleIntentLifecycle(
   projectDir: string,
   verb: IntentLifecycleVerb,
@@ -6810,41 +6820,40 @@ function handleIntentLifecycle(
       `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (/aidlc --doctor names the mismatch).`,
     );
   }
-  // Decided BEFORE the flip: once archived, a record no longer resolves through
-  // the lone-record fallback, and this answer decides whether the per-user
-  // cursor is cleared below.
-  const wasActive = activeIntent(projectDir, space) === dirName;
   const stage = withAuditLock(projectDir, () => {
-    const row = readIntentRegistry(projectDir, space).find((entry) =>
-      recordDirMatches(entry, dirName),
-    );
-    if (!row) {
-      die(`Intent "${dirName}" has no intents.json row any more; nothing was changed.`);
-    }
-    const state = readStateFile(projectDir, dirName, space);
-    const currentStage = (getField(state, "Current Stage") ?? "").trim() || "none";
-    const timestamp = isoTimestamp();
-    if (verb === "archive") {
-      refuseUnlessArchivable(projectDir, space, dirName, row, state);
-      const fields: Record<string, string> = { Stage: currentStage };
-      const reason = auditReason(flags.reason);
-      if (reason) fields.Reason = reason;
-      appendAuditEntryUnlocked("WORKFLOW_ARCHIVED", fields, projectDir, dirName, space);
-      let content = setField(state, "Status", "Archived");
+    return withAuditLock(projectDir, () => {
+      const row = readIntentRegistry(projectDir, space).find((entry) =>
+        recordDirMatches(entry, dirName),
+      );
+      if (!row) {
+        die(`Intent "${dirName}" has no intents.json row any more; nothing was changed.`);
+      }
+      const state = readStateFile(projectDir, dirName, space);
+      const currentStage = (getField(state, "Current Stage") ?? "").trim() || "none";
+      const timestamp = isoTimestamp();
+      if (verb === "archive") {
+        refuseUnlessArchivable(projectDir, space, dirName, row, state);
+        const fields: Record<string, string> = { Stage: currentStage };
+        const reason = auditReason(flags.reason);
+        if (reason) fields.Reason = reason;
+        appendAuditEntryUnlocked("WORKFLOW_ARCHIVED", fields, projectDir, dirName, space);
+        let content = setField(state, "Status", "Archived");
+        content = setField(content, "Last Updated", timestamp);
+        writeStateFile(projectDir, content, dirName, space);
+        updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
+        return currentStage;
+      }
+      const stateArchived = getField(state, "Status") === "Archived";
+      if (!isArchivedIntent(row) && !stateArchived) {
+        die(`Intent "${dirName}" is not archived (status: ${row.status}); nothing to unarchive.`);
+      }
+      appendAuditEntryUnlocked("WORKFLOW_UNARCHIVED", { Stage: currentStage }, projectDir, dirName, space);
+      let content = setField(state, "Status", "Running");
       content = setField(content, "Last Updated", timestamp);
       writeStateFile(projectDir, content, dirName, space);
-      updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
+      updateIntentStatus(projectDir, dirName, "in-flight", space);
       return currentStage;
-    }
-    if (!isArchivedIntent(row)) {
-      die(`Intent "${dirName}" is not archived (status: ${row.status}); nothing to unarchive.`);
-    }
-    appendAuditEntryUnlocked("WORKFLOW_UNARCHIVED", { Stage: currentStage }, projectDir, dirName, space);
-    let content = setField(state, "Status", "Running");
-    content = setField(content, "Last Updated", timestamp);
-    writeStateFile(projectDir, content, dirName, space);
-    updateIntentStatus(projectDir, dirName, "in-flight", space);
-    return currentStage;
+    }, dirName, space);
   });
   if (verb === "unarchive") {
     process.stdout.write(
@@ -6856,9 +6865,12 @@ function handleIntentLifecycle(
   // cursor when it named this record, and unbind the live conversation from it
   // so a resume does not offer to rebind onto retired work. Best-effort, like
   // every other per-user cursor write.
-  if (wasActive) clearActiveIntentCursor(projectDir, space);
+  clearActiveIntentCursor(projectDir, space, dirName);
   const sid = selection.sessionId ?? readCurrentSessionId(projectDir);
-  if (sid && selection.intent === dirName) {
+  const liveSelection = sid
+    ? resolveWorkflowSelection(projectDir, { sessionId: sid })
+    : null;
+  if (sid && liveSelection?.space === space && liveSelection.intent === dirName) {
     writeSessionBinding(projectDir, sid, space, null);
     clearSessionRebindOffer(projectDir, sid);
     clearSessionIntentUuid(projectDir, sid);

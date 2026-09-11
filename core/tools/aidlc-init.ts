@@ -3714,11 +3714,15 @@ function activeWorkflowDescriptions(projectDir: string): string[] {
   const active: string[] = [];
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
-      if (intent.status === "complete" || !intent.dirName) continue;
+      if (
+        intent.status === "complete" ||
+        intent.status === "archived" ||
+        !intent.dirName
+      ) continue;
       const path = stateFilePath(projectDir, intent.dirName, space.name);
       if (regularFile(path)) {
         const status = getField(readFileSync(path, "utf-8"), "Status");
-        if (status === "Completed") continue;
+        if (status === "Completed" || status === "Archived") continue;
       }
       active.push(`${space.name}/${intent.dirName}`);
     }

@@ -2741,9 +2741,41 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
 // Remove a space's active-intent cursor so no record resolves implicitly until
 // the human picks one (`intent <name>`) or creates new work. Best-effort and
 // idempotent, like the writer: an absent cursor is already the desired state.
-export function clearActiveIntentCursor(projectDir: string, space?: string): void {
+export function clearActiveIntentCursor(
+  projectDir: string,
+  space?: string,
+  expectedIntent?: string,
+): void {
+  const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
+  if (expectedIntent !== undefined) {
+    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(path, staged);
+    } catch {
+      return;
+    }
+    try {
+      const captured = readFileSync(staged, "utf-8").trim();
+      if (captured !== expectedIntent && !existsSync(path)) {
+        try {
+          renameSync(staged, path);
+          return;
+        } catch {
+          // A concurrent switch won the destination. Keep its newer cursor.
+        }
+      }
+    } catch {
+      // An unreadable captured cursor is stale runtime state.
+    }
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* already moved or removed */
+    }
+    return;
+  }
   try {
-    unlinkSync(join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER));
+    unlinkSync(path);
   } catch {
     /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
