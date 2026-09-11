@@ -121,7 +121,15 @@ function scanOccurrences(): Occurrence[] {
       // `*-learnings.md` surface. Filename-anchored so the live tool
       // `aidlc-learnings.ts` and the phrase "learnings ritual" never match.
       const hasLearningsLog = /[a-z]+-learnings\.md/.test(line);
-      if (hasAidlcDocs || hasInit || hasRulesDir || hasLearningsLog) {
+      // Retired record-dir shape; intent-create mints `<YYMMDD>-<label>`.
+      const hasLegacyRecordDir = line.includes("<slug>-<id8>");
+      if (
+        hasAidlcDocs ||
+        hasInit ||
+        hasRulesDir ||
+        hasLearningsLog ||
+        hasLegacyRecordDir
+      ) {
         out.push({ file: rel, line: i + 1, text: line.trim() });
       }
     }
@@ -137,7 +145,7 @@ describe("t174 docs legacy-ref allowlist gate (P9 — closed predicate)", () => 
     allowedByFile.get(e.file)?.add(e.text.trim());
   }
 
-  test("every surviving aidlc-docs/--init/rules-dir/learnings-log docs occurrence is pinned in the allowlist", () => {
+  test("every surviving aidlc-docs/--init/rules-dir/learnings-log/legacy-record-dir docs occurrence is pinned in the allowlist", () => {
     const unpinned = occurrences.filter(
       (o) => !(allowedByFile.get(o.file)?.has(o.text) ?? false),
     );
