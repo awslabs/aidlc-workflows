@@ -139,6 +139,12 @@ field (the display name of the next in-scope stage, computed by the engine at
 emit time), or `Complete workflow` when `next_stage` is null. The conductor
 never guesses the next stage.
 
+Pass the selected label unchanged in `--user-input`, including any trailing
+`(Recommended)` added by the harness's question renderer. The engine removes
+one such suffix (case-insensitive) before matching **Approve**, **Request Changes**,
+or **Accept as-is** when that choice is available. Approval audit records and
+refusal messages retain the received label.
+
 If a reply matches none of the choices currently shown, the conductor quotes
 the received reply briefly, says that it did not match an offered choice, and
 re-presents every valid choice in the same turn. It does not report a lifecycle

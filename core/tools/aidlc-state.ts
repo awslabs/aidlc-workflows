@@ -137,6 +137,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
+  stripRecommendedDecorator,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -5351,9 +5352,10 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
+    const approvalChoice = stripRecommendedDecorator(approvalInput ?? "");
     const matchesOfferedApproval =
-      approvalInput === "Approve" ||
-      (approvalInput === "Accept as-is" && revisionCount >= 3);
+      approvalChoice === "Approve" ||
+      (approvalChoice === "Accept as-is" && revisionCount >= 3);
     if (!matchesOfferedApproval) {
       const cancellation = isNonAnswer(approvalInput)
         ? " The reply is cancellation boilerplate, not consent."

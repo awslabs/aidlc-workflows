@@ -7347,12 +7347,13 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice. The words themselves must be
-// present; a paraphrase ("please change it") is not a choice. Plan Approval
-// keeps its exact-label rule because those labels are the anti-forgery binding.
+// trailing punctuation are all the same choice, as is the "(Recommended)" label
+// decorator the question-rendering guide asks the conductor to add. The words
+// themselves must be present; a paraphrase ("please change it") is not a
+// choice. Plan Approval keeps its exact-label rule because those labels are the
+// anti-forgery binding.
 export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  const normalized = (text ?? "")
-    .trim()
+  const normalized = stripRecommendedDecorator(text ?? "")
     .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
     .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/[.!]+$/, "")
@@ -7364,9 +7365,9 @@ export function isRequestChangesChoice(text: string | undefined | null): boolean
 
 // The Codex question-rendering guide tells the conductor to append
 // "(Recommended)" to the recommended option's label, and request_user_input
-// returns the decorated label. Plan Approval matches offered labels exactly, so
-// the one trailing decorator is removed before that match (case-insensitive,
-// surrounding whitespace tolerated) and nothing else about the text changes.
+// returns the decorated label. Stage gates and Plan Approval remove the one
+// trailing decorator before matching offered labels (case-insensitive,
+// surrounding whitespace tolerated). Nothing else about the text changes.
 const RECOMMENDED_DECORATOR_RE = /\s*\(recommended\)\s*$/i;
 export function stripRecommendedDecorator(text: string): string {
   return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
