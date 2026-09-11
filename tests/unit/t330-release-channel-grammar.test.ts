@@ -38,8 +38,8 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = readFileSync(join(REPO_ROOT, "scripts", "install.sh"), "utf-8");
 const INSTALL_PS1 = readFileSync(join(REPO_ROOT, "scripts", "install.ps1"), "utf-8");
 const RUNTIME_PATHS = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts"), "utf-8");
-const RELEASE_WORKFLOW = readFileSync(
-  join(REPO_ROOT, ".github", "workflows", "release.yml"),
+const PREVIEW_RELEASE_WORKFLOW = readFileSync(
+  join(REPO_ROOT, ".github", "workflows", "preview-release.yml"),
   "utf-8",
 );
 const [MAJOR, MINOR, PATCH] = AIDLC_VERSION.split(".").map(Number);
@@ -241,13 +241,13 @@ describe("t330 release version-id grammar", () => {
         expect(regex.test(value), `install.ps1 ${context} ${JSON.stringify(value)}`).toBe(false);
       }
     }
-    const lifecycle = /\\\\versions\\\\([^']+)\\\\aidlc\\\.exe\$'/.exec(RELEASE_WORKFLOW)?.[1];
+    const lifecycle = /\\\\versions\\\\([^']+)\\\\aidlc\\\.exe\$'/.exec(PREVIEW_RELEASE_WORKFLOW)?.[1];
     expect(lifecycle).toBeDefined();
     const pointer = new RegExp(`^${lifecycle}$`);
     expect(pointer.test("2.7.2")).toBe(true);
     expect(pointer.test("2.7.2-preview.20260903.1")).toBe(true);
     expect(pointer.test("2.7.2-rc.1")).toBe(false);
-    expect(RELEASE_WORKFLOW).toContain(
+    expect(PREVIEW_RELEASE_WORKFLOW).toContain(
       `sed -n 's/.*"version":[[:space:]]*"\\([0-9][0-9A-Za-z.-]*\\)".*/\\1/p'`,
     );
   });

@@ -66,12 +66,15 @@ const GITHUB_API_HEADERS = {
   "X-GitHub-Api-Version": "2022-11-28",
 };
 
-function releaseTrust(): { repository: string; workflow: string } {
+function releaseTrust(version: string): { repository: string; workflow: string } {
   const repository =
     process.env.AIDLC_RELEASE_REPOSITORY ?? DEFAULT_RELEASE_REPOSITORY;
+  const workflowName = parseVersion(version).channel === PREVIEW_CHANNEL
+    ? "preview-release.yml"
+    : "release.yml";
   const workflow =
     process.env.AIDLC_RELEASE_WORKFLOW ??
-    `${repository}/.github/workflows/release.yml`;
+    `${repository}/.github/workflows/${workflowName}`;
   return { repository, workflow };
 }
 
@@ -169,7 +172,7 @@ export function verifyReleaseProvenance(
     throw new Error(`release is missing ${PROVENANCE_BUNDLE}`);
   }
   assertMetadataSize(bundle, PROVENANCE_BUNDLE);
-  const trust = releaseTrust();
+  const trust = releaseTrust(manifest.version);
   const configuredGh = process.env.AIDLC_GH_BIN?.trim();
   const gh = configuredGh || "gh";
   let capabilityAvailable = false;

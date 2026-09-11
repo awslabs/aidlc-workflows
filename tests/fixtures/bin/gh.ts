@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
 if (
@@ -27,9 +28,16 @@ const repository = valueAfter("--repo");
 const signerWorkflow = valueAfter("--signer-workflow");
 const expectedRepository =
   process.env.AIDLC_RELEASE_REPOSITORY?.trim() || "awslabs/aidlc-workflows";
+const manifestPath = join(dirname(args[2]), "version.json");
+const manifestVersion = existsSync(manifestPath)
+  ? (JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string }).version
+  : undefined;
+const expectedWorkflowName = manifestVersion?.includes("-preview.")
+  ? "preview-release.yml"
+  : "release.yml";
 const expectedWorkflow =
   process.env.AIDLC_RELEASE_WORKFLOW?.trim() ||
-  `${expectedRepository}/.github/workflows/release.yml`;
+  `${expectedRepository}/.github/workflows/${expectedWorkflowName}`;
 if (
   !existsSync(args[2]) ||
   !bundle ||

@@ -65,11 +65,7 @@ $releaseRepository = if ($env:AIDLC_RELEASE_REPOSITORY) {
 } else {
   'awslabs/aidlc-workflows'
 }
-$releaseWorkflow = if ($env:AIDLC_RELEASE_WORKFLOW) {
-  $env:AIDLC_RELEASE_WORKFLOW
-} else {
-  "$releaseRepository/.github/workflows/release.yml"
-}
+$releaseWorkflow = $env:AIDLC_RELEASE_WORKFLOW
 
 function Write-Result {
   [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -277,6 +273,14 @@ try {
   if ($manifest.schemaVersion -ne 1 -or $manifest.version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}\.[1-9][0-9]*)?(?![\s\S])') {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'version.json has an invalid schema or version'
+  }
+  if (-not $releaseWorkflow) {
+    $workflowName = if ($manifest.version -match '-preview\.') {
+      'preview-release.yml'
+    } else {
+      'release.yml'
+    }
+    $releaseWorkflow = "$releaseRepository/.github/workflows/$workflowName"
   }
   $ghPath = $env:AIDLC_GH_BIN
   if (-not $ghPath) {

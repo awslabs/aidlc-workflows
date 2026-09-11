@@ -30,7 +30,8 @@ import {
 import { publishRelease } from "../../scripts/publish-release.ts";
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
-const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+const STABLE_RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+const PREVIEW_RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "preview-release.yml");
 const CI_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "ci.yml");
 
 const [MAJOR, MINOR, PATCH] = AIDLC_VERSION.split(".").map(Number);
@@ -239,7 +240,7 @@ function servePublishMock(
 type PlanMockOptions = {
   releases: MockRelease[];
   tags: string[];
-  annotated: Record<string, { source: string } | "lightweight">;
+  annotated: Record<string, { source: string; repository?: string } | "lightweight">;
   requests?: string[];
 };
 
@@ -276,7 +277,7 @@ function servePlanMock(options: PlanMockOptions): string {
         return json({
           message: previewTagMessage({
             version: entry[0].slice(1),
-            sourceRepository: "owner/source",
+            sourceRepository: entry[1].repository ?? "owner/source",
             sourceDigest: entry[1].source,
           }),
           object: { type: "commit", sha: TARGET },
@@ -877,37 +878,44 @@ describe("t332 preview publication pipeline", () => {
     });
   });
 
-  test("a lightweight or foreign previous preview never triggers a skip", async () => {
-    const history = sourceHistory();
-    const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
-    const baseUrl = servePlanMock({
-      releases: [{ tag_name: previous, prerelease: true, draft: false }],
-      tags: [previous],
-      annotated: { [previous]: "lightweight" },
-    });
-    const planned = await planPreviewRelease({
-      client: githubApiClient(baseUrl, undefined),
-      repository: "owner/repo",
-      sourceRepository: "owner/source",
-      sourceDigest: history.first,
-      cwd: history.cwd,
-      date: "20260904",
-    });
-    expect(planned.skip).toBe(false);
-    expect(planned.version).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`);
-    expect(planned.plan?.previousSourceDigest).toBeNull();
-    expect(nextPreviewVersion([], AIDLC_VERSION, "20260904")).toBe(
-      `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`,
-    );
-    expect(nextPreviewVersion(
-      [`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.3`, `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.7`],
-      AIDLC_VERSION,
-      "20260904",
-    )).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.4`);
-  });
+  test.each(["lightweight", "foreign"] as const)(
+    "a %s previous preview never triggers a skip",
+    async (kind) => {
+      const history = sourceHistory();
+      const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
+      const baseUrl = servePlanMock({
+        releases: [{ tag_name: previous, prerelease: true, draft: false }],
+        tags: [previous],
+        annotated: {
+          [previous]: kind === "lightweight"
+            ? "lightweight"
+            : { source: history.first, repository: "other/source" },
+        },
+      });
+      const planned = await planPreviewRelease({
+        client: githubApiClient(baseUrl, undefined),
+        repository: "owner/repo",
+        sourceRepository: "owner/source",
+        sourceDigest: history.first,
+        cwd: history.cwd,
+        date: "20260904",
+      });
+      expect(planned.skip).toBe(false);
+      expect(planned.version).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`);
+      expect(planned.plan?.previousSourceDigest).toBeNull();
+      expect(nextPreviewVersion([], AIDLC_VERSION, "20260904")).toBe(
+        `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`,
+      );
+      expect(nextPreviewVersion(
+        [`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.3`, `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.7`],
+        AIDLC_VERSION,
+        "20260904",
+      )).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.4`);
+    },
+  );
 
   test("a queued older checkout can skip today's preview but cannot become a new publication candidate", async () => {
-    const workflow = Bun.YAML.parse(readFileSync(RELEASE_WORKFLOW, "utf-8")) as {
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
     };
     const validateScript = workflow.jobs.validate.steps.find((step) => step.id === "validate")?.run;
@@ -949,7 +957,7 @@ describe("t332 preview publication pipeline", () => {
     });
     expect(validated.status, validated.stdout + validated.stderr).toBe(0);
     const validationRows = readFileSync(validationOutput, "utf-8");
-    expect(validationRows).toBe(`channel=preview\ntag=\nsha=${history.first}\n`);
+    expect(validationRows).toBe(`sha=${history.first}\n`);
     const authorizedSha = /^sha=(.+)$/m.exec(validationRows)?.[1];
     expect(git(history.cwd, ["rev-parse", "HEAD"])).toBe(history.first);
     expect(git(history.cwd, ["rev-parse", "origin/main"])).toBe(history.third);
@@ -984,109 +992,158 @@ describe("t332 preview publication pipeline", () => {
     }
   }, 45_000);
 
-  test("the release workflow schedules previews, gates them on CI, and stamps the build", () => {
-    const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
-    const ci = Bun.YAML.parse(readFileSync(CI_WORKFLOW, "utf-8")) as { on: Record<string, unknown> };
-    expect(Object.keys(ci.on)).toContain("workflow_call");
-    const parsed = Bun.YAML.parse(workflow) as {
-      on: {
-        push: { tags: string[] };
-        schedule?: Array<{ cron: string }>;
-        workflow_dispatch: unknown;
-      };
-      concurrency?: { group?: string; "cancel-in-progress"?: boolean };
-      jobs: Record<string, {
-        needs?: string | string[];
+  test("stable and preview releases use isolated, fully gated DAGs", () => {
+    type WorkflowJob = {
+      needs?: string | string[];
+      if?: string;
+      environment?: string;
+      permissions?: Record<string, string>;
+      uses?: string;
+      env?: Record<string, string>;
+      outputs?: Record<string, string>;
+      steps?: Array<{
+        name?: string;
         if?: string;
-        environment?: string;
-        permissions?: Record<string, string>;
-        uses?: string;
+        run?: string;
         env?: Record<string, string>;
-        outputs?: Record<string, string>;
-        steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string> }>;
       }>;
     };
-    const cron = parsed.on.schedule?.[0]?.cron ?? "";
+    type Workflow = {
+      on: Record<string, unknown> & {
+        push?: { tags: string[] };
+        schedule?: Array<{ cron: string }>;
+      };
+      concurrency?: { group?: string; "cancel-in-progress"?: boolean };
+      jobs: Record<string, WorkflowJob>;
+    };
+    const stableText = readFileSync(STABLE_RELEASE_WORKFLOW, "utf-8");
+    const previewText = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
+    const stable = Bun.YAML.parse(stableText) as Workflow;
+    const preview = Bun.YAML.parse(previewText) as Workflow;
+    const ci = Bun.YAML.parse(readFileSync(CI_WORKFLOW, "utf-8")) as {
+      on: Record<string, unknown>;
+    };
+
+    expect(Object.keys(ci.on)).toContain("workflow_call");
+    expect(Object.keys(stable.on)).toEqual(["push"]);
+    expect(stable.on.push?.tags).toEqual(["v*.*.*", "!v*-preview.*"]);
+    expect(stable.concurrency).toEqual({
+      group: "release-stable",
+      "cancel-in-progress": false,
+    });
+    expect(stable.jobs.gate).toBeUndefined();
+    expect(stable.jobs.verify.needs).toBe("validate");
+    expect(stable.jobs.validate.outputs).toEqual({
+      tag: `\${{ steps.validate.outputs.tag }}`,
+      sha: `\${{ steps.validate.outputs.sha }}`,
+    });
+    expect(stable.jobs.release.environment).toBe("release");
+    expect(stable.jobs["release-result"].needs).toEqual(["validate", "release"]);
+    expect(stableText).not.toContain("plan-preview-release.ts");
+    expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
+    expect(stableText).not.toContain("./.github/workflows/ci.yml");
+
+    expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+    const cron = preview.on.schedule?.[0]?.cron ?? "";
     expect(cron).toMatch(/^\d{1,2} \d{1,2} \* \* \*$/);
     expect(cron.split(" ")[0]).not.toBe("0");
-    expect(parsed.on.workflow_dispatch).toBeDefined();
-    expect(parsed.on.push.tags).toContain("v*.*.*");
-    expect(parsed.on.push.tags).toContain("!v*-preview.*");
-    expect(parsed.concurrency?.group).toBe(
-      `release-\${{ github.event_name == 'push' && 'stable' || 'preview' }}`,
-    );
-    expect(parsed.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(preview.concurrency).toEqual({
+      group: "release-preview",
+      "cancel-in-progress": false,
+    });
+    expect(preview.jobs.gate).toMatchObject({
+      needs: "validate",
+      uses: "./.github/workflows/ci.yml",
+    });
+    expect(preview.jobs.gate.if).toContain("needs.validate.outputs.skip");
+    expect(preview.jobs.verify.needs).toEqual(["validate", "gate"]);
+    expect(preview.jobs.test_smoke.needs).toEqual(["validate", "gate"]);
+    expect(preview.jobs.test_unit.needs).toEqual(["validate", "gate"]);
+    expect(preview.jobs.test_deep.needs).toEqual(["validate", "gate"]);
+    expect(preview.jobs.test.needs).toEqual([
+      "validate",
+      "test_smoke",
+      "test_unit",
+      "test_deep",
+    ]);
+    expect(preview.jobs.test.if).toContain("needs.validate.outputs.skip");
+    expect(preview.jobs.release.environment).toBe("preview");
+    expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
 
-    const jobs = parsed.jobs;
-    for (const [name, job] of Object.entries(jobs)) {
-      const needs = job.needs === undefined ? [] : Array.isArray(job.needs) ? job.needs : [job.needs];
-      for (const dependency of needs) expect(jobs[dependency], `${name} needs ${dependency}`).toBeDefined();
+    const dependencies = (job: WorkflowJob): string[] =>
+      job.needs === undefined ? [] : Array.isArray(job.needs) ? job.needs : [job.needs];
+    for (const [name, job] of Object.entries(preview.jobs)) {
+      for (const dependency of dependencies(job)) {
+        expect(preview.jobs[dependency], `${name} needs ${dependency}`).toBeDefined();
+      }
     }
-    const visiting = new Set<string>();
-    const done = new Set<string>();
-    const visit = (name: string): void => {
-      if (done.has(name)) return;
-      expect(visiting.has(name), `cycle through ${name}`).toBe(false);
-      visiting.add(name);
-      const needs = jobs[name].needs;
-      for (const dependency of needs === undefined ? [] : Array.isArray(needs) ? needs : [needs]) visit(dependency);
-      visiting.delete(name);
-      done.add(name);
+    const ancestors = (name: string, seen = new Set<string>()): Set<string> => {
+      for (const dependency of dependencies(preview.jobs[name])) {
+        if (seen.has(dependency)) continue;
+        seen.add(dependency);
+        ancestors(dependency, seen);
+      }
+      return seen;
     };
-    for (const name of Object.keys(jobs)) visit(name);
-
-    expect(jobs.gate.uses).toBe("./.github/workflows/ci.yml");
-    expect(jobs.gate.needs).toBe("validate");
-    expect(jobs.gate.if).toContain(`needs.validate.outputs.channel == '${PREVIEW_CHANNEL}'`);
-    expect(jobs.gate.if).toContain("needs.validate.outputs.skip != 'true'");
-    expect(jobs["gate-result"].needs).toEqual(["validate", "gate"]);
-    expect(jobs["gate-result"].if).toContain("needs.gate.result == 'success'");
-    expect(jobs["gate-result"].if).toContain("needs.validate.outputs.skip != 'true'");
-    expect(jobs.verify.needs).toEqual(["validate", "gate-result"]);
-    expect(jobs.verify.if).toContain("!cancelled()");
-    expect(jobs.verify.if).toContain("needs.validate.result == 'success'");
-    expect(jobs.verify.if).toContain("needs.gate-result.result == 'success'");
-    expect(jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
-    expect(jobs.release.needs).toEqual(["validate", "publish"]);
-    expect(jobs.release.environment).toBe(
-      `\${{ needs.validate.outputs.channel == 'preview' && 'preview' || 'release' }}`,
-    );
-    expect(jobs.release.permissions).toEqual({ contents: "write" });
-    expect(jobs["release-result"].needs).toEqual(["validate", "release"]);
-    expect(jobs["release-result"].if).toContain("!cancelled()");
-    const releaseResult = jobs["release-result"].steps?.find(
-      (step) => step.name === "Require publication or an intentional preview skip",
-    );
-    expect(releaseResult?.run).toContain('test "$VALIDATE_RESULT" = success');
-    expect(releaseResult?.run).toContain(
-      '[ "$RELEASE_CHANNEL" = preview ] && [ "$RELEASE_SKIP" = true ]',
-    );
-    expect(releaseResult?.run).toContain('test "$RELEASE_RESULT" = success');
-
-    for (const key of ["channel", "tag", "sha", "skip", "preview_version", "preview_plan"]) {
-      expect(jobs.validate.outputs?.[key], key).toBeDefined();
+    for (const name of [
+      "verify",
+      "test_smoke",
+      "test_unit",
+      "test_deep",
+      "test",
+      "native-smoke",
+      "build",
+      "musl-smoke",
+      "stage-release",
+      "windows-lifecycle",
+      "unix-lifecycle",
+      "publish",
+      "release",
+    ]) {
+      expect(ancestors(name).has("gate"), `${name} must descend from the CI gate`).toBe(true);
     }
-    const plan = jobs.validate.steps?.find((step) => step.name === "Plan preview publication");
-    expect(plan?.if).toBe(`steps.validate.outputs.channel == '${PREVIEW_CHANNEL}'`);
+
+    for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {
+      expect(preview.jobs.validate.outputs?.[key], key).toBeDefined();
+    }
+    expect(preview.jobs.validate.outputs?.channel).toBeUndefined();
+    const plan = preview.jobs.validate.steps?.find(
+      (step) => step.name === "Plan preview publication",
+    );
     expect(plan?.run).toContain("bun scripts/plan-preview-release.ts");
-    expect(plan?.run).toContain('--source-digest "$AUTHORIZED_SHA"');
+    expect(plan?.run).toContain("--source-digest \"$AUTHORIZED_SHA\"");
+    const immutable = preview.jobs.validate.steps?.find(
+      (step) => step.name === "Require immutable preview releases",
+    );
+    expect(immutable?.if).toContain("steps.plan.outputs.skip");
+    expect(immutable?.run).toContain("immutable-releases");
 
     const stamp = `\${{ needs.validate.outputs.preview_version }}`;
-    expect(jobs.build.env?.AIDLC_BUILD_VERSION).toBe(stamp);
-    expect(jobs["stage-release"].env?.AIDLC_BUILD_VERSION).toBe(stamp);
-    const smoke = jobs["native-smoke"].steps ?? [];
-    expect(smoke.find((step) => step.run === "bun scripts/package.ts")?.env?.AIDLC_BUILD_VERSION).toBe(stamp);
-    expect(smoke.find((step) => step.run?.includes("t238-build-binaries"))?.env?.AIDLC_BUILD_VERSION).toBe(stamp);
-    expect(jobs.verify.env).toBeUndefined();
+    expect(preview.jobs.build.env?.AIDLC_BUILD_VERSION).toBe(stamp);
+    expect(preview.jobs["stage-release"].env?.AIDLC_BUILD_VERSION).toBe(stamp);
+    const smoke = preview.jobs["native-smoke"].steps ?? [];
+    expect(smoke.find((step) => step.run === "bun scripts/package.ts")?.env?.AIDLC_BUILD_VERSION)
+      .toBe(stamp);
+    expect(smoke.find((step) => step.run?.includes("t238-build-binaries"))?.env?.AIDLC_BUILD_VERSION)
+      .toBe(stamp);
+    expect(preview.jobs.verify.env).toBeUndefined();
 
-    const preview = jobs.release.steps?.find((step) => step.name === "Create preview GitHub Release");
-    expect(preview?.if).toBe(`needs.validate.outputs.channel == '${PREVIEW_CHANNEL}'`);
-    expect(preview?.run).toContain("bun scripts/publish-release.ts");
-    expect(preview?.run).toContain("--channel preview");
-    expect(preview?.run).toContain('--preview-plan "$plan"');
-    expect(preview?.run).toContain("--expected-assets 13");
-    const stable = jobs.release.steps?.find((step) => step.name === "Create stable GitHub Release");
-    expect(stable?.if).toBe(`needs.validate.outputs.channel == '${STABLE_CHANNEL}'`);
-    expect(stable?.run).toContain("--generate-notes");
+    const publish = preview.jobs.release.steps?.find(
+      (step) => step.name === "Create preview GitHub Release",
+    );
+    expect(publish?.if).toBeUndefined();
+    expect(publish?.run).toContain("bun scripts/publish-release.ts");
+    expect(publish?.run).toContain("--channel preview");
+    expect(publish?.run).toContain("--preview-plan \"$plan\"");
+    expect(publish?.run).toContain("--expected-assets 13");
+    expect(previewText).toContain(
+      "awslabs/aidlc-workflows/.github/workflows/preview-release.yml",
+    );
+    expect(preview.jobs["release-result"].needs).toEqual(["validate", "release"]);
+    const result = preview.jobs["release-result"].steps?.find(
+      (step) => step.name === "Require publication or an intentional preview skip",
+    );
+    expect(result?.run).toContain("[ \"$RELEASE_SKIP\" = true ]");
+    expect(result?.run).toContain("test \"$RELEASE_RESULT\" = success");
   });
 });

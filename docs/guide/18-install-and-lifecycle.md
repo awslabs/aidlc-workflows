@@ -125,14 +125,16 @@ the same binary plus all harness runtimes.
 explicit options win. `AIDLC_RELEASE_REPOSITORY` selects both the GitHub
 repository used for default downloads and the repository trusted by provenance
 verification. It defaults to `awslabs/aidlc-workflows`.
-`AIDLC_RELEASE_WORKFLOW` selects the trusted signer workflow and defaults to
-`<AIDLC_RELEASE_REPOSITORY>/.github/workflows/release.yml`. Set these explicitly
-for a fork or mirror, together with its release base URL; changing the download
-URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
-explicit GitHub CLI executable for both installers. If that executable is
-missing or lacks `--signer-workflow`, `--source-ref`, or `--source-digest`,
-provenance verification is skipped while checksum verification remains
-mandatory.
+`AIDLC_RELEASE_WORKFLOW` overrides the trusted signer workflow. By default,
+installers select `<AIDLC_RELEASE_REPOSITORY>/.github/workflows/release.yml`
+for stable versions and
+`<AIDLC_RELEASE_REPOSITORY>/.github/workflows/preview-release.yml` for preview
+versions. Set the override explicitly for a fork or mirror whose workflow path
+differs, together with its release base URL; changing the download URL alone
+does not change the provenance trust root. `AIDLC_GH_BIN` selects an explicit
+GitHub CLI executable for both installers. If that executable is missing or
+lacks `--signer-workflow`, `--source-ref`, or `--source-digest`, provenance
+verification is skipped while checksum verification remains mandatory.
 
 Fork releases need no GitHub App or additional repository. The tag workflow
 publishes to the same repository with its short-lived `GITHUB_TOKEN`. Its final
