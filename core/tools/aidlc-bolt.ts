@@ -404,6 +404,12 @@ function handleStart(args: string[]): void {
       failJson("start-worktree", flags.slug, "state-read-failed", errorMessage(e));
     }
   }
+  if (stateContent && getField(stateContent, "Status") === "Archived") {
+    error(
+      "Cannot start a Bolt for an Archived workflow. Bring it back first with " +
+        "`/aidlc intent unarchive <name>`.",
+    );
+  }
   const teamOwnership = isTeamUnitOwnership(stateContent);
   const unitSlug = teamOwnership && !flags.name.includes(",")
     ? resolveTeamUnitSlug(pd, flags.name, flags.slug)
@@ -597,6 +603,12 @@ function handleComplete(args: string[]): void {
     stateContent = readStateFile(pd);
   } catch {
     // Legacy non-worktree completion can emit against an audit-only fixture.
+  }
+  if (stateContent && getField(stateContent, "Status") === "Archived") {
+    error(
+      "Cannot complete a Bolt for an Archived workflow. Bring it back first with " +
+        "`/aidlc intent unarchive <name>`.",
+    );
   }
   const teamOwnership = isTeamUnitOwnership(stateContent);
   const unitSlug = teamOwnership && !flags.name.includes(",")
@@ -1097,6 +1109,13 @@ function handleSetAutonomy(args: string[]): void {
   // One lock covers presence check -> audit consume -> state write. Otherwise
   // two grants, or a grant racing approval, can both observe one fresh turn.
   withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    if (getField(content, "Status") === "Archived") {
+      error(
+        "Cannot change autonomy for an Archived workflow. Bring it back first with " +
+          "`/aidlc intent unarchive <name>`.",
+      );
+    }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
     // human's ladder-prompt grant and consumes that turn through the emitted
     // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
@@ -1115,7 +1134,6 @@ function handleSetAutonomy(args: string[]): void {
     }
 
     // Validate state-file shape before the audit-first mutation.
-    const content = readStateFile(pd);
     let updated: string;
     try {
       updated = setFieldStrict(content, "Construction Autonomy Mode", flags.mode);

@@ -149,6 +149,7 @@ import {
   isPerUnitStage,
   isReadOnlyEngineProbe,
   isRegularFile,
+  isArchivedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -1908,7 +1909,12 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  const intents = listIntents(projectDir, space, selection.intent);
+  // Archived intents are retired work: they never block creation and are never
+  // offered as a pick (the listing shows them only under --all). A space whose
+  // every record is archived therefore reads as zero intents here.
+  const intents = listIntents(projectDir, space, selection.intent).filter(
+    (intent) => !isArchivedIntent(intent),
+  );
   if (intents.length === 0) return null; // zero intents → creation is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
@@ -4298,6 +4304,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       emit(errorDirective(stale));
       return;
     }
+  }
+  // Archived is terminal for routing, including scoped Unit checkouts. Keep
+  // this before Unit jump/park handling so every next shape returns the same
+  // archived result instead of reviving or locally parking retired work.
+  if (
+    stateContent &&
+    !flags.newIntent &&
+    getField(stateContent, "Status") === "Archived"
+  ) {
+    const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+    emit({
+      kind: "done",
+      reason:
+        `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
+        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+    });
+    return;
   }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
@@ -8285,6 +8309,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const stale = staleStateVersionError(sc);
       if (stale) {
         emit(errorDirective(stale));
+        return;
+      }
+      if (getField(sc, "Status") === "Archived") {
+        const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+        emit(errorDirective(
+          `Intent "${archivedIntent}" is archived, so report cannot mutate its workflow state. ` +
+            `Bring it back with /aidlc intent unarchive ${archivedIntent}.`,
+        ));
         return;
       }
     }

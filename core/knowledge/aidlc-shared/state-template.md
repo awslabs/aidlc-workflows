@@ -81,7 +81,7 @@ Progress column and required team gates are complete.
 - **Lifecycle Phase**: [READY/INITIALIZATION/IDEATION/INCEPTION/CONSTRUCTION/OPERATION]
 - **Current Stage**: [stage slug or status text]
 - **Next Stage**: [next stage slug or none]
-- **Status**: [Running/Completed]
+- **Status**: [Running/Completed/Archived]
 - **Construction Autonomy Mode**: [unset/autonomous/gated]
 - **Last Updated**: [ISO 8601 timestamp]
 

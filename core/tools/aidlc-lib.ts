@@ -208,8 +208,28 @@ export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cur
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
 // layout (lib copied loose in a test, a non-dotted parent) falls through to the
 // CWD probe instead of returning a bogus harness dir.
-function isHarnessDirName(name: string): boolean {
+export function isHarnessDirName(name: string): boolean {
   return /^\.[a-z0-9][a-z0-9._-]*$/i.test(name);
+}
+
+/** Where a harness shell announces itself, relative to the shell dir. */
+export const HARNESS_SHELL_MANIFEST_REL = "tools/data/harness.json";
+
+/** The manifest test that makes a dot-dir a harness shell rather than an
+ *  ordinary hidden directory someone reviewed. Exported alongside
+ *  HARNESS_SHELL_MANIFEST_REL so a caller that must judge a *git tree* instead
+ *  of the checkout (commit provenance) applies the identical rule: two answers
+ *  to "is this a shell?" would mean two answers to "is this path excluded?". */
+export function isHarnessShellManifest(bytes: Buffer | string): boolean {
+  if (bytes.length > 64 * 1024) return false;
+  try {
+    const parsed = JSON.parse(
+      typeof bytes === "string" ? bytes : bytes.toString("utf-8"),
+    ) as { name?: unknown };
+    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function deriveHarnessDir(): string {
@@ -710,6 +730,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
   "create",
+  "archive",
+  "unarchive",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -719,23 +741,32 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "archive",
   "rename",
   "show",
   "birth",
 ]);
 
+// The two intent lifecycle verbs that retire and revive a record without
+// touching its files: `archive` moves an in-flight intent to the terminal
+// `archived` status, `unarchive` brings it back to `in-flight`.
+export type IntentLifecycleVerb = "archive" | "unarchive";
+
 export type WorkspaceCommand =
-  | { kind: "list"; noun: WorkspaceNoun; json: boolean }
+  // `all` is only ever set (true) for `intent list --all`; a plain list omits
+  // it so existing shape consumers keep matching the two-field object.
+  | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
+  // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
+  // utility argv verbatim, the same way `create-intent` forwards its args.
+  | { kind: IntentLifecycleVerb; noun: "intent"; name: string; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name";
-      verb: "switch" | "create" | "space-create";
+      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
       message: string;
     }
   | {
@@ -749,7 +780,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create",
+  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb,
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -788,11 +819,19 @@ function isReservedFutureWorkspaceVerb(
   return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
-function explicitWorkspaceList(
-  noun: WorkspaceNoun,
-  tokens: string[],
-): WorkspaceCommand {
-  return { kind: "list", noun, json: tokens[2] === "--json" };
+function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
+  return token === "archive" || token === "unarchive";
+}
+
+// `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
+// in either order after the verb. `--all` (intents only) includes archived
+// records, which the default listing hides; the `all` field is set only when
+// requested so the plain list keeps its two-field shape.
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+  const flags = tokens.slice(2);
+  const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
+  if (noun === "intent" && flags.includes("--all")) command.all = true;
+  return command;
 }
 
 export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
@@ -813,8 +852,11 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
   if (verbOrName === undefined) {
     return { kind: "list", noun, json: false };
   }
-  if (verbOrName === "--json") {
-    return { kind: "list", noun, json: true };
+
+  if (verbOrName === "--json" || (noun === "intent" && verbOrName === "--all")) {
+    // A bare list with flags only (`intent --json`, `intent --all --json`):
+    // re-read the flags from the verb position onward.
+    return explicitWorkspaceList(noun, [tokens[0], "list", ...tokens.slice(1)]);
   }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
@@ -832,6 +874,13 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
+    }
+    if (isIntentLifecycleVerb(verbOrName)) {
+      const name = tokens[2];
+      if (name === undefined || name.startsWith("--")) {
+        return missingWorkspaceName(noun, verbOrName);
+      }
+      return { kind: verbOrName, noun, name, rest: tokens.slice(3) };
     }
   }
 
@@ -856,8 +905,17 @@ export function workspaceCommandUtilityArgv(
   command: WorkspaceCommand,
 ): string[] | null {
   switch (command.kind) {
-    case "list":
-      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "list": {
+      const argv: string[] = [command.noun];
+      if (command.json) argv.push("--json");
+      if (command.all) argv.push("--all");
+      return argv;
+    }
+    case "archive":
+    case "unarchive":
+      // The lifecycle verbs forward verbatim, trailing flags included:
+      // `intent archive <name> --reason <text>`.
+      return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
       return command.explicit
         ? [command.noun, "switch", command.name]
@@ -1930,7 +1988,18 @@ export function activeIntent(
   } catch {
     // no cursor → fall through to lone-intent
   }
-  const records = listIntentDirs(projectDir, sp);
+  // Archived records never resolve implicitly: a space whose only record was
+  // archived reads as "no active intent" (creation is correct), not as that
+  // retired record silently coming back. An explicit cursor naming an archived
+  // record still resolves above, so the engine can explain it instead of
+  // guessing. The registry is read ONCE and matched in memory: this is the
+  // hot path of intent resolution, and an unregistered (orphan) record has no
+  // status, so it stays live work.
+  const registry = readIntentRegistry(projectDir, sp);
+  const records = listIntentDirs(projectDir, sp).filter((dirName) => {
+    const row = registry.find((entry) => recordDirMatches(entry, dirName));
+    return row === undefined || !isArchivedIntent(row);
+  });
   if (records.length === 1) return records[0];
   // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
@@ -2639,6 +2708,18 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
   return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
 }
 
+// The intent status lifecycle is a registry-row field. Creation writes
+// `in-flight`; workflow completion flips it to `complete`; `intent archive`
+// flips an in-flight row to `archived` and `intent unarchive` restores
+// `in-flight`. `archived` is the only status a human moves a row INTO and back
+// OUT of, so it gets a named constant and predicate; the other two stay the
+// literals the creation and completion paths already write.
+export const ARCHIVED_INTENT_STATUS = "archived";
+
+export function isArchivedIntent(entry: { status: string }): boolean {
+  return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
+}
+
 export function intentsRegistryPath(projectDir: string, space?: string): string {
   return join(intentsDir(projectDir, space), "intents.json");
 }
@@ -2809,6 +2890,49 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
     writeFileSync(join(dir, ACTIVE_INTENT_POINTER), `${dirName}\n`, "utf-8");
   } catch {
     /* per-user cursor; best-effort */
+  }
+}
+
+// Remove a space's active-intent cursor so no record resolves implicitly until
+// the human picks one (`intent <name>`) or creates new work. Best-effort and
+// idempotent, like the writer: an absent cursor is already the desired state.
+export function clearActiveIntentCursor(
+  projectDir: string,
+  space?: string,
+  expectedIntent?: string,
+): void {
+  const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
+  if (expectedIntent !== undefined) {
+    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(path, staged);
+    } catch {
+      return;
+    }
+    try {
+      const captured = readFileSync(staged, "utf-8").trim();
+      if (captured !== expectedIntent && !existsSync(path)) {
+        try {
+          renameSync(staged, path);
+          return;
+        } catch {
+          // A concurrent switch won the destination. Keep its newer cursor.
+        }
+      }
+    } catch {
+      // An unreadable captured cursor is stale runtime state.
+    }
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* already moved or removed */
+    }
+    return;
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
@@ -9300,6 +9424,29 @@ export interface AuditShardEvent {
 // can preserve append order only within one shard; equal second-precision
 // timestamps across shards are causally unordered and must not be resolved by
 // filename position when authority or attempt freshness depends on the result.
+// Split ONE shard's bytes into events, preserving append position. Factored out
+// of readAuditShardEvents so a reader whose shard bytes do not come from the
+// working tree shares this parser rather than reimplementing the block grammar:
+// aidlc-attest.ts reads shards out of a git tree (`git cat-file`) to resolve a
+// commit against the record as that commit carried it. Two copies of the
+// `\n---\n` split and the Event/Timestamp filter would be free to drift, and a
+// drifted audit parser silently changes which receipt counts as newest.
+export function parseAuditShardEvents(
+  content: string,
+  shard: string,
+  shardIndex: number,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  for (let pos = 0; pos < blocks.length; pos++) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const timestamp = auditBlockField(blocks[pos], "Timestamp");
+    if (!event || !timestamp) continue;
+    rows.push({ block: blocks[pos], event, pos, shard, shardIndex, timestamp });
+  }
+  return rows;
+}
+
 export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
@@ -9328,20 +9475,7 @@ export function readAuditShardEvents(
       unreadableShards?.push(shards[shardIndex]);
       continue; // vanished or refused shard; growth during read is tolerated
     }
-    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
-    for (let pos = 0; pos < blocks.length; pos++) {
-      const event = auditBlockField(blocks[pos], "Event");
-      const timestamp = auditBlockField(blocks[pos], "Timestamp");
-      if (!event || !timestamp) continue;
-      rows.push({
-        block: blocks[pos],
-        event,
-        pos,
-        shard: shards[shardIndex],
-        shardIndex,
-        timestamp,
-      });
-    }
+    rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
   }
   return rows;
 }
@@ -14688,13 +14822,14 @@ function sourceIdentityBudget(name: string, fallback: number): number {
 function isSourceHarnessShellDir(root: string, name: string): boolean {
   if (!isHarnessDirName(name)) return false;
   try {
-    const manifestPath = join(root, name, "tools", "data", "harness.json");
+    const manifestPath = join(
+      root,
+      name,
+      ...HARNESS_SHELL_MANIFEST_REL.split("/"),
+    );
     const stat = lstatSync(manifestPath);
     if (!stat.isFile() || stat.size > 64 * 1024) return false;
-    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
-      name?: unknown;
-    };
-    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+    return isHarnessShellManifest(readFileSync(manifestPath, "utf-8"));
   } catch {
     return false;
   }
@@ -16769,7 +16904,7 @@ export function sourceListingSha256(serialized: string): string {
   return createHash("sha256").update(serialized, "utf-8").digest("hex");
 }
 
-function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
+export function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
   if (path.length === 0) return { reason: "writes[].path must be non-empty" };
   if (path.includes("\0")) return { reason: "writes[].path cannot contain a NUL byte" };
   if (path.includes("\\")) return { reason: "writes[].path must use POSIX '/' separators, not backslashes" };
@@ -16785,13 +16920,27 @@ function normalizeManifestSourcePath(path: string): { path: string; prefix: bool
   return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
 }
 
-function sourcePathIsExcluded(
+export interface SourceExclusionContext {
+  /** Harness shell dirs of the tree being judged, supplied instead of being
+   *  discovered under `projectDir`. Commit provenance passes this: shells found
+   *  on disk would make a commit's `excluded` paths depend on which harnesses
+   *  happen to be installed in the current checkout, so the same SHA would
+   *  classify `.claude/settings.json` differently in two clones. */
+  harnessShellDirs: ReadonlySet<string>;
+}
+
+export function sourcePathIsExcluded(
   path: string,
   carriesWorkspaceShell: boolean,
   projectDir?: string,
+  context?: SourceExclusionContext,
 ): boolean {
   const withoutTrailingSlash = path.replace(/\/+$/, "");
   const segments = withoutTrailingSlash.split("/");
+  const isShellDir = (name: string): boolean =>
+    context !== undefined
+      ? isHarnessDirName(name) && context.harnessShellDirs.has(name)
+      : projectDir !== undefined && isSourceHarnessShellDir(projectDir, name);
   if (
     carriesWorkspaceShell &&
     (
@@ -16799,10 +16948,7 @@ function sourcePathIsExcluded(
       path === ".aidlc/" ||
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
-      (
-        projectDir !== undefined &&
-        isSourceHarnessShellDir(projectDir, segments[0])
-      )
+      isShellDir(segments[0])
     )
   ) return true;
 
@@ -17719,6 +17865,20 @@ export function unitSourceFingerprint(
   return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
 }
 
+/** Parse committed reviewed-source evidence bytes (the serializeUnitSourceListing
+ *  shape): a `manifest\t<sha256>\t-` header row binding the source-manifest bytes,
+ *  then the claim-restricted per-path listing. Null on any malformed row. */
+export function parseUnitSourceListing(
+  serialized: string,
+): { manifestSha256: string; listing: WorkspaceSourceListing } | null {
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
+  if (header === null) return null;
+  const listing = parseSourceListing(serialized.slice(newline + 1));
+  return listing === null ? null : { manifestSha256: header[1], listing };
+}
+
 function validSourceSnapshotFingerprint(fingerprint: string): string | null {
   const matched = /^sha256:([0-9a-f]{64})$/.exec(fingerprint);
   return matched?.[1] ?? null;
@@ -17802,6 +17962,40 @@ export function sourceBaselineAuditFields(
   };
 }
 
+/** Record-relative, posix-separated location of a unit's stage record files. One
+ *  grammar for both readers: the filesystem readers join it onto a record dir,
+ *  and the git-tree reader in aidlc-attest.ts appends it to a tree path, so a
+ *  layout change cannot move one reader without moving the other. */
+export function unitStageRecordRelPath(
+  unit: string,
+  stageSlug: string,
+  fileName: string,
+): string {
+  return `construction/${unit}/${stageSlug}/${fileName}`;
+}
+
+/** Record-relative path of a unit's committed reviewed-listing evidence. */
+export function reviewedSourceEvidenceRelPath(
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return unitStageRecordRelPath(unit, stageSlug, `reviewed-source-${hash12}.tsv`);
+}
+
+/** Committed per-unit reviewed-listing evidence beside source-manifest.json. */
+export function reviewedSourceEvidencePath(
+  recordDirPath: string,
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return join(
+    recordDirPath,
+    ...reviewedSourceEvidenceRelPath(unit, stageSlug, hash12).split("/"),
+  );
+}
+
 /** Write a content-addressed unit listing snapshot including its manifest header. */
 export function writeUnitSourceSnapshot(
   projectDir: string,
@@ -17812,10 +18006,20 @@ export function writeUnitSourceSnapshot(
   manifestSha256: string,
 ): string {
   const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const record = recordDir(projectDir);
   const unitError = validateUnitName(unit);
-  if (dir === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
+  if (dir === null || record === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
   const serialized = serializeUnitSourceListing(listing, claimModel, manifestSha256);
   const hash = sourceListingSha256(serialized);
+  // Dual-write the identical bytes into the COMMITTED record beside the unit's
+  // source-manifest.json. The receipt's Unit Source Fingerprint is the sha256
+  // of exactly these bytes, so the committed audit shards already tamper-bind
+  // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
+  // (aidlc-attest.ts) without the machine-local .aidlc-source-review/ copy.
+  writeSourceSnapshot(
+    reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
+    serialized,
+  );
   return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
@@ -18045,6 +18249,7 @@ export function currentStageSourceBaseline(
 export interface UnitSourceSnapshot {
   listing: WorkspaceSourceListing;
   manifestSha256: string;
+  serialized: string;
 }
 
 /** Read a unit snapshot only after full-hash verification and strict parsing. */
@@ -18064,7 +18269,9 @@ export function readUnitSourceSnapshot(
   const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
   if (header === null) return null;
   const listing = parseSourceListing(serialized.slice(newline + 1));
-  return listing === null ? null : { listing, manifestSha256: header[1] };
+  return listing === null
+    ? null
+    : { listing, manifestSha256: header[1], serialized };
 }
 
 

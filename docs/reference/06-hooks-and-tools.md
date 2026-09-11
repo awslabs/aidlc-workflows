@@ -594,9 +594,11 @@ When Claude Code starts a session (or resumes after compaction), this hook check
 1. **Project directory resolution:** Multi-fallback methods (`$CLAUDE_PROJECT_DIR`, script path, CWD).
 2. **State file guard:** Exits if no `aidlc-state.md` exists.
 3. **Health heartbeat:** Writes to `.aidlc-hooks-health/session-start.last`.
-4. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope.
-5. **Recovery check:** If `.aidlc-recovery.md` exists, includes a compaction warning note.
-6. **JSON output:** Outputs `{"additionalContext": "..."}` with native JSON serialization.
+4. **Session event:** Appends `SESSION_STARTED` (startup/clear) or `SESSION_RESUMED` (resume); compact emits nothing (PreCompact owns it).
+5. **Commit-provenance sweep (opt-in, off by default):** Only when `AIDLC_SESSION_ANCHOR=1` — best-effort `runAnchor` reconcile over the last 25 first-parent commits, so manual commits that landed reviewed claims gain `SOURCE_COMMITTED` anchors (idempotent; skipped on compact and rebind probes; never blocks startup). Unset, the hook writes no anchors and does no provenance work. Anchors are enrichment that `aidlc attest resolve` never reads. See [Commit Provenance](20-commit-provenance.md).
+6. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope.
+7. **Recovery check:** If `.aidlc-recovery.md` exists, includes a compaction warning note.
+8. **JSON output:** Outputs `{"additionalContext": "..."}` with native JSON serialization.
 
 **Output format:**
 
@@ -653,7 +655,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | Category | Count | Events | Logged By |
 |----------|-------|--------|-----------|
 | **Session Lifecycle** | 5 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` | Hooks (session-start, validate-state PreCompact, session-end, human-presence mint) |
-| **Workflow Lifecycle** | 4 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED` | `aidlc-utility.ts intent-create`; `aidlc-orchestrate.ts report`/`park` through internal state emitters |
+| **Workflow Lifecycle** | 6 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED` | `aidlc-utility.ts intent-create` and `intent archive`/`unarchive`; `aidlc-orchestrate.ts report`/`park` through internal state emitters |
 | **Phase** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` | `aidlc-utility.ts intent-create`; lifecycle outcomes reported through `aidlc-orchestrate.ts` |
 | **Stage** | 6 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED` | `aidlc-orchestrate.ts report` (internal state emitters), `aidlc-jump.ts` |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
@@ -675,6 +677,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` | `aidlc-sensor.ts fire`, `aidlc-utility.ts doctor` (`GUARDRAIL_LOADED`) |
 | **Learning loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` | `aidlc-runtime.ts compile`, `aidlc-learnings.ts persist` |
 | **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` | `aidlc-swarm.ts` emits prepare/finalize rows; `aidlc-worktree.ts merge` emits the post-application-source aggregate binding |
+| **Commit Provenance** | 1 | `SOURCE_COMMITTED` | `aidlc-attest.ts anchor`, or the opt-in `aidlc-session-start.ts` sweep (`AIDLC_SESSION_ANCHOR=1`) — enrichment only; `resolve` never reads it |
 
 ### Entry Format
 
@@ -712,7 +715,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | `session-start.ts` | `SESSION_STARTED` / `SESSION_RESUMED` | Per Claude Code SessionStart hook input `source` field |
 | `session-end.ts` | `SESSION_ENDED` | Claude Code SessionEnd hook |
 | `validate-state.ts` | `SESSION_COMPACTED` | Claude Code PreCompact hook |
-| CLI tools | All other events (stage/phase/workflow lifecycle, gates, decisions, bolts, sensors, learnings, recovery, …) | Lifecycle and gate rows come from the orchestration engine's internal state emitters after a conductor report; other rows come from their owning tools (`aidlc-log.ts`, `aidlc-bolt.ts`, `aidlc-learnings.ts`, `aidlc-utility.ts`). Never hand-appended from prose (see `SKILL.md`: "Never emit audit events from prose"). |
+| CLI tools | All other events (stage/phase/workflow lifecycle, gates, decisions, bolts, sensors, learnings, recovery, …) | Lifecycle and gate rows come from the orchestration engine's internal state emitters after a conductor report; other rows come from their owning tools (`aidlc-log.ts`, `aidlc-bolt.ts`, `aidlc-learnings.ts`, `aidlc-utility.ts`, `aidlc-attest.ts`). Never hand-appended from prose (see `SKILL.md`: "Never emit audit events from prose"). |
 
 ---
 
@@ -776,7 +779,9 @@ path for a framework command.
 | `doctor` | Health check: verify hooks, prerequisites, file structure, plus local-only team claim stamp/activity/orphan-ref reconciliation (never fetches or releases). | `HEALTH_CHECKED` |
 | `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
 | `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-create`. | none |
-| `intent [name]` | List intents (`--json`) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
+| `intent [name]` | List intents (`--json`; `--all` includes archived) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
+| `intent archive <name> [--reason <text>]` | Retire an in-flight intent: registry row `archived`, state `Status: Archived`, record dir and audit shards preserved, default listing hides it. Normally routed from `/aidlc intent archive <name>`. | `WORKFLOW_ARCHIVED` |
+| `intent unarchive <name>` | Bring an archived intent back to `in-flight` / `Running`. Normally routed from `/aidlc intent unarchive <name>`. | `WORKFLOW_UNARCHIVED` |
 | `space [name]` | List spaces (`--json`) or switch the active-space cursor and harness include. Normally routed from `/aidlc space [name]`. | — |
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
 | `codekb-path [--repo <name>] [--json]` | Read-only query behind `aidlc engine workspace codekb`; prints the deterministic per-repo codekb directory. | — |
@@ -935,6 +940,17 @@ There is deliberately **no `remove` subcommand**: deletion is "delete the user-o
 
 > Extracted document text is **untrusted data, not instructions**. `show` ships that rule inline with the content so the two can never be separated.
 
+### `aidlc-attest.ts` — Commit provenance
+
+Resolves git commits/diffs back to the reviewed units of work that own each changed path — attribution is a pure function of committed content (`REVIEW_COMPLETED` receipts plus committed `reviewed-source-<hash12>.tsv` evidence, both read out of a **git tree**, not the checkout), so any clone resolves a manual commit identically, with no hooks, trailers, or pushed refs. Resolution answers an integrity question (do the landed bytes match what a receipt approved?), not an authenticity one; `trust{}` in every report states the basis, and `--record-ref`/`--require-trust` are how a verifier raises it. See the [commit provenance chapter](20-commit-provenance.md) for the threat model and full semantics.
+
+| Subcommand | Purpose | Emits |
+|------------|---------|-------|
+| `resolve [<commit>\|--commit <rev>] [--diff <base>..<head>] [--record-ref <ref>] [--require-trust <level>] [--fail-on <statuses>]` | Read-only: classify each changed path as `verified` \| `drifted` \| `unattested` \| `unverifiable` \| `indeterminate` \| `excluded` against the owning unit's newest READY receipt. `--record-ref` reads the record from a ref the change cannot write; `--require-trust informational\|reproducible\|independent\|signed` gates on the report's own basis (`signed` covers every authority-bearing input — each relied-upon receipt's audit shard as well as the evidence file it selects). Exit 3 when `--fail-on` matches or the trust bar is missed | — |
+| `anchor [--commit <rev>] [--reconcile] [--max-commits <n>]` | Record that a commit landed reviewed claims (deduplicated per intent; `--reconcile` sweeps first-parent history, default bound 100). Enrichment only — `resolve` never reads anchors, so anchoring is explicit; the session-start sweep is opt-in via `AIDLC_SESSION_ANCHOR=1` | `SOURCE_COMMITTED` |
+
+Both verbs accept `--repo <name>`, `--space <name>`, `--intent <dir>`, and `--project-dir <path>`, and reject each other's verb-specific flags (`resolve --reconcile`, `anchor --record-ref`) as usage errors instead of ignoring them.
+
 ---
 
 ## Token Usage and Cost Tracking
@@ -993,7 +1009,7 @@ The transcript reader is **Claude-Code-format-specific**, and only the Claude ha
 
 ## Prerequisites
 
-1. **bun (source-generated projection only)** -- Required for all 17 hook sources and every TypeScript CLI tool in a locally generated `dist/<harness>/` tree (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Native release installs and versioned release runtimes route the same hooks and tools through the installed `aidlc` binary. For source projections, install bun via `curl -fsSL https://bun.sh/install | bash`; on Windows use `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. It must be on PATH for non-interactive shells.
+1. **bun (source-generated projection only)** -- Required for all 17 hook sources and every TypeScript CLI tool in a locally generated `dist/<harness>/` tree (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-attest.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Native release installs and versioned release runtimes route the same hooks and tools through the installed `aidlc` binary. For source projections, install bun via `curl -fsSL https://bun.sh/install | bash`; on Windows use `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. It must be on PATH for non-interactive shells.
 2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
 No other prerequisites: copy installs run every hook and tool through bun, while native installs use the compiled dispatcher. Neither channel requires `jq`, `sed`, `awk`, Git Bash, or WSL for hook execution.

@@ -129,6 +129,15 @@ import {
   gridCostSummary,
   listIntents,
   listSpaces,
+  ARCHIVED_INTENT_STATUS,
+  clearActiveIntentCursor,
+  isArchivedIntent,
+  readIntentRegistry,
+  recordDirMatches,
+  updateIntentStatus,
+  type IntentInfo,
+  type IntentLifecycleVerb,
+  type IntentRegistryEntry,
   loadAgents,
   loadScopeMapping,
   loadStageGraph,
@@ -450,8 +459,10 @@ Utilities:
   compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
   compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
   --new-scope "<task>"  Build a custom plan even when a ready-made one matches
-  intent list       List intents in the active space (read-only; --json for structured output)
+  intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
+  intent archive <name> [--reason <text>]  Retire an in-flight intent; its record stays on disk and leaves the default list
+  intent unarchive <name>  Bring an archived intent back to in-flight
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
@@ -1103,11 +1114,16 @@ function activeWorkflowDependencyViolations(
   }
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
-      if (intent.status === "complete" || !intent.dirName) continue;
+      if (
+        intent.status === "complete" ||
+        isArchivedIntent(intent) ||
+        !intent.dirName
+      ) continue;
       const sp = stateFilePath(projectDir, intent.dirName, space.name);
       if (!existsSync(sp)) continue;
       const content = readFileSync(sp, "utf-8");
-      if ((getField(content, "Status") ?? "") === "Completed") continue;
+      const status = getField(content, "Status") ?? "";
+      if (status === "Completed" || status === "Archived") continue;
       const where = `workflow "${intent.dirName}" (space ${space.name})`;
       const scope = getField(content, "Scope");
       if (scope) {
@@ -6518,11 +6534,15 @@ function handleUpgrade(): void {
 // Print an intent listing (the query layer's human OR --json mode). Both modes
 // read the SAME listSpaces/listIntents source so they never diverge. --json
 // shape: {active, spaces:[...], intents:[{uuid,slug,status,repos}]} — consumed
-// by the creation gate, resume-rebind, and statusline; human text is the bare
-// `/aidlc intent` rendering. Pure read.
+// by the creation gate, resume-rebind, and statusline; it always carries EVERY
+// registry row, archived ones included (a structured consumer filters on
+// `status`). Human text is the bare `/aidlc intent` rendering: it hides
+// archived rows unless `showAll`, and says how many it hid so a retired record
+// is never mistaken for a lost one. Pure read.
 function printIntentListing(
   projectDir: string,
   asJson: boolean,
+  showAll = false,
 ): void {
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
@@ -6551,12 +6571,24 @@ function printIntentListing(
     );
     return;
   }
+  const visible = showAll ? intents : intents.filter((i) => !isArchivedIntent(i));
+  const hidden = intents.length - visible.length;
+  if (visible.length === 0) {
+    process.stdout.write(
+      `No in-flight intents in space "${space}" (${hidden} archived; /aidlc intent list --all shows them). Start one by describing what to build: /aidlc "build the auth service"\n`
+    );
+    return;
+  }
   let out = `Intents in space "${space}":\n`;
-  for (const i of intents) {
+  const visibleActive = visible.some((intent) => intent.active);
+  for (const i of visible) {
     const marker = i.active ? "*" : " ";
     out += `${marker} ${i.dirName ?? i.slug}  [${i.status}]\n`;
   }
-  if (!active) {
+  if (hidden > 0) {
+    out += `\n(${hidden} archived intent${hidden === 1 ? "" : "s"} hidden - /aidlc intent list --all shows them)\n`;
+  }
+  if (!visibleActive) {
     out += `\n(no active intent - switch with /aidlc intent <name>)\n`;
   }
   process.stdout.write(out);
@@ -6587,24 +6619,58 @@ function printSpaceListing(
   process.stdout.write(out);
 }
 
+// Resolve `<name>` to exactly one record in the space: an exact record-dir
+// match first, then a unique slug match. Dies on a miss or an ambiguous slug.
+// The miss wording deliberately steers to the read-only listing ONLY - a
+// conductor recovering from a failed switch once read "describe what to build
+// to start a new one" as an instruction and created an unwanted intent.
+function resolveIntentByName(
+  intents: IntentInfo[],
+  target: string,
+  space: string,
+): IntentInfo & { dirName: string } {
+  const exact = intents.find((i) => i.dirName === target);
+  if (exact?.dirName) return { ...exact, dirName: exact.dirName };
+  const bySlug = intents.filter((i) => i.slug === target && i.dirName !== null);
+  if (bySlug.length > 1) {
+    die(
+      `Ambiguous intent "${target}" in space "${space}" (${bySlug.length} match). Use the full record-dir name: ${bySlug.map((i) => i.dirName).join(", ")}.`
+    );
+  }
+  const match = bySlug[0];
+  if (!match?.dirName) {
+    die(
+      `Unknown intent "${target}" in space "${space}". This command only acts on existing intents - run /aidlc intent list --all to see them. Do not start a new workflow to recover from this error.`
+    );
+  }
+  return { ...match, dirName: match.dirName };
+}
+
 // `/aidlc intent` (list) · `/aidlc intent <name>` (switch the active-intent
-// cursor). Switching an intent is a PURE cursor write (an intent has no native
-// include — only a space does). The <name> matches a record dir name exactly,
-// or a slug (when unambiguous within the space). --json on the bare list emits
-// the structured query shape.
+// cursor) · `/aidlc intent archive|unarchive <name>` (lifecycle). Switching an
+// intent is a PURE cursor write (an intent has no native include — only a
+// space does). The <name> matches a record dir name exactly, or a slug (when
+// unambiguous within the space). --json on the bare list emits the structured
+// query shape; --all includes archived records in the human listing.
 function handleIntent(
   projectDir: string,
   positional: string[],
   flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string> = new Set(),
 ): void {
   const asJson = flags.json === "true";
+  const showAll = flags.all === "true";
   const verbOrTarget = positional[1];
   if (verbOrTarget === "list") {
-    printIntentListing(projectDir, asJson);
+    printIntentListing(projectDir, asJson, showAll);
     return;
   }
   if (verbOrTarget === "create") {
     handleIntentCreate(projectDir, flags);
+    return;
+  }
+  if (verbOrTarget === "archive" || verbOrTarget === "unarchive") {
+    handleIntentLifecycle(projectDir, verbOrTarget, positional[2], flags, missingValueFlags);
     return;
   }
   const target = verbOrTarget === "switch" ? positional[2] : verbOrTarget;
@@ -6612,7 +6678,7 @@ function handleIntent(
     die("Usage: aidlc-utility intent switch <name>");
   }
   if (!target) {
-    printIntentListing(projectDir, asJson);
+    printIntentListing(projectDir, asJson, showAll);
     return;
   }
   // `intent help`/`-h` is a help request, not a switch to a record named
@@ -6628,26 +6694,7 @@ function handleIntent(
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
-  // Exact record-dir match first; then a unique slug match.
-  let match = intents.find((i) => i.dirName === target);
-  if (!match) {
-    const bySlug = intents.filter((i) => i.slug === target && i.dirName !== null);
-    if (bySlug.length === 1) match = bySlug[0];
-    else if (bySlug.length > 1) {
-      die(
-        `Ambiguous intent "${target}" in space "${space}" (${bySlug.length} match). Use the full record-dir name: ${bySlug.map((i) => i.dirName).join(", ")}.`
-      );
-    }
-  }
-  if (!match || match.dirName === null) {
-    // Deliberately NOT "describe what to build to start a new one": a conductor
-    // recovering from a failed switch read that as an instruction and created an
-    // unwanted intent. Point at the read-only listing only; starting new work
-    // stays a separate, human-confirmed move.
-    die(
-      `Unknown intent "${target}" in space "${space}". This command only switches between existing intents - run /aidlc intent to list them. Do not start a new workflow to recover from this error.`
-    );
-  }
+  const match = resolveIntentByName(intents, target, space);
   setActiveIntentCursor(projectDir, match.dirName, space);
   // Re-stamp the LIVE conversation's session→intent record to the switched-to
   // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
@@ -6671,6 +6718,166 @@ function handleIntent(
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   }
   process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
+}
+
+// A human's free-text `--reason` becomes one audit field value: one physical
+// line (the audit block is line-oriented), trimmed, and capped so a pasted
+// essay cannot bloat the shard. Absent or blank means no field at all.
+function auditReason(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const oneLine = raw.replace(/\s+/g, " ").trim();
+  if (oneLine.length === 0) return null;
+  return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
+}
+
+// The refusals that keep `intent archive` from hiding live work. A completed
+// intent is already terminal (nothing to retire). A record with Bolt worktrees
+// or claimed team Units still has work in flight in other checkouts that the
+// archive would orphan. Claim inspection fails closed: inability to prove the
+// registry is claim-free is not permission to retire shared work.
+function refuseUnlessArchivable(
+  projectDir: string,
+  space: string,
+  dirName: string,
+  row: IntentRegistryEntry,
+  state: string,
+): void {
+  if (isArchivedIntent(row) || getField(state, "Status") === "Archived") {
+    die(`Intent "${dirName}" is already archived.`);
+  }
+  if (row.status === "complete" || getField(state, "Status") === "Completed") {
+    die(
+      `Intent "${dirName}" is complete. A completed workflow is already terminal and is not archived.`,
+    );
+  }
+  const boltRefs = parseRefsList(getField(state, "Bolt Refs") ?? "");
+  if (boltRefs.length > 0) {
+    die(
+      `Intent "${dirName}" still has Bolt worktree(s) in flight (${boltRefs.join(", ")}). Merge or discard them before archiving.`,
+    );
+  }
+  if (!isTeamUnitOwnership(state)) return;
+  const dependencyPath = unitDependencyPath(projectDir, dirName, space);
+  if (!existsSync(dependencyPath)) return;
+  let claimed: string[];
+  try {
+    const dependencyBody = readFileSync(dependencyPath, "utf-8");
+    claimed = localUnitClaimOverviewForIntent(projectDir, {
+      space,
+      intentUuid: row.uuid,
+      stateContent: state,
+      dependencyBody,
+    }).claimed.map((claim) => claim.unit);
+  } catch (cause) {
+    die(
+      `Intent "${dirName}" cannot be archived because team Unit claims could not be verified: ${errorMessage(cause)}`,
+    );
+  }
+  if (claimed.length > 0) {
+    die(
+      `Intent "${dirName}" still has claimed team Unit(s) (${claimed.join(", ")}). Release or land them before archiving.`,
+    );
+  }
+}
+
+// `/aidlc intent archive <name> [--reason <text>]` · `/aidlc intent unarchive
+// <name>`. Archiving retires an in-flight intent without deleting anything:
+// the record dir, its artifacts, and its audit shards stay on disk; the
+// registry row flips to `archived`; the state file's Status flips to `Archived`
+// so the engine refuses to route its stages; and the default listing hides it.
+// Unarchiving reverses exactly those two field writes. Both run under the
+// WORKSPACE lock (invariant 2: every intents.json mutation takes the sentinel
+// bucket), then the target intent lock, so registry and state changes cannot
+// race either another registry writer or a workflow-local mutation. Both emit
+// their audit row FIRST (audit-first atomicity) into the target intent's own
+// shard, so the row lands even when that intent is not active.
+function handleIntentLifecycle(
+  projectDir: string,
+  verb: IntentLifecycleVerb,
+  target: string | undefined,
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  if (!target) die(`Usage: aidlc-utility intent ${verb} <name>`);
+  // Only `archive` records a reason. Refusing it on `unarchive` keeps a user
+  // from believing a reason was audited when nothing captures it.
+  const reasonGiven = flags.reason !== undefined || missingValueFlags.has("reason");
+  if (verb === "unarchive" && reasonGiven) {
+    die("intent unarchive refused: --reason is only accepted by intent archive.");
+  }
+  // A bare or blank `--reason` would otherwise land in the audit shard as the
+  // flag's boolean placeholder ("Reason: true") - a usage error, not a reason.
+  if (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === "")) {
+    die("intent archive refused: --reason requires a nonblank value.");
+  }
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const intents = listIntents(projectDir, space, selection.intent);
+  const match = resolveIntentByName(intents, target, space);
+  const dirName = match.dirName;
+  if (match.uuid === "") {
+    die(
+      `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (/aidlc --doctor names the mismatch).`,
+    );
+  }
+  const stage = withAuditLock(projectDir, () => {
+    return withAuditLock(projectDir, () => {
+      const row = readIntentRegistry(projectDir, space).find((entry) =>
+        recordDirMatches(entry, dirName),
+      );
+      if (!row) {
+        die(`Intent "${dirName}" has no intents.json row any more; nothing was changed.`);
+      }
+      const state = readStateFile(projectDir, dirName, space);
+      const currentStage = (getField(state, "Current Stage") ?? "").trim() || "none";
+      const timestamp = isoTimestamp();
+      if (verb === "archive") {
+        refuseUnlessArchivable(projectDir, space, dirName, row, state);
+        const fields: Record<string, string> = { Stage: currentStage };
+        const reason = auditReason(flags.reason);
+        if (reason) fields.Reason = reason;
+        appendAuditEntryUnlocked("WORKFLOW_ARCHIVED", fields, projectDir, dirName, space);
+        let content = setField(state, "Status", "Archived");
+        content = setField(content, "Last Updated", timestamp);
+        writeStateFile(projectDir, content, dirName, space);
+        updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
+        return currentStage;
+      }
+      const stateArchived = getField(state, "Status") === "Archived";
+      if (!isArchivedIntent(row) && !stateArchived) {
+        die(`Intent "${dirName}" is not archived (status: ${row.status}); nothing to unarchive.`);
+      }
+      appendAuditEntryUnlocked("WORKFLOW_UNARCHIVED", { Stage: currentStage }, projectDir, dirName, space);
+      let content = setField(state, "Status", "Running");
+      content = setField(content, "Last Updated", timestamp);
+      writeStateFile(projectDir, content, dirName, space);
+      updateIntentStatus(projectDir, dirName, "in-flight", space);
+      return currentStage;
+    }, dirName, space);
+  });
+  if (verb === "unarchive") {
+    process.stdout.write(
+      `Unarchived intent → ${dirName} (space: ${space}); it is in-flight again at "${stage}". Switch to it with /aidlc intent ${dirName}.\n`,
+    );
+    return;
+  }
+  // The archived record must stop resolving as "where I am": drop the per-user
+  // cursor when it named this record, and unbind the live conversation from it
+  // so a resume does not offer to rebind onto retired work. Best-effort, like
+  // every other per-user cursor write.
+  clearActiveIntentCursor(projectDir, space, dirName);
+  const sid = selection.sessionId ?? readCurrentSessionId(projectDir);
+  const liveSelection = sid
+    ? resolveWorkflowSelection(projectDir, { sessionId: sid })
+    : null;
+  if (sid && liveSelection?.space === space && liveSelection.intent === dirName) {
+    writeSessionBinding(projectDir, sid, space, null);
+    clearSessionRebindOffer(projectDir, sid);
+    clearSessionIntentUuid(projectDir, sid);
+  }
+  process.stdout.write(
+    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; /aidlc intent list --all shows it and /aidlc intent unarchive ${dirName} brings it back.\n`,
+  );
 }
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
@@ -8866,7 +9073,7 @@ export async function main(argv: string[]): Promise<void> {
       handleIntentCreate(projectDir, flags);
       break;
     case "intent":
-      handleIntent(projectDir, positional, flags);
+      handleIntent(projectDir, positional, flags, missingValueFlags);
       break;
     case "space":
       handleSpace(projectDir, positional, flags);

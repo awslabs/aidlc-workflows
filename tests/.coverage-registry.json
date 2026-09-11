@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 946,
+    "total": 965,
     "enumeratedByClass": {
-      "function": 643,
-      "audit": 95,
+      "function": 656,
+      "audit": 98,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 139,
+      "subcommand": 142,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 383,
-      "audit": 53,
+      "function": 390,
+      "audit": 56,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 126,
+      "subcommand": 129,
       "render-surface": 7
     }
   },
@@ -646,6 +646,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "SOURCE_COMMITTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "STAGE_AWAITING_APPROVAL",
       "minMechanism": "none",
       "coveredBy": [],
@@ -973,6 +985,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "WORKFLOW_ARCHIVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKFLOW_COMPLETED",
       "minMechanism": "none",
       "coveredBy": [
@@ -1007,6 +1031,18 @@
         {
           "file": "tests/e2e/t54-workflow-audit-completeness.test.ts",
           "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKFLOW_UNARCHIVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1298,6 +1334,18 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ARCHIVED_INTENT_STATUS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1855,6 +1903,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearActiveIntentCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2999,6 +3059,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:HARNESS_SHELL_MANIFEST_REL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:harnessDataPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3358,6 +3425,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isArchivedIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isAutonomousConstructionDecision",
       "minMechanism": "none",
       "coveredBy": [
@@ -3416,6 +3495,20 @@
     {
       "unitClass": "function",
       "unitId": "function:isGitRepoDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isHarnessDirName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isHarnessShellManifest",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4240,6 +4333,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:normalizeManifestSourcePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:numericStageOrder",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4260,6 +4365,13 @@
     {
       "unitClass": "function",
       "unitId": "function:parseArgs",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseAuditShardEvents",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4478,6 +4590,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseUnitSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5807,6 +5931,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceEvidencePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedSourceEvidenceRelPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewedSourceRef",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6396,6 +6539,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourcePathIsExcluded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t311-committed-reviewed-source-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7140,6 +7295,13 @@
     {
       "unitClass": "function",
       "unitId": "function:unitSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitStageRecordRelPath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -8896,6 +9058,42 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest anchor",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest help",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-attest resolve",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-attest-resolve-anchor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

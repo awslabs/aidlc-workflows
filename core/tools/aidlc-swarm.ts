@@ -102,6 +102,7 @@ import {
   relativeRecordDir,
   reviewArtifactFingerprint,
   reviewArtifactBytesSnapshot,
+  reviewedSourceEvidencePath,
   reviewedSourceRef,
   resolveAuditWorktreePath,
   resolveBoltDag,
@@ -733,12 +734,61 @@ function captureReviewedRecordSnapshot(
           `re-run the reviewer`,
       };
     }
+    // The committed reviewed-listing evidence must travel with the manifest: the
+    // manifest alone lands a claim whose content nothing can verify, so the unit
+    // would resolve `unverifiable` on main (aidlc-attest.ts) even though it was
+    // reviewed. Its sha256 IS the receipt's Unit Source Fingerprint.
+    const hex = /^sha256:([0-9a-f]{64})$/.exec(receipt.unitSourceFingerprint)?.[1];
+    if (hex === undefined) {
+      return { error: `unit "${unit}" carries a malformed Unit Source Fingerprint` };
+    }
+    const evidenceLogicalPath =
+      `construction/${unit}/${stage.slug}/reviewed-source-${hex.slice(0, 12)}.tsv`;
+    const evidencePath = reviewedSourceEvidencePath(
+      wtRecord,
+      unit,
+      stage.slug,
+      hex.slice(0, 12),
+    );
+    let evidenceBytes: Buffer;
+    try {
+      evidenceBytes = readRegularFileNoFollowOrThrow(
+        assertNoSymlinkInChainOrThrow(
+          realpathSync(wt),
+          relative(wt, evidencePath),
+        ),
+        `reviewed source evidence for unit ${unit}`,
+      );
+    } catch {
+      try {
+        lstatSync(evidencePath);
+        return {
+          error:
+            `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+            `re-run the reviewer`,
+        };
+      } catch {
+        // Reviews completed before committed evidence was introduced still
+        // retain these exact, receipt-bound bytes in .aidlc-source-review.
+        // Promote them into the transferred snapshot so an in-flight swarm can
+        // finish after upgrading without weakening the new provenance record.
+        evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
+      }
+    }
+    if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
+      return {
+        error:
+          `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+          `re-run the reviewer`,
+      };
+    }
     entries.push(
       {
         logicalPath:
           `construction/${unit}/${stage.slug}/source-manifest.json`,
         bytes: manifestBytes,
       },
+      { logicalPath: evidenceLogicalPath, bytes: evidenceBytes },
     );
   }
 

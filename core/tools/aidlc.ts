@@ -116,6 +116,7 @@ type Alias = {
 };
 
 export const TOOLS = {
+  attest: "aidlc-attest.ts",
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
@@ -644,6 +645,35 @@ export const ROUTES: readonly Route[] = [
     targets: { fork: "audit-fork", merge: "audit-merge" },
   },
   {
+    // Commit provenance. `resolve` is read-only attribution and `anchor` appends
+    // a SOURCE_COMMITTED audit event, so the route mutates the project at most.
+    // It is a public noun (`aidlc attest resolve`, no engine prefix) because it
+    // is invoked by people and pipelines outside a workflow turn, but hidden
+    // from the capped top-level help like the other non-`top` public nouns.
+    // Never pinned: `attest` is not a PINNED_TOP_LEVEL_ROUTE, and the launcher
+    // drift guard compares the two.
+    id: "attest",
+    group: "attest",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["resolve", "anchor"],
+    tool: TOOLS.attest,
+    namespace: "public",
+    visibility: "hidden",
+    projectRequirement: "required",
+    pinPolicy: "active",
+    networkPolicy: "forbidden",
+    mutationScope: "project",
+    outputModes: ["human", "json"],
+    human: [
+      { command: "attest <verb>", summary: "resolve commits/diffs to reviewed units; anchor commits" },
+    ],
+    all: [
+      "resolve [commit|--commit <rev>] [--diff <base>..<head>] [--record-ref <ref>] [--require-trust <level>] [--fail-on <statuses>]",
+      "anchor [--commit <rev>] [--reconcile]",
+    ],
+  },
+  {
     id: "graph",
     group: "graph",
     kind: "noun-passthrough",
@@ -760,11 +790,23 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
-    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
+    human: [
+      {
+        command: "intent [list|switch|create|archive|unarchive]",
+        summary: "list, switch, create, archive, or unarchive intent context",
+      },
+    ],
+    all: [
+      "list [--json] [--all]",
+      "switch <name>",
+      "<name>",
+      "create [args]",
+      "archive <name> [--reason <text>]",
+      "unarchive <name>",
+    ],
   },
   {
     id: "space",
@@ -1969,6 +2011,8 @@ type DelegateModule = {
 
 async function loadDelegate(tool: string): Promise<DelegateModule | null> {
   switch (tool) {
+    case TOOLS.attest:
+      return import("./aidlc-attest.ts");
     case TOOLS.audit:
       return import("./aidlc-audit.ts");
     case TOOLS.bolt:
