@@ -7124,12 +7124,13 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice. The words themselves must be
-// present; a paraphrase ("please change it") is not a choice. Plan Approval
-// keeps its exact-label rule because those labels are the anti-forgery binding.
+// trailing punctuation are all the same choice, as is the "(Recommended)" label
+// decorator the question-rendering guide asks the conductor to add. The words
+// themselves must be present; a paraphrase ("please change it") is not a
+// choice. Plan Approval keeps its exact-label rule because those labels are the
+// anti-forgery binding.
 export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  const normalized = (text ?? "")
-    .trim()
+  const normalized = stripRecommendedDecorator(text ?? "")
     .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
     .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/[.!]+$/, "")
