@@ -408,6 +408,30 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 8. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn. Failing open never means falling through to a write: the probe path has no write to fall through to, and a barrier violation is one of the non-zero exits this step absorbs.
 
+Cursor applies one harness-local authority check before this shared hook:
+`is_background_agent: true` on `sessionStart` or `beforeSubmitPrompt` records
+background identity in a protected, conversation-scoped marker under
+`aidlc/.aidlc-cursor-subagents/`. `beforeSubmitPrompt` covers hosts without
+`sessionStart`; identity persists until `sessionEnd`, without an inactivity
+timeout. Tool and stop payloads omit the flag and consult the marker instead.
+Background stops are silent and never invoke the core loop.
+Missing, unreadable, or malformed identity also prevents forwarding and
+workflow commands. A prompt whose identity cannot be saved is explicitly
+rejected so the user can restore runtime-directory access and resubmit.
+The same operation identity is denied workflow lifecycle and routing commands
+at PreToolUse through the recursive classifier's strict background mode,
+including nested shells, command substitution, and variable-derived script
+names or verbs. Uninspectable execution hosts, helper scripts, and Bun
+preloads are refused as well. Background tools cannot modify protected
+identity or dispatch untracked child Tasks. Background reviews
+therefore cannot issue a fresh `next`, consume a continuation, or reset the
+foreground conversation's single-use steering cursor; read-only utilities
+remain available through verified installed entrypoints. Unlisted commands
+and directory-changing execution wrappers require the foreground conversation.
+The ordinary delegated-agent mode keeps benign Bun eval/print
+validation available and continues to block only identified lifecycle/routing
+commands.
+
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
 `next`, `continue`, `report`, or `park` result. On Stop, the shared hook may use

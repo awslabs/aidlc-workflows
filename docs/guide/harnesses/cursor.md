@@ -117,7 +117,22 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   a follow-up nudge instead (the same posture as opencode). Its host
   `loop_limit` is 10 rather than Cursor's default 5, which covers the core's
   autonomous no-progress cap of 8. The forwarding loop in the conductor skill
-  is the real discipline.
+  is the real discipline. Cursor background agents are excluded from this
+  follow-up path: their stops remain silent, so an ancillary background review
+  cannot reset or consume the foreground conversation's steering continuation.
+  The adapter records background identity from `sessionStart` or, when that
+  event is unavailable, `beforeSubmitPrompt`. Later tool and stop events use
+  this protected conversation-scoped record because their payloads omit the
+  background flag. The record remains active until `sessionEnd`.
+  Missing or unreadable identity also withholds workflow control; resubmit a
+  foreground prompt after restoring access to the session record.
+  Their PreToolUse boundary also denies workflow lifecycle and routing commands,
+  including computed script names and verbs, and refuses execution it cannot
+  inspect: interpreter evaluation, helper scripts, and runtime preloads.
+  Read-only utilities in the installed harness remain available; commands
+  outside the supported read policy must run in the foreground conversation.
+  Background agents cannot change their
+  identity record or dispatch child Tasks.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).
