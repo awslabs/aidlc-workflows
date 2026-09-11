@@ -278,12 +278,13 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");
-    expect(WORKFLOW).toContain("vars.AWS_AI_PR_REVIEW_ROLE_ARN != ''");
+    expect(WORKFLOW).not.toContain("vars.AWS_AI_PR_REVIEW_ROLE_ARN");
+    expect(WORKFLOW).toContain("secrets.AWS_AI_PR_REVIEW_ROLE_ARN");
     expect(WORKFLOW).not.toContain("AWS_AI_PR_REVIEW_FORK_ROLE_ARN");
     expect(WORKFLOW).not.toContain("ai-pr-review-fork");
     expect(WORKFLOW).not.toContain("is_fork");
     expect(WORKFLOW).toContain("    environment: ai-pr-review");
-    expect(WORKFLOW).toContain(`role-to-assume: \${{ vars.AWS_AI_PR_REVIEW_ROLE_ARN }}`);
+    expect(WORKFLOW).toContain(`role-to-assume: \${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}`);
     expect(WORKFLOW).toContain('model = "openai.gpt-5.6-sol"');
     expect(WORKFLOW).toContain('exclude = ["AWS_*", "ACTIONS_*", "GITHUB_*", "GH_*"]');
     expect(WORKFLOW).toContain("step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920");

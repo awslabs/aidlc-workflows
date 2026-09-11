@@ -32,12 +32,10 @@ jobs:
   context:
     name: Build immutable review context
     if: >-
-      (github.event_name == 'workflow_dispatch'
-          && vars.AWS_AI_PR_REVIEW_ROLE_ARN != '')
+      github.event_name == 'workflow_dispatch'
       || (github.event_name == 'pull_request'
           && !github.event.pull_request.draft
-          && github.event.pull_request.head.repo.full_name == github.repository
-          && vars.AWS_AI_PR_REVIEW_ROLE_ARN != '')
+          && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -252,7 +250,7 @@ jobs:
       - name: Assume dedicated Bedrock review role through OIDC
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
-          role-to-assume: ${{ vars.AWS_AI_PR_REVIEW_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}
           role-session-name: aidlc-pr-${{ needs.context.outputs.pr }}-${{ matrix.lens }}
           aws-region: ${{ env.AWS_REGION }}
 
@@ -355,7 +353,7 @@ jobs:
       - name: Assume dedicated Bedrock review role through OIDC
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
-          role-to-assume: ${{ vars.AWS_AI_PR_REVIEW_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}
           role-session-name: aidlc-pr-${{ needs.context.outputs.pr }}-synthesis
           aws-region: ${{ env.AWS_REGION }}
 
