@@ -3,7 +3,7 @@ set -eu
 
 RELEASE_REPOSITORY=${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}
 BASE_URL=${AIDLC_RELEASE_BASE_URL:-https://github.com/$RELEASE_REPOSITORY/releases}
-RELEASE_WORKFLOW=${AIDLC_RELEASE_WORKFLOW:-$RELEASE_REPOSITORY/.github/workflows/release.yml}
+RELEASE_WORKFLOW=${AIDLC_RELEASE_WORKFLOW:-}
 GH_BIN=${AIDLC_GH_BIN:-}
 PROVENANCE_VERIFIER_AVAILABLE=0
 VERSION=
@@ -352,6 +352,16 @@ for metadata in version.json checksums.txt aidlc-release.intoto.jsonl; do
     fail 4 failed "$metadata exceeds the 1 MiB metadata limit"
 done
 
+candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9A-Za-z.-]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
+printf '%s\n' "$candidate_version" |
+  grep -Eq "$VERSION_PATTERN" ||
+  fail 4 failed "version.json has no valid version."
+if [ -z "$RELEASE_WORKFLOW" ]; then
+  case "$candidate_version" in
+    *-preview.*) RELEASE_WORKFLOW="$RELEASE_REPOSITORY/.github/workflows/preview-release.yml" ;;
+    *) RELEASE_WORKFLOW="$RELEASE_REPOSITORY/.github/workflows/release.yml" ;;
+  esac
+fi
 requested_version=$VERSION
 if [ -z "$GH_BIN" ]; then
   GH_BIN=$(command -v gh 2>/dev/null || true)
@@ -384,10 +394,6 @@ actual_manifest=$(sha256_file "$TMP/version.json")
 [ "$actual_manifest" = "$expected_manifest" ] || {
   fail 4 failed "Checksum mismatch for version.json."
 }
-candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9A-Za-z.-]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
-printf '%s\n' "$candidate_version" |
-  grep -Eq "$VERSION_PATTERN" ||
-  fail 4 failed "version.json has no valid version."
 source_ref=$(sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 source_digest=$(sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 case "$candidate_version" in

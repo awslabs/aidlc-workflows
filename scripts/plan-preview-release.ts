@@ -154,6 +154,7 @@ function newestPublishedPreviewVersion(releases: readonly unknown[]): string | n
 export async function previewSourceDigest(
   client: ApiClient,
   repository: string,
+  sourceRepository: string,
   version: string,
 ): Promise<string | null> {
   const ref = await client.json(`repos/${repository}/git/ref/tags/v${version}`);
@@ -174,7 +175,9 @@ export async function previewSourceDigest(
   const message = tag.value && typeof tag.value === "object" && "message" in tag.value
     ? tag.value.message
     : null;
-  return typeof message === "string" ? parsePreviewTagSource(message)?.digest ?? null : null;
+  if (typeof message !== "string") return null;
+  const source = parsePreviewTagSource(message);
+  return source?.repository === sourceRepository ? source.digest : null;
 }
 
 export function nextPreviewVersion(
@@ -304,7 +307,12 @@ export async function planPreviewRelease(options: {
   }
   const newest = newestPublishedPreviewVersion(releases);
   const previousSourceDigest = newest
-    ? await previewSourceDigest(options.client, options.repository, newest)
+    ? await previewSourceDigest(
+        options.client,
+        options.repository,
+        options.sourceRepository,
+        newest,
+      )
     : null;
   if (previousSourceDigest && previousSourceDigest === options.sourceDigest) {
     return { skip: true, reason: "unchanged-source", version: null, previousSourceDigest, plan: null };

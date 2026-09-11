@@ -1,9 +1,11 @@
 # Release supply chain
 
-AI-DLC releases are created in `awslabs/aidlc-workflows` by
-`.github/workflows/release.yml`. The workflow uses the repository-provided
-`GITHUB_TOKEN`. It does not require a GitHub App, a personal access token, a
-second repository, or repository secrets.
+AI-DLC releases are created in `awslabs/aidlc-workflows` by two isolated
+workflows: `.github/workflows/release.yml` for stable tags and
+`.github/workflows/preview-release.yml` for scheduled or manually dispatched
+previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
+GitHub App, a personal access token, a second repository, or repository
+secrets.
 
 ## Release trigger
 
@@ -45,7 +47,7 @@ after the build and lifecycle jobs pass. GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
-The preview channel schedules `main` daily and accepts manual dispatch, with
+The preview workflow schedules `main` daily and accepts manual dispatch, with
 publication at most once per UTC day for both triggers combined. Scheduled
 and manual runs serialize through the `release-preview` workflow concurrency
 group without cancelling the active run. Each later run re-reads the release
@@ -71,17 +73,20 @@ creates an annotated tag that records the source repository and commit, then
 publishes the draft as a prerelease with `make_latest: false`; stable
 `latest/download` discovery therefore remains unchanged.
 
-The final publication job selects the protected `release` environment for
-stable tags and the unattended `preview` environment for preview runs. The
-preview environment must keep the same `main` deployment policy but no
-required reviewers; merge approval plus callable CI are its human and
-deterministic gates. Stable runs use a separate concurrency group.
+Stable and preview publication use the protected `release` and unattended
+`preview` environments respectively. The preview environment must keep the
+same `main` deployment policy but no required reviewers; merge approval plus
+callable CI are its human and deterministic gates. Stable runs use a separate
+concurrency group. Preview publication also requires immutable releases to be
+enabled for the repository; the preview workflow fails before the expensive
+gate and build jobs when that repository setting is disabled.
 
 When a compatible GitHub CLI is available, installers verify `checksums.txt`
 against that bundle and bind verification to:
 
 - `awslabs/aidlc-workflows`;
-- `.github/workflows/release.yml`;
+- `.github/workflows/release.yml` for stable versions or
+  `.github/workflows/preview-release.yml` for preview versions;
 - the version tag for stable releases or `refs/heads/main` for previews;
 - the exact source commit from `version.json`.
 

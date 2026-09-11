@@ -54,6 +54,12 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+const PREVIEW_RELEASE_WORKFLOW = join(
+  REPO_ROOT,
+  ".github",
+  "workflows",
+  "preview-release.yml",
+);
 const V1_RELEASE_DISPATCH_WORKFLOW = join(
   REPO_ROOT,
   ".github",
@@ -1908,6 +1914,7 @@ describe("t244 Windows and completion release surfaces", () => {
 
   test("release workflow keeps actions pinned, lints installers, and regenerates before consumers", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
+    const previewWorkflow = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs: Record<string, {
@@ -1939,9 +1946,11 @@ describe("t244 Windows and completion release surfaces", () => {
     // Third-party actions are pinned to a full commit SHA. A same-repository
     // reusable workflow (`./.github/workflows/...`) is referenced by path and
     // resolves to the commit already being run, so it carries no ref to pin.
-    const actionRefs = [...workflow.matchAll(
-      /^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm,
-    )].map((match) => match[1]);
+    const actionRefs = [workflow, previewWorkflow].flatMap(
+      (workflowText) =>
+        [...workflowText.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)]
+          .map((match) => match[1]),
+    );
     expect(actionRefs.length).toBeGreaterThan(0);
     for (const ref of actionRefs) {
       if (ref.startsWith("./.github/workflows/")) continue;
@@ -2329,9 +2338,7 @@ describe("t244 Windows and completion release surfaces", () => {
     };
     expect(parsed.jobs.release.needs).toEqual(["validate", "publish"]);
     expect(parsed.jobs.release.permissions).toEqual({ contents: "write" });
-    expect(parsed.jobs.release.environment).toBe(
-      `\${{ needs.validate.outputs.channel == 'preview' && 'preview' || 'release' }}`,
-    );
+    expect(parsed.jobs.release.environment).toBe("release");
     const release = workflowJob(workflow, "release");
     expect(release).toContain(`GH_TOKEN: \${{ github.token }}`);
     expect(release).toContain('gh release create "$RELEASE_TAG" build/release/*');

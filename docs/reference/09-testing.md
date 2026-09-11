@@ -57,9 +57,9 @@ Distribution coverage is split by contract:
   the cap of at most one published preview per UTC day even after `main`
   advances or a later manual run starts, including overnight publication
   timestamps. Unchanged sources skip; drafts and orphan tags permit retry
-  planning with unoccupied ids. Workflow assertions cover scheduled/manual
-  triggers sharing `release-preview` concurrency, CI gate ordering, and build
-  stamping.
+  planning with unoccupied ids. Workflow assertions cover isolation of stable
+  tags from scheduled/manual previews, shared `release-preview` concurrency,
+  CI gate ancestry, channel-specific provenance signers, and build stamping.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
