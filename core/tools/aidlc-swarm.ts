@@ -744,21 +744,36 @@ function captureReviewedRecordSnapshot(
     }
     const evidenceLogicalPath =
       `construction/${unit}/${stage.slug}/reviewed-source-${hex.slice(0, 12)}.tsv`;
+    const evidencePath = reviewedSourceEvidencePath(
+      wtRecord,
+      unit,
+      stage.slug,
+      hex.slice(0, 12),
+    );
     let evidenceBytes: Buffer;
     try {
       evidenceBytes = readRegularFileNoFollowOrThrow(
         assertNoSymlinkInChainOrThrow(
           realpathSync(wt),
-          relative(wt, reviewedSourceEvidencePath(wtRecord, unit, stage.slug, hex.slice(0, 12))),
+          relative(wt, evidencePath),
         ),
         `reviewed source evidence for unit ${unit}`,
       );
     } catch {
-      return {
-        error:
-          `unit "${unit}" has no committed reviewed-source evidence at ` +
-          `${evidenceLogicalPath}; re-run the per-unit review so it is written`,
-      };
+      try {
+        lstatSync(evidencePath);
+        return {
+          error:
+            `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+            `re-run the reviewer`,
+        };
+      } catch {
+        // Reviews completed before committed evidence was introduced still
+        // retain these exact, receipt-bound bytes in .aidlc-source-review.
+        // Promote them into the transferred snapshot so an in-flight swarm can
+        // finish after upgrading without weakening the new provenance record.
+        evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
+      }
     }
     if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
       return {

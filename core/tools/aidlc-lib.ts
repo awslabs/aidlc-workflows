@@ -17785,6 +17785,7 @@ export function currentStageSourceBaseline(
 export interface UnitSourceSnapshot {
   listing: WorkspaceSourceListing;
   manifestSha256: string;
+  serialized: string;
 }
 
 /** Read a unit snapshot only after full-hash verification and strict parsing. */
@@ -17804,7 +17805,9 @@ export function readUnitSourceSnapshot(
   const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
   if (header === null) return null;
   const listing = parseSourceListing(serialized.slice(newline + 1));
-  return listing === null ? null : { listing, manifestSha256: header[1] };
+  return listing === null
+    ? null
+    : { listing, manifestSha256: header[1], serialized };
 }
 
 

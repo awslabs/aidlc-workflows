@@ -71,6 +71,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -854,6 +855,60 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     // Application source still lands only through the later, correlated
     // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
     expect(existsSync(join(wtproj, "win.txt"))).toBe(false);
+  }, 60000);
+
+  test("6f: finalize promotes receipt-bound local evidence from a pre-upgrade review", () => {
+    const unit = "pre-upgrade";
+    const proj = seedRefereeProject([unit]);
+    approvalProjects.push(proj);
+    prepareRefereeProject(proj, unit);
+    const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+    writeFileSync(join(wt, `${unit}.txt`), "done\n");
+    logWorktreeReview(proj, unit);
+
+    const wtUnitRecord = join(
+      seededRecordDir(wt),
+      "construction",
+      unit,
+      "code-generation",
+    );
+    const evidenceName = readdirSync(wtUnitRecord).find((name) =>
+      /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name)
+    );
+    if (evidenceName === undefined) throw new Error("reviewed-source evidence missing");
+    const hash12 = evidenceName.slice(
+      "reviewed-source-".length,
+      -".tsv".length,
+    );
+    const localEvidence = join(
+      seededRecordDir(wt),
+      ".aidlc-source-review",
+      "code-generation",
+      `unit-${unit}-${hash12}.tsv`,
+    );
+    expect(existsSync(localEvidence)).toBe(true);
+    const expectedBytes = readFileSync(localEvidence);
+
+    // Simulate a review completed by the previous runtime: its local,
+    // receipt-bound snapshot exists, but dual-write did not yet create the
+    // committed evidence file.
+    rmSync(join(wtUnitRecord, evidenceName));
+    const result = spawnSync(
+      BUN,
+      [SWARM_TOOL, "--project-dir", proj, "finalize", "--batch", "1", "--units", unit, "--claimed", unit, "--check-cmd", "true"],
+      { encoding: "utf-8", env: identityFreeGitEnv(proj) },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"converged": 1');
+    const promotedEvidence = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "code-generation",
+      evidenceName,
+    );
+    expect(readFileSync(promotedEvidence).equals(expectedBytes)).toBe(true);
   }, 60000);
 });
 
