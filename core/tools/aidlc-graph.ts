@@ -110,6 +110,7 @@ export interface Consume {
   artifact: string;
   required: boolean;
   conditional_on?: "brownfield" | "greenfield";
+  kinds?: string[];
 }
 
 // Per-rule resolution row baked into each stage's rules_in_context.
@@ -2089,6 +2090,9 @@ function buildGraphStage(
     };
     if (c.conditional_on !== undefined) {
       out.conditional_on = c.conditional_on;
+    }
+    if (c.kinds !== undefined) {
+      out.kinds = c.kinds;
     }
     return out;
   });

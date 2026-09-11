@@ -124,6 +124,7 @@ import {
   effectivePlanAction,
   errorMessage,
   evaluateGuardRefusal,
+  consumeAppliesToKind,
   filterProducesByKind,
   firstInScopeStageOfPhase,
   formatReceivedReply,
@@ -2677,6 +2678,7 @@ function resolveConsumes(
     ) {
       continue;
     }
+    if (!consumeAppliesToKind(consume, unitKind)) continue;
     const producer = producersOf(consume.artifact)[0];
     if (
       producer &&

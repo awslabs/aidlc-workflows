@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 946,
+    "total": 947,
     "enumeratedByClass": {
-      "function": 643,
+      "function": 644,
       "audit": 95,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 383,
+      "function": 384,
       "audit": 53,
       "scope": 11,
       "stage": 11,
@@ -2179,6 +2179,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeAppliesToKind",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t338-consumes-kinds.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumeCopilotConversation",
       "minMechanism": "none",
       "coveredBy": [
@@ -2530,6 +2542,10 @@
         },
         {
           "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t338-consumes-kinds.test.ts",
           "mechanism": "cli"
         },
         {
@@ -4463,6 +4479,10 @@
         },
         {
           "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t338-consumes-kinds.test.ts",
           "mechanism": "cli"
         },
         {
@@ -9781,6 +9801,10 @@
         {
           "file": "tests/unit/t336-change-control-surfaces.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t338-consumes-kinds.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9993,6 +10017,10 @@
         },
         {
           "file": "tests/integration/t92.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t338-consumes-kinds.test.ts",
           "mechanism": "cli"
         }
       ],
