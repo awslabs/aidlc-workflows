@@ -9747,6 +9747,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-kiro-ide-native-recovery.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t114-orchestrate-next.test.ts",
           "mechanism": "cli"
         },

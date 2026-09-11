@@ -325,9 +325,16 @@ describe("t231 plugin list and sync handlers", () => {
 describe("t231 config and update lifecycle routing", () => {
   test("config reaches the dedicated delegate and does not create an intent record on source failure", () => {
     const project = emptyProject();
+    const machine = tempDir("aidlc-t231-empty-machine-");
     const result = run(
       [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config", "--project-dir", project],
       project,
+      {
+        // This case needs a missing runtime, regardless of the developer's install.
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_RUNTIME_ROOT: "",
+      },
     );
 
     expect(result.status).toBe(4);

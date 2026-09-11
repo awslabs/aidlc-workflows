@@ -109,7 +109,7 @@ the same binary plus all harness runtimes.
 
 | Unix | PowerShell | Meaning |
 |------|------------|---------|
-| `--version <x.y.z>` | `-Version <x.y.z>` | Install one strict semantic version instead of latest |
+| `--version <version>` | `-Version <version>` | Install one exact release instead of latest: a stable `x.y.z` or a preview `x.y.z-preview.YYYYMMDD.N` id |
 | `--from <dir>` | `-From <dir>` | Read a flat release set locally and imply offline mode |
 | `--offline` | `-Offline` | Forbid network access; requires `--from` / `-From` |
 | `--release-base-url <url>` | `-ReleaseBaseUrl <url>` | Use a compatible release mirror |
@@ -152,12 +152,13 @@ The installer:
    `aidlc-release.intoto.jsonl`.
 2. When a compatible GitHub CLI is available, verifies the `checksums.txt`
    attestation against the repository and signer workflow.
-3. Verifies the `version.json` SHA-256, reads its strict version and source
+3. Verifies the `version.json` SHA-256, reads its version id and source
    identity, and rejects an explicit version mismatch before downloading or
    executing a release binary.
-4. Requires `sourceRef` to equal `refs/tags/v<version>` and, when provenance
-   verification is available, re-verifies the attestation against that tag and
-   the authenticated `sourceDigest`.
+4. Requires `sourceRef` to equal `refs/tags/v<version>` for stable releases or
+   `refs/heads/main` for previews and, when provenance verification is
+   available, re-verifies the attestation against that ref and the
+   authenticated `sourceDigest`.
 5. Verifies the selected binary and harness archives by SHA-256 and declared
    byte length.
 6. Lets the verified binary validate and transactionally install the release.
@@ -664,10 +665,11 @@ Successful config prints the host-specific next step:
 
 | Command | Public options and behavior |
 |---------|-----------------------------|
-| `aidlc update` | Install latest with the complete all-harness runtime, then atomically activate. Accepts `--version <x.y.z>`, `--from <release-dir>`, `--release-base-url <url>`, `--ca-bundle <path>`, `--offline`, and `--dry-run`. |
-| `aidlc update --check` | Refresh update metadata without installing. Returns 5 when behind, 0 when current, 3 when unavailable/offline, and 1 when checks are disabled. |
-| `aidlc use <x.y.z>` | Install the exact version when it is not retained, then make it machine-active without changing project files. |
-| `aidlc config --pin <x.y.z>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
+| `aidlc update` | Install the newest release of the machine's channel with the complete all-harness runtime, then atomically activate. Accepts `--version <version>`, `--channel <stable\|preview>`, `--from <release-dir>`, `--release-base-url <url>`, `--release-api-url <url>`, `--ca-bundle <path>`, `--offline`, and `--dry-run`. |
+| `aidlc update --check` | Refresh update metadata for the channel without installing. Returns 5 when behind (or when the binary belongs to the other channel), 0 when current, 3 when unavailable/offline, and 1 when checks are disabled. |
+| `aidlc use <version>` | Install the exact stable or preview version when it is not retained, then make it machine-active without changing project files. |
+| `aidlc config --channel [stable\|preview]` | Set the machine release channel, or print it when no value is given. |
+| `aidlc config --pin <version>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
 | `aidlc config --unpin` | Remove `.aidlc-version`, its machine-local resolved target, and its registry entry. |
 
 Human lifecycle output states each completed fact. Update reports the
@@ -676,16 +678,89 @@ version, any pruned unprotected releases, and the project-refresh courtesy.
 A no-op says `You're on the latest version of aidlc (<version>).`; `--dry-run`
 says `Would update aidlc from <old> to <new>.`, or
 `You're on the latest version of aidlc (<version>); nothing to update.` when
-nothing would change. `aidlc use` distinguishes
-`Now using` from `Already using`, and uninstall states exactly which machine
-state was removed or kept. JSON and quiet messages retain their stable machine
-contracts.
+nothing would change. On the preview channel the update lines say
+`preview releases` and `latest preview version`, and an update that crosses
+channels adds `Switched release channel from <a> to <b>.`. `aidlc use`
+distinguishes `Now using` from `Already using`, and uninstall states exactly
+which machine state was removed or kept. JSON and quiet messages retain their
+stable machine contracts; update JSON carries `channel` and, on a switch,
+`channelSwitch`.
 
 Update downloads and fully validates a candidate before changing the active
 pointer. Failed updates automatically restore the prior consistent
 installation. A successful update retains the prior active version and every
 registered project pin, then prunes older unprotected versions automatically.
 There is no public rollback or retained-version management command.
+
+## Release Channels
+
+`main` is the shared development branch. The **stable** channel publishes a
+selected commit as a GitHub release tagged `vX.Y.Z`. The **preview** channel
+lets users try changes from `main` before the next stable release, at most once
+per UTC day, as a GitHub prerelease that is never marked "latest". Source
+versions and changelog entries are updated during release preparation.
+
+Scheduled and manual runs share the same daily cap. A run skips if a preview
+is already published for that UTC day, even when `main` has advanced; it also
+skips when the source is unchanged since the latest published preview. An
+overnight build counts on the UTC date it is published as well as the date in
+its id.
+
+A preview id is `<x.y.z>-preview.<YYYYMMDD>.<N>`: the source tree's version,
+the UTC build date chosen during planning, and a retry counter (`1` initially).
+Drafts and tags left by failed attempts reserve ids without consuming the
+daily publication allowance. A retry can advance `N` past those occupied ids;
+it does not permit multiple public releases in one day.
+
+Stable ids stay exactly `x.y.z`, and nothing else is accepted anywhere a
+version appears (installer flags, `use`, pins, `.aidlc-version`, retained
+version directories). Ids order numerically on `x.y.z`; at an equal base the
+stable release sorts above every preview built from it, and previews order by
+build date then counter. Inside a preview artifact `aidlc version`,
+`version.json`, and doctor bundles all report the preview id; the source tree is
+never modified.
+
+```bash
+aidlc config --channel preview   # follow the preview stream
+aidlc update                     # newest published preview
+aidlc update --check             # 5 when a newer preview exists
+aidlc config --channel stable    # back to the stable stream
+aidlc update                     # newest stable, reported as a channel switch
+```
+
+The channel is machine-local: `aidlc config --channel` writes a `channel`
+marker beside the update cache and `pins.json` under the install root
+(`stable` when the marker is absent), `aidlc uninstall` preserves it with the
+other machine settings, and `--purge` removes it. `aidlc update --channel <c>`
+overrides the marker for one run; `--version` and `--from` select an exact
+release regardless of channel. Stable discovery is unchanged (the
+`latest/download` redirect). Preview discovery lists the releases of the
+repository behind the release base URL through the GitHub API, keeps the
+newest published prerelease by preview version id, and installs it through
+the exact-version path. Drafts and tags without a published release are ignored.
+For `github.com` base URLs the API endpoint is derived; for any other host set
+`--release-api-url <url>` or `AIDLC_RELEASE_API_URL`.
+An API failure, a rate limit, or a repository with no published preview is
+reported as unavailable (exit 3); the client never falls back to the stable
+release. The update cache records the channel it was refreshed for, so a cached
+preview result never answers a stable check or the reverse.
+
+Switching back is `aidlc config --channel stable` then `aidlc update`. Even if
+the newest stable id sorts below the preview you are running, update installs
+it and reports a channel switch. Preview retention is a bounded window on top
+of the protection every release has (active, rollback, in use, pinned): after
+an update the two newest complete previews stay, and every older preview
+without its own protection is pruned; stable retention is unchanged.
+
+Project pins keep overriding the machine channel: `aidlc config --pin <id>` and
+`.aidlc-version` accept preview ids, and a pinned project dispatches to that
+exact retained version whatever the machine follows.
+
+Previews are `main` as it stands, including project state-schema changes. A
+preview that raises the state schema writes project state a stable build does
+not understand, and the code refuses to open state newer than the build; that
+project cannot be walked back to stable until a stable release ships the same
+schema. Use the preview channel on projects you can recreate, or pin them.
 
 ## Project Pins and CI
 
@@ -774,6 +849,7 @@ default order:
 |---------|-------------|----------------|
 | Offline | `AIDLC_OFFLINE=1` (`0` explicitly enables network) | `aidlc system config global set offline on` |
 | Mirror | `AIDLC_RELEASE_BASE_URL` | `aidlc system config global set release-base-url <url>` |
+| Preview releases API | `AIDLC_RELEASE_API_URL` (or `aidlc update --release-api-url <url>`) | derived from the mirror for `github.com`; not a machine config key |
 | CA bundle | `AIDLC_CA_BUNDLE` | `aidlc system config global set ca-bundle <absolute-path>` |
 
 Manage the four machine keys:

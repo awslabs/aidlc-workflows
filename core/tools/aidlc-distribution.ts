@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { VERSION_ID } from "./aidlc-channel.ts";
 
 export type ProjectionStamp = {
   schemaVersion: 1;
@@ -98,7 +99,7 @@ export function validateProjectionDescriptor(
   descriptor: ProjectionDescriptor,
   options: { allowMissingRootIntegrations?: boolean } = {},
 ): void {
-  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(stamp.frameworkVersion)) {
+  if (!VERSION_ID.test(stamp.frameworkVersion)) {
     throw new Error(`${root}: projection stamp has an invalid framework version`);
   }
   if (

@@ -869,6 +869,47 @@ describe("detector corpus", () => {
     expect(d1("aidlc engine orchestrate park")).toBe(true);
   });
 
+  test("workspace navigation through next is terminal in native and source forms", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      'bun "/project with spaces/.claude/tools/aidlc.ts" engine orchestrate',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        'space switch "team B"',
+        "space --json",
+        "intent list",
+        "intent switch existing",
+        "space help",
+      ]) {
+        const command = `${entry} next ${args}`;
+        expect(d1(command), command).toBe(false);
+        expect(d1(`cd project && ${command}`), command).toBe(false);
+        expect(d1(`${command} && aidlc engine state advance`), command).toBe(true);
+        expect(d1(`aidlc engine state advance; ${command}`), command).toBe(true);
+      }
+      expect(d1(`${entry} next intent create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent \\create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent creat? --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent cr*ate --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --project-dir . create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --aidlc-attempt-id run-1 create --scope poc --arguments app`)).toBe(true);
+      for (const flag of ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"]) {
+        expect(d1(`${entry} next intent ${flag} create --scope poc --arguments app`)).toBe(true);
+      }
+      expect(d1(`${entry} next --arguments "space-create teamB"`)).toBe(true);
+      expect(d1(`${entry} next space-create "$(aidlc engine state advance)"`)).toBe(true);
+      expect(d1(`${entry} next space-create "unterminated`)).toBe(true);
+    }
+    expect(d1(
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB',
+    )).toBe(true);
+  });
+
   test("observed unified Bun report has native and legacy transition classifications", () => {
     const args = 'report --stage intent-capture --result awaiting-approval';
     for (const command of [

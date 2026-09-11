@@ -797,6 +797,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // when their segment stopped saying cli. Same predicate, same honesty ratchet:
   // a new spawning test still cannot land without a human edit here.
   const EXPECTED_NONE_TO_CLI = [
+    "unit/t-kiro-ide-native-recovery.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
@@ -940,6 +941,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t185-stage-artifact-guard.test.ts",
     "integration/t188-plugin-compose.test.ts",
     "integration/t224-plugin-selection.test.ts",
+    "integration/t300-plugin-kit.test.ts",
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t314-plugin-reinstall-doctor.test.ts",
@@ -1088,6 +1090,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t319-doctor-hooks-blocked.test.ts",
     "unit/t315-pipeline-link-receipts.test.ts",
     "unit/t329-document-input.test.ts",
+    "unit/t330-release-channel-grammar.test.ts",
+    "unit/t331-preview-channel-lifecycle.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
     "unit/t320-review-confirmation-deadlock.test.ts",
     "unit/t321-source-recovery-freeze.test.ts",

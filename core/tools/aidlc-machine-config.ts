@@ -1,5 +1,13 @@
 #!/usr/bin/env bun
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
+import {
+  isReleaseChannel,
+  RELEASE_CHANNELS,
+  type ReleaseChannel,
+  requireReleaseChannel,
+  STABLE_CHANNEL,
+} from "./aidlc-channel.ts";
 import {
   type CommandResult,
   emitResult,
@@ -53,6 +61,43 @@ export function updateCachePath(): string {
 
 export function defaultHarnessPath(): string {
   return join(installRoot(), "default-harness");
+}
+
+// The machine's release channel lives beside the update cache and pin registry
+// as one plain marker file; an absent marker means stable.
+export function channelPath(): string {
+  return join(installRoot(), "channel");
+}
+
+export function readMachineChannel(): ReleaseChannel {
+  const path = channelPath();
+  if (!existsSync(path)) return STABLE_CHANNEL;
+  const value = readFileSync(path, "utf-8").trim();
+  if (!isReleaseChannel(value)) {
+    throw new Error(
+      `${path} must contain one release channel (${RELEASE_CHANNELS.join(" or ")}); found ${
+        JSON.stringify(value)
+      }`,
+    );
+  }
+  return value;
+}
+
+export function writeMachineChannel(value: string): ReleaseChannel {
+  const channel = requireReleaseChannel(value);
+  const path = channelPath();
+  const root = machineTransactionRoot();
+  executePlan({
+    schemaVersion: 1,
+    root,
+    operations: [writeOperation(
+      relative(root, path),
+      `${channel}\n`,
+      transactionState(path),
+      0o600,
+    )],
+  });
+  return channel;
 }
 
 function validReleaseUrl(value: string): boolean {

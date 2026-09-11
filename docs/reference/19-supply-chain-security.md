@@ -45,12 +45,44 @@ after the build and lifecycle jobs pass. GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
+The preview channel schedules `main` daily and accepts manual dispatch, with
+publication at most once per UTC day for both triggers combined. Scheduled
+and manual runs serialize through the `release-preview` workflow concurrency
+group without cancelling the active run. Each later run re-reads the release
+list: the planner skips if a preview is already published for that UTC day,
+even if `main` has advanced, or if the source commit is unchanged since the
+latest published preview. The daily check counts both the date in a published
+preview's id and its GitHub `published_at` timestamp in UTC, so an overnight
+build also consumes the day on which it becomes public.
+
+The planner allocates `<x.y.z>-preview.<YYYYMMDD>.<N>` using the UTC date at
+planning and ids occupied by existing tags or release records. Drafts and
+orphan tags do not consume the daily publication allowance, so retry planning
+can advance `N` past their occupied ids. This counter permits retries, not
+multiple public daily releases. Leftover `aidlc-staging-*` drafts still require
+inspection and removal before the publisher stages another candidate.
+
+The planner renders notes from changes since the previous preview. Callable
+CI gates the authorized commit before the normal release build chain.
+`AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,
+`version.json`, and the versioned runtime archive while the source tree keeps
+its stable `x.y.z` version. The preview publisher verifies a staging draft,
+creates an annotated tag that records the source repository and commit, then
+publishes the draft as a prerelease with `make_latest: false`; stable
+`latest/download` discovery therefore remains unchanged.
+
+The final publication job selects the protected `release` environment for
+stable tags and the unattended `preview` environment for preview runs. The
+preview environment must keep the same `main` deployment policy but no
+required reviewers; merge approval plus callable CI are its human and
+deterministic gates. Stable runs use a separate concurrency group.
+
 When a compatible GitHub CLI is available, installers verify `checksums.txt`
 against that bundle and bind verification to:
 
 - `awslabs/aidlc-workflows`;
 - `.github/workflows/release.yml`;
-- the release tag;
+- the version tag for stable releases or `refs/heads/main` for previews;
 - the exact source commit from `version.json`.
 
 Missing or older GitHub CLI versions do not block installation. In that mode,
