@@ -119,6 +119,7 @@ import {
   codekbDir,
   intentsDir,
   codekbRepoName,
+  codekbScopeChangedFiles,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
   codekbStoreGeneration,
@@ -7458,7 +7459,11 @@ function handleCodekbPublish(
 // scope block and recompute the content fingerprint over its analyzed paths.
 //   NO_STORE       no store timestamp - first scan, nothing to guard
 //   CURRENT        fingerprint matches - the store's deep knowledge is exact
-//   STALE          analyzed paths changed since the store was built
+//   STALE          analyzed paths changed since the store was built. Carries a
+//                  `changed_files` list (the per-file delta between the stored
+//                  fingerprint and the current tree) so a warm rescan can
+//                  re-derive only what moved; `changed_files: null` means the
+//                  delta was not computable and the full scope should rescan.
 //   UNVERIFIED     scope parsed but no/uncomputable fingerprint (non-git)
 //   UNKNOWN_SCOPE  block absent (legacy store) or malformed
 //
@@ -7602,6 +7607,16 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     return;
   }
   const current = store.fingerprint === currentFingerprint;
+  const changedFiles = current
+    ? []
+    : codekbScopeChangedFiles(repoDir, store.fingerprint, currentFingerprint);
+  const changedFilesLines =
+    changedFiles && changedFiles.length > 0
+      ? `\nchanged files (${changedFiles.length}):\n` +
+        changedFiles.map((f) => `  - ${JSON.stringify(f)}`).join("\n")
+      : changedFiles === null
+        ? `\n(changed-file delta unavailable - re-scan the full analyzed scope)`
+        : "";
   emit(
     {
       verdict: current ? "CURRENT" : "STALE",
@@ -7610,10 +7625,11 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
       analyzed_paths: store.analyzedPaths,
       store_fingerprint: store.fingerprint,
       current_fingerprint: currentFingerprint,
+      ...(current ? {} : { changed_files: changedFiles }),
     },
     current
       ? `CURRENT: the analyzed paths are unchanged since the store was built (intent: ${store.intent || "unrecorded"}, coverage: ${store.kind}):\n${scopeLines}`
-      : `STALE: the analyzed paths have changed since the store was built (intent: ${store.intent || "unrecorded"}):\n${scopeLines}`,
+      : `STALE: the analyzed paths have changed since the store was built (intent: ${store.intent || "unrecorded"}):\n${scopeLines}${changedFilesLines}`,
   );
 }
 
