@@ -184,10 +184,6 @@ function assertTerminalWorkspaceTurn(result: DriveResult, output: string): void 
   expect(result.stoppedAfterAskUserQuestion).toBe(false);
   assertResultOk(result);
   assertToolResultContains(result, "Bash", output);
-  expect(
-    result.toolResults.at(-1)?.resultText,
-    "workspace navigation must end with the requested utility output",
-  ).toContain(output);
   expect(result.askedQuestions, "workspace navigation must not start workflow intake").toEqual([]);
   expect(
     result.toolResults.filter((tool) => {

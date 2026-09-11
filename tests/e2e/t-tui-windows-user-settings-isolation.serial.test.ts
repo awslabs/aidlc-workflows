@@ -22,7 +22,6 @@ import {
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearOwnedClaudeFixtureStartup } from "../harness/claude-fixture-startup.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import {
   assertTuiDriveKill,
@@ -160,21 +159,54 @@ function startTrace(records: TraceRecord[]): TraceRecord {
   return start;
 }
 
+function clearStartupModal(
+  session: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  const startupReady = waitFor(
+    session,
+    "trust this folder|Bypass Permissions mode|bypass permissions on",
+    60_000,
+    300,
+    env,
+  );
+  const initialPane = drive(["capture", "--session", session], env).stdout;
+  if (!startupReady) {
+    throw new Error(`Claude TUI never reached a startup state.\n${initialPane}`);
+  }
+
+  if (/trust this folder/i.test(initialPane)) {
+    expect(drive(["send", "--session", session, "--keys", "1"], env).rc).toBe(0);
+    expect(
+      waitFor(
+        session,
+        "Bypass Permissions mode|bypass permissions on",
+        30_000,
+        300,
+        env,
+      ),
+    ).toBe(true);
+  }
+
+  const permissionPane = drive(["capture", "--session", session], env).stdout;
+  if (/Bypass Permissions mode/.test(permissionPane)) {
+    expect(drive(["send", "--session", session, "--keys", "2"], env).rc).toBe(0);
+  }
+  expect(
+    waitFor(session, "bypass permissions on", 30_000, 300, env),
+  ).toBe(true);
+}
+
 function runProbe(
   session: string,
   project: string,
-  ownedUserHome: string,
   baseEnv: NodeJS.ProcessEnv,
   tracePath: string,
   settingArgs: string[],
   expectedMarker: string,
   cleanupState: ProbeCleanupState,
 ): { pane: string; trace: TraceRecord[] } {
-  const env: NodeJS.ProcessEnv = { ...baseEnv, AIDLC_TUI_TRACE_FILE: tracePath };
-  // Validate before start: the Windows driver preseeds Claude onboarding.
-  expect(env.HOME).toBe(ownedUserHome);
-  expect(env.USERPROFILE).toBe(ownedUserHome);
-  expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  const env = { ...baseEnv, AIDLC_TUI_TRACE_FILE: tracePath };
   try {
     const started = drive(
       [
@@ -196,17 +228,7 @@ function runProbe(
     );
     expect(started.rc).toBe(0);
 
-    clearOwnedClaudeFixtureStartup(ownedUserHome, env, {
-      capture: () => {
-        const captured = drive(["capture", "--session", session], env);
-        expect(captured.rc).toBe(0);
-        return captured.stdout;
-      },
-      send: (keys) => {
-        expect(drive(["send", "--session", session, "--keys", keys], env).rc).toBe(0);
-      },
-      waitFor: (pattern, timeoutMs) => waitFor(session, pattern, timeoutMs, 300, env),
-    });
+    clearStartupModal(session, env);
     expect(
       drive(
         [
@@ -334,7 +356,6 @@ describe("Windows Claude TUI user-settings isolation", () => {
         const explicit = runProbe(
           `aidlc_tui_settings_explicit_${process.pid}`,
           project,
-          userHome,
           probeEnv,
           explicitTrace,
           ["--setting-sources", "user,project"],
@@ -357,7 +378,6 @@ describe("Windows Claude TUI user-settings isolation", () => {
         const isolated = runProbe(
           `aidlc_tui_settings_isolated_${process.pid}`,
           project,
-          userHome,
           probeEnv,
           isolatedTrace,
           [],

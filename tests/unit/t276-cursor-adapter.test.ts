@@ -1762,7 +1762,6 @@ if (import.meta.main) {
     expectAllowJson(harmless);
   });
 
-  // This evaluator matrix runs many adapter subprocesses sequentially.
   test("29: Windows evaluator variants and unresolved expansion remain fail-closed", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
@@ -2915,7 +2914,7 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(staleManifestResult, staleManifestStatus);
-  }, 90_000);
+  }, 55_000);
 
   test("30: existing symlink or junction aliases cannot hide protected attribution paths", () => {
     const proj = installedProject();

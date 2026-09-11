@@ -1437,8 +1437,9 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
-  const text = canonicalEngineCommand(rawText);
+  const text = canonicalEngineCommand(
+    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
+  );
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
@@ -1453,9 +1454,7 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
   for (const seg of segments) {
-    // Path normalization can remove a substitution inside a quoted dispatcher
-    // path. Such a command cannot receive the static navigation exemption.
-    if (isEngineEngagementSegment(seg, !/\$\(|`/.test(rawText))) return true;
+    if (isEngineEngagementSegment(seg)) return true;
   }
   return false;
 }
@@ -1492,59 +1491,6 @@ function legacyEngineEngagementSegment(seg: string): boolean {
   return true;
 }
 
-// A next call that only routes workspace navigation does not engage a workflow.
-// Require a static, complete command before applying this exemption; unknown
-// wrappers, substitutions, redirects, and malformed quoting retain the existing
-// conservative classification. Shell chains are classified segment by segment.
-function isWorkspaceNavigationNext(seg: string): boolean {
-  if (/[\\`$<>&()[\]{}*?~^#]/.test(seg)) return false;
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < seg.length; i++) {
-    const char = seg[i];
-    if (quote) {
-      if (char === quote) quote = null;
-    } else if (char === "'" || char === '"') {
-      quote = char;
-    }
-  }
-  if (quote) return false;
-
-  const words = splitKiroCommandArgs(seg.trim());
-  if (words[0] === "env") words.shift();
-  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) words.shift();
-  if (words[0] === "command" || words[0] === "exec") {
-    words.shift();
-    if (words.at(0) === "--") words.shift();
-  }
-  let args: string[];
-  if (words[0] === "aidlc" && words[1] === "orchestrate" && words[2] === "next") {
-    args = words.slice(3);
-  } else if (words[0] === "aidlc" && words[1] === "next") {
-    args = words.slice(2);
-  } else if (
-    words[0] === "bun" &&
-    /(?:^|[/\\])aidlc-orchestrate\.ts$/.test(words[1] ?? "") &&
-    words[2] === "next"
-  ) {
-    args = words.slice(3);
-  } else {
-    return false;
-  }
-  // Dispatcher/engine global options can be removed or moved before workspace
-  // parsing, revealing a different verb. Grant no exemption for those ambiguous
-  // forms. A trailing bare option cannot reveal another verb (`space --json`).
-  if (
-    args.some((arg) => arg === "--project-dir" || arg === "--aidlc-attempt-id") ||
-    args.slice(0, -1).some((arg) =>
-      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
-    )
-  ) return false;
-  // Intent creation explicitly returns null here: it starts workflow work and
-  // must retain the normal engagement and session-handoff rules.
-  return parseWorkspaceCommand(args).kind !== "not-workspace" &&
-    classifyTerminalCommand(args) !== null;
-}
-
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately
 // ask "what stage am I on?" answered with `--status` / `next --status` /
@@ -1556,11 +1502,7 @@ function isWorkspaceNavigationNext(seg: string): boolean {
 // state/jump/bolt/swarm verb we do not specifically recognise is treated as
 // engagement (BLOCK), so an unrecognised mutating verb can never leak through as
 // "chat" - the conservative direction for loop integrity.
-export function isEngineEngagementSegment(
-  seg: string,
-  allowWorkspaceNavigation = true,
-): boolean {
-  if (allowWorkspaceNavigation && isWorkspaceNavigationNext(seg)) return false;
+export function isEngineEngagementSegment(seg: string): boolean {
   if (
     /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)

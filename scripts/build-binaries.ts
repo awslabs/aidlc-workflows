@@ -28,12 +28,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { releaseBuildVersion, VERSION_ID_PATTERN } from "../core/tools/aidlc-channel.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
-
-// The version every built artifact must report: the source version, or the
-// preview id a release build stamps through AIDLC_BUILD_VERSION.
-const AIDLC_VERSION = releaseBuildVersion();
+import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 
 type TargetConfig = {
   name: string;
@@ -248,13 +244,12 @@ function formatSeconds(ms: number): number {
   return Math.round((ms / 1000) * 1000) / 1000;
 }
 
-const VERSION_LINE = new RegExp(
-  `^aidlc\\s+(${VERSION_ID_PATTERN})(?:\\s+\\(runtime\\s+${VERSION_ID_PATTERN}\\))?$`,
-);
-
 function stampedVersion(stdout: string): string {
   const trimmed = stdout.trim();
-  return VERSION_LINE.exec(trimmed)?.[1] ?? trimmed;
+  const prefixed =
+    /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s+\(runtime\s+[0-9]+\.[0-9]+\.[0-9]+\))?$/
+      .exec(trimmed);
+  return prefixed?.[1] ?? trimmed;
 }
 
 let standaloneGateProject: string | null = null;

@@ -527,8 +527,6 @@ function scratchProject(): string {
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
-    "aidlc-channel.ts",
-    "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",
   ]) {

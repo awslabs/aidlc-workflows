@@ -526,37 +526,6 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  for (const tool of ["execute_bash", "execute_pwsh", "shell"]) {
-    test(`registered PostToolUse hooks dispatch audit-tail updates for ${tool}`, () => {
-      for (const target of ["sync-workflow-state", "rebuild-stage-graph"]) {
-        const dir = scratchProject(true);
-        try {
-          const registration = JSON.parse(
-            readFileSync(join(dir, ".kiro", "hooks", `aidlc-${target}.json`), "utf-8"),
-          ) as { hooks: Array<{ trigger: string; matcher: string }> };
-          const hook = registration.hooks.find((candidate) =>
-            candidate.trigger === "PostToolUse" &&
-            new RegExp(`^(?:${candidate.matcher})$`).test(tool)
-          );
-          expect(hook, `${target} must receive ${tool} events`).toBeDefined();
-          expect(new RegExp(`^(?:${hook?.matcher})$`).test("fs_write")).toBe(false);
-          appendStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
-          const result = runIdeStdin(dir, target, ctx1x(tool, "Output:\nok\n\nExit Code: 0"));
-          expect(result.code, result.stderr).toBe(0);
-          if (target === "sync-workflow-state") {
-            expect(readFileSync(seededStateFile(dir), "utf-8")).toMatch(
-              /\*\*Current Stage\*\*:\s*user-stories/,
-            );
-          } else {
-            expect(existsSync(join(seededRecordDir(dir), "runtime-graph.json"))).toBe(true);
-          }
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
-        }
-      }
-    }, 15_000);
-  }
-
   test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
     const dir = scratchProject(true);
     try {

@@ -52,8 +52,8 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
   { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
   { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
-  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "rebuild-stage-graph" },
-  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "sync-workflow-state" },
+  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "rebuild-stage-graph" },
+  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "sync-workflow-state" },
   { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "^(subagent_.+|invoke_sub_agent)$", adapterTarget: "log-subagent" },
   { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
 ];

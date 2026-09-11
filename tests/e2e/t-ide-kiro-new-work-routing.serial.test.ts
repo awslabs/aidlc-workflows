@@ -14,7 +14,6 @@ import {
   appendFileSync,
   existsSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
 } from "node:fs";
 import { platform, tmpdir } from "node:os";
@@ -26,15 +25,12 @@ import {
 } from "../harness/tui-fixtures.ts";
 import {
   autoApprove,
-  CdpTarget,
   clickByText,
   generateKiroIdeSeed,
   KIRO_IDE_BIN,
   type KiroIdeDomSnapshot,
   launchKiroIde,
-  listTargets,
   pageTarget,
-  readChatText,
   removeSeedDir,
   snapshotChatDom,
   teardown,
@@ -74,70 +70,6 @@ function diagnostic(event: string, fields: Record<string, unknown> = {}): void {
     `${JSON.stringify({ timestamp: new Date().toISOString(), event, ...fields })}\n`,
     "utf-8",
   );
-}
-
-// Kiro 1.0.428 binds Ctrl+Shift+L to focusChatInput({newSession: true}).
-// typeAndSubmit uses that shortcut to open the initial chat. Replies must focus
-// the existing editor directly so the typed ask and its answer share a session.
-async function submitRoutingReply(port: number, text: string): Promise<void> {
-  let focused = false;
-  for (const target of await listTargets(port)) {
-    if (!target.webSocketDebuggerUrl ||
-      (target.type !== "page" && target.type !== "iframe")) continue;
-    const contextTarget = new CdpTarget(target.webSocketDebuggerUrl);
-    try {
-      await contextTarget.connect();
-      for (const context of await contextTarget.enableContexts(600)) {
-        focused = await contextTarget.evaluateInContext<boolean>(
-          context.id,
-          `(() => {
-            for (const editor of document.querySelectorAll("[contenteditable='true']")) {
-              if (!/prosemirror|tiptap/i.test(String(editor.className || ""))) continue;
-              const rect = editor.getBoundingClientRect();
-              if (!(rect.width > 0 && rect.height > 0)) continue;
-              editor.focus({ preventScroll: true });
-              return document.activeElement === editor;
-            }
-            return false;
-          })()`,
-        );
-        if (focused) break;
-      }
-    } finally {
-      contextTarget.close();
-    }
-    if (focused) break;
-  }
-  expect(focused, "the existing routing conversation has a visible editor").toBe(true);
-  expect(await readChatText(port)).toBe("");
-  const target = await pageTarget(port);
-  try {
-    await target.send("Input.insertText", { text });
-    await sleep(600);
-    expect(await readChatText(port)).toBe(text);
-    await target.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      modifiers: 0,
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-      text: "\r",
-    });
-    await target.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      modifiers: 0,
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-    });
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await sleep(700);
-      if ((await readChatText(port)) === "") return;
-    }
-    expect(await readChatText(port), "the routing reply was submitted").toBe("");
-  } finally {
-    target.close();
-  }
 }
 
 function extractRoutingDirective(
@@ -432,13 +364,9 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         const initialDirectiveCount =
           primaryRoutingDirectiveCount(finalSnapshots);
         expect(initialDirectiveCount).toBeGreaterThan(0);
-        const sessionPath = join(
-          project, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session",
-        );
-        const initialSession = readFileSync(sessionPath, "utf-8").trim();
-        expect(initialSession).toMatch(/^sess_/);
-        diagnostic("initial-routing", { session_id: initialSession, directive });
-        await submitRoutingReply(handle.port, "4");
+        const otherTarget = await pageTarget(handle.port);
+        await typeAndSubmit(otherTarget, "4", handle.port);
+        otherTarget.close();
 
         let otherSnapshots: KiroIdeDomSnapshot[] = [];
         let otherChatText = "";
@@ -469,12 +397,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           otherSnapshots = settledOther;
           otherChatText = combinedChatText(settledOther);
         }
-        const otherSession = readFileSync(sessionPath, "utf-8").trim();
-        diagnostic("other-response", {
-          session_id: otherSession,
-          chat_text: otherChatText,
-        });
-        expect(otherSession).toBe(initialSession);
         expect(visibleMarkdown(otherChatText)).toContain(OTHER_DETAIL_PROMPT);
         expect(completedTurn(otherSnapshots)).toBe(true);
         expect(routingDescriptions(otherSnapshots)).toEqual(
@@ -486,7 +408,9 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         expect(otherChatText).not.toMatch(/aidlc-utility\.ts intent --json/i);
         expect(otherChatText).not.toMatch(/aidlc-orchestrate\.ts report/i);
 
-        await submitRoutingReply(handle.port, ALTERNATIVE);
+        const alternativeTarget = await pageTarget(handle.port);
+        await typeAndSubmit(alternativeTarget, ALTERNATIVE, handle.port);
+        alternativeTarget.close();
 
         let alternativeSnapshots: KiroIdeDomSnapshot[] = [];
         let alternativeChatText = "";
@@ -532,12 +456,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
             settledAlternativeEntry.extracted.end,
           );
         }
-        const alternativeSession = readFileSync(sessionPath, "utf-8").trim();
-        diagnostic("alternative-response", {
-          session_id: alternativeSession,
-          chat_text: alternativeChatText,
-        });
-        expect(alternativeSession).toBe(initialSession);
         expect(alternativeDirective).not.toBeNull();
         expect(alternativeDirective?.response_route).toBe("next");
         expect(alternativeDirective?.new_work_description).toBe(ALTERNATIVE);
@@ -562,7 +480,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         expect(routingDescriptions(alternativeSnapshots)).toContain(ALTERNATIVE);
         diagnostic("verified", {
           platform: platform(),
-          session_id: initialSession,
           directive,
           assistant_tail: visibleMarkdown(assistantTail),
           ordered_lists: finalSnapshots.flatMap(

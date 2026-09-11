@@ -32,7 +32,6 @@ import {
   appendAuditEntryUnlocked,
   type AuditEntryInput,
 } from "./aidlc-audit.ts";
-import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
@@ -2742,11 +2741,11 @@ export async function collectDoctorReport(
   const pinPath = join(projectDir, ".aidlc-version");
   if (existsSync(pinPath)) {
     const pinned = readFileSync(pinPath, "utf-8").trim();
-    if (!VERSION_ID.test(pinned)) {
+    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(pinned)) {
       results.push({
         pass: false,
         label: `Project pin is malformed: ${JSON.stringify(pinned)}`,
-        fix: `run \`${aidlcInvocation()} config --unpin\` or write one release version id`,
+        fix: `run \`${aidlcInvocation()} config --unpin\` or write one strict semver`,
       });
     } else {
       const distribution = (() => {

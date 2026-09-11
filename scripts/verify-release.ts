@@ -6,10 +6,6 @@ import {
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
-  parseVersion,
-  PREVIEW_CHANNEL,
-} from "../core/tools/aidlc-channel.ts";
-import {
   releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../core/tools/aidlc-release.ts";
@@ -106,15 +102,11 @@ function verifyCandidate(args: string[]): void {
     "version.json",
   );
   if (typeof rawManifest.version !== "string") {
-    throw new Error("version.json version must be a release id");
+    throw new Error("version.json version must be strict semver");
   }
-  const parsedVersion = parseVersion(rawManifest.version);
   const expectedAssets = releaseAssets(rawManifest.version);
-  const expectedSourceRef = parsedVersion.channel === PREVIEW_CHANNEL
-    ? "refs/heads/main"
-    : `refs/tags/v${rawManifest.version}`;
-  if (rawManifest.sourceRef !== expectedSourceRef) {
-    throw new Error(`version.json sourceRef must be ${expectedSourceRef}`);
+  if (rawManifest.sourceRef !== `refs/tags/v${rawManifest.version}`) {
+    throw new Error("version.json sourceRef must match its version tag");
   }
   if (
     typeof rawManifest.sourceDigest !== "string" ||

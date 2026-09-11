@@ -119,8 +119,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
-  against resurrecting a finished workflow). Both audit-tail hooks match
-  `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
+  against resurrecting a finished workflow). Matched to `execute_bash` — the
   IDE surfaces no task event the sync could parse.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
