@@ -10,9 +10,6 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 const MAX_CHANGED_FILES = 500;
-const MAX_DIFF_BYTES = 5_000_000;
-const MAX_FILE_BYTES = 1_000_000;
-const MAX_SNAPSHOT_BYTES = 20_000_000;
 const MAX_REVIEW_BYTES = 100_000;
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
@@ -104,7 +101,7 @@ function git(args: string[], encoding?: BufferEncoding, cwd = process.cwd()): Bu
   return execFileSync("git", args, {
     cwd,
     encoding,
-    maxBuffer: MAX_SNAPSHOT_BYTES + MAX_DIFF_BYTES,
+    maxBuffer: Number.POSITIVE_INFINITY,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
@@ -171,12 +168,9 @@ function rangesFromDiff(
   });
 }
 
-function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoDir: string): number {
-  if (file.status.startsWith("D")) return 0;
+function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoDir: string): void {
+  if (file.status.startsWith("D")) return;
   const content = git(["show", `${head}:${file.path}`], undefined, repoDir) as Buffer;
-  if (content.byteLength > MAX_FILE_BYTES) {
-    throw new Error(`${file.path} exceeds the ${MAX_FILE_BYTES}-byte snapshot limit`);
-  }
   const snapshot = join("head", file.path);
   const destination = resolve(outputDir, snapshot);
   const root = `${resolve(outputDir)}${sep}`;
@@ -184,7 +178,6 @@ function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoD
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, content);
   file.snapshot = snapshot;
-  return content.byteLength;
 }
 
 function contextDigest(root: string): string {
@@ -222,9 +215,6 @@ export function buildContext(
     undefined,
     repoDir,
   ) as Buffer;
-  if (diff.byteLength > MAX_DIFF_BYTES) {
-    throw new Error(`PR diff exceeds ${MAX_DIFF_BYTES} bytes`);
-  }
   writeFileSync(join(outputDir, "pr.diff"), diff);
 
   const entries = parseNameStatus(
@@ -239,13 +229,9 @@ export function buildContext(
   }
   const ranges = rangesFromDiff(diff.toString("utf8"), entries.length);
 
-  let snapshotBytes = 0;
   const files = entries.map((entry, index) => {
     const file: ChangedFile = { ...entry, ...ranges[index] };
-    snapshotBytes += writeSnapshot(outputDir, head, file, repoDir);
-    if (snapshotBytes > MAX_SNAPSHOT_BYTES) {
-      throw new Error(`head snapshots exceed ${MAX_SNAPSHOT_BYTES} bytes`);
-    }
+    writeSnapshot(outputDir, head, file, repoDir);
     return file;
   });
   const manifest = { base, head, files };

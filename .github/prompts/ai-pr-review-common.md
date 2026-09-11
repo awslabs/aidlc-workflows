@@ -32,10 +32,10 @@ install dependencies, push commits, post comments, approve, or merge. The
 checked-out tree is the trusted base revision. Read the proposed change from `.ai-review-context/pr.diff`;
 metadata and immutable SHAs are in `.ai-review-context/pr.json`; the complete
 changed-file and changed-line manifest is
-`.ai-review-context/changed-files.json`. Bounded full snapshots of files at
+`.ai-review-context/changed-files.json`. Full snapshots of files at
 the proposed head are under `.ai-review-context/head/`. Deleted files remain
 available in the checked-out base tree. Context creation fails closed when a
-changed head file cannot be snapshotted within the configured bounds.
+changed head file cannot be snapshotted.
 
 Read `AGENTS.md`, `CONTRIBUTING.md`, and relevant base-branch reference material.
 Inspect every changed file represented in the diff. Read related definitions,

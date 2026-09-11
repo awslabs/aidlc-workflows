@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -264,6 +264,63 @@ describe("t300 adversarial AI PR review", () => {
     expect(modeOnly?.added).toEqual([]);
     expect(modeOnly?.deleted).toEqual([]);
     expect(modeOnly?.fileLevelEvidence).toBe(true);
+  });
+
+  test("context builder accepts large files, diffs, and aggregate snapshots", () => {
+    const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-large-context-"));
+    const run = (...args: string[]): string =>
+      execFileSync("git", args, {
+        cwd: repo,
+        encoding: "utf8",
+        maxBuffer: Number.POSITIVE_INFINITY,
+      }).trim();
+    run("init", "--quiet");
+    run("config", "user.name", "AI Review Test");
+    run("config", "user.email", "ai-review@example.invalid");
+    writeFileSync(join(repo, "large-diff.txt"), "a".repeat(6_000_000));
+    const aggregateContent = "x\n".repeat(475_000);
+    for (let index = 0; index < 16; index++) {
+      writeFileSync(join(repo, `aggregate-${index}.txt`), aggregateContent);
+    }
+    run("add", ".");
+    run("commit", "--quiet", "-m", "base");
+    const base = run("rev-parse", "HEAD");
+
+    writeFileSync(join(repo, "large-diff.txt"), "b".repeat(6_000_000));
+    for (let index = 0; index < 16; index++) {
+      writeFileSync(join(repo, `aggregate-${index}.txt`), `${aggregateContent}changed\n`);
+    }
+    run("add", ".");
+    run("commit", "--quiet", "-m", "head");
+    const head = run("rev-parse", "HEAD");
+
+    const output = join(repo, "context");
+    const manifest = buildContext(base, head, output, repo);
+    const snapshotSizes = manifest.files.map(file => statSync(join(output, file.snapshot!)).size);
+    expect(statSync(join(output, "pr.diff")).size).toBeGreaterThan(5_000_000);
+    expect(Math.max(...snapshotSizes)).toBeGreaterThan(1_000_000);
+    expect(snapshotSizes.reduce((total, size) => total + size, 0)).toBeGreaterThan(20_000_000);
+  });
+
+  test("context builder still rejects more than 500 changed files", () => {
+    const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-file-limit-"));
+    const run = (...args: string[]): string =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    run("init", "--quiet");
+    run("config", "user.name", "AI Review Test");
+    run("config", "user.email", "ai-review@example.invalid");
+    run("commit", "--quiet", "--allow-empty", "-m", "base");
+    const base = run("rev-parse", "HEAD");
+    for (let index = 0; index < 501; index++) {
+      writeFileSync(join(repo, `file-${index}.txt`), `${index}\n`);
+    }
+    run("add", ".");
+    run("commit", "--quiet", "-m", "head");
+    const head = run("rev-parse", "HEAD");
+
+    expect(() => buildContext(base, head, join(repo, "context"), repo)).toThrow(
+      "PR changes 501 files; limit is 500",
+    );
   });
 
   test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
