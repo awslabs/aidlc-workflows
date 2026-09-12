@@ -591,6 +591,40 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing: string[] = [];
     for (const rel of harnessQuestionAnnexes()) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (rel === "harness/devin/skills/aidlc/question-rendering.md") {
+        const summary = body.split("## Mandatory consolidated-summary checkpoint\n")[1]?.split("\n## ")[0];
+        expect(summary).toBeDefined();
+        expect(summary).toContain("[Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format)");
+        expect(summary).toContain("Step 3a");
+        expect(summary).toContain("[Conversation event logging checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#mandatory-conversation-event-logging-checklist)");
+        const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8");
+        const start = protocol.indexOf("## 3. Question Format\n");
+        const end = protocol.indexOf("\n## 4.", start);
+        expect(start).toBeGreaterThanOrEqual(0);
+        expect(end).toBeGreaterThan(start);
+        const questions = protocol.slice(start, end).replace(/\s+/g, " ");
+        for (const token of [
+          "Consolidated Summary Confirmation", "file-letter prefixes", "blank `[Answer]:`",
+          "`[Answer]: Looks correct`", "`[Answer]: Request changes`",
+          "`[Answer]: A. Looks correct`", "`[Answer]: 1. Looks correct`",
+          "{{INVOKE}} engine log decision", "{{INVOKE}} engine log answer",
+          '--checkpoint summary-confirmation --questions-file "<questions-path>"',
+          '`--unit "<directive.unit>"`', "`--single`", "a self-selected answer",
+          "record and later human turn", "same `--unit` / `--single` identity",
+          '**"What should change?"**', "END THE TURN", "Do not revise anything until",
+          "reset the confirmation entry to a blank `[Answer]:`", "re-present the summary",
+          "receipt command succeeds", "before re-saving artifacts or requesting review",
+          "Step 3b", "Step 3c", "checkpoint from Step 3a",
+        ]) expect(questions).toContain(token);
+        const logging = protocol.split("### MANDATORY: Conversation event logging checklist\n")[1]?.split("\n### ")[0]?.replace(/\s+/g, " ");
+        expect(logging).toBeDefined();
+        expect(logging).toContain("Once `decision` succeeds, render that question and END THE TURN");
+        expect(logging).toContain("only the human's next interaction may be followed by `answer`");
+        expect(protocol).toContain("questions → artifact → reviewer (if declared) → learnings → gate");
+        expect(body).not.toContain("[Answer]: Looks correct");
+        expect(body).not.toContain("aidlc-log.ts decision");
+        continue;
+      }
       for (const token of SUMMARY_STOP_ANNEX_TOKENS) {
         if (!body.includes(token)) {
           missing.push(`${rel}  missing: ${token}`);

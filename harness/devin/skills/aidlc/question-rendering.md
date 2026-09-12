@@ -1,59 +1,33 @@
 # Question Rendering — Devin CLI harness annex
 
-This file defines how THIS harness renders the structured questions that
-`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
-The protocol and stage files are harness-neutral: they say *present a
-structured question* and carry a fenced ` ```question ` spec block. This annex
-is the one place that binds that contract to a concrete mechanism.
+This annex binds the shared question specs to Devin CLI. Before rendering any
+question, read and follow [Structured questions]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#structured-questions-harness-neutral-contract)
+and the applicable method sections below.
 
-## Never echo the spec (non-negotiable)
+## Method references
 
-A ` ```question ` fenced block is **INPUT to the `ask_user_question` tool, never
-output to render**. The orchestrator MUST translate every ` ```question ` spec
-into an actual `ask_user_question` tool call, and MUST NEVER echo, print, paste,
-or "quote back" the fenced block, or any of its field lines (`prompt:`,
-`header:`, `multiSelect:`, `options:`, `label:`, `description:`), into the chat
-transcript. The user must never see the raw fence; they see only the native
-`ask_user_question` prompt.
+- [Approval Gates]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#1-approval-gates): **Naming the next stage** and **Non-matching checkpoint replies**.
+- [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format): Step 1 for file formatting; Step 3a for option coverage, Other, and answer recording; Steps 3b/3c for self-guided and chat modes.
+- [Critical Compliance Checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#critical-compliance-checklist-most-commonly-missed-steps): exact user input and stage ordering.
+- [Conversation event logging checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#mandatory-conversation-event-logging-checklist): question logging and human-wait boundaries.
 
-Echoing the fence as literal text is a **protocol violation**, not a stylistic
-choice. It:
+## Mandatory consolidated-summary checkpoint
 
-- produces a non-interactive wall of text the user cannot click or select;
-- loses the built-in "Other" escape hatch that `ask_user_question` provides;
-- is inconsistent with every correct rendering elsewhere in the same session.
-
-If you find yourself about to write a triple-backtick `question` block into your
-reply, STOP: that content belongs inside an `ask_user_question` tool call, not
-in the message body.
-
-This applies to **every** structured-question site, including but not limited to:
-
-- approval gates (every stage completion);
-- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
-- the ladder prompt (autonomy mode after the walking skeleton);
-- halt-and-ask on Bolt failure (Retry / Skip / Abort);
-- consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate (keep / heading / promote-to-team).
-
-(Literal ` ```question ` fences legitimately remain in framework documentation
-like THIS file and the stage-protocol because they are authoring specs, not chat
-output. In the stage-protocol those specs are normative prompt templates: when
-the surrounding instruction requires a question, their content MUST be rendered
-through this annex. This annex's mapping examples are illustrative. The
-prohibition is about echoing raw fences in live orchestration turns.)
+Read and follow [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format),
+**Step 3a**, including its application to Steps 3b/3c, and the
+[Conversation event logging checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#mandatory-conversation-event-logging-checklist).
+Apply the native mapping below to its normative confirmation spec.
 
 ## Mechanism
 
-On Devin CLI, every structured question renders via the **`ask_user_question`
-tool**: the fenced ` ```question ` spec is the input, the tool call is the
-output, never the other way around. Map the spec fields 1:1:
+On Devin CLI, render every structured question via `ask_user_question`.
+Map each neutral spec to an entry in `questions`:
 
 | Spec field | ask_user_question field |
 |------------|-------------------------|
 | `prompt` | `questions[0].question` |
 | `header` | `questions[0].header` |
-| `multiSelect` | `questions[0].multiSelect` |
+| `multiSelect` | `questions[0].multi_select` |
 | `options[].label` | `questions[0].options[].label` |
 | `options[].description` | `questions[0].options[].description` |
 
@@ -77,7 +51,7 @@ ask_user_question({
   questions: [{
     question: "[Stage Name] complete. How would you like to proceed?",
     header: "Approval",
-    multiSelect: false,
+    multi_select: false,
     options: [
       { label: "Approve", description: "Continue to [next stage]" },
       { label: "Request Changes", description: "Provide revision feedback" }
@@ -86,70 +60,37 @@ ask_user_question({
 })
 ```
 
-## Mandatory consolidated-summary checkpoint
+## Native limits and Other
 
-After guided or chat file-backed Q&A (and whenever a stage definition requires
-it explicitly, such as Requirements Analysis), the stage protocol requires a
-separate confirmation before any stage artifact is generated. Append or update
-`## Consolidated Summary Confirmation` in the questions file with the summary,
-the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag, then render the two semantic options through
-`ask_user_question`:
+- **Batching**: 1–4 questions per call and 2–4 explicit options per question.
+  For larger option sets, use multiple calls with no one-option remainder:
+  five options as 3 + 2, not 4 + 1. Apply the option-coverage rules in
+  [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format).
+- **Other**: `ask_user_question` automatically adds the Other free-text option.
+  Omit the file's Other entry from the native `options` array; do not add a
+  second interactive Other option.
+- **Question identity**: Do not batch identical question texts; use separate
+  calls so the returned question-text keys remain unambiguous.
 
-```
-ask_user_question({
-  questions: [{
-    question: "Does this all look correct before I generate the artifact?",
-    header: "Confirm",
-    multiSelect: false,
-    options: [
-      {
-        label: "Looks correct",
-        description: "Generate the artifact from these answers"
-      },
-      {
-        label: "Request changes",
-        description: "Revise one or more answers before generation"
-      }
-    ]
-  }]
-})
-```
+## Native answer capture
 
-This is a mandatory human checkpoint, not the stage approval gate. Before
-rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
-`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
-identity. END THE TURN after presenting it and wait for the user's response.
-Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly
-and run the matching checkpoint-specific `aidlc-log.ts answer` command. Strip
-any source letter, punctuation, and option description before writing:
-`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
-a self-selected answer are invalid. On Request changes, ask **"What should change?"**
-and END THE TURN again; do not update any answer until that feedback
-arrives. Then record the feedback, update the affected answers, reset this tag
-to blank, and present the consolidated summary again. Do not generate the
-artifact until the file contains the human's explicit `[Answer]: Looks correct`
-and the receipt command succeeds. Never merge this checkpoint with the later
-reviewer, learnings, or approval steps.
+The tool returns `answers[questionText]`, keyed by the exact rendered
+`questions[].question`, not an ID or array index. Each answer contains
+`selected: string[]` and optional `custom_text`. With `multi_select: true`,
+`selected` can contain multiple option labels; keep them associated with their
+own question rather than flattening the batch into one answer.
 
-## Harness-specific behaviors
+For `selected: ["Other"]`, `custom_text` is discussion input, not a substitute option label.
+Route it through the Other rules in [Approval Gates]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#1-approval-gates)
+or [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format),
+as applicable.
 
-- **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
-  `Complete workflow` when `next_stage` is null. Never guess the next stage.
-- **Batching limits**: max 4 questions per `ask_user_question` call, max 4
-  options per question, and **at least 2 options per question**. For 5+
-  options, split across multiple calls (options A-D, then E+); the questions
-  file retains the full option set as the authoritative record. Never send a
-  one-option call: the tool rejects it before the user can answer.
-- **"Other" escape**: `ask_user_question` auto-adds an "Other" free-text
-  option, always available — do NOT add an explicit Other option to the spec's
-  options list for interactive batches. (Questions *files* still end every
-  question with `X. Other (please specify)` per protocol §3 — the file format
-  is harness-neutral.)
-- **Answer capture**: the user's selection returns as the exact option label;
-  record it verbatim (protocol: never summarize User Input).
-- **Long prompts**: the question body renders at full terminal width and wraps
-  gracefully (multi-line wrap verified on macOS before each release) — see
-  `knowledge/aidlc-shared/worktree-info-schema.md` for the long-path fallback.
+A skipped question (`skipped: true`), cancellation, or rejected interaction is
+not a selected option. Keep any returned partial answers associated with their
+own questions; apply the referenced checkpoint and completeness rules to any
+unresolved questions.
+
+## Long prompts
+
+See [AUQ prompt rendering — long-path fallback]({{HARNESS_DIR}}/knowledge/aidlc-shared/worktree-info-schema.md#auq-prompt-rendering--long-path-fallback)
+for the shared worktree-path display guidance and its implementation status.

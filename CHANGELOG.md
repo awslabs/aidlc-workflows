@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.3] - 2026-09-12
+
+Corrects Devin CLI's structured-question binding and consolidates its shared question rules in the core protocol. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.3` / `install.ps1 -Version 2.9.3`) to refresh the installed question-rendering instructions. No workflow-record migration is required.
+
+* Devin's structured questions now map the neutral multi-select setting to the native `multi_select` field and describe answers by question text, selected labels, and optional custom text.
+* Devin's question batches avoid one-option remainders, and skipped or cancelled interactions remain distinct from selected answers.
+* Devin's rendering annex references the shared checkpoint and never-echo rules instead of maintaining duplicate instructions.
+
 ## [2.9.2] - 2026-09-12
 
 AIDLC now requires Devin CLI 3000.10.21 or later. **Upgrade:** upgrade Devin CLI separately, then run `aidlc update` (or use `install.sh --version 2.9.2` / `install.ps1 -Version 2.9.2`) to update AIDLC. Updating AIDLC does not upgrade Devin CLI. No workflow-record migration is required.
