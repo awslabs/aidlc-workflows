@@ -377,6 +377,15 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(
         "a tag naming this stage's own finding is bookkeeping",
       );
+      // The two forms a live run produced: a stage-review-state header line, and an
+      // applied-findings table. The reviewer half must name them too, or the pass
+      // that reads only this list still reports them.
+      expect(labelled).toContain(
+        "to state the stage's own review state",
+      );
+      expect(labelled).toContain(
+        "in any form including a table or a section of its own",
+      );
       expect(labelled).toContain(
         "durable human dispositions from the audit ledger",
       );

@@ -78,7 +78,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output - the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` - so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
    - The validation tools list from the stage definition's frontmatter (if any)
-   - The review-content boundary: tell the reviewer not to raise a finding whose sole subject is this stage's own review bookkeeping. Treat text as this stage's own review bookkeeping when its sole purpose is to record a review iteration or revision count, list or status this stage's findings, or name this stage's review-record path; judge the product claims instead. An inline tag naming an upstream stage's finding is provenance; a tag naming this stage's own finding is bookkeeping.
+   - The review-content boundary: tell the reviewer not to raise a finding whose sole subject is this stage's own review bookkeeping. Treat text as this stage's own review bookkeeping when its sole purpose is to record a review iteration, revision count or revision-round label, to list or status this stage's findings in any form including a table or a section of its own, to state the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), or to name this stage's review-record path; judge the product claims instead. An inline tag naming an upstream stage's finding is provenance; a tag naming this stage's own finding is bookkeeping.
    - For a per-unit `workspace_requires` stage, the unit's
      `source-manifest.json` path and its claimed source paths. Review the
      implementation differentially at those paths rather than sweeping the
@@ -235,9 +235,12 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    **Review bookkeeping is not artifact content.** The review record carries the
    verdict, findings, reviewer, request id and artifact fingerprint; the ledger
    carries the human dispositions; and `REVIEW_COMPLETED` pins the record's digest.
-   So do not copy this stage's own review history into a `produces[]` artifact -
-   not a revision counter, not a note listing which of its findings a revision
-   applied, not a finding's status, not a review-record path. Such a copy is
+   So do not copy this stage's own review history into a `produces[]` artifact, in
+   any form - a header line, a heading, a table, or a section of its own: not a
+   revision counter or revision-round label, not a list or table of which of its
+   findings a revision applied, not a finding's status, not the stage's own review
+   state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), not a
+   review-record path. Such a copy is
    unverified and it goes stale by construction rather than by mistake: the gate
    can approve while the artifact's own note still says a review is pending. An
    inline provenance tag is different only when it preserves a tag already carried

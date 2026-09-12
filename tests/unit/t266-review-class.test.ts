@@ -401,6 +401,15 @@ describe("t266 review class", () => {
       expect(flat).toContain(
         "A tag naming this stage's own finding or review iteration is review bookkeeping and is prohibited.",
       );
+      // The two forms a live run wrote straight past the looser wording: a header
+      // line stating the stage's own review state, and an applied-findings table
+      // under a heading of its own. Naming the form is what makes the list bite.
+      expect(flat).toContain(
+        "in any form - a header line, a heading, a table, or a section of its own",
+      );
+      expect(flat).toContain(
+        "not the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`)",
+      );
     }
   });
 
