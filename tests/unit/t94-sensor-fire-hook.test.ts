@@ -173,15 +173,15 @@ function makeProject(): string {
  * (requirements-analysis -> required-sections + upstream-coverage) + the audit
  * shard (the active-workflow gate at hook :100).
  */
-function makeProjectActive(): string {
+function makeProjectActive(scope = "bugfix"): string {
   const proj = makeProject();
   seedState(
     proj,
     [
       "# AI-DLC State (t94 fixture)",
       "",
-      "- **Workflow**: bugfix",
-      "- **Scope**: bugfix",
+      `- **Workflow**: ${scope}`,
+      `- **Scope**: ${scope}`,
       "- **Phase**: inception",
       "- **Current Stage**: requirements-analysis",
       "",
@@ -251,6 +251,8 @@ function heartbeatPath(proj: string): string {
 
 interface HookRun {
   status: number;
+  stdout: string;
+  stderr: string;
 }
 
 /**
@@ -263,6 +265,7 @@ function runHook(
   proj: string,
   filePath: string,
   graph: string = FRAMEWORK_GRAPH,
+  envOverrides: Record<string, string> = {},
 ): HookRun {
   const json = JSON.stringify({
     tool_name: "Write",
@@ -273,12 +276,18 @@ function runHook(
     encoding: "utf-8",
     env: {
       ...(process.env as Record<string, string>),
+      AIDLC_DISABLE_SENSORS: "0",
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_STAGE_GRAPH: graph,
       T94_SPAWN_LOG: spawnLogPath(proj),
+      ...envOverrides,
     },
   });
-  return { status: res.status ?? -1 };
+  return {
+    status: res.status ?? -1,
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? "",
+  };
 }
 
 // A path under the stage's artifact tree that the aidlc-docs glob matches.
@@ -356,6 +365,47 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
       "requirements-analysis",
       "--output-path",
       filePath,
+    ]);
+  });
+
+  test("classic suppresses automatic sensors silently until the intent opts in", () => {
+    const proj = makeProjectActive("classic");
+    const graph = writeDispatchGraph(proj);
+    const filePath = inceptionMd(proj);
+    const off = runHook(proj, filePath, graph);
+    expect(off.status).toBe(0);
+    expect(off.stdout).toBe("");
+    expect(off.stderr).toBe("");
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(join(seededRecordDir(proj), ".aidlc-hooks-health", ".first-fired"))).toBe(false);
+
+    seedState(
+      proj,
+      `${readFileSync(seededStateFile(proj), "utf-8")}\n- **Sensors**: on (set by you)\n`,
+    );
+    expect(runHook(proj, filePath, graph).status).toBe(0);
+    const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];
+    expect(argv.slice(2)).toEqual([
+      "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+    ]);
+  });
+
+  test("the global sensor kill switch suppresses a feature intent without changing its default", () => {
+    const proj = makeProjectActive("feature");
+    const graph = writeDispatchGraph(proj);
+    const filePath = inceptionMd(proj);
+    const off = runHook(proj, filePath, graph, { AIDLC_DISABLE_SENSORS: "1" });
+    expect(off.status).toBe(0);
+    expect(off.stdout).toBe("");
+    expect(off.stderr).toBe("");
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+
+    expect(runHook(proj, filePath, graph).status).toBe(0);
+    const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];
+    expect(argv.slice(2)).toEqual([
+      "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
     ]);
   });
 
@@ -567,6 +617,16 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(r.status).toBe(0);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
     expect(existsSync(heartbeatPath(proj))).toBe(true);
+  });
+
+  test("unavailable scope-policy data exits zero without dispatch", () => {
+    const proj = makeProjectActive("feature");
+    const r = runHook(proj, inceptionMd(proj), join(proj, "missing-graph.json"), {
+      AIDLC_SCOPE_GRID: join(proj, "missing-grid.json"),
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
   test("stage slug not in graph -> no spawn [.sh case 15]", () => {
