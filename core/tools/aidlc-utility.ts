@@ -60,6 +60,7 @@ import {
   trustedCommand,
 } from "./aidlc-command.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
+import { checkDevinVersion } from "./aidlc-devin-version.ts";
 import {
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
@@ -3016,6 +3017,7 @@ export async function collectDoctorReport(
       );
     }
     if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
+    if (harness === ".devin") tsHooks.push("aidlc-devin-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -3198,6 +3200,80 @@ export async function collectDoctorReport(
       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
       fix: projectedFileRepair("opencode", ".opencode/command/aidlc.md"),
     });
+  } else if (harness === ".devin") {
+    for (const [file, what, from] of [
+      ["hooks.v1.json", "hook wiring", "dist/devin/.devin/hooks.v1.json"],
+      ["config.json", "permissions + read_config_from", "dist/devin/.devin/config.json"],
+      ["mcp_config.json", "MCP servers", "dist/devin/.devin/mcp_config.json"],
+      ["rules/aidlc.md", "standing method rule (auto-loaded pointer)", "dist/devin/.devin/rules/aidlc.md"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: `copy from \`${from}\``,
+      });
+    }
+    // Check the shared Devin CLI support baseline for AIDLC's required
+    // capabilities (hooks.v1.json, triggers frontmatter, run_subagent,
+    // ask_user_question with multi_select). Discovery is PATH-first with
+    // cross-platform Desktop fallback (macOS .app, Linux share/opt, Windows
+    // LocalAppData/ProgramFiles). Desktop execution is NOT verified —
+    // discovery only. See core/tools/aidlc-devin-version.ts for the full
+    // discovery/exec/parse logic and the injectable test seams.
+    const devinVerResult = checkDevinVersion();
+    results.push({
+      pass: devinVerResult.pass,
+      label: devinVerResult.label,
+      fix: devinVerResult.fix || undefined,
+    });
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: "Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)",
+      fix: 'Ask an organization/enterprise admin to review "Default subagent model" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker.',
+    });
+    // Desktop discovery advisory (advisory pass-with-label): if the Desktop
+    // binary was discovered, note that Desktop execution is separately
+    // unverified. If neither PATH nor Desktop found the binary, the main
+    // check above already failed.
+    if (devinVerResult.source === "Desktop") {
+      results.push({
+        pass: true,
+        label:
+          `Desktop binary discovered at ${devinVerResult.binaryPath} — Desktop execution is separately unverified (discovery only)`,
+      });
+    } else if (!devinVerResult.pass && !devinVerResult.binaryPath) {
+      // Neither PATH nor Desktop found the binary — add a Desktop discovery
+      // advisory so the user knows Desktop was checked.
+      results.push({
+        pass: true,
+        label:
+          `Desktop discovery: no Devin Desktop installation found (checked OS-appropriate paths); PATH lookup also failed`,
+      });
+    }
+    // Hook execution evidence is historical: SessionStart writes a local marker.
+    // Missing or invalid evidence leaves hook approval/execution unverified.
+    let lastHookRun: string | undefined;
+    try {
+      const marker = JSON.parse(readFileSync(
+        join(projectDir, harness, ".aidlc-session-start.local.json"),
+        "utf-8",
+      )) as { lastRun?: unknown } | null;
+      if (
+        typeof marker?.lastRun === "string" &&
+        new Date(marker.lastRun).toISOString() === marker.lastRun
+      ) {
+        lastHookRun = marker.lastRun;
+      }
+    } catch {}
+    results.push({
+      pass: lastHookRun !== undefined,
+      label: lastHookRun
+        ? `Devin hook execution evidence: SessionStart last ran ${lastHookRun} (historical evidence only; current hook approval is not verified)`
+        : "Devin hook execution evidence: no valid SessionStart marker; hook approval/execution is unverified",
+      fix: lastHookRun ? undefined
+        : "inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions",
+    });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -3210,7 +3286,7 @@ export async function collectDoctorReport(
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".devin"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (
@@ -3682,6 +3758,7 @@ export async function collectDoctorReport(
   // environment that produces drops, so an unreadable dir/file is named
   // rather than reported "none recorded".
   const advisoryEntries: string[] = [];
+  let repairDropsRecorded = false;
   let dropsUnreadable = 0;
   if (heartbeatDirExists) {
     try {
@@ -3694,6 +3771,16 @@ export async function collectDoctorReport(
           if (lines.length === 0) continue;
           const hook = f.replace(".drops", "");
           const reasons = lines.map((l) => l.split("\t").slice(1).join(" "));
+          if (hook === "testing-contract-repair") {
+            repairDropsRecorded = true;
+            results.push({
+              pass: false,
+              severity: "warn",
+              label: `Testing-posture contract was read via repair (historical): ${lines.length} read(s); ${[...new Set(reasons)].join("; ")}`,
+              fix: `Inspect the named plan file(s) and ${join(healthDir, f)}. Regenerate valid Testing Contract JSON through the normal plan-approval workflow; investigate the writer. Retire this log only after investigation. This history does not prove current corruption or a fixed Devin CLI version.`,
+            });
+            continue;
+          }
           const degraded = reasons.filter((r) => r.includes("[degraded]"));
           if (degraded.length > 0) {
             const last = reasons[reasons.length - 1].slice(0, 160);
@@ -3730,7 +3817,7 @@ export async function collectDoctorReport(
       pass: true,
       label: `Hook drops recorded (advisory): ${advisoryEntries.join(", ")} - a hook swallowed a failure and fail-opened; inspect the named .drops file(s) under .aidlc-hooks-health/ for the reasons, then delete them once investigated`,
     });
-  } else {
+  } else if (!repairDropsRecorded) {
     results.push({
       pass: true,
       label: "Hook drops: none recorded",

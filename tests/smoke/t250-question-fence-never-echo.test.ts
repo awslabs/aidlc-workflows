@@ -1,4 +1,4 @@
-// covers: doc:harness/claude/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/codex/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/cursor/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/opencode/skills/aidlc/question-rendering.md(never-echo-spec), doc:aidlc-common/protocols/stage-protocol.md(structured-questions-never-echo)
+// covers: doc:harness/claude/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/codex/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/cursor/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/opencode/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/devin/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/copilot/skills/aidlc/question-rendering.md(never-echo-spec), doc:aidlc-common/protocols/stage-protocol.md(structured-questions-never-echo)
 //
 // t250: regression guard for the "never echo the ```question fence" contract:
 // an orchestrator that dumps a fenced ` ```question ` block as LITERAL text
@@ -10,6 +10,8 @@
 //   - harness/kiro-ide/skills/aidlc/question-rendering.md  (numbered prose)
 //   - harness/opencode/skills/aidlc/question-rendering.md  (numbered prose)
 //   - harness/cursor/skills/aidlc/question-rendering.md    (numbered prose)
+//   - harness/devin/skills/aidlc/question-rendering.md     (numbered prose)
+//   - harness/copilot/skills/aidlc/question-rendering.md   (numbered prose)
 //   - core/aidlc-common/protocols/stage-protocol.md        (harness-neutral § "Structured questions")
 //
 // Mechanism: none. There is no tool / process / argv seam: the subject IS the
@@ -37,10 +39,15 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 // REPO_ROOT = <repo> (tests/harness/../..). The authored source trees sit
 // directly beneath it: core/ (harness-neutral) and harness/<h>/.
-const HARNESSES = ["claude", "codex", "kiro", "kiro-ide", "opencode", "cursor"] as const;
+// DISCOVERED, never hardcoded: a hardcoded roster silently stops covering the
+// next harness, which is exactly how devin shipped an annex that still said
+// "Claude Code harness annex". Deriving from HARNESS_MATRIX also picked up
+// copilot, which the old six-name list had been omitting.
+const HARNESSES = HARNESS_MATRIX.map((h) => h.name);
 
 function annexPath(harness: string): string {
   return join(
@@ -67,8 +74,18 @@ function read(path: string): string {
   return readFileSync(path, "utf-8");
 }
 
+const DEVIN_CONTRACT_REFERENCE = "[Structured questions]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#structured-questions-harness-neutral-contract)";
+
+function questionContract(harness: string, annex = read(annexPath(harness))): string {
+  if (harness !== "devin") return annex;
+  if (!annex.includes(DEVIN_CONTRACT_REFERENCE)) throw new Error("Devin must reference the core structured-question contract");
+  const section = read(PROTOCOL).match(/^### Structured questions \(harness-neutral contract\)\r?\n([\s\S]*?)(?=^### )/m)?.[0];
+  if (!section) throw new Error("Missing core structured-question section");
+  return section;
+}
+
 describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to chat", () => {
-  test("all six annexes and the protocol exist (no vacuous pass on a rename)", () => {
+  test("all shipped annexes and the protocol exist (no vacuous pass on a rename)", () => {
     for (const h of HARNESSES) {
       expect(existsSync(annexPath(h))).toBe(true);
     }
@@ -78,7 +95,7 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
   for (const harness of HARNESSES) {
     describe(`harness annex: ${harness}`, () => {
       test("carries the non-negotiable 'Never echo the spec' prohibition", () => {
-        const t = read(annexPath(harness));
+        const t = questionContract(harness);
         // The section heading the fix introduces in every rendering annex.
         expect(/never echo the spec/i.test(t)).toBe(true);
         // The prohibition verb: matching keeps this robust to reorder.
@@ -86,12 +103,12 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
       });
 
       test("names echoing the fence a protocol violation", () => {
-        const t = read(annexPath(harness));
+        const t = questionContract(harness);
         expect(/protocol violation/i.test(t)).toBe(true);
       });
 
       test("lists representative structured-question sites the rule applies to", () => {
-        const t = read(annexPath(harness));
+        const t = questionContract(harness);
         // The sites are representative, never an exhaustive allowlist.
         expect(/including but not limited to/i.test(t)).toBe(true);
         // Pin representative sites, including the consolidated-summary gate
@@ -115,6 +132,57 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
       });
     });
   }
+
+  test("Devin cannot inherit a core contract through a missing or incorrect reference", () => {
+    const annex = read(annexPath("devin"));
+    expect(annex).toContain(DEVIN_CONTRACT_REFERENCE);
+    expect(() => questionContract("devin", annex.replace(DEVIN_CONTRACT_REFERENCE, ""))).toThrow("Devin must reference");
+    expect(() => questionContract("devin", annex.replace("#structured-questions-harness-neutral-contract)", "#missing-section)"))).toThrow("Devin must reference");
+    expect(questionContract("devin")).toMatch(/annex mapping examples are illustrative authoring specs/i);
+    expect(questionContract("devin")).not.toContain("{{HARNESS_DIR}}/skills/aidlc/question-rendering.md");
+    expect(questionContract("devin").replace(/\s+/g, " ")).toContain("`question-rendering.md` in the SAME directory as the orchestrator `SKILL.md`");
+  });
+
+  test("Devin maps neutral specs to valid native question calls", () => {
+    const annex = read(annexPath("devin"));
+    expect(annex).toContain("| `multiSelect` | `questions[0].multi_select` |");
+    const specs = [...annex.matchAll(/^```question\n([\s\S]*?)^```/gm)].map(match => match[1]);
+    expect(specs.length).toBeGreaterThanOrEqual(1);
+    for (const spec of specs) {
+      expect(spec).toContain("multiSelect: false");
+      expect(spec).not.toContain("multi_select:");
+    }
+    const calls = annex.match(/ask_user_question\(\{[\s\S]*?\n\}\)/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      expect(call).toContain("multi_select: false");
+      expect(call).not.toMatch(/\bmultiSelect\s*:/);
+      const questions = call.split(/\bquestion:\s*/).slice(1);
+      expect(questions.length).toBeGreaterThanOrEqual(1);
+      expect(questions.length).toBeLessThanOrEqual(4);
+      for (const question of questions) {
+        const optionCount = question.match(/\blabel:\s*/g)?.length ?? 0;
+        expect(optionCount).toBeGreaterThanOrEqual(2);
+        expect(optionCount).toBeLessThanOrEqual(4);
+      }
+    }
+    expect(annex).toContain("1–4 questions per call");
+    expect(annex).toContain("2–4 explicit options per question");
+    expect(annex).toContain("five options as 3 + 2, not 4 + 1");
+    expect(annex).not.toContain("options A-D, then E+");
+  });
+
+  test("Devin keeps native answer identity and non-answer states distinct", () => {
+    const annex = read(annexPath("devin"));
+    for (const token of [
+      "`answers[questionText]`", "`questions[].question`", "`selected: string[]`",
+      "`custom_text`", "`skipped: true`", "not an ID or array index",
+      "not a selected option", "not a substitute option label",
+      "Do not batch identical question texts",
+      "#1-approval-gates)", "#3-question-format)",
+    ]) expect(annex).toContain(token);
+    expect(annex).not.toContain("verified on macOS before each release");
+  });
 
   test("Claude annex frames the fence as INPUT to the AskUserQuestion tool", () => {
     const t = read(annexPath("claude"));

@@ -1,0 +1,19 @@
+{
+  "stage": "code-generation",
+  "unit": null,
+  "version": 1,
+  "writes": [
+    { "path": "package.json" },
+    { "path": "vitest.config.js" },
+    { "path": ".gitignore" },
+    { "path": "src/db.js" },
+    { "path": "src/todoRepository.js" },
+    { "path": "src/todoService.js" },
+    { "path": "src/app.js" },
+    { "path": "src/server.js" },
+    { "path": "tests/db.test.js" },
+    { "path": "tests/todoRepository.test.js" },
+    { "path": "tests/todoService.test.js" },
+    { "path": "tests/app.test.js" }
+  ]
+}

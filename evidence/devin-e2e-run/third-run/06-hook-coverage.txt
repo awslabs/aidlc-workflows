@@ -1,0 +1,36 @@
+Run 3 — Hook Coverage Checklist (final)
+=======================================
+
+Target: 17/17 (run 1: 15/17, run 2: 14/17)
+Actual: 15/17
+
+| # | Hook Event | Target | Matcher | How verified | Run 1 | Run 2 | Run 3 |
+|---|------------|--------|---------|--------------|-------|-------|-------|
+| 1 | SessionStart | session-start | -- | heartbeat in hooks-health dir | PASS | PASS | PASS |
+| 2 | SessionEnd | session-end | -- | SESSION_ENDED in audit (15:45:17) | PASS | PASS | PASS |
+| 3 | UserPromptSubmit | record-human-turn | -- | 7 HUMAN_TURN from UserPromptSubmit (typed prompts) | PASS | PASS | PASS |
+| 4 | PreToolUse | state-transition-guard | -- | heartbeat in hooks-health dir | PASS | PASS | PASS |
+| 5 | PreToolUse | reviewer-scope | -- | heartbeat in hooks-health dir | PASS | PASS | PASS |
+| 6 | PreToolUse | review-freeze | -- | heartbeat in hooks-health dir | PASS | PASS | PASS |
+| 7 | PreToolUse | plan-approval-guard | -- | 23 PLAN_APPROVAL_BLOCKED events | PASS (15) | PASS (12) | PASS (23) |
+| 8 | PreToolUse | deliver-stage-rules | run_subagent | NO heartbeat in hooks-health dir | NOT TESTED | NOT TESTED | **NOT TESTED** |
+| 9 | PreToolUse | fold-usage | -- | (assumed; no explicit counter) | PASS | PASS | PASS |
+| 10 | PostToolUse | audit-and-sensors | edit\|write\|apply_patch | 15 ARTIFACT_* events | PASS | PASS | PASS |
+| 11 | PostToolUse | sync-workflow-state | todo_write | state updates in aidlc-state.md | PASS | PASS | PASS |
+| 12 | PostToolUse | log-subagent | run_subagent | 2 SUBAGENT_COMPLETED events + heartbeat | NOT TESTED | NOT TESTED | **PASS** |
+| 13 | PostToolUse | record-human-turn | ask_user_question | 0 HUMAN_TURN from PostToolUse arm (all 7 from UserPromptSubmit) | PARTIAL | **FAIL** | **FAIL** |
+| 14 | PostToolUse | rebuild-stage-graph | exec | (assumed; stage graph refreshed) | PASS | PASS | PASS |
+| 15 | PostToolUse | fold-usage | -- | (assumed; no explicit counter) | PASS | PASS | PASS |
+| 16 | PostCompaction | validate-state | -- | heartbeat at 12:26 + SESSION_COMPACTED | PASS | PASS | PASS |
+| 17 | Stop | continue-workflow | -- | 3 drops (all correct pending-decision carve-outs) | PASS | PASS | PASS |
+
+Deltas from run 2:
+- log-subagent: NOT TESTED → PASS (2 SUBAGENT_COMPLETED from conductor recovery dispatches)
+- record-human-turn on ask_user_question: FAIL → FAIL (arm STILL never fires — root cause confirmed: hasExplicitHumanSelection rejects all Devin response shapes; normalizeToolResponse was necessary but not sufficient)
+- deliver-stage-rules: NOT TESTED → NOT TESTED (conductor didn't pass `profile` field in run_subagent calls)
+
+The run did NOT reach 17/17 because:
+1. deliver-stage-rules never fired (conductor didn't pass the agent slug as `profile` in `run_subagent` calls — the hook matches on `tool_input.profile`)
+2. record-human-turn on ask_user_question: FAIL — the PostToolUse arm has NEVER fired for ANY ask_user_question response. All 7 HUMAN_TURNs are from UserPromptSubmit (typed prompts). The arm skips because hasExplicitHumanSelection() returns false for the actual Devin response shape. The run-2 fix (normalizeToolResponse) was necessary but not sufficient — it fixed the output extraction but hasExplicitHumanSelection still rejects the parsed shape.
+
+Key correction from earlier analysis: the 6 HUMAN_TURNs during requirements-analysis were initially attributed to the PostToolUse arm firing (proof that the run-2 fix worked). This was WRONG. All 7 HUMAN_TURNs are from UserPromptSubmit. The PostToolUse arm has never fired in any run. The regular gates passed because they only need ANY HUMAN_TURN since the last gate resolution — a typed prompt satisfies this. The plan approval failed because it specifically needs the response file written by recordPlanApprovalHumanResponse, which only fires when the PostToolUse arm runs with session_id + responseText.

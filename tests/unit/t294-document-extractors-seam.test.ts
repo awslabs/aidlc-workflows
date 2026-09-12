@@ -94,6 +94,7 @@ const HARNESS_DATA: Record<string, string> = {
   codex: "dist/codex/.codex/tools/data/harness.json",
   copilot: "dist/copilot/.aidlc/tools/data/harness.json",
   cursor: "dist/cursor/.cursor/tools/data/harness.json",
+  devin: "dist/devin/.devin/tools/data/harness.json",
   kiro: "dist/kiro/.kiro/tools/data/harness.json",
   "kiro-ide": "dist/kiro-ide/.kiro/tools/data/harness.json",
   opencode: "dist/opencode/.aidlc/tools/data/harness.json",

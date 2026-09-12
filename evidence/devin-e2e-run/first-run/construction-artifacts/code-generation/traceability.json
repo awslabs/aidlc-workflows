@@ -1,0 +1,27 @@
+{
+  "stage": "code-generation",
+  "unit": null,
+  "upstream_ids": [
+    "FR1.1", "FR1.2", "FR1.3", "FR1.4", "FR1.5",
+    "FR2.1", "FR2.2", "FR2.3",
+    "FR3.1", "FR3.2", "FR3.3",
+    "NFR1", "NFR2", "NFR3", "NFR4"
+  ],
+  "coverage": [
+    { "id": "FR1.1", "status": "OK", "target": "src/app.js" },
+    { "id": "FR1.2", "status": "OK", "target": "src/app.js" },
+    { "id": "FR1.3", "status": "OK", "target": "src/app.js" },
+    { "id": "FR1.4", "status": "OK", "target": "src/app.js" },
+    { "id": "FR1.5", "status": "OK", "target": "src/app.js" },
+    { "id": "FR2.1", "status": "OK", "target": "src/todoService.js" },
+    { "id": "FR2.2", "status": "OK", "target": "src/todoService.js" },
+    { "id": "FR2.3", "status": "OK", "target": "src/app.js" },
+    { "id": "FR3.1", "status": "OK", "target": "src/app.js" },
+    { "id": "FR3.2", "status": "OK", "target": "src/app.js" },
+    { "id": "FR3.3", "status": "OK", "target": "src/app.js" },
+    { "id": "NFR1", "status": "OK", "target": "src/db.js" },
+    { "id": "NFR2", "status": "OK", "target": "package.json" },
+    { "id": "NFR3", "status": "OK", "target": "tests/app.test.js" },
+    { "id": "NFR4", "status": "OK", "target": "src/server.js" }
+  ]
+}

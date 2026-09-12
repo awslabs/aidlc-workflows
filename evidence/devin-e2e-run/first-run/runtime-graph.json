@@ -1,0 +1,369 @@
+{
+  "workflow_id": "2026-08-31T12:18:26Z",
+  "scope": "express",
+  "started_at": "2026-08-31T12:18:26Z",
+  "stages": [
+    {
+      "stage_slug": "workspace-scaffold",
+      "started_at": "2026-08-31T12:18:26Z",
+      "completed_at": "2026-08-31T12:18:26Z",
+      "agent": "orchestrator",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/initialization/workspace-scaffold/memory.md",
+      "memory_entries": null,
+      "memory_breakdown": null,
+      "sensor_firings": [],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "workspace-detection",
+      "started_at": "2026-08-31T12:18:26Z",
+      "completed_at": "2026-08-31T12:18:26Z",
+      "agent": "orchestrator",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/initialization/workspace-detection/memory.md",
+      "memory_entries": null,
+      "memory_breakdown": null,
+      "sensor_firings": [],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "state-init",
+      "started_at": "2026-08-31T12:18:26Z",
+      "completed_at": "2026-08-31T12:18:26Z",
+      "agent": "orchestrator",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/initialization/state-init/memory.md",
+      "memory_entries": null,
+      "memory_breakdown": null,
+      "sensor_firings": [],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "requirements-analysis",
+      "started_at": "2026-08-31T12:18:26Z",
+      "completed_at": "2026-08-31T12:23:51Z",
+      "agent": "aidlc-product-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/inception/requirements-analysis/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [
+        {
+          "id": "required-sections",
+          "fire_id": "cb74c473",
+          "result": "passed",
+          "ts": "2026-08-31T12:23:45Z"
+        },
+        {
+          "id": "required-sections",
+          "fire_id": "c954d225",
+          "result": "passed",
+          "ts": "2026-08-31T12:23:45Z"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "d3389f15",
+          "result": "passed",
+          "ts": "2026-08-31T12:23:45Z"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "acdf4805",
+          "result": "passed",
+          "ts": "2026-08-31T12:23:45Z"
+        }
+      ],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "code-generation",
+      "started_at": "2026-08-31T12:23:51Z",
+      "completed_at": "2026-08-31T12:56:56Z",
+      "agent": "aidlc-developer-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/construction/code-generation/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [
+        {
+          "id": "linter",
+          "fire_id": "56c9d985",
+          "result": "passed",
+          "ts": "2026-08-31T12:35:46Z"
+        },
+        {
+          "id": "type-check",
+          "fire_id": "f9b704a2",
+          "result": "passed",
+          "ts": "2026-08-31T12:35:49Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "e9efbffa",
+          "result": "passed",
+          "ts": "2026-08-31T12:50:38Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "9a7db36d",
+          "result": "passed",
+          "ts": "2026-08-31T12:50:45Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "624bd6a4",
+          "result": "passed",
+          "ts": "2026-08-31T12:51:02Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "e0e927ee",
+          "result": "passed",
+          "ts": "2026-08-31T12:51:14Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "cdb80ee6",
+          "result": "passed",
+          "ts": "2026-08-31T12:51:33Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "bff7b1e5",
+          "result": "passed",
+          "ts": "2026-08-31T12:51:41Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "9f8aa185",
+          "result": "passed",
+          "ts": "2026-08-31T12:51:48Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "ce15e277",
+          "result": "passed",
+          "ts": "2026-08-31T12:51:59Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "113eed7d",
+          "result": "passed",
+          "ts": "2026-08-31T12:52:06Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "7f7ae8b9",
+          "result": "passed",
+          "ts": "2026-08-31T12:52:22Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "1879cd5c",
+          "result": "passed",
+          "ts": "2026-08-31T12:53:46Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "04ec84e9",
+          "result": "passed",
+          "ts": "2026-08-31T12:53:59Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "ff45346e",
+          "result": "passed",
+          "ts": "2026-08-31T12:54:25Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "172e0abc",
+          "result": "passed",
+          "ts": "2026-08-31T12:54:56Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "04d1be75",
+          "result": "passed",
+          "ts": "2026-08-31T12:55:10Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "0f02c460",
+          "result": "passed",
+          "ts": "2026-08-31T12:55:14Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "db4d46a3",
+          "result": "passed",
+          "ts": "2026-08-31T12:55:27Z"
+        },
+        {
+          "id": "traceability",
+          "fire_id": "f23d3ea3",
+          "result": "failed",
+          "ts": "2026-08-31T12:56:29Z",
+          "detail_path": "aidlc/spaces/default/intents/260831-todo-rest-api/.aidlc-sensors/code-generation/traceability-f23d3ea3.md"
+        },
+        {
+          "id": "required-sections",
+          "fire_id": "bb7e2c1e",
+          "result": "passed",
+          "ts": "2026-08-31T12:56:55Z"
+        }
+      ],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "build-and-test",
+      "started_at": "2026-08-31T12:56:56Z",
+      "completed_at": "2026-08-31T12:58:49Z",
+      "agent": "aidlc-quality-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/construction/build-and-test/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [
+        {
+          "id": "required-sections",
+          "fire_id": "76fc5a75",
+          "result": "passed",
+          "ts": "2026-08-31T12:58:29Z"
+        },
+        {
+          "id": "required-sections",
+          "fire_id": "e001bfc5",
+          "result": "passed",
+          "ts": "2026-08-31T12:58:29Z"
+        },
+        {
+          "id": "required-sections",
+          "fire_id": "6132adad",
+          "result": "passed",
+          "ts": "2026-08-31T12:58:29Z"
+        },
+        {
+          "id": "required-sections",
+          "fire_id": "a7e93421",
+          "result": "passed",
+          "ts": "2026-08-31T12:58:29Z"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "7079d2c5",
+          "result": "failed",
+          "ts": "2026-08-31T12:58:29Z",
+          "detail_path": "aidlc/spaces/default/intents/260831-todo-rest-api/.aidlc-sensors/build-and-test/upstream-coverage-7079d2c5.md"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "b1a52e4a",
+          "result": "failed",
+          "ts": "2026-08-31T12:58:29Z",
+          "detail_path": "aidlc/spaces/default/intents/260831-todo-rest-api/.aidlc-sensors/build-and-test/upstream-coverage-b1a52e4a.md"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "9547cdda",
+          "result": "failed",
+          "ts": "2026-08-31T12:58:29Z",
+          "detail_path": "aidlc/spaces/default/intents/260831-todo-rest-api/.aidlc-sensors/build-and-test/upstream-coverage-9547cdda.md"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "7ef41eb2",
+          "result": "failed",
+          "ts": "2026-08-31T12:58:29Z",
+          "detail_path": "aidlc/spaces/default/intents/260831-todo-rest-api/.aidlc-sensors/build-and-test/upstream-coverage-7ef41eb2.md"
+        }
+      ],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "deployment-pipeline",
+      "started_at": "2026-08-31T12:58:49Z",
+      "completed_at": null,
+      "agent": "aidlc-pipeline-deploy-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/operation/deployment-pipeline/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [],
+      "outcome": "pending",
+      "learnings_captured": null
+    },
+    {
+      "stage_slug": "deployment-execution",
+      "started_at": "2026-08-31T12:59:17Z",
+      "completed_at": null,
+      "agent": "aidlc-pipeline-deploy-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/operation/deployment-execution/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [],
+      "outcome": "pending",
+      "learnings_captured": null
+    },
+    {
+      "stage_slug": "observability-setup",
+      "started_at": "2026-08-31T12:59:49Z",
+      "completed_at": null,
+      "agent": "aidlc-operations-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-rest-api/operation/observability-setup/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [],
+      "outcome": "pending",
+      "learnings_captured": null
+    }
+  ]
+}

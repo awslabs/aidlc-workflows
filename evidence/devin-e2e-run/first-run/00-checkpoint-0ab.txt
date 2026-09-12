@@ -1,0 +1,21 @@
+=== Checkpoint 0a: Doctor output rows ===
+RESULT: PASS
+
+Required rows (all present with ✓):
+  ✓  bun installed
+  ✓  aidlc-devin-adapter.ts present
+  ✓  hooks.v1.json present (hook wiring)
+  ✓  config.json present (permissions + read_config_from)
+  ✓  mcp_config.json present (MCP servers)
+  ✓  rules/aidlc.md present (standing method rule)
+  ✓  devin CLI version 3000.6.7 >= 3000.3.0
+  ✓  hook approval: approve the project's hooks via /hooks... (advisory)
+
+Must NOT include:
+  settings.json present — NOT FOUND (correct, harness dir detected as .devin)
+
+Total: 45 passed, 0 failed
+
+=== Checkpoint 0b: Doctor exit code ===
+RESULT: PASS
+Exit code: 0 (all passed)

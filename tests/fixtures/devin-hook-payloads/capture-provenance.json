@@ -1,0 +1,48 @@
+{
+  "$schema": "devin-hook-capture-provenance/v1",
+  "cliVersion": "devin 3000.6.14 (18033302)",
+  "cliBinary": "/home/wiley/.local/bin/devin (resolves through _versions/current to 3000.6.14)",
+  "os": "Linux 5.15.167.4-microsoft-standard-WSL2",
+  "bunVersion": "1.3.14",
+  "captureDate": "2026-09-05",
+  "captureRoot": "/tmp/devin-capture-s02/proj (throwaway fixture, outside the aidlc-workflows checkout)",
+  "captureMethod": {
+    "description": "A minimal capture-only project with .devin/hooks.v1.json (native format, no outer 'hooks' wrapper) wiring SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse to a single .devin/capture-logger.ts bun script. The logger reads one JSON event from stdin, writes it pretty-printed to a uniquely named file under ./captures/, writes NOTHING to stdout, and exits 0. One file per event avoids the shared-append race for parallel hooks. Blank matcher captures all tools. No SubagentStop event was added (undocumented).",
+    "loggerPath": ".devin/capture-logger.ts",
+    "hooksConfigPath": ".devin/hooks.v1.json",
+    "invocation": "devin -p \"<prompt>\" --respect-workspace-trust false [--permission-mode accept-edits]",
+    "permissionModeNote": "C03 edit/write captures used --permission-mode accept-edits (auto-approves workspace edits only; NOT the broad 'dangerous' mode the runbook forbids). Read/grep/glob/notebook/exec/subagent captures used the default 'auto' mode. No global configuration was changed.",
+    "trustNote": "--respect-workspace-trust false skips the trust prompt that non-interactive -p mode cannot display on a scratch dir. Hooks DO fire under this flag (verified)."
+  },
+  "sanitization": "Real hook stdin captured live. Only paths, session_id slugs, prompt_id UUIDs, tool_use_id hexes, agent_id hexes, shell ids, and verbose prompt text were replaced with placeholders in captured-3000.6.14.json. Property names, nesting, booleans, missing-vs-null distinctions, response status, and correlation relationships are preserved exactly. No secrets, no real document content, no unredacted user prompts. Metadata lives in this provenance file, not injected into the captured events.",
+  "capturedFile": "captured-3000.6.14.json",
+  "cases": [
+    { "caseId": "C01", "eventName": ["SessionStart", "UserPromptSubmit"], "classification": "captured", "status": "PASS", "scenario": "Session start then ordinary human prompt", "notes": "session_id is a slug; prompt_id absent on SessionStart, present on UserPromptSubmit." },
+    { "caseId": "C02", "eventName": ["PreToolUse", "PostToolUse"], "toolName": ["read", "glob", "grep", "notebook_read", "exec"], "classification": "captured", "status": "PASS", "scenario": "Harmless read/grep/glob/notebook_read/exec", "notes": "grep glob_pattern confirmed as a real optional field (separate capture C02_grep_globPattern)." },
+    { "caseId": "C03", "eventName": ["PreToolUse", "PostToolUse"], "toolName": ["edit", "write"], "classification": "captured", "status": "PASS", "scenario": "Harmless edit/write in fixture", "notes": "Success response envelope captured. A rejected write (default auto mode) fires PreToolUse only — captured as C03_rejectedWrite." },
+    { "caseId": "C04", "eventName": ["PreToolUse", "PostToolUse"], "toolName": ["run_subagent", "read"], "classification": "captured", "status": "PASS", "scenario": "Foreground custom-profile dispatch", "notes": "Child tool calls share parent session_id; no profile/agent_type/agent_id on child events; agent_id only in run_subagent Post output string." },
+    { "caseId": "C05", "eventName": ["PreToolUse", "PostToolUse"], "toolName": ["run_subagent", "read_subagent"], "classification": "captured", "status": "PASS", "scenario": "Background launch + terminal completion via read_subagent", "notes": "Launch ack embeds agent_id in output. No dedicated completion hook event; async notification is agent-context only." },
+    { "caseId": "C06", "eventName": ["PreToolUse", "PostToolUse"], "toolName": ["read_subagent"], "classification": "captured", "status": "PARTIAL", "scenario": "Repeated read of completed subagent (cancel/fail/resume NOT captured)", "notes": "Repeated read returns success:true again — indistinguishable from first terminal completion. Cancel/fail/resume of a subagent was NOT separately captured (would require interrupting a running subagent mid-flight, not exercisable from -p)." },
+    { "caseId": "C07", "eventName": ["PreToolUse"], "toolName": ["ask_user_question"], "classification": "captured (cancel only)", "status": "BLOCKED", "scenario": "Single question with an explicit option selected", "blocker": "Headless -p mode cancels ask_user_question before a human can answer — no interactive TTY available to the capture harness. Only the cancel case (PreToolUse, no PostToolUse) was captured. The answered PostToolUse output envelope is NOT captured.", "owner": "S08 depends on this; requires an interactive UI session or owner-approved alternative capture strategy." },
+    { "caseId": "C08", "eventName": ["PreToolUse"], "toolName": ["ask_user_question"], "classification": "captured (cancel only)", "status": "BLOCKED", "scenario": "Multiple questions, multi-selection, Other text, partial skip, cancellation/rejection", "blocker": "Same as C07 — headless -p cannot produce human-answered responses. Multi-select/Other/skip answered envelopes NOT captured. The cancellation/rejection case overlaps with C07_cancel.", "owner": "S08 depends on this; requires an interactive UI session or owner-approved alternative capture strategy." },
+    { "caseId": "C09", "eventName": ["PreToolUse", "PostToolUse"], "toolName": ["run_subagent", "grep"], "classification": "captured (negative result)", "status": "PASS", "scenario": "Read/search inside a named custom profile to find reviewer identity", "notes": "ESTABLISHED the negative: no hook-provided identity on child tool calls distinguishes a reviewer from the conductor. This is evidence that BLOCKS S07, not a capture failure." },
+    { "caseId": "C10", "eventName": ["SessionEnd"], "classification": "captured", "status": "PASS", "scenario": "End the fixture session normally", "notes": "SessionEnd fires on 3000.6.14 with reason='other' for a normal -p exit; prompt_id present; no cwd/transcript_path." }
+  ],
+  "unsupportedEvents": {
+    "SubagentStop": "NOT captured and NOT added to hooks config — undocumented event. The runbook forbids adding it.",
+    "PostCompaction": "Not exercised in these captures (no compaction occurred during short -p sessions). The synthetic payloads.json retains a PostCompaction fixture for compatibility.",
+    "Stop": "Not exercised in these captures (the agent stopped normally without a Stop-hook block loop). The synthetic payloads.json retains a Stop fixture for compatibility.",
+    "PermissionRequest": "Not exercised. Documented in lifecycle-hooks.mdx but not needed for the AIDLC adapter contract."
+  },
+  "keyContractFindings": {
+    "session_id": "A short human-readable SLUG (e.g. 'bramble-scorpion'), NOT a UUID. Stable per session. The synthetic payloads.json used UUIDs — divergent.",
+    "prompt_id": "A UUID v4, rotated per user prompt. Present on all events EXCEPT SessionStart (which fires before the first prompt). The synthetic payloads.json used 'turn_id' — divergent; real field is 'prompt_id'.",
+    "cwd": "ABSENT on all captured events. The synthetic payloads.json included cwd — divergent. Project root is delivered via the DEVIN_PROJECT_DIR env var, not the payload.",
+    "transcript_path": "ABSENT on all captured events. The synthetic payloads.json included transcript_path — divergent.",
+    "tool_use_id": "Present on PreToolUse/PostToolUse. Two formats observed: 'chatcmpl-tool-<hex>' (parent/conductor) and 'functions.<tool>:<n>' (subagent-issued). Correlates Pre and Post.",
+    "tool_response": "ALWAYS an object {success:boolean, output:string, error:string|null} on PostToolUse. The synthetic payloads.json used bare strings ('ok'/'done') — divergent.",
+    "agent_type": "ABSENT on all captured events. The adapter's devin.agent_type assumption is NOT backed by real payloads.",
+    "agent_id": "ABSENT as a top-level field on all captured events. Appears ONLY embedded in run_subagent/read_subagent output strings and as read_subagent tool_input.agent_id. The adapter's devin.agent_id assumption is NOT backed by real payloads.",
+    "DEVIN_PROJECT_DIR": "Set to the project root by the CLI (env var, not payload). The adapter's DEVIN_PROJECT_DIR → payload.cwd → process.cwd() precedence stands, but payload.cwd was never observed."
+  }
+}

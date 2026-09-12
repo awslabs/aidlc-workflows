@@ -1,0 +1,11 @@
+/aidlc express "build a REST API for a todo app with CRUD endpoints"
+
+IMPORTANT — AUTOMATED TEST RUN INSTRUCTIONS:
+This is a non-interactive automated e2e test. You MUST auto-approve every gate
+without calling ask_user_question. When you reach a gate approval point:
+1. Do NOT call ask_user_question.
+2. Immediately call: bun .devin/tools/aidlc-orchestrate.ts report --stage <stage> --result completed --user-input "approved"
+3. Continue to the next stage.
+Run through ALL stages until the workflow reports done. Do not stop to ask
+questions. Do not park the workflow. Keep running stages back-to-back until
+the engine returns a done directive.

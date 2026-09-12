@@ -34,6 +34,7 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { DEVIN_MIN_VERSION_STRING } from "../../core/tools/aidlc-devin-version.ts";
 import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
 
 const BUN = process.execPath;
@@ -296,6 +297,34 @@ describe("t294 runtime diagnostics", () => {
       required: false,
       status: "not-applicable",
     }));
+  });
+
+  test("Devin diagnostics uses the shared version floor and install hint", () => {
+    const result = probeHarnessCli("devin", { which: () => null });
+    expect(result.status).toBe("missing");
+    expect(result.minimumVersion).toBe(DEVIN_MIN_VERSION_STRING);
+    expect(result.remediation).toBe(
+      `Install Devin CLI ${DEVIN_MIN_VERSION_STRING} or later and ensure \`devin --version\` works.`,
+    );
+  });
+
+  test.each([
+    ["3000.10.20", "too-old"],
+    [DEVIN_MIN_VERSION_STRING, "found"],
+    ["3000.10.22", "found"],
+    ["3000.11.0", "found"],
+    ["3001.0.0", "found"],
+  ] as const)("Devin diagnostics classifies %s as %s", (version, status) => {
+    const result = probeHarnessCli("devin", {
+      interactivePath: "/bin",
+      which: () => "/bin/devin",
+      run: () => ({ status: 0, stdout: `devin ${version} (test)\n` }),
+    });
+    expect(result.status).toBe(status);
+    expect(result.minimumVersion).toBe(DEVIN_MIN_VERSION_STRING);
+    if (status === "too-old") {
+      expect(result.remediation).toContain(DEVIN_MIN_VERSION_STRING);
+    }
   });
 });
 

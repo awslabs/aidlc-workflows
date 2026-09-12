@@ -1,0 +1,19 @@
+I'll generate the Outcomes Pack for this completed workflow. Let me start by invoking the skill and reading the aggregates.Summary loaded. Note: the runtime graph shows 3 pending operation stages, but the session header says observability-setup is completed and workflow is complete. Let me check the recovery breadcrumb and state to reconcile.State confirmed — workflow is complete. Operation phase stages were marked `[S]` (jumped/skipped) rather than formally approved, which is why the runtime graph shows them as pending. The breadcrumb file doesn't exist on disk, but state was preserved correctly in `aidlc-state.md`.
+
+Now let me read the content sources — artefacts and delivered code.Let me read the key artefacts and delivered code in parallel.Now let me read the remaining artefacts — operation phase memory files, build instructions, test results, and the source tree.I have all the content I need. The operation phase stages were jumped (`[S]` markers) with empty memory templates — no actual deployment/observability work was performed. I'll reflect that honestly. Writing `OUTCOMES.md` now.`OUTCOMES.md` written to the workspace root.
+
+## Summary
+
+**Sections written**: all 8 (What Was Built, Repository Structure, Setup Guide, Build and Deploy, Architecture Decisions, Commit vs Archive, Workflow Footprint, Limitations & Next Steps).
+
+**No sections skipped** — every section had source material.
+
+**Notes on the counts** (all traced to `aidlc-runtime.ts summary --json`):
+- 6 approved / 9 total stages, 0 failed, 3 pending, 40 min duration
+- 0 memory entries, 0 learnings, 33 sensor firings (28 passed / 5 failed)
+
+**One honest caveat I want to flag**: the 3 "pending" operation-phase stages (deployment-pipeline, deployment-execution, observability-setup) were *jumped* (`[S]` markers in `aidlc-state.md`) rather than executed — their memory files are empty templates and no deployment/observability artefacts exist. The runtime graph counts them as pending because no audit events were recorded. I reflected this in sections 4, 7, and 8 so the handover doc doesn't overstate what was delivered.
+
+The recovery breadcrumb (`.aidlc-recovery.md`) mentioned in the session header does not exist on disk, but `aidlc-state.md` preserved the workflow state correctly.
+
+Want to add or adjust a section?
