@@ -33,7 +33,7 @@
 //     #3  no Ideation stage marked [x]       -> 0 lines match `[x] <ideation-slug>`
 //     #4  Inception stages present in state  -> /reverse-engineering|requirements-analysis/
 //     #5  Construction stages present        -> /code-generation|build-and-test/
-//     #6  Operation stages absent            -> no deployment-pipeline or observability-setup
+//     #6  Operation stages SKIP-only        -> no `[x] <operation-slug>`; each renders `— SKIP`
 //     #7-9 init stages [x]                    -> `[x] workspace-scaffold|-detection|state-init`
 //     #11 classic scope recorded            -> `- **Scope**: classic`
 //     #12 Depth = Standard                    -> `- **Depth**: Standard`
@@ -367,8 +367,14 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         expect(stateMd).toMatch(/reverse-engineering|requirements-analysis/);
         // #5 Construction stages present.
         expect(stateMd).toMatch(/code-generation|build-and-test/);
-        // #6 Operation is a skipped phase, not a stage list for classic.
-        expect(stateMd).not.toMatch(/deployment-pipeline|observability-setup/);
+        // #6 Operation stages are planned-but-SKIP'd for classic: state-init still
+        //    renders every slug as `- [ ] <slug> — SKIP` (and by number under
+        //    Stages to Skip), so the slugs ARE present. Assert none is marked [x]
+        //    and each carries the SKIP suffix — the same shape as #3 for Ideation.
+        for (const slug of ["deployment-pipeline", "observability-setup"]) {
+          expect(new RegExp(`\\[x\\]\\s*${slug}\\b`, "i").test(stateMd)).toBe(false);
+          expect(stateMd).toMatch(new RegExp(`- \\[[ S]\\] ${slug} \u2014 SKIP`));
+        }
 
         // #7-9 all 3 init stages marked [x] (the .sh's per-stage grep).
         for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
