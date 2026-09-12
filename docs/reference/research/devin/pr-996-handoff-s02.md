@@ -21,9 +21,11 @@ S02 step before editing.
 | S03 | Runner/standalone triggers + rule activation | PASS | `.aidlc-impl/S03-invocation-rules.md`; t331 tests 14–18 |
 | S04 | Persona frontmatter projection | PASS | `.aidlc-impl/S04-persona-frontmatter.md`; t333 (12 tests) |
 | S05 | Hook cleanup, anchored matchers, path tests | PASS | `.aidlc-impl/S05-hook-cleanup.md`; t331/t332 |
-| S10 | Version floor 3000.5.20 + cross-platform Desktop doctor | PASS | `.aidlc-impl/S10-version-floor.md`; t334 (15 tests) |
+| S10 | Version floor + cross-platform Desktop doctor | PASS | `.aidlc-impl/S10-version-floor.md`; t334 (15 tests) |
 | S11 | Onboarding reduction ≤12KiB | PASS | `.aidlc-impl/S11-onboarding-reduction.md`; t331 tests 7b–7d |
 | Policy table §0.2 | Row-by-row review | APPROVED | `.aidlc-impl/policy-table-decision.md` (row 10 amended: cross-platform Desktop) |
+
+**Baseline update (2026-09-12):** the current Devin CLI floor is `3000.10.21`. The S10 PASS and test counts above describe the historical hand-off, not a rerun against this baseline.
 
 **Verification at hand-off:** `bun scripts/package.ts --check` clean across 8
 harness trees; full unit suite 264 files / 6275 assertions / 0 failures.

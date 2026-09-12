@@ -9,11 +9,10 @@ every distribution — only the shell differs. The tree is **generated** from
 
 ## Prerequisites
 
-- **Devin CLI ≥ 3000.3.0** — earlier versions lack the dedicated
-  `mcp_config.json` files and the modern `.devin/` config layout
-  (`hooks.v1.json` as the whole-hooks-object file, project config limited to
-  permissions/read_config_from/hooks). `/aidlc --doctor` enforces the pin. Check
-  with `devin --version`.
+- **Devin CLI ≥ 3000.10.21** — the selected AIDLC support baseline, shared by
+  config diagnostics and `/aidlc --doctor`. This baseline does not claim that
+  every required capability first appeared in this release. Check with
+  `devin --version`.
 - **bun** — same requirement as every harness; every tool and hook runs via
   bun. Install via `curl -fsSL https://bun.sh/install | bash` (or
   `npm install -g bun` / `powershell -c "irm bun.sh/install.ps1 | iex"` on

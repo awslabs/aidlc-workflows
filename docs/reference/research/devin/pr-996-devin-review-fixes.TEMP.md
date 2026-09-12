@@ -30,7 +30,7 @@ Approval of implementation should explicitly include this table. If the owner di
 
 | Topic | Proposed choice | Do not do |
 |---|---|---|
-| Supported CLI floor | Set `3000.5.20` as the candidate minimum; validate minimum/current before claiming verified compatibility | Infer full support from the `3000.3.22` stderr fix alone |
+| Supported CLI floor | Current baseline (updated 2026-09-12): `3000.10.21`; validate minimum/current before claiming verified compatibility | Infer full support from the `3000.3.22` stderr fix alone |
 | Nested delegation | Retain Devin's native default no-nesting; ship no nesting opt-in | Introduce exhaustive role allowlists merely to remove `run_subagent` |
 | Generated runners | User-only for stage, initialization, scope, and composition runners | Treat `user-invocable: true` as disabling model invocation |
 | Standalone skills that write | Make `aidlc-knowledge` and `aidlc-outcomes-pack` user-only on Devin | Call a skill filesystem-read-only merely because workflow state is unchanged |
@@ -502,7 +502,7 @@ If no reliable terminal signal is available, document the precise unsupported be
 
 ### Version decision
 
-Use candidate minimum `3000.5.20`. Changelog evidence: `3000.3.22` fixes stderr block reasons; `3000.5.20` fixes SessionEnd execution, workspace hook roots, full skill delivery, and argument interpolation. This is a compatibility rationale, not proof of testing an unavailable binary.
+**Baseline update (2026-09-12):** use the selected support baseline `3000.10.21`. Earlier CLI releases fixed stderr block reasons, SessionEnd execution, workspace hook roots, full skill delivery, and argument interpolation; these are historical compatibility context, not features claimed to debut at the current baseline. The selected floor is not proof of end-to-end testing.
 
 ### Discovery algorithm
 
@@ -515,16 +515,16 @@ Use candidate minimum `3000.5.20`. Changelog evidence: `3000.3.22` fixes stderr 
 7. Report source (`PATH` or observed Desktop bundle), checked path, parsed version, and comparison result. Do not dump unrelated stderr or environment secrets.
 8. Report only the checked executable's compatibility; Desktop may use another runtime. Keep Desktop execution separately unverified.
 9. Extract small pure parse/compare helpers and injectable discovery/execution dependencies if needed for deterministic tests. Keep test injection internal, not new public configuration flags.
-10. Update the live E2E version predicate and skip message, currently pinned to `3000.3.0`. Preserve the `AIDLC_DEVIN_BIN` test override.
+10. Update the live E2E version predicate and skip message to consume the shared `3000.10.21` support baseline. Preserve the `AIDLC_DEVIN_BIN` test override.
 
 ### Deterministic table
 
 | Case | Expected |
 |---|---|
-| PATH `3000.5.20` | Pass minimum comparison |
-| PATH `3000.6.14` | Pass |
-| PATH `3000.5.19` | Fail old version |
-| PATH `3000.3.22` | Fail candidate floor, without claiming no blocking support |
+| PATH `3000.10.21` | Pass minimum comparison |
+| PATH `3000.10.22` | Pass |
+| PATH `3000.10.20` | Fail old version |
+| PATH `3000.3.22` | Fail current floor, without claiming no blocking support |
 | PATH absent, macOS bundle supported | Pass comparison, bundle source shown |
 | Both present | PATH chosen; no claim about active Desktop runtime |
 | Neither present | Advisory/unknown, not verified support |

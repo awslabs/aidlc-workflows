@@ -7,9 +7,10 @@
 // override to simulate missing binaries, broken binaries, malformed output,
 // Desktop bundles, etc.
 //
-// The floor is 3000.5.20 (the minimum version that supports the features
-// AIDLC relies on: hooks.v1.json, triggers frontmatter, run_subagent tool,
-// ask_user_question with multi_select).
+// The shared floor is the selected Devin CLI support baseline, not a claim
+// about when required capabilities first appeared. AIDLC relies on
+// hooks.v1.json, triggers frontmatter, run_subagent, and
+// ask_user_question with multi_select.
 //
 // Desktop discovery is cross-platform:
 //   - macOS: /Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin
@@ -23,7 +24,7 @@ import { join } from "node:path";
 import { homedir, platform } from "node:os";
 
 /** The minimum supported Devin CLI version as a numeric triple. */
-export const DEVIN_MIN_VERSION: readonly [number, number, number] = [3000, 5, 20];
+export const DEVIN_MIN_VERSION: readonly [number, number, number] = [3000, 10, 21];
 
 /** Human-readable floor string for labels. */
 export const DEVIN_MIN_VERSION_STRING = DEVIN_MIN_VERSION.join(".");

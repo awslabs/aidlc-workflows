@@ -29,6 +29,12 @@ import {
   setupDevinProject,
 } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import {
+  compareTriples,
+  DEVIN_MIN_VERSION,
+  DEVIN_MIN_VERSION_STRING,
+  parseVersionTriple,
+} from "../../core/tools/aidlc-devin-version.ts";
 
 const DEVIN_DIST = join(REPO_ROOT, "dist", "devin");
 const DEVIN_BIN = process.env.AIDLC_DEVIN_BIN ?? "devin";
@@ -38,18 +44,17 @@ const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
 
 function devinVersionOk(): boolean {
   const r = spawnSync(DEVIN_BIN, ["--version"], { encoding: "utf-8" });
-  const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
-  if (r.status !== 0 || !m) return false;
-  const [maj, min, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  // Minimum Devin CLI version: 3000.3.0 (the modern .devin/ config layout).
-  return maj > 3000 || (maj === 3000 && (min > 3 || (min === 3 && patch >= 0)));
+  const version = parseVersionTriple(r.stdout ?? "");
+  // Compare against the shared Devin CLI support floor.
+  return r.status === 0 && version !== null &&
+    compareTriples(version, DEVIN_MIN_VERSION) >= 0;
 }
 
 function skipReason(): string | null {
   if (process.env.AIDLC_DEVIN_EXEC_LIVE !== "1") {
     return "set AIDLC_DEVIN_EXEC_LIVE=1 to run the live devin-exec journey";
   }
-  if (!devinVersionOk()) return `devin >= 3000.3.0 not found (AIDLC_DEVIN_BIN=${DEVIN_BIN})`;
+  if (!devinVersionOk()) return `devin >= ${DEVIN_MIN_VERSION_STRING} not found (AIDLC_DEVIN_BIN=${DEVIN_BIN})`;
   if (!existsSync(DEVIN_DIST)) return `distributable missing: ${DEVIN_DIST}`;
   return null;
 }

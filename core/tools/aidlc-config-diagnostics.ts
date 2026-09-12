@@ -12,6 +12,7 @@ import {
 import { homedir, platform as hostPlatform } from "node:os";
 import { delimiter, extname, join, relative, resolve } from "node:path";
 import { sha256Bytes } from "./aidlc-distribution.ts";
+import { DEVIN_MIN_VERSION_STRING } from "./aidlc-devin-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -650,8 +651,8 @@ const HARNESS_CLI: Record<
   devin: {
     command: "devin",
     required: true,
-    minimumVersion: "3000.3.0",
-    install: "Install Devin CLI 3000.3.0 or later and ensure `devin --version` works.",
+    minimumVersion: DEVIN_MIN_VERSION_STRING,
+    install: `Install Devin CLI ${DEVIN_MIN_VERSION_STRING} or later and ensure \`devin --version\` works.`,
   },
 };
 

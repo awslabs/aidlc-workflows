@@ -45,7 +45,7 @@ figure in docs is the logical-behavior count across all harnesses.
 
 - **Confirmed:** all 45 doctor checks green, 0 failed.
 - `workspace shell ready` check passed → §1 sibling layout is correct.
-- `devin CLI version 3000.6.14 >= 3000.5.20` → matches RFC pin.
+- **Baseline update (2026-09-12):** the observed Devin CLI `3000.6.14` passed the then-current floor, but is below the current `3000.10.21` support baseline. This historical run does not verify the new baseline.
 - `Enabled plugins: all enabled (no selection); enabled stage counts:
   aidlc=30, bootstrap=3` → 33 stages total, matches RFC "5 phases / 33 stages".
 - **Hooks-are-firing proof:** `Hooks last fired: reviewer-scope

@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.2] - 2026-09-12
+
+AIDLC now requires Devin CLI 3000.10.21 or later. **Upgrade:** upgrade Devin CLI separately, then run `aidlc update` (or use `install.sh --version 2.9.2` / `install.ps1 -Version 2.9.2`) to update AIDLC. Updating AIDLC does not upgrade Devin CLI. No workflow-record migration is required.
+
+* Config diagnostics and `/aidlc --doctor` now use the same minimum Devin CLI version and consistent install/upgrade guidance.
+* Devin prerequisite documentation and the opt-in live E2E gate now use the shared support baseline.
+
 ## [2.9.1] - 2026-09-12
 
 Restores the shared persona frontmatter contract for Devin CLI, including plugin agents. **Upgrade:** `aidlc update`, or `install.sh --version 2.9.1` / `install.ps1 -Version 2.9.1`, to replace previously stripped agent files. No workflow-record migration is required.

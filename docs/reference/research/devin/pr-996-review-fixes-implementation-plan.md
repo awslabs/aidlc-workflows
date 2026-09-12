@@ -129,7 +129,7 @@ Important local discrepancy: the adapter currently resolves `DEVIN_PROJECT_DIR â
 
 ### Primary implementation point
 
-`core/tools/aidlc-utility.ts`: the reviewed doctor implementation hard-fails when no version can be read and pins `3000.3.0`.
+`core/tools/aidlc-utility.ts`: the reviewed doctor implementation hard-fails when no version can be read. **Baseline update (2026-09-12):** the current supported floor is `3000.10.21`, shared through `core/tools/aidlc-devin-version.ts`; the originally proposed older minimum below has been superseded.
 
 ### Changes
 
@@ -137,7 +137,7 @@ Important local discrepancy: the adapter currently resolves `DEVIN_PROJECT_DIR â
    - `devin` on `PATH`.
    - On macOS, the measured standard Desktop bundle location: `/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin`.
    - Otherwise report version verification unavailable as an advisory.
-2. Raise the minimum to `3000.3.22`, documenting the exit-code-2/stderr blocking compatibility requirement.
+2. **Baseline update (2026-09-12):** the floor is now the shared `3000.10.21` support baseline in `core/tools/aidlc-devin-version.ts`. The earlier proposal to raise the minimum to `3000.3.22` â€” documenting the exit-code-2/stderr blocking compatibility requirement â€” is superseded historical context, as are the earlier release fixes it cited.
    - Avoid the stronger, insufficiently established claim that every older version cannot block at all.
 3. Distinguish missing binaries from binaries that exist but fail execution or return an unparseable version.
    - A broken discovered binary must not silently receive the missing-binary advisory.

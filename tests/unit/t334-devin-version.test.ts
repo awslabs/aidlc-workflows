@@ -5,7 +5,7 @@
 //
 // WHAT. The version check discovers the Devin CLI binary (PATH first, then
 // cross-platform Desktop paths), executes [binary, "--version"], parses the
-// output, and compares against the floor (3000.5.20). These tests verify
+// output, and compares against the shared floor (DEVIN_MIN_VERSION). These tests verify
 // every case in the runbook's S10 matrix using injectable discovery/exec seams:
 //   - missing binary (neither PATH nor Desktop)
 //   - PATH binary found, version OK
@@ -69,13 +69,13 @@ describe("t334 devin version — checkDevinVersion with injectable seams", () =>
     const r = checkDevinVersion(
       pathBin,
       noDesktop,
-      execReturning({ stdout: "devin 3000.6.14 (18033302)\n" }),
+      execReturning({ stdout: "devin 3000.10.22 (18033302)\n" }),
     );
     expect(r.pass).toBe(true);
     expect(r.binaryPath).toBe("/usr/local/bin/devin");
     expect(r.source).toBe("PATH");
-    expect(r.parsedVersion).toEqual([3000, 6, 14]);
-    expect(r.label).toContain("3000.6.14");
+    expect(r.parsedVersion).toEqual([3000, 10, 22]);
+    expect(r.label).toContain("3000.10.22");
     expect(r.label).toContain(">=");
     expect(r.label).toContain(DEVIN_MIN_VERSION_STRING);
   });
@@ -84,7 +84,7 @@ describe("t334 devin version — checkDevinVersion with injectable seams", () =>
     const r = checkDevinVersion(
       noPath,
       desktopBin,
-      execReturning({ stdout: "devin 3000.6.14 (18033302)\n" }),
+      execReturning({ stdout: "devin 3000.10.22 (18033302)\n" }),
     );
     expect(r.pass).toBe(true);
     expect(r.source).toBe("Desktop");
@@ -116,38 +116,39 @@ describe("t334 devin version — checkDevinVersion with injectable seams", () =>
     expect(r.label).toContain("unparseable");
   });
 
-  test("6: below floor — version 3000.4.0", () => {
+  test("6: below floor — version 3000.10.20", () => {
     const r = checkDevinVersion(
       pathBin,
       noDesktop,
-      execReturning({ stdout: "devin 3000.4.0 (12345)\n" }),
+      execReturning({ stdout: "devin 3000.10.20 (12345)\n" }),
     );
     expect(r.pass).toBe(false);
-    expect(r.parsedVersion).toEqual([3000, 4, 0]);
-    expect(r.label).toContain("3000.4.0");
+    expect(r.parsedVersion).toEqual([3000, 10, 20]);
+    expect(r.label).toContain("3000.10.20");
     expect(r.label).toContain("<");
     expect(r.fix).toContain("upgrade");
+    expect(r.fix).toContain(DEVIN_MIN_VERSION_STRING);
   });
 
-  test("7: exact floor — version 3000.5.20", () => {
+  test("7: exact shared floor", () => {
     const r = checkDevinVersion(
       pathBin,
       noDesktop,
-      execReturning({ stdout: "devin 3000.5.20 (99999)\n" }),
+      execReturning({ stdout: `devin ${DEVIN_MIN_VERSION_STRING} (99999)\n` }),
     );
     expect(r.pass).toBe(true);
-    expect(r.parsedVersion).toEqual([3000, 5, 20]);
-    expect(r.label).toContain("3000.5.20");
+    expect(r.parsedVersion).toEqual(DEVIN_MIN_VERSION);
+    expect(r.label).toContain(DEVIN_MIN_VERSION_STRING);
   });
 
-  test("8: newer than floor — version 3000.10.0", () => {
+  test("8: newer than floor — version 3000.10.22", () => {
     const r = checkDevinVersion(
       pathBin,
       noDesktop,
-      execReturning({ stdout: "devin 3000.10.0 (55555)\n" }),
+      execReturning({ stdout: "devin 3000.10.22 (55555)\n" }),
     );
     expect(r.pass).toBe(true);
-    expect(r.parsedVersion).toEqual([3000, 10, 0]);
+    expect(r.parsedVersion).toEqual([3000, 10, 22]);
   });
 
   test("9: unknown version — exit 0, empty stdout", () => {
@@ -187,7 +188,7 @@ describe("t334 devin version — checkDevinVersion with injectable seams", () =>
     const r = checkDevinVersion(
       pathBin,
       desktopBin,
-      execReturning({ stdout: "devin 3000.6.14 (18033302)\n" }),
+      execReturning({ stdout: "devin 3000.10.22 (18033302)\n" }),
     );
     expect(r.source).toBe("PATH");
     expect(r.binaryPath).toBe("/usr/local/bin/devin");
@@ -203,16 +204,16 @@ describe("t334 devin version — checkDevinVersion with injectable seams", () =>
   });
 
   test("14: compareTriples lexicographic ordering", () => {
-    expect(compareTriples([3000, 5, 20], [3000, 5, 20])).toBe(0);
-    expect(compareTriples([3000, 5, 21], [3000, 5, 20])).toBeGreaterThan(0);
-    expect(compareTriples([3000, 5, 19], [3000, 5, 20])).toBeLessThan(0);
-    expect(compareTriples([3000, 6, 0], [3000, 5, 20])).toBeGreaterThan(0);
-    expect(compareTriples([3000, 4, 99], [3000, 5, 20])).toBeLessThan(0);
-    expect(compareTriples([3001, 0, 0], [3000, 5, 20])).toBeGreaterThan(0);
+    expect(compareTriples(DEVIN_MIN_VERSION, DEVIN_MIN_VERSION)).toBe(0);
+    expect(compareTriples([3000, 10, 22], DEVIN_MIN_VERSION)).toBeGreaterThan(0);
+    expect(compareTriples([3000, 10, 20], DEVIN_MIN_VERSION)).toBeLessThan(0);
+    expect(compareTriples([3000, 11, 0], DEVIN_MIN_VERSION)).toBeGreaterThan(0);
+    expect(compareTriples([3000, 9, 99], DEVIN_MIN_VERSION)).toBeLessThan(0);
+    expect(compareTriples([3001, 0, 0], DEVIN_MIN_VERSION)).toBeGreaterThan(0);
   });
 
-  test("15: DEVIN_MIN_VERSION is 3000.5.20", () => {
-    expect(DEVIN_MIN_VERSION).toEqual([3000, 5, 20]);
-    expect(DEVIN_MIN_VERSION_STRING).toBe("3000.5.20");
+  test("15: DEVIN_MIN_VERSION is 3000.10.21", () => {
+    expect(DEVIN_MIN_VERSION).toEqual([3000, 10, 21]);
+    expect(DEVIN_MIN_VERSION_STRING).toBe("3000.10.21");
   });
 });
