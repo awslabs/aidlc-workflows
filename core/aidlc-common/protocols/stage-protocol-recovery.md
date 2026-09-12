@@ -15,7 +15,7 @@ where the workflow stands by reading five sources, in this order:
 1. **Artefact tree** (`<record>/<phase>/<stage>/*.md`) — the decisions
    themselves, in finished form. Read first: it is the durable record of what
    was actually agreed.
-2. **`memory.md` per stage** (`<record>/<phase>/<stage>/memory.md`) — what
+2. **`memory.md` per stage, only when the `learnings` module is listed** (`<record>/<phase>/<stage>/memory.md`) — what
    got noticed during the decision-making (interpretations, deviations,
    trade-offs, open questions).
 3. **Audit log** (`<record>/audit/<host>-<clone>.md`, glob `<record>/audit/*.md`) —
@@ -217,9 +217,8 @@ instruction**. Supplying material is not a request to advance.
   Construction design stages (Functional Design, NFR Requirements, NFR Design,
   Infrastructure Design) and do not jump to Code Generation. New material
   sharpens the design; it does not mean the design is done.
-- **Fold it in.** Ingest the material, record what it tells you in the stage's
-  `memory.md` (Interpretations / Open questions), and update the current stage's
-  questions and artifacts to reflect it. Re-run or revise the current stage as
+- **Fold it in.** Ingest the material and update the current stage's
+  questions and artifacts to reflect it. Only when `directive.protocol_modules` lists `learnings`, record observations in the stage's `memory.md` (Interpretations / Open questions); otherwise keep no diary. Re-run or revise the current stage as
   needed until its answers are coherent.
 - **Then continue through the normal engine transition** — finish the stage,
   present its gate, `report` the outcome, and let the next `next` name the next

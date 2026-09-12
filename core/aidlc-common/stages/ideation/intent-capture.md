@@ -193,11 +193,11 @@ Otherwise:
    Acceptance does not turn an assumption into fact.
 4. On `Convert to follow-up questions`, fill that answer, append consecutively
    numbered `Q<n>` follow-ups, collect and confirm their answers, and revise
-   both artifacts. Re-present the consolidated summary, reset the single
+   both artifacts. Only when `directive.ceremony.summary_confirmation === "on"`, re-present the consolidated summary, reset the single
    post-summary confirmation to a blank `[Answer]:`, and record a fresh standard
    summary decision/answer receipt before continuing. Only after that new receipt
    succeeds may you re-save the artifacts, rerun the reviewer, and continue to
-   completion. If assumptions remain, reuse and reset the single
+   completion. When it is `"off"`, save the revised artifacts directly with no summary checkpoint or receipt. The separate Assumption Confirmation remains required. If assumptions remain, reuse and reset the single
    `## Assumption Confirmation` section and repeat this step.
 
 Do not invoke the reviewer or proceed to completion while an assumption
@@ -231,9 +231,8 @@ entails a claim.
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

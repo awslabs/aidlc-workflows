@@ -7,7 +7,7 @@
 //
 // SUBJECT: the bounded Build & Test → Code Generation failure loop-back in the
 // conditional Construction protocol module.
-// Five surfaces carry the contract:
+// Four surfaces carry the contract:
 //   1. dist/claude/.claude/aidlc-common/stages/construction/build-and-test.md
 //      — Step 9's 4-rung failure-escalation ladder, the `## Loop-Back Log`
 //      artifact shape, and the single-stage (--single) carve-out.
@@ -17,19 +17,15 @@
 //      settlement paths, swarm path, question variants, and second
 //      autonomous-stop case.
 //   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md — the
-//      NO EMERGENT carve-out, checklist-item-5 exception, and both Artifact
+//      NO EMERGENT carve-out and both Artifact
 //      Re-use overrides.
 //   4. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
 //      — the crash-resume bullet (logged-but-not-jumped detection), now under
 //      "Session resume" rather than "Stage re-run".
-//   5. Every harness conductor SKILL (authored harness/<h>/skills/aidlc/
-//      SKILL.md AND its dist copy via the harness matrix) — the parenthetical
-//      exception on the "STAGE RITUAL IS ATOMIC" Key Principles bullet.
 //
 // FIXTURE DISCIPLINE: inputs are the REAL committed shipped files (AIDLC_SRC
-// = <repo>/dist/claude/.claude from tests/harness/fixtures.ts) plus the
-// authored + dist conductor SKILLs discovered through HARNESS_MATRIX (so a
-// new harness cannot escape the gate). NOTHING is written; no temp project,
+// = <repo>/dist/claude/.claude from tests/harness/fixtures.ts) plus authored
+// and harness-matrix Construction protocol copies. NOTHING is written; no temp project,
 // no teardown — there is no mutable surface.
 
 import { describe, expect, test } from "bun:test";
@@ -193,11 +189,6 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     );
   });
 
-  test("EXCEPTION sentence on Critical-checklist item 5 (stage ritual atomic)", () => {
-    expect(MAIN_PROTOCOL).toContain(
-      "EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.",
-    );
-  });
 
   test("ledger paragraph: artifact ledger beats counting STAGE_JUMPED rows", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain("the count of `### Loop-back N` entries IS the bound (max 3 per intent)");
@@ -561,41 +552,3 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
   });
 });
 
-describe("t305 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored + dist, every harness)", () => {
-  const EXCEPTION_SENTENCE =
-    "(One exception: the Build-and-Test failure loop-back — the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)";
-
-  test("every authored conductor SKILL carries the exception on the atomic-ritual bullet", () => {
-    expect(HARNESS_MATRIX).toHaveLength(7);
-    const missing: string[] = [];
-    for (const harness of HARNESS_MATRIX) {
-      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      const bullet = body
-        .split("\n")
-        .find((l) => l.includes("**STAGE RITUAL IS ATOMIC**"));
-      if (!bullet) {
-        missing.push(`${rel}  missing the STAGE RITUAL IS ATOMIC bullet`);
-      } else if (!bullet.includes(EXCEPTION_SENTENCE)) {
-        // Same-line co-location: the exception is part of the bullet itself,
-        // not merely present somewhere in the file.
-        missing.push(`${rel}  bullet lacks the loop-back exception sentence`);
-      }
-    }
-    expect(missing).toEqual([]);
-  });
-
-  test("every dist conductor SKILL copy carries the same exception (byte-parity spot check)", () => {
-    const missing: string[] = [];
-    for (const harness of HARNESS_MATRIX) {
-      const path = join(harness.skillsRoot, "aidlc", "SKILL.md");
-      const bullet = readFileSync(path, "utf-8")
-        .split("\n")
-        .find((l) => l.includes("**STAGE RITUAL IS ATOMIC**"));
-      if (!bullet?.includes(EXCEPTION_SENTENCE)) {
-        missing.push(`dist ${harness.name}: ${path}`);
-      }
-    }
-    expect(missing).toEqual([]);
-  });
-});
