@@ -462,9 +462,8 @@ function parseSourceUniverse(
 	}
 	const assumptionAnswer = assumptionAnswers[0] ?? "";
 	const acceptedAssumptions = new Set(
-		confirmation
-			.filter((line) => isListItem(line))
-			.filter((line) => sourceTags(line, labels).includes("assumption"))
+		foldListItemBlocks(confirmation)
+			.filter((block) => sourceTags(block, labels).includes("assumption"))
 			.map(normalizedAssumption)
 			.filter((entry) => entry.length > 0),
 	);
@@ -478,6 +477,39 @@ function parseSourceUniverse(
 			pastedDocumentPresent: authority.pastedDocumentPresent,
 			findings,
 	};
+}
+
+/**
+ * Groups a flat line array into logical list-item blocks: a line matching
+ * `isListItem` starts a new block, and subsequent non-blank, non-list-item
+ * lines are folded into it as wrapped continuation text (joined with "\n",
+ * matching how `normalizedAssumption` collapses whitespace). A blank line
+ * or the next list item ends the current block. Lines that appear before
+ * any list item are ignored, matching the previous per-line filter's
+ * behavior of only ever keeping list-item lines.
+ */
+function foldListItemBlocks(lines: string[]): string[] {
+	const blocks: string[] = [];
+	let pending: string[] = [];
+
+	const flush = (): void => {
+		if (pending.length > 0) blocks.push(pending.join("\n"));
+		pending = [];
+	};
+
+	for (const line of lines) {
+		if (isListItem(line)) {
+			flush();
+			pending.push(line);
+		} else if (line.trim().length === 0) {
+			flush();
+		} else if (pending.length > 0) {
+			pending.push(line);
+		}
+	}
+	flush();
+
+	return blocks;
 }
 
 function isTableSeparator(line: string): boolean {

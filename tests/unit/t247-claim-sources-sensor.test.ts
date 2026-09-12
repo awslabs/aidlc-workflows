@@ -415,6 +415,25 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
+  test("a wrapped multi-line assumption confirmation still matches the retained assumption", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed for all international purchases over the annual threshold. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed for all international\n  purchases over the annual threshold. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
   for (const answer of [
     "A. Accept assumptions? No",
     "A. Accept assumptions with caveats",
