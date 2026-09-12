@@ -22,6 +22,7 @@ import {
   commitPlanApprovalBatch,
   planApprovalBatchCommitted,
   contentBeforeTerminalReviewAppendix,
+  currentSwarmSourceMergeChain,
   docsRoot,
   getField,
   gitCommitSourceListing,
@@ -86,6 +87,7 @@ import {
   writePlanApprovalResponse,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
+  type ActiveDirectiveMarker,
   type PlanApprovalOverrideRequest,
   type PlanApprovalReceiptKey,
   type PlanApprovalBatchMember,
@@ -1396,6 +1398,14 @@ export function resolveCodeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
 ): CodeGenerationAuthority {
+  return codeGenerationAuthority(projectDir, requestedTarget);
+}
+
+function codeGenerationAuthority(
+  projectDir: string,
+  requestedTarget: CodeGenerationTarget,
+  batchPeers?: { units: string[]; markerSha256: string },
+): CodeGenerationAuthority {
   const target = normalizeCodeGenerationTarget(requestedTarget);
   const statePath = stateFilePath(projectDir);
   if (!existsSync(statePath)) {
@@ -1407,6 +1417,13 @@ export function resolveCodeGenerationAuthority(
     throw new Error(
       "Code Generation approval authority is unavailable because the active directive is missing, stale, or legacy; run a fresh `next`",
     );
+  }
+  // Only batch validation supplies this proof, after validating the original
+  // group against the live lifecycle. It permits reading completed peers that
+  // a pending-only directive no longer dispatches, without widening dispatch.
+  if (batchPeers && (hashObject(marker) !== batchPeers.markerSha256 ||
+    target.unit === null || !batchPeers.units.includes(target.unit))) {
+    throw new Error("Plan Approval batch directive changed while checking its members");
   }
   if (marker.stage !== "code-generation") {
     throw new Error(
@@ -1426,7 +1443,7 @@ export function resolveCodeGenerationAuthority(
       );
     }
   } else if (marker.kind === "run-stage") {
-    if (marker.unit !== target.unit) {
+    if (marker.unit !== target.unit && !batchPeers) {
       // A settled swarm emits one run-stage target for the whole batch. Its
       // other members still need their parent authority during delegation and
       // checkpoint review; only a committed, current group can select them.
@@ -1454,7 +1471,7 @@ export function resolveCodeGenerationAuthority(
     if (
       dag.state !== "ok" ||
       !dag.units.includes(target.unit) ||
-      !marker.units?.includes(target.unit)
+      (!marker.units?.includes(target.unit) && !batchPeers)
     ) {
       throw new Error(
         `Code Generation approval target unit "${target.unit}" is not in the active swarm directive and authoritative Unit DAG`,
@@ -1836,7 +1853,7 @@ function planApprovalBatchContext(projectDir: string, units: string[], sourceSha
   };
 }
 
-function assertPlanApprovalBatchLifecycle(projectDir: string, receipt: PlanApprovalRuntimeReceipt): void {
+function assertPlanApprovalBatchLifecycle(projectDir: string, receipt: PlanApprovalRuntimeReceipt): ActiveDirectiveMarker {
   const batch = receipt.batch as BoundPlanApprovalBatch;
   if (!batch?.context || !planApprovalBatchCommitted(projectDir, receipt) ||
     hashObject({ name: batch.name, members: batch.members, context: batch.context }) !== batch.bindingSha256) {
@@ -1849,14 +1866,16 @@ function assertPlanApprovalBatchLifecycle(projectDir: string, receipt: PlanAppro
   const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
   if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE ||
     !units.length || new Set(units).size !== units.length ||
-    marker.units?.length !== units.length || new Set(marker.units).size !== units.length ||
-    !units.every((unit) => marker.units!.includes(unit))) {
+    !marker.units?.length || new Set(marker.units).size !== marker.units.length ||
+    !marker.units.every((unit) => units.includes(unit))) {
     throw new Error("Plan Approval batch no longer matches the emitted unit set; re-present every plan");
   }
-  if (marker.kind === "invoke-swarm") return;
+  const entireGroup = marker.units.length === units.length;
+  if (marker.kind === "invoke-swarm" && entireGroup) return marker;
   // Marker units survive the engine's checkpoint/completion publication. They
   // alone are not authority: prove the same batch actually ran and converged.
-  if (marker.kind !== "run-stage" || !marker.unit || !units.includes(marker.unit)) {
+  if (marker.kind !== "invoke-swarm" &&
+    (marker.kind !== "run-stage" || !marker.unit || !units.includes(marker.unit))) {
     throw new Error("Plan Approval batch has no supported lifecycle successor");
   }
   const unreadable: string[] = [];
@@ -1868,26 +1887,42 @@ function assertPlanApprovalBatchLifecycle(projectDir: string, receipt: PlanAppro
   const starts = rows.filter((row) => row.event === "SWARM_STARTED" &&
     auditBlockField(row.block, "Batch number") === String(batch.context.batch));
   const converged = swarmConvergedUnits(projectDir, CODE_GENERATION_STAGE);
-  if (unreadable.length ||
-    !units.every((unit) => {
-      // Prepare stamps only successfully created worktrees. A retry can start
-      // another subset of the same approved group, so select each member's
-      // latest unambiguous start instead of requiring one whole-group row.
-      const memberStarts = maximalAttemptEvents(starts.filter((row) =>
-        auditBlockField(row.block, "Unit names")?.split(",").map((name) => name.trim()).includes(unit)));
-      const start = memberStarts.length === 1 ? memberStarts[0] : null;
-      const startedUnits = start
-        ? auditBlockField(start.block, "Unit names")?.split(",").map((name) => name.trim()) : undefined;
-      const completions = maximalAttemptEvents(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
-        auditBlockField(row.block, "Unit name") === unit));
-      return start !== null && startedUnits !== undefined && startedUnits.length > 0 &&
-        new Set(startedUnits).size === startedUnits.length && startedUnits.every((name) => units.includes(name)) &&
-        completions.length === 1 && converged.has(unit) &&
-        auditBlockField(completions[0].block, "Batch number") === String(batch.context.batch) &&
-        attemptEventDefinitelyBefore(start, completions[0]);
-    })) {
+  const completed = new Set(units.filter((unit) => {
+    // Prepare stamps only successfully created worktrees. A retry can start
+    // another subset of the same approved group, so select each member's
+    // latest unambiguous start instead of requiring one whole-group row.
+    const memberStarts = maximalAttemptEvents(starts.filter((row) =>
+      auditBlockField(row.block, "Unit names")?.split(",").map((name) => name.trim()).includes(unit)));
+    const start = memberStarts.length === 1 ? memberStarts[0] : null;
+    const startedUnits = start
+      ? auditBlockField(start.block, "Unit names")?.split(",").map((name) => name.trim()) : undefined;
+    const completions = maximalAttemptEvents(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
+      auditBlockField(row.block, "Unit name") === unit));
+    return start !== null && startedUnits !== undefined && startedUnits.length > 0 &&
+      new Set(startedUnits).size === startedUnits.length && startedUnits.every((name) => units.includes(name)) &&
+      completions.length === 1 && converged.has(unit) &&
+      auditBlockField(completions[0].block, "Batch number") === String(batch.context.batch) &&
+      attemptEventDefinitelyBefore(start, completions[0]);
+  }));
+  if (unreadable.length) {
+    throw new Error("Plan Approval batch successor audit evidence is unreadable");
+  }
+  if (!entireGroup) {
+    // An engine resume omits only members whose native source has landed in
+    // this attempt. Legacy convergence, inline completion and an arbitrary
+    // subset cannot narrow the original protected approval.
+    const merged = currentSwarmSourceMergeChain(projectDir, CODE_GENERATION_STAGE);
+    const omitted = units.filter((unit) => !marker.units!.includes(unit));
+    if (merged.state !== "ready" ||
+      !omitted.every((unit) => completed.has(unit) && merged.units.has(unit)) ||
+      (marker.kind === "invoke-swarm" && marker.units.some((unit) => converged.has(unit)))) {
+      throw new Error("Plan Approval batch pending subset requires current native convergence and source landing for every omitted member");
+    }
+  }
+  if (marker.kind === "run-stage" && completed.size !== units.length) {
     throw new Error("Plan Approval batch successor requires current, unambiguous swarm start and convergence evidence");
   }
+  return marker;
 }
 
 function planApprovalBatchSelection(projectDir: string, file: string): PlanApprovalBatchSelection {
@@ -2070,10 +2105,12 @@ export function recordPlanApprovalBatchReceipts(
 
 function assertPlanApprovalBatchCurrent(projectDir: string, receipt: PlanApprovalRuntimeReceipt): void {
   const batch = receipt.batch as BoundPlanApprovalBatch;
-  assertPlanApprovalBatchLifecycle(projectDir, receipt);
+  const marker = assertPlanApprovalBatchLifecycle(projectDir, receipt);
+  const batchPeers = { units: batch.members.map((member) => member.unit), markerSha256: hashObject(marker) };
   const members = batch.members.map((member) => {
-    const evidence = codeGenerationPlanApprovalQuestionEvidence(
-      projectDir, { unit: member.unit }, member.questionsFile, "Approve Plan", { breakGlass: true },
+    const evidence = planApprovalQuestionEvidence(
+      projectDir, codeGenerationAuthority(projectDir, { unit: member.unit }, batchPeers),
+      member.questionsFile, "Approve Plan", { breakGlass: true },
     );
     const current = planApprovalBatchMember(evidence);
     const peer = readPlanApprovalReceipt(projectDir, current);
@@ -2544,6 +2581,16 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   options: PlanApprovalEvidenceOptions = {},
 ): PlanApprovalQuestionEvidence {
   const authority = resolveCodeGenerationAuthority(projectDir, target);
+  return planApprovalQuestionEvidence(projectDir, authority, suppliedQuestionsFile, expectedAnswer, options);
+}
+
+function planApprovalQuestionEvidence(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  suppliedQuestionsFile: string,
+  expectedAnswer: "" | "Approve Plan" | "Request Changes",
+  options: PlanApprovalEvidenceOptions,
+): PlanApprovalQuestionEvidence {
   const expectedPath = resolve(
     authority.stageDir,
     "code-generation-questions.md",

@@ -18124,26 +18124,29 @@ export function readCommittedUnitSourceManifest(
     return { ok: false, reason: "invalid immutable Unit source context" };
   }
   const root = join(tmpdir(), `aidlc-commit-manifest-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const checkoutDir = join(root, "checkout");
   try {
-    mkdirSync(root, { recursive: true });
+    // Raw materialization places its batch stream beside the checkout. Keep
+    // both under this invocation's private root, including on failure.
+    mkdirSync(checkoutDir, { recursive: true });
     const gitDir = gitMetadataDirectory(sourceRepoDir);
     const common = gitDir && gitCommonDirectory(gitDir);
     const entries = gitTreeLeafEntries(sourceRepoDir, commit);
-    if (!common || !entries || !materializeRawGitTree(sourceRepoDir, root, entries)) {
+    if (!common || !entries || !materializeRawGitTree(sourceRepoDir, checkoutDir, entries)) {
       return { ok: false, reason: "immutable reviewed Source Commit is unavailable" };
     }
     // A private index/HEAD gives ignore, path-mode and symlink validation the
     // reviewed tree, without registering a worktree or consulting mutable HEAD.
     const initialized = spawnSync("git", [
-      "--git-dir", join(root, ".git"), "--work-tree", root,
-      "init", "-q", "--template=", `--object-format=${commit.length === 64 ? "sha256" : "sha1"}`, root,
+      "--git-dir", join(checkoutDir, ".git"), "--work-tree", checkoutDir,
+      "init", "-q", "--template=", `--object-format=${commit.length === 64 ? "sha256" : "sha1"}`, checkoutDir,
     ], { encoding: "utf-8" });
     if (initialized.status !== 0) return { ok: false, reason: "cannot initialize immutable source context" };
-    writeFileSync(join(root, ".git", "objects", "info", "alternates"), `${join(common, "objects")}\n`);
-    writeFileSync(join(root, ".git", "HEAD"), `${commit}\n`);
-    const manifest = validateUnitSourceManifestBytes(root, stageSlug, unit, rawBytes, {}, { carriesWorkspaceShell });
+    writeFileSync(join(checkoutDir, ".git", "objects", "info", "alternates"), `${join(common, "objects")}\n`);
+    writeFileSync(join(checkoutDir, ".git", "HEAD"), `${commit}\n`);
+    const manifest = validateUnitSourceManifestBytes(checkoutDir, stageSlug, unit, rawBytes, {}, { carriesWorkspaceShell });
     if (!manifest.ok) return manifest;
-    const source = filesystemSourceIdentity(root, carriesWorkspaceShell, new Set(), "tree-only", false);
+    const source = filesystemSourceIdentity(checkoutDir, carriesWorkspaceShell, new Set(), "tree-only", false);
     if (!source) return { ok: false, reason: "immutable reviewed source cannot be fingerprinted" };
     return {
       ...manifest,

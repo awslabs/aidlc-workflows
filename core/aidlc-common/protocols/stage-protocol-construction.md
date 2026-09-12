@@ -510,6 +510,11 @@ An `invoke-swarm` directive for `code-generation` changes where generation
 runs, not whether planning and Plan Approval happen. Before `aidlc-swarm.ts
 prepare`:
 
+For a session continuing an already prepared partial batch, first apply the
+swarm module's **Continuing a partially completed batch** rule. Valid remaining
+workers keep their original plans and approvals and proceed to the protected
+brief in step 4; do not reset their questions or run initial preparation again.
+
 1. For every Unit in `directive.units`, prepare Code Generation Part 1 in the
    main workspace: the plan, embedded `## Testing Contract`, test instructions,
    questions file, `[Approval Fingerprint]`, and `[Planned Source]`. Leave each
