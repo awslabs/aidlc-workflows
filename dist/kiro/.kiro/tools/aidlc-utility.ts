@@ -3196,8 +3196,8 @@ export async function collectDoctorReport(
         fix: `copy from \`${from}\``,
       });
     }
-    // Minimum Devin CLI version pin: 3000.5.20 is the floor for the features
-    // AIDLC relies on (hooks.v1.json, triggers frontmatter, run_subagent,
+    // Check the shared Devin CLI support baseline for AIDLC's required
+    // capabilities (hooks.v1.json, triggers frontmatter, run_subagent,
     // ask_user_question with multi_select). Discovery is PATH-first with
     // cross-platform Desktop fallback (macOS .app, Linux share/opt, Windows
     // LocalAppData/ProgramFiles). Desktop execution is NOT verified —
