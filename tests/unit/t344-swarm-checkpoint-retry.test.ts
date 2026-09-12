@@ -188,6 +188,14 @@ function prepare(pd: string, units = ["alpha"], resume = false) {
   return swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main", ...(resume ? ["--resume-existing"] : [])]);
 }
 
+function nextDirective(pd: string) {
+  const result = runOrchestrateNext(join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), pd, [], {
+    cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+  });
+  expect(result.status, result.out).toBe(0);
+  return result.directive!;
+}
+
 function interruptAfterBoltStart(pd: string, resume: boolean) {
   mkdirSync(join(pd, ".aidlc"), { recursive: true });
   const driver = join(pd, ".aidlc", "interrupt-prepare.ts");
@@ -314,11 +322,17 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(failed.out).toContain("resume Bolt start failed");
     const archive = JSON.parse(failed.out).units[0].archive_path;
     expect(readFileSync(join(archive, "plan.md"), "utf-8")).toBe(originalPlan);
+    expect(nextDirective(pd)).toMatchObject({
+      kind: "invoke-swarm", units: ["alpha"], resume_existing: true,
+    });
     const recovered = prepare(pd, ["alpha"], true);
     expect(recovered.code, `${recovered.out}\n${recovered.err}`).toBe(0);
     expect(readFileSync(join(archive, "plan.md"), "utf-8")).toBe(originalPlan);
     expect(readdirSync(join(archive, "attempts")).length).toBeGreaterThan(0);
     expect(evaluateCodeGenerationApproval(child, { unit: "alpha" }).ok).toBe(true);
+    const continued = nextDirective(pd);
+    expect(continued).toMatchObject({ kind: "invoke-swarm", units: ["alpha"] });
+    expect(continued).not.toHaveProperty("resume_existing");
     const startedCount = starts(pd).length;
     expect(prepare(pd, ["alpha"], true).code).toBe(0);
     expect(starts(pd)).toHaveLength(startedCount);
@@ -422,12 +436,49 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
   }, 90_000);
 
-  test("partial native landing resumes the preserved pending worker with its original grouped receipt", () => {
+  test.each(["initial batch", "prepared checkpoint revision"])("partial native landing continues the preserved worker and grouped receipt for %s", (phase) => {
     const units = ["alpha", "beta"];
     const pd = fixture(units);
     approveGroupedPlans(pd, units, "partial-native-group");
     const prepared = prepare(pd, units);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const land = (unit: string) => tool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    const next = () => nextDirective(pd);
+    const isRevision = phase === "prepared checkpoint revision";
+    if (isRevision) {
+      for (const unit of units) {
+        writeFileSync(join(wt(pd, unit), "src", `${unit}.ts`), `export const ${unit} = 2;\n`);
+        reviewRevisedSource(pd, unit);
+      }
+      const completed = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","),
+        "--claimed", units.join(","), "--check-cmd", "git diff --check"]);
+      expect(completed.code, `${completed.out}\n${completed.err}`).toBe(0);
+      for (const unit of units) {
+        const merged = land(unit);
+        expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
+        expect(existsSync(wt(pd, unit))).toBe(false);
+      }
+      expect(next()).toMatchObject({
+        kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
+      });
+      appendAuditEntry("HUMAN_TURN", { Source: "t344 partial revision Request Changes" }, pd);
+      const rejected = tool(pd, "tools/aidlc-bolt.ts", [
+        "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
+        "--user-input", "Request Changes", "--reason", "Please revise both units", "--project-dir", pd,
+      ]);
+      expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
+      expect(next()).toMatchObject({ kind: "invoke-swarm", units, resume_existing: true });
+      approveGroupedPlans(pd, units, "partial-native-revision");
+      // Plan Approval alone does not finish revision preparation.
+      expect(next()).toMatchObject({ kind: "invoke-swarm", units, resume_existing: true });
+      const revision = prepare(pd, units, true);
+      expect(revision.code, `${revision.out}\n${revision.err}`).toBe(0);
+      expect(JSON.parse(revision.out).units).toMatchObject([
+        { unit: "alpha", resumed: true }, { unit: "beta", resumed: true },
+      ]);
+    }
     const beta = wt(pd, "beta");
     const authority = resolveCodeGenerationAuthority(beta, { unit: "beta" });
     const key = {
@@ -444,10 +495,15 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       expect(readPlanApprovalReceipt(beta, key)).toEqual(workerReceipt);
       expect(starts(pd, "beta")).toHaveLength(betaStarts);
     };
+    const preparedDirective = next();
+    expect(preparedDirective).toMatchObject({ kind: "invoke-swarm", units });
+    expect(preparedDirective).not.toHaveProperty("resume_existing");
+    unchangedAuthority();
     // Pending work predates the other member's source merge and must survive
     // resume in the existing worktree, without another prepare or approval.
+    const alphaValue = isRevision ? 4 : 2;
     writeFileSync(join(beta, "src", "beta.ts"), "export const beta = 3;\n");
-    writeFileSync(join(wt(pd, "alpha"), "src", "alpha.ts"), "export const alpha = 2;\n");
+    writeFileSync(join(wt(pd, "alpha"), "src", "alpha.ts"), `export const alpha = ${alphaValue};\n`);
     reviewRevisedSource(pd, "alpha");
     const alpha = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","),
       "--claimed", "alpha", "--check-cmd", "git diff --check"]);
@@ -461,22 +517,16 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     });
     expect(readAuditShardEvents(pd).some((row) => row.event === "BOLT_FAILED" &&
       auditBlockField(row.block, "Bolt slug") === boltSlugForUnit("beta"))).toBe(true);
-    const land = (unit: string) => tool(pd, "tools/aidlc-worktree.ts", [
-      "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
-    ]);
     const landedAlpha = land("alpha");
     expect(landedAlpha.code, `${landedAlpha.out}\n${landedAlpha.err}`).toBe(0);
     expect(existsSync(wt(pd, "alpha"))).toBe(false);
-    expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toContain("alpha = 2");
-    const next = () => {
-      const result = runOrchestrateNext(join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), pd, [], {
-        cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
-      });
-      expect(result.status, result.out).toBe(0);
-      return result.directive!;
-    };
-    expect(next()).toMatchObject({ kind: "invoke-swarm", units: ["beta"] });
-    expect(next()).toMatchObject({ kind: "invoke-swarm", units: ["beta"] });
+    expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toContain(`alpha = ${alphaValue}`);
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const pending = next();
+      expect(pending).toMatchObject({ kind: "invoke-swarm", units: ["beta"] });
+      expect(pending).not.toHaveProperty("resume_existing");
+      unchangedAuthority();
+    }
     const parentApproval = evaluateCodeGenerationApproval(pd, { unit: "beta" });
     expect(parentApproval.ok, parentApproval.reason).toBe(true);
     const approval = evaluateCodeGenerationApproval(beta, { unit: "beta" });
@@ -500,7 +550,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const landedBeta = land("beta");
     expect(landedBeta.code, `${landedBeta.out}\n${landedBeta.err}`).toBe(0);
     expect(existsSync(beta)).toBe(false);
-    expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toContain("alpha = 2");
+    expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toContain(`alpha = ${alphaValue}`);
     expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toContain("beta = 3");
     expect(next()).toMatchObject({
       kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
@@ -516,7 +566,8 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       "--user-input", "Approve", "--project-dir", pd,
     ]);
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
-  }, 90_000);
+    expect(JSON.parse(approved.out).approved).toBe(true);
+  }, 120_000);
 
   test("resumes the current rejected Unit with fresh authority and preserves source, history, and peers", () => {
     const pd = fixture(["alpha", "beta"]);

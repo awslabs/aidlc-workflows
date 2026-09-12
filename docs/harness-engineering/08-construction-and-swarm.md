@@ -131,6 +131,9 @@ workers retain the original group's approval and worktrees. Verify their parent
 and worktree approval before continuing; do not repeat initial preparation just
 because the emitted Unit set became smaller. Failure still stops for the human
 Retry/Abort decision, and a checkpoint Request Changes starts a fresh revision.
+Once that revision's native preparation is recorded, subsequent directives
+continue its workers without another approval. Recovery of interrupted setup
+reuses current approval rather than replacing the receipt bound to the worker.
 
 ## Shaping what can run in parallel — the Bolt-DAG
 
