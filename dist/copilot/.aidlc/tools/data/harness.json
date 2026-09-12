@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "distribution": "copilot",
-  "productName": "GitHub Copilot",
-  "configNextStep": "start Copilot CLI or VS Code agent mode, then run `/aidlc --doctor`",
-  "name": "copilot",
-  "harnessDir": ".aidlc",
-  "rulesSubdir": "rules"
-}

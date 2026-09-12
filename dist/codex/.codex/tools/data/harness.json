@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "distribution": "codex",
-  "productName": "Codex CLI",
-  "configNextStep": "run `codex`, then `$aidlc --doctor`",
-  "name": "codex",
-  "harnessDir": ".codex",
-  "rulesSubdir": "aidlc-rules"
-}

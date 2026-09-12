@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "distribution": "claude",
-  "productName": "Claude Code",
-  "configNextStep": "open Claude Code in this project and run `/aidlc --doctor`",
-  "name": "claude",
-  "harnessDir": ".claude",
-  "rulesSubdir": "rules"
-}

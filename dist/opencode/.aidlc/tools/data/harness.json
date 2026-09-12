@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "distribution": "opencode",
-  "productName": "opencode",
-  "configNextStep": "run `opencode`, then `/aidlc --doctor`",
-  "name": "opencode",
-  "harnessDir": ".aidlc",
-  "rulesSubdir": "rules"
-}

@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "distribution": "kiro-ide",
-  "productName": "Kiro IDE",
-  "configNextStep": "open this project in Kiro IDE, then run `/aidlc --doctor`",
-  "name": "kiro-ide",
-  "harnessDir": ".kiro",
-  "rulesSubdir": "steering"
-}
