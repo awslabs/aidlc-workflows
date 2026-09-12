@@ -840,7 +840,7 @@ and ceremony choices store `<value> (set by you)`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing
 the saved choice. `intent-create` accepts the same setting flags when creating
-the intent. See [CLI Commands](../guide/12-cli-commands.md#workflow-configuration--one-atomic-setter)
+the intent. See [CLI Commands](../guide/12-cli-commands.md#workflow-configuration-one-atomic-setter)
 for values, precedence, and isolated-run semantics.
 
 ## Plugin State Tool

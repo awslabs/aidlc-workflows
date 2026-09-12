@@ -1526,7 +1526,7 @@ Pre-set the implicit scope for a project. The resolver reads the real environmen
 `AIDLC_DISABLE_SENSORS`, `AIDLC_DISABLE_LEARNINGS`, and
 `AIDLC_DISABLE_SUMMARY_CONFIRMATION` each force the matching ceremony `off`
 when set to exactly `1`. They override per-intent and scope settings without
-rewriting the state file. See [Ceremony controls](#aidlc---sensors---learnings---summary-confirmation--ceremony-controls)
+rewriting the state file. See [Ceremony controls](#aidlc-sensors-learnings-summary-confirmation-ceremony-controls)
 for the precedence, defaults, and recordable `aidlc config flags --bypass` forms.
 
 ---
