@@ -240,9 +240,13 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    revision counter or revision-round label, not a list or table of which of its
    findings a revision applied, not a finding's status, not the stage's own review
    state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), not a
-   review-record path. Such a copy is
-   unverified and it goes stale by construction rather than by mistake: the gate
-   can approve while the artifact's own note still says a review is pending. An
+   review-record path. Such a copy is unverified and it goes stale by construction
+   rather than by mistake: the gate can approve while the artifact's own note still
+   says a review is pending. What the artifact says about its own subject is
+   untouched: a decision record's lifecycle status - the
+   `## Status: [Proposed | Accepted | Deprecated | Superseded by ADR-NNN]` heading an
+   ADR is told to carry - or any state the customer's own process owns, is content
+   and stays. An
    inline provenance tag is different only when it preserves a tag already carried
    by a consumed upstream artifact or cites an upstream stage's finding as the
    source of a downstream claim. A tag naming this stage's own finding or review
