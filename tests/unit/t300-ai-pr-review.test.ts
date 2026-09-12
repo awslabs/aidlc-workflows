@@ -32,6 +32,7 @@ const RUNTIME_SETUP = readFileSync(
   join(REPO_ROOT, ".github", "scripts", "prepare-ai-review-runtime.sh"),
   "utf8",
 );
+const REPOSITORY_INSTRUCTIONS = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
 const MANIFEST: ChangedFileManifest = {
   base: BASE,
   head: HEAD,
@@ -481,6 +482,16 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain("Review the code that exists, not the PR description");
     expect(aidlc).toContain("Reconstruct every affected caller, writer, reader");
     expect(aidlc).toContain("Treat tests as claims");
+    expect(REPOSITORY_INSTRUCTIONS).toContain(
+      "Feature, fix, documentation, refactor, and test PRs do NOT bump",
+    );
+    expect(aidlc).toContain("Feature, fix, documentation,");
+    expect(aidlc).toContain("refactor, and test PRs must not change");
+    expect(aidlc).toContain("core/tools/aidlc-version.ts");
+    expect(aidlc).toContain("README version badge");
+    expect(aidlc).toContain("explicit release-preparation or");
+    expect(aidlc).toContain("version-bump PR");
+    expect(aidlc).toContain("Every PR must preserve existing changelog entries");
     expect(aidlc).toContain('"status": "failed"');
     expect(aidlc).toContain('"changedFiles"');
     expect(aidlc).toContain('"requiredCorrection"');

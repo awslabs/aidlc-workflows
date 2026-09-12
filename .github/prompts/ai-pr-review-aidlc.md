@@ -33,8 +33,14 @@ compatibility. Review the code that exists, not the PR description:
   selectors, validation after mutation, silent fallback, fail-open behavior,
   and authority bypasses when reachable.
 - Verify authored `core/` or `harness/` sources, generated projections, model
-  contracts, documentation, changelog and version requirements, and all
-  affected harnesses remain consistent.
+  contracts, documentation, and all affected harnesses remain consistent.
+- Enforce the repository release metadata policy. Feature, fix, documentation,
+  refactor, and test PRs must not change `core/tools/aidlc-version.ts`, the
+  README version badge, or add a release entry to `CHANGELOG.md`. Those three
+  coordinated changes belong only in an explicit release-preparation or
+  version-bump PR. Every PR must preserve existing changelog entries. Report an
+  ordinary PR that changes any of these surfaces as a policy violation and
+  require their removal from that PR.
 - Treat tests as claims. Verify observable contracts and positive, negative,
   compatibility, stale-state, and partial-failure coverage. Do not accept tests
   weakened to bless incorrect behavior.
