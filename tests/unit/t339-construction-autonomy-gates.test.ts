@@ -21,7 +21,8 @@ afterEach(() => {
   project = "";
 });
 
-function run(tool: string, args: string[]) {
+function run(tool: "bolt" | "state", args: string[]) {
+  const tools = { bolt: "aidlc-bolt.ts", state: "aidlc-state.ts" };
   const env: Record<string, string | undefined> = {
     ...process.env,
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
@@ -31,7 +32,7 @@ function run(tool: string, args: string[]) {
   delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
   const result = spawnSync(
     process.execPath,
-    [join(AIDLC_SRC, "tools", `aidlc-${tool}.ts`), ...args, "--project-dir", project],
+    [join(AIDLC_SRC, "tools", tools[tool]), ...args, "--project-dir", project],
     { encoding: "utf-8", env },
   );
   return { status: result.status, output: `${result.stdout}${result.stderr}` };

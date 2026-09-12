@@ -3454,7 +3454,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9313,7 +9313,7 @@
         },
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10307,7 +10307,7 @@
         },
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
