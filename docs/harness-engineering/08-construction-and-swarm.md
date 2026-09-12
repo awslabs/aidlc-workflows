@@ -45,8 +45,8 @@ author none of them.
 ## The autonomy posture — your real lever, written as a rule
 
 The standing recommendation lives under `## Walking Skeleton` in
-`core/memory/org.md`, refined by `team.md` and `project.md`. New workflows
-record three independent settings:
+`core/memory/org.md`, refined by `team.md` and `project.md`. New source-producing
+solo Unit workflows record three independent settings:
 
 | Setting | New-workflow default | Meaning |
 | --- | --- | --- |
@@ -54,9 +54,10 @@ record three independent settings:
 | `Construction Iteration` | `unit-major` | Finish one Unit's applicable stages before the next |
 | `Construction Execution` | `serial` | Build serially; explicit swarm execution requires stage-major |
 
-Checkpoint policy applies only to an actual non-empty Unit DAG with solo
-ownership. Under skeleton-on, plan the first DAG Unit as the smallest working
-integrated slice. It completes all applicable per-unit design stages and Code
+Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
+an included source-producing per-unit stage. Design-only and no-Unit work keep
+their existing stage flow. Under skeleton-on, plan the first DAG Unit as the
+smallest working integrated slice. It completes all applicable per-unit design stages and Code
 Generation, passes a real end-to-end check, and receives human skeleton approval
 before later Units start, even with stage-major selected. A first design-stage
 review alone is not a working skeleton. The planned marker in `bolt-plan.md`
@@ -71,7 +72,7 @@ Autonomy changes ordinary completion approvals; it never supplies a human Plan
 Approval or summary confirmation, or makes a failed check pass.
 
 To choose swarm execution, explicitly select stage-major and then
-`Construction Execution=swarm`. Guided (`gated`) and automatic (`autonomous`)
+`Construction Execution: swarm`. Guided (`gated`) and automatic (`autonomous`)
 batch completion are both supported; granting autonomy does not change order or
 execution. Unit-major remains serial and refuses a contradictory swarm setting.
 Legacy workflows without the new fields retain their existing first-stage/late
@@ -199,10 +200,23 @@ something you author. Shaping that parser is a code change → see the
 A Code Generation swarm does not bypass planning. Before `prepare`, every
 emitted Unit must have a current human-approved plan containing the structured
 Testing Contract, unit-scoped test instructions, and matching approval
-fingerprint. `prepare` verifies that evidence before forking worktrees, and
-every worker brief carries the approved Unit marker, contract hash, plan, and
-instructions. This keeps the autonomous path on the same methodology and Plan
-Approval contract as normal Code Generation.
+fingerprint. Before initial protected prepare, the approved parent application
+source must also be committed and reproducible. The tool validates all Units
+read-only before creating the first worktree, under both legacy autonomy and
+new checkpoint policy. If approved source is uncommitted, it refuses with a
+commit-and-retry remedy and leaves no child from that refusal. Commit only with
+explicit authorization; neither prepare nor an autonomy grant commits for you.
+The approved inline skeleton source needs this explicit commit before a later
+parallel batch. Each worker still receives the approved Unit marker, contract
+hash, plan, and instructions.
+
+A rejected batch resumes through `prepare --resume-existing` after fresh Plan
+Approval for its rejection revision. Existing worktrees preserve their source
+and archive old metadata. Where native source landing removed a child, the tool
+can recreate it from already-landed parent source with verified landing evidence.
+The rejection revision is retained, not replaced by the old approval. A missing
+child without that evidence is refused; do not promise that every merged child
+continues to exist.
 
 A swarm worker can claim its Unit converged. The framework never takes that claim
 on faith. The authoritative signal is your project's **own check command**, run by
@@ -285,9 +299,11 @@ The swarm's machinery is code, and shaping it is the Developer Reference's
 territory:
 
 - **The referee** `aidlc-swarm.ts` — the stateless `prepare` / `check` /
-  `finalize` subcommands. On autonomous Code Generation, `prepare` first
-  verifies each Unit's approved Testing Contract and fingerprint; it then forks
-  worktrees. The remaining commands run the verdict, re-verify every claimed
+  `finalize` subcommands. Protected Code Generation prepare, for legacy autonomy
+  and new checkpoints alike, first validates every Unit's approved Testing
+  Contract, fingerprint, and committed parent source; only then does it fork
+  worktrees. `--resume-existing` keeps the rejected revision whether its child
+  survives or must be recreated after verified native source landing. The remaining commands run the verdict, re-verify every claimed
   Unit before merge (the lying-conductor guard), snapshot and land reviewed
   record artifacts plus the bound source manifest, serialise AIDLC metadata
   merge-back, and emit the six referee-owned `SWARM_*` events. The conductor
@@ -307,11 +323,14 @@ and the `bolt_dag` node schema is in
 [Runtime Graph](../reference/13-runtime-graph.md). The conductor's own chapter is
 [Orchestrator](../reference/03-orchestrator.md).
 
-The user-facing side of what your posture rule governs — the walking-skeleton
-gate, the ladder prompt, the autonomy mode — is walked in
-[Phases and Stages § Construction](../guide/04-phases-and-stages.md) in the User
-Guide, and the six `SWARM_*` audit events you will see in the log are catalogued
-in [State and Audit](../guide/10-state-and-audit.md).
+The User Guide's [Construction flow](../guide/04-phases-and-stages.md#phase-3-construction)
+shows the eligible source-producing solo path: a real integrated Unit check and
+human skeleton approval, followed by **Continue automatically** / **Review each
+checkpoint** when offered. It also distinguishes legacy first-stage reviews and
+the retained design-only, no-Unit, and team-owned paths. The autonomy choice
+controls ordinary completion approval independently of execution. The six
+`SWARM_*` audit events are catalogued in
+[State and Audit](../guide/10-state-and-audit.md).
 
 ---
 

@@ -33,6 +33,7 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   listIntentDirs,
   listSpaces,
+  maximalAttemptEvents,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
@@ -47,6 +48,7 @@ import {
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
+  swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
@@ -1512,6 +1514,13 @@ function convergedSourceRecord(
       "refusing to merge: the current swarm worktree has no correlated convergence authority; rerun finalize",
     );
   }
+  if (swarmUnitCheckpointRejections(rows, stage, floor, unitName, batch)
+    .some((rejection) => !rowAfter(latest, rejection))) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: this Unit convergence predates its checkpoint rejection; prepare and finalize a fresh retry",
+    );
+  }
 
   const bypass =
     auditBlockField(latest.block, "Source Freshness Bypass") ?? undefined;
@@ -1810,6 +1819,8 @@ interface SwarmWorktreeIdentity {
   batch: string;
   stage: string;
   floor: string;
+  baseCommit: string;
+  baseSourceListing: string;
 }
 
 function currentSwarmWorktreeIdentity(
@@ -1827,7 +1838,11 @@ function currentSwarmWorktreeIdentity(
     const batch = parsed.swarmBatch;
     const stage = parsed.swarmStage;
     const floor = parsed.swarmFloor;
+    const baseCommit = parsed.baseCommit;
+    const baseSourceListing = parsed.baseSourceListing;
     return (
+        parsed.version === 1 &&
+        parsed.boltSlug === slug &&
         typeof unit === "string" &&
         boltSlugForUnit(unit) === slug &&
         typeof batch === "string" &&
@@ -1835,9 +1850,13 @@ function currentSwarmWorktreeIdentity(
         typeof stage === "string" &&
         stage.length > 0 &&
         typeof floor === "string" &&
-        floor.length > 0
+        floor.length > 0 &&
+        typeof baseCommit === "string" &&
+        /^[0-9a-f]{40,64}$/.test(baseCommit) &&
+        typeof baseSourceListing === "string" &&
+        /^sha256:[0-9a-f]{64}$/.test(baseSourceListing)
       )
-      ? { unit, batch, stage, floor }
+      ? { unit, batch, stage, floor, baseCommit, baseSourceListing }
       : null;
   } catch {
     return null;
@@ -1901,20 +1920,49 @@ function mergedSwarmCleanupAuthority(
         stage !== identity.stage ||
         floor !== identity.floor)
     ) continue;
-    matchedSlugAuthority = true;
-    const convergence = audit.rows.find(
+    // A slug and stage floor survive a Unit checkpoint rejection. Cleanup of
+    // an old landing must never reset or remove the next child bearing them.
+    const creations = maximalAttemptEvents(audit.rows.filter((candidate) =>
+      candidate.event === "WORKTREE_CREATED" &&
+      auditBlockField(candidate.block, "Bolt slug") === slug &&
+      auditBlockField(candidate.block, "Repo") === repoField &&
+      (() => {
+        const path = auditBlockField(candidate.block, "Worktree path");
+        return path !== null &&
+          pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(worktreePath(pd, slug));
+      })()));
+    if (creations.length > 1) continue;
+    const creation = creations[0];
+    if (creation && !rowAfter(row, creation)) continue;
+    if (identity !== undefined && (!creation ||
+      creation.authoritySpace !== row.authoritySpace ||
+      creation.authorityIntent !== row.authorityIntent ||
+      auditBlockField(creation.block, "Base commit") !== identity.baseCommit ||
+      auditBlockField(creation.block, "Base Source Listing") !== identity.baseSourceListing ||
+      auditBlockField(creation.block, "Swarm Unit") !== unit ||
+      auditBlockField(creation.block, "Swarm Batch") !== batch ||
+      auditBlockField(creation.block, "Swarm Stage") !== stage ||
+      auditBlockField(creation.block, "Swarm Run floor") !== floor)) continue;
+    const scopeRows = audit.rows.filter((candidate) =>
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent);
+    if (swarmUnitCheckpointRejections(scopeRows, stage, floor, unit, batch)
+      .some((rejection) => !rowAfter(row, rejection))) continue;
+    const convergences = maximalAttemptEvents(scopeRows.filter(
       (candidate) =>
-        candidate.authoritySpace === row.authoritySpace &&
-        candidate.authorityIntent === row.authorityIntent &&
         candidate.event === "SWARM_UNIT_CONVERGED" &&
-        auditBlockField(candidate.block, "Batch number") === batch &&
         auditBlockField(candidate.block, "Unit name") === unit &&
-        auditBlockField(candidate.block, "Stage") === stage &&
-        auditBlockField(candidate.block, "Run floor") === floor &&
-        auditBlockField(candidate.block, "Source Commit") === sourceCommit &&
-        rowAfter(row, candidate),
-    );
-    if (!convergence) continue;
+        (!creation || rowAfter(candidate, creation)),
+    ));
+    const convergence = convergences.length === 1 ? convergences[0] : null;
+    if (!convergence ||
+      auditBlockField(convergence.block, "Batch number") !== batch ||
+      auditBlockField(convergence.block, "Stage") !== stage ||
+      auditBlockField(convergence.block, "Run floor") !== floor ||
+      auditBlockField(convergence.block, "Source Commit") !== sourceCommit ||
+      auditBlockField(convergence.block, "Source Freshness Bypass") !== null ||
+      !rowAfter(row, convergence)) continue;
+    matchedSlugAuthority = true;
     const repoCwd = repo === null ? pd : repoDir(pd, repo);
     if (
       !runGit(["cat-file", "-e", `${sourceCommit}^{commit}`], repoCwd).ok ||

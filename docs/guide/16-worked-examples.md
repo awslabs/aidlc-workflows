@@ -302,7 +302,7 @@ Decomposes into 3 units of work:
 2. **notification-preferences** — Preference CRUD API, default preferences
 3. **notification-email** — Email renderer, SQS integration, digest scheduler
 
-Produces `unit-of-work.md` with dependency map: notification-core first, then preferences and email in parallel.
+Produces `unit-of-work.md` and `unit-of-work-dependency.md`: notification-core first, then notification-preferences, then notification-email, whose preference lookup depends on the preferences API.
 
 **Stage 2.8 — Contract Design** (aidlc-architect-agent)
 
@@ -310,56 +310,60 @@ Because the system splits into three integrating units, Contract Design formalis
 
 **Stage 2.9 — Delivery Planning** (aidlc-delivery-agent)
 
-Planning only: Bolt 1 would ship notification-core (walking skeleton — proves the event-handler pipeline end-to-end). Bolt 2 would ship notification-preferences and notification-email together. Per-Bolt DoDs land in `bolt-plan.md`; WSJF-style rationale in `risk-and-sequencing-rationale.md`; external SES/SQS dependencies mapped in `external-dependency-map.md`. The Construction engine does not consume this plan for walk order — runtime batches still come from the 2.7 DAG. Phase boundary verification confirms requirements-to-architecture alignment.
+Delivery Planning identifies notification-core as the first integrated slice: an event must reach stored notification data and in-app delivery. The later delivery grouping contains preferences and email, while the actual order respects their dependency. Per-Bolt DoDs land in `bolt-plan.md`, rationale in `risk-and-sequencing-rationale.md`, and SES/SQS dependencies in `external-dependency-map.md`. The engine follows the 2.7 DAG and recorded iteration choice. Phase boundary verification confirms requirements-to-architecture alignment.
 
 > Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
 ### Construction Phase (stages 3.1-3.7)
 
-Construction's **default walk is stage-major**. The 2.9 Bolt plan stays on disk as planning; the engine walks Units from `unit-of-work-dependency.md`. The first in-scope Construction EXECUTE stage (here 3.1) is the walking-skeleton gate; the ladder after it decides remaining *stage* gates.
+This new source-producing solo workflow qualifies for the **unit-major, serial
+checkpoint default**. The 2.9 Bolt plan remains planning content; the engine
+walks the Units from `unit-of-work-dependency.md`.
 
-**3.1 Functional Design** — every Unit (walking-skeleton gate)
+**First Unit: notification-core — the working integrated slice**
 
-The conductor runs functional design for notification-core, then notification-preferences, then notification-email (or a wave for the last two once core is settled). You approve one stage-level gate covering all three Units — Code Generation has not run.
+The conductor runs notification-core through its applicable design stages and
+Code Generation before starting either later Unit. Functional Design covers
+Notification and NotificationEvent entities, deduplication, and rate limiting;
+NFR and infrastructure work cover the first slice where applicable. You confirm
+the summaries and approve its Code Generation plan before generation. The Unit
+then produces its event handler, notification repository, and in-app delivery
+endpoint: 3 source files and 4 test files in this example.
 
-- **notification-core** — Domain entities (Notification, NotificationEvent), business rules (deduplication, rate limiting)
-- **notification-preferences** — Preference entity, default values, channel toggles
-- **notification-email** — delivery-addressing rules that the later email unit will implement
+After the required reviews and completion receipts, a real project check submits
+an event and verifies storage and in-app delivery. You approve that verified
+skeleton checkpoint. The earlier Functional Design review by itself would not
+have established that the integration worked.
 
-Immediately after that first Construction gate, the **ladder prompt** fires:
-
-```
-The walking skeleton shipped. How should the remaining Bolts run?
-  ▸ Continue autonomously
-    Skip remaining Construction stage gates. Failures still halt and ask.
-  ▸ Gate every Bolt
-    Present an approval gate after each remaining Construction stage.
-```
-
-You've seen the opening design shape, so you pick **Continue autonomously**. The conductor records `Construction Autonomy Mode: autonomous` in `aidlc-state.md` and emits `AUTONOMY_MODE_SET`. Remaining design stages (3.2–3.4 as in scope) run for every Unit without a gate.
-
-**3.5 Code Generation** — every Unit; preferences + email may batch
-
-notification-core generates first (it unblocks the others): event handler, notification repository, in-app delivery endpoint. 3 source files, 4 test files. Then notification-preferences and notification-email share a dependency-satisfied batch, so the conductor dispatches **both code-generation Units concurrently** by issuing two `Task` calls in a single turn.
-
-- **notification-preferences** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
-- **notification-email** — Email renderer, SQS consumer, digest cron job. 4 source files, 5 test files. (3.2/3.4 artifacts for this Unit already exist from the earlier stage-major pass.)
-
-Both subagent Tasks return in the next turn. Under the swarm the engine presents **one** Code Generation stage gate after this final batch — not a gate per intermediate batch. Because you chose autonomous, that remaining stage gate is skipped and Construction proceeds to 3.6.
-
-**What a failure would look like.** Suppose `notification-email`'s Code Generation had returned with a broken SES mock. The conductor would wait for `notification-preferences` to finish, preserve its artifacts on disk, and present:
+If no autonomy choice has already been recorded, the workflow offers:
 
 ```
-Unit notification-preferences succeeded. Unit notification-email failed during code generation:
-  "SES client mock could not be constructed — check test config."
-
-Options:
-  ▸ Retry         Re-run notification-email from code generation.
-  ▸ Skip          Mark notification-email skipped and continue. Dependents may also fail.
-  ▸ Abort         Stop Construction. Resume via /aidlc --stage code-generation.
+How should I continue building the remaining work?
+  ▸ Continue automatically
+  ▸ Review each checkpoint
 ```
 
-You'd pick **Retry**, fix the mock setup, and only notification-email re-runs. Preferences is already `[x]` complete.
+You choose **Continue automatically**. The conductor records `autonomous` and
+continues serially; this approval choice does not enable swarm execution.
+
+**Remaining Units: notification-preferences, then notification-email**
+
+Each Unit goes through its own applicable design stages, summary confirmation,
+Plan Approval, code, checks, and reviews before the next begins:
+
+- **notification-preferences** — Preference entity, defaults, channel toggles, CRUD API, repository, and validation; 2 source files and 3 test files.
+- **notification-email** — Delivery rules, renderer, SQS consumer, and digest cron job using the approved preference-lookup contract; 4 source files and 5 test files.
+
+The conductor may automatically approve each verified ordinary Unit checkpoint
+under your recorded grant. Plan Approval and summary confirmation still wait
+for you. Once all Units are approved, completion-only stage directives reconcile
+bookkeeping without another round of stage-body or reviewer work.
+
+**What a failure would look like.** If notification-email's check fails because
+its SES mock cannot be constructed, the workflow stops and explains the failure.
+The already completed preferences Unit stays complete. Any required repair-plan
+approval remains a human decision; an automatic-completion grant never counts
+as verification of a failed check.
 
 **Stage 3.6 — Build and Test** (aidlc-quality-agent, runs once after all Units)
 
@@ -390,10 +394,10 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 | Stages executed | 9 | 33 |
 | Depth | Minimal | Standard |
 | Phases | Initialization + Inception + Construction + Operation | All 5 |
-| Units of work | 1 | 3 |
-| Construction walk | Stage-major; one Unit | Stage-major across 3 Units (2.9 still plans 2 Bolts) |
+| Units of work | No Unit DAG; stage-level work | 3 |
+| Construction walk | Existing stage-level flow | New unit-major, serial checkpoint flow (2.9 still plans delivery groupings) |
 | Conditional stages | Most skipped | Most executed |
-| Approval gates | 4 | First Construction EXECUTE stage + ladder; remaining stage gates per autonomy mode |
+| Approval gates | Ordinary stage approvals | Verified human skeleton checkpoint; later completion follows the recorded choice; Plan Approval and summaries remain human |
 
 ---
 

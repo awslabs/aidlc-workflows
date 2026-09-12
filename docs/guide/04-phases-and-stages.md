@@ -36,7 +36,7 @@ graph LR
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
         C1["Functional Design"]
         C7["CI Pipeline"]
-        C1 -.->|"3.1–3.5 stage-major per Unit; 3.6–3.7 once after all Units"| C7
+        C1 -.->|"3.1–3.5 per Unit in the recorded order; 3.6–3.7 once after all Units"| C7
     end
 
     subgraph OPERATION["OPERATION (4.1-4.7)"]
@@ -148,9 +148,7 @@ the Product Lead reviewer and approval gate run.
 
 ```mermaid
 flowchart TD
-    S21{{"`**2.1 Reverse Engineering**
-    (aidlc-developer-agent + aidlc-architect-agent)
-    pipeline: 2-link`"}}
+    S21{{"`**2.1 Reverse Engineering**<br/>    (aidlc-developer-agent + aidlc-architect-agent)<br/>    pipeline: 2-link`"}}
     S2P["2.2 Practices Discovery\n(aidlc-pipeline-deploy-agent)"]
     S22["2.3 Requirements Analysis\n(aidlc-product-agent)"]
     S23["2.4 User Stories\n(aidlc-product-agent)"]
@@ -225,104 +223,99 @@ flowchart TD
 
 ### Why Construction works the way it does
 
-Construction used to run stage-by-stage per [unit of work](glossary.md), with an approval gate after every stage. A three-unit project meant fifteen gates before a single line of tested code shipped. Customers called it babysitting.
+New solo workflows that include Unit decomposition and a source-producing
+Construction stage default to **unit-major, serial execution with verified Unit
+checkpoints**. Each Unit completes its applicable design stages and Code
+Generation before the next. Runtime order follows `unit-of-work-dependency.md`;
+`bolt-plan.md` records delivery grouping and rationale without replacing that DAG.
 
-The first fix batched all questions, all design artifacts, then all code generation across every unit — one review at the end. That swung the pendulum the other way. A 15-unit run could land 15,000 lines of code at the build-and-test gate. Too much to verify in a single review.
+With skeleton-on, the first DAG Unit is the smallest working integrated slice.
+Its code must run through a real end-to-end check, and you approve the verified
+skeleton before later Units begin. This happens even if you explicitly choose
+stage-major order. A first design-stage review alone is not a working skeleton.
 
-The current shape is the middle path: Construction's **default walk is stage-major** — one stage runs for every Unit, then the next stage. A [Bolt](glossary.md) is the planned Construction delivery slice from 2.9 (one or more Units, DoD, confidence hypothesis, ownership). `bolt-plan.md` is planning content; the engine does not consume it for Unit grouping or walk order. Runtime batches come from `unit-of-work-dependency.md` (2.7). `Construction Iteration: unit-major` is the opt-in walk older docs described as the default. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage. Once that gate approves, the **ladder prompt** fires exactly once. Your answer is recorded in state and governs the remaining Construction *stage* gates. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once at the end across everything.
+The autonomy offer is **Continue automatically** / **Review each checkpoint**:
+for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
+and skeleton-on offers it after the real skeleton checkpoint. An existing choice
+is not repeated; on-demand grant/revoke requests remain available. Plan Approval,
+summary confirmation, and failures still need human attention under either choice.
 
-The shape gives you an early confidence checkpoint and a deliberate autonomy choice. Reviewable delivery slices are still planned as Bolts in 2.9; the shipped walk does not yet use those slices as runtime boundaries.
+The new default does not convert existing workflows, design-only work, or flows
+without Units. Their existing stage approvals remain. Team-owned Units keep their
+own per-stage or unit-end gate rhythm. Preserve explicit iteration choices.
 
 ### Construction flow
 
+This diagram shows the default path for an eligible solo workflow that produces
+source. Other workflows keep their recorded execution and approval policy.
+
 ```mermaid
 flowchart TD
-    START(["Begin Construction"])
-    READ[/"Read unit-of-work-dependency.md (2.7)\nbolt-plan.md is planning, not the walk source"/]
-
-    STAGE1["First in-scope Construction EXECUTE stage\nfor every Unit (often 3.1)"]
-    GATE1{{"Walking-skeleton gate\nfirst Construction EXECUTE stage"}}
-
-    LADDER{"Ladder prompt\n(fires once)"}
-    MODE_AUTO["Continue autonomously\nskips remaining stage gates\n(swarm settle auto-approved)"]
-    MODE_GATED["Gate every remaining stage"]
-
-    NEXT["Next Construction stage\nfor every Unit"]
-    GATE_N{{"Per-stage gate\n(skipped if autonomous)"}}
-    MORE{"More per-unit stages?"}
-
-    S36["3.6 Build and Test\n(aidlc-quality-agent)\nALWAYS — once"]
-    S37["3.7 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL — once"]
-    VG3{{"Verification Gate:\nConstruction → Operation"}}
-
-    START --> READ --> STAGE1 --> GATE1 --> LADDER
-    LADDER --> MODE_AUTO
-    LADDER --> MODE_GATED
-    MODE_AUTO --> NEXT
-    MODE_GATED --> NEXT
-    NEXT --> GATE_N
-    GATE_N --> MORE
-    MORE -->|"Yes"| NEXT
-    MORE -->|"No"| S36
-    S36 ==> S37
-    S36 -.->|"skip CI if\nnot in scope"| VG3
-    S37 -.-> VG3
-
-    style STAGE1 fill:#bbdefb,stroke:#1565c0,color:#000
-    style GATE1 fill:#ffcc80,stroke:#e65100,color:#000
-    style LADDER fill:#fff59d,stroke:#f57f17,color:#000
-    style MODE_AUTO fill:#c8e6c9,stroke:#388e3c,color:#000
-    style MODE_GATED fill:#f8bbd0,stroke:#c2185b,color:#000
-    style NEXT fill:#bbdefb,stroke:#1565c0,color:#000
-    style S36 fill:#c8e6c9,stroke:#388e3c,color:#000
-    style S37 fill:#fff9c4,stroke:#f9a825,color:#000
-    style VG3 fill:#ef9a9a,stroke:#c62828,color:#000
+    START(["Begin eligible solo Unit workflow"])
+    STANCE{"Skeleton-on?"}
+    FIRST["First DAG Unit: applicable design and Code Generation<br/>Human summary confirmation and Plan Approval"]
+    INTEGRATED["Real integrated project check passes"]
+    SKELETON{{"Human approval of verified skeleton"}}
+    OFFER["When offered and no choice is recorded:<br/>Continue automatically / Review each checkpoint"]
+    MORE{"Another Unit owed?"}
+    UNIT["Next Unit: applicable design and Code Generation<br/>Human summary confirmation and Plan Approval"]
+    VERIFY["Verify the completed Unit"]
+    CHECKPOINT{{"Ordinary Unit checkpoint<br/>Human if gated; automatic under an explicit grant"}}
+    BOOK["Settle completion-only stage bookkeeping"]
+    S36["3.6 Build and Test — once across the solution"]
+    S37["3.7 CI Pipeline — once, if included"]
+    VG3{{"Construction-to-Operation verification"}}
+    START --> STANCE
+    STANCE -->|Yes| FIRST --> INTEGRATED --> SKELETON --> OFFER
+    STANCE -->|No| OFFER
+    OFFER --> MORE
+    MORE -->|Yes| UNIT --> VERIFY --> CHECKPOINT --> MORE
+    MORE -->|No| BOOK --> S36
+    S36 --> S37 --> VG3
+    S36 -.->|CI skipped| VG3
 ```
 
-<!-- Text fallback: Begin Construction → read unit-of-work-dependency.md for the Unit DAG (bolt-plan.md is planning) → run the first in-scope Construction EXECUTE stage for every Unit → walking-skeleton gate → ladder prompt (autonomous skips remaining stage gates; gated keeps them) → remaining stages stage-major, Code Generation last → 3.6 Build and Test then optionally 3.7 CI Pipeline → Verification Gate 3. -->
+<!-- Text fallback: An eligible solo source-producing workflow completes and verifies the first integrated Unit with human skeleton approval when skeleton-on. When offered, choose Continue automatically or Review each checkpoint unless a choice already exists. Complete remaining Units serially with human Plan Approval and summary confirmation, verify each, and approve ordinary checkpoints according to the recorded policy. Completion-only stage gates are bookkeeping; Build and Test and optional CI Pipeline run once across the solution. -->
 
 ### Parallel Unit batches
 
-When two Units share their dependency prerequisite (for example, Units B and C both depend only on A) and don't depend on each other, they form a **batch**. Design stages may emit `directive.wave` for that batch. Code Generation may dispatch sibling Units concurrently. Under an autonomous swarm the engine converges every DAG batch and then presents **one** Code Generation stage gate — not one gate per intermediate batch.
+Unit-major remains serial. To use swarm execution in an eligible checkpoint
+workflow, explicitly choose stage-major and `Construction Execution: swarm`.
+Execution and approval are separate choices: batch completion may be guided or
+automatic. Dependency-ready Units may run together; an inline Unit already
+approved at its checkpoint is not rebuilt in a later batch.
+Before initial protected prepare, the approved parent application source must
+be committed and reproducible. In particular, commit the approved inline
+skeleton source before preparing parallel Units. This is an explicit action;
+the tool never commits automatically and checks all Units before creating any
+child. See [Swarm prepare](12-cli-commands.md#aidlc-engine-swarm-prepare---prepare-a-reproducible-batch).
 
 ```mermaid
 flowchart LR
-    S1["First Construction EXECUTE stage\nfor every eligible Unit"]
-    GA{{"One walking-skeleton gate"}}
-    L{"Ladder prompt"}
-    LATER["Remaining design stages\nstage-major"]
-
-    subgraph CG["3.5 Code Generation"]
-        A["Unit A"]
-        B["Unit B"]
-        C["Unit C"]
-    end
-
-    GBC{{"One Code Generation stage gate\nafter the final DAG batch (swarm)"}}
-
-    S1 --> GA --> L --> LATER --> A
-    A --> B
-    A --> C
-    B --> GBC
-    C --> GBC
-
-    style S1 fill:#bbdefb,stroke:#1565c0,color:#000
-    style GA fill:#ffcc80,stroke:#e65100,color:#000
-    style L fill:#fff59d,stroke:#f57f17,color:#000
-    style A fill:#bbdefb,stroke:#1565c0,color:#000
-    style B fill:#bbdefb,stroke:#1565c0,color:#000
-    style C fill:#bbdefb,stroke:#1565c0,color:#000
-    style CG fill:#fff3e0,stroke:#e65100,color:#000
-    style GBC fill:#ffcc80,stroke:#e65100,color:#000
+    READY["Explicit stage-major + swarm<br/>Eligible skeleton checkpoint already approved"]
+    COMMIT["Approved application source committed<br/>Only with explicit authorization"]
+    PLANS{{"Human Plan Approval for each named Unit<br/>Grouped presentation where supported"}}
+    B["Build Unit B"]
+    C["Build independent Unit C"]
+    EVIDENCE["Current checks and review evidence for the batch"]
+    BATCH{{"Batch checkpoint<br/>Human if gated; automatic under an explicit grant"}}
+    NEXT["Continue to the next emitted work"]
+    READY --> COMMIT --> PLANS
+    PLANS --> B --> EVIDENCE
+    PLANS --> C --> EVIDENCE
+    EVIDENCE --> BATCH --> NEXT
 ```
 
-<!-- Text fallback: The first Construction EXECUTE stage runs for every eligible Unit, then one walking-skeleton gate and the ladder prompt. Remaining design stages stay stage-major. At Code Generation, Unit A can unblock B and C so those two may run as a parallel batch. Under an autonomous swarm, one Code Generation stage gate covers the stage after the final DAG batch converges. -->
+<!-- Text fallback: After explicit stage-major/swarm selection and any required skeleton approval, ensure the approved application source is committed with explicit authorization, then obtain Plan Approval for the exact emitted Units. Build dependency-independent Units in parallel, collect current verification and review evidence, then resolve that batch's guided or automatic checkpoint before the next work. -->
 
-The conductor (the live `/aidlc` session) dispatches parallel Code Generation Units by issuing multiple `Task` calls in a single turn. Design stages stay on the engine-driven per-Unit (or wave) path. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
+Design stages can use an emitted per-Unit wave on a stage-major path. The
+conductor follows the emitted Unit set rather than deriving parallelism from a
+Bolt-plan grouping. `BOLT_STARTED` / `BOLT_COMPLETED` apply to the swarm/worktree
+path; serial inline Unit work uses its lifecycle and checkpoint receipts.
 
 ### Halt-and-ask on failure
 
-Failures always stop Construction, even in autonomous mode. The other autonomous-stop case is the Build-and-Test loop-back's rung 4.
+Failures always stop Construction, even in autonomous mode. The Build-and-Test loop-back's rung 4 also stops for the human; required Plan Approvals and summary confirmations remain separate human decisions.
 
 - If a solo Unit's Code Generation fails, Construction halts immediately and offers **retry** (re-run just that Unit), **skip** (mark it `[S]` and continue — dependents will likely also fail), or **abort**.
 - If one Unit in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Units' artifacts on disk, and presents the same retry / skip / abort choice for the failed Unit only.
@@ -341,10 +334,11 @@ Failures always stop Construction, even in autonomous mode. The other autonomous
 
 **Key behaviors:**
 
-- Default walk is stage-major: questions and artifacts for a stage run for every Unit, then the next stage. There is no Bolt-level answers gate on the shipped walk.
-- The per-Unit completion gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Construction. A single stage-level gate replaces it after the last Unit settles; under swarm, that gate waits for the final DAG batch.
-- The ladder prompt fires exactly once per workflow — after the first Construction EXECUTE-stage gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume. On the default walk, `autonomous` skips remaining stage gates except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle re-entry (auto-approved under autonomy). Unit-major suppresses swarm but **keeps** the per-stage gate cascade.
-- Parallel Code Generation batches require multiple `Task`-capable subagent slots — see [Agents](06-agents.md) for concurrency constraints.
+- Eligible new source-producing solo Unit workflows default to unit-major and serial execution. Legacy, design-only, no-Unit, and team-owned workflows retain their existing paths.
+- The real skeleton is the first complete integrated Unit, verified and human-approved before later Units; a legacy first-stage gate is only a stage review.
+- Ordinary completion follows the recorded autonomy policy. `completion_only` stage directives settle existing approvals without repeating bodies, reviewers, or human completion questions.
+- An autonomy answer does not choose swarm or change iteration order. Explicit stage-major/swarm selection supports guided or automatic batch checkpoints.
+- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Summary confirmation and failures still require the human.
 
 ---
 

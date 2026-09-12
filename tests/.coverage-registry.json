@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1002,
+    "total": 1004,
     "enumeratedByClass": {
-      "function": 688,
+      "function": 690,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 412,
+      "function": 414,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -5274,6 +5274,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readCommittedUnitSourceManifest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7344,6 +7356,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:swarmUnitCheckpointRejections",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:teamUnitGateStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -8560,6 +8584,10 @@
         },
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-grouped-plan-approval.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9794,6 +9822,10 @@
         {
           "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10466,6 +10498,10 @@
         },
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-grouped-plan-approval.test.ts",
           "mechanism": "cli"
         },
         {
@@ -12241,6 +12277,10 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
       ],

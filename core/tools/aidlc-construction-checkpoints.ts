@@ -4,6 +4,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -396,7 +397,10 @@ export function verifyConstructionCheckpoint(
     const selection = resolveWorkflowSelection(projectDir);
     return { ...current, proof, intent: selection.intent!, space: selection.space };
   });
-  const command = process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : "/bin/sh";
+  // Match swarm checkConverged: preserve Bash project checks where available.
+  const command = process.platform === "win32"
+    ? process.env.ComSpec ?? "cmd.exe"
+    : existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
   const args = process.platform === "win32" ? ["/d", "/s", "/c", checkCmd] : ["-c", checkCmd];
   const check = spawnSync(command, args, {
     cwd: projectDir, encoding: "utf-8", timeout: CHECK_TIMEOUT_MS,

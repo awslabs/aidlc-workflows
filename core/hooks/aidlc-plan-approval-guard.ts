@@ -572,6 +572,17 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
   ) {
     return true;
   }
+  // Checkpoint review owns its own audit/readiness/human authority. It must
+  // remain reachable after the engine replaces invoke-swarm with its gate
+  // successor, including when Request Changes retired the old Plan Approval.
+  // Verification executes a supplied command and still requires approval.
+  if (noun === "bolt" && (verb === "checkpoint" || verb === "swarm-checkpoint")) {
+    const routeArgs = args.slice(3);
+    const action = lastFlagValue(routeArgs, "--action");
+    return action === null
+      ? !routeArgs.includes("--action")
+      : ["status", "approve", "reject"].includes(action);
+  }
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
   const routeArgs = args.slice(3);

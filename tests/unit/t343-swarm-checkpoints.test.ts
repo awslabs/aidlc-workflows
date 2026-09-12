@@ -1,9 +1,11 @@
 // covers: audit:GATE_APPROVED, audit:GATE_REJECTED, function:currentSwarmSourceMergeChain,
-// function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint
+// function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint,
+// function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -20,10 +22,13 @@ import {
   artifactFilename,
   auditBlockField,
   currentSwarmSourceMergeChain,
+  currentSwarmSourceOpeningFingerprint,
   findStageBySlug,
   gitCommitSourceListing,
+  intentRepos,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
+  readCommittedUnitSourceManifest,
   readUnitSourceManifest,
   reviewArtifactFingerprint,
   serializeSourceListing,
@@ -113,21 +118,30 @@ function artifacts(pd: string, unit: string, stage = STAGE): void {
   }
 }
 
-function fixture(autonomous = false): string {
+function fixture(autonomous = false, repos: readonly string[] = []): string {
   const pd = createTestProject();
   projects.push(pd);
   seedAidlcMemory(pd);
   writeFileSync(seededStateFile(pd), state(autonomous));
   seedBoltDagBatches(pd, [BATCH, ["gamma"]]);
-  mkdirSync(join(pd, "src"), { recursive: true });
+  if (repos.length) {
+    const registry = join(pd, "aidlc/spaces/default/intents/intents.json");
+    const entries = JSON.parse(readFileSync(registry, "utf-8"));
+    entries[0].repos = repos;
+    writeFileSync(registry, JSON.stringify(entries));
+  }
   for (const unit of [...BATCH, "gamma"]) {
-    writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+    const sourceRoot = repos.length ? join(pd, repos[unit === "gamma" ? repos.length - 1 : 0]) : pd;
+    mkdirSync(join(sourceRoot, "src"), { recursive: true });
+    writeFileSync(join(sourceRoot, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
     artifacts(pd, unit);
   }
-  for (const args of [
-    ["init", "-q"], ["config", "user.name", "AI-DLC Tests"],
-    ["config", "user.email", "tests@example.com"], ["add", "-A"], ["commit", "-qm", "baseline"],
-  ]) git(pd, args);
+  for (const sourceRoot of repos.length ? repos.map((repo) => join(pd, repo)) : [pd]) {
+    for (const args of [
+      ["init", "-q"], ["config", "user.name", "AI-DLC Tests"],
+      ["config", "user.email", "tests@example.com"], ["add", "-A"], ["commit", "-qm", "baseline"],
+    ]) git(sourceRoot, args);
+  }
   const listing = workspaceSourceListing(pd)!;
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, listing);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
@@ -142,10 +156,7 @@ function converge(pd: string, batch = 1, units = BATCH, kind = "bound"): void {
   const floor = latestMainWorkflowStageRunFloorForProject(pd, STAGE);
   const listing = workspaceSourceListing(pd)!;
   const fingerprint = workspaceSourceFingerprint(pd)!;
-  const commit = git(pd, ["rev-parse", "HEAD"]);
-  const committed = gitCommitSourceListing(pd, commit, true);
-  expect(committed).not.toBeNull();
-  expect(serializeSourceListing(committed!)).toBe(serializeSourceListing(listing));
+  const repos = intentRepos(pd);
   const chain = currentSwarmSourceMergeChain(pd, STAGE);
   let previous = chain.state === "ready" ? chain.fingerprint
     : sourceListingSha256(serializeSourceListing(listing));
@@ -153,26 +164,38 @@ function converge(pd: string, batch = 1, units = BATCH, kind = "bound"): void {
     Stage: STAGE, "Run floor": floor, "Batch number": String(batch), "Unit obligations": "alpha, beta, gamma",
   }, pd);
   for (const unit of units) {
-    const manifest = readUnitSourceManifest(pd, STAGE, unit);
-    expect(manifest.ok).toBe(true);
+    const repo = repos.length ? repos[unit === "gamma" ? repos.length - 1 : 0] : null;
+    const sourceRoot = repo ? join(pd, repo) : pd;
+    const commit = git(sourceRoot, ["rev-parse", "HEAD"]);
+    const committed = gitCommitSourceListing(sourceRoot, commit, !repo)!;
+    expect(committed).not.toBeNull();
+    const nativeFingerprint = workspaceSourceFingerprint(sourceRoot)!;
+    const bytes = readFileSync(join(seededRecordDir(pd), "construction", unit, STAGE, "source-manifest.json"));
+    // Child receipts deliberately contain repo-relative keys and unchanged,
+    // unqualified manifest bytes, even when the parent has multiple repos.
+    const manifest = repo ? {
+      ok: true as const, claims: new Set([`\0src/${unit}.ts`]), prefixes: [],
+      rawBytesSha256: createHash("sha256").update(bytes).digest("hex"),
+    } : readUnitSourceManifest(pd, STAGE, unit);
     if (!manifest.ok) throw new Error(manifest.reason);
     appendAuditEntry("REVIEW_COMPLETED", {
       Stage: STAGE, Unit: unit, Verdict: "approved",
       "Artifact Fingerprint": reviewArtifactFingerprint(pd, findStageBySlug(STAGE)!, unit, { requireRequiredArtifacts: true })!,
-      "Source Fingerprint": fingerprint,
-      "Unit Source Fingerprint": unitSourceFingerprint(listing, manifest, manifest.rawBytesSha256),
+      "Source Fingerprint": nativeFingerprint,
+      "Unit Source Fingerprint": unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256),
     }, pd);
     appendAuditEntry("SWARM_UNIT_CONVERGED", {
       Stage: STAGE, "Run floor": kind === "stale" ? "unstarted#0" : floor,
       "Batch number": String(batch), "Unit name": unit,
       ...(kind === "legacy" ? {} : kind === "bypass" ? { "Source Freshness Bypass": "true" } : {
-        "Source Commit": commit, "Source Fingerprint": fingerprint,
+        "Source Commit": commit, "Source Fingerprint": kind === "source-binding" ? "e".repeat(64) : nativeFingerprint,
       }),
     }, pd);
     if (kind !== "unmerged") {
       appendAuditEntry("SWARM_SOURCE_MERGED", {
         Stage: STAGE, "Run floor": floor, "Batch number": String(batch), "Unit name": unit,
-        "Source Commit": commit, "Merge commit": commit, Repo: "-",
+        "Source Commit": commit, "Merge commit": commit,
+        Repo: kind === "wrong-repo" ? "foreign" : repo ?? "-",
         "Previous Source Fingerprint": previous, "Source Fingerprint": fingerprint,
       }, pd);
     }
@@ -319,6 +342,136 @@ describe("t343 completed swarm batch checkpoints", () => {
     for (const unit of BATCH) {
       expect(latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, unit)).toStartWith("GATE_REJECTED:");
     }
+  }, 30_000);
+
+  test("a rejected batch retries from its landed aggregate without erasing another approved batch", () => {
+    const pd = fixture(true);
+    converge(pd);
+    approveSwarmCheckpoint(pd, 1, BATCH);
+    converge(pd, 2, ["gamma"]);
+    const later = approveSwarmCheckpoint(pd, 2, ["gamma"]);
+    const aggregate = workspaceSourceFingerprint(pd);
+    if (aggregate === null) throw new Error("Fixture aggregate source is unbindable");
+    human(pd);
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Revise the first batch");
+    const rejected = currentSwarmSourceMergeChain(pd, STAGE);
+    expect(rejected.state).toBe("ready");
+    if (rejected.state !== "ready") throw new Error(JSON.stringify(rejected));
+    expect([...rejected.units]).toEqual(["gamma"]);
+    expect(rejected.fingerprint).toBe(aggregate);
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).fingerprint).toBe(later.fingerprint);
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
+    writeFileSync(join(pd, "src/alpha.ts"), "export const alpha = 2;\n");
+    git(pd, ["add", "src/alpha.ts"]);
+    git(pd, ["commit", "-qm", "revised alpha"]);
+    converge(pd, 1, ["alpha"]);
+    const partial = currentSwarmSourceMergeChain(pd, STAGE);
+    expect(partial.state).toBe("ready");
+    if (partial.state !== "ready") throw new Error(JSON.stringify(partial));
+    expect([...partial.units].sort()).toEqual(["alpha", "gamma"]);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
+    converge(pd, 1, ["beta"]);
+    const ready = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(ready.ready, ready.errors.join("\n")).toBe(true);
+    expect(ready.approved).toBe(false);
+    expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
+  }, 30_000);
+
+  test.each(["missing", "old-floor", "wrong-batch", "old-unit-floor"])(
+    "%s rejection cannot authorize a duplicate merge",
+    (kind) => {
+      const pd = fixture(true);
+      converge(pd);
+      if (kind !== "missing") {
+        appendAuditEntry("GATE_REJECTED", {
+          Checkpoint: "swarm-batch", Stage: STAGE, "Gate Stages": STAGE,
+          Unit: "alpha", Units: "alpha, beta", "Batch number": kind === "wrong-batch" ? "2" : "1",
+          "Run floor": kind === "old-floor" ? "unstarted#0" : latestMainWorkflowStageRunFloorForProject(pd, STAGE),
+          "Run floors": JSON.stringify({ alpha: kind === "old-unit-floor" ? "unstarted#0" :
+            latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, "alpha") }),
+        }, pd);
+      }
+      converge(pd, 1, ["alpha"]);
+      const chain = currentSwarmSourceMergeChain(pd, STAGE);
+      expect(chain.state).toBe("invalid");
+      if (chain.state === "invalid") expect(chain.reason).toContain("duplicate");
+    }, 30_000,
+  );
+
+  test("a stage rejection after Unit rejections carries the correct accepted aggregate", () => {
+    const pd = fixture(true);
+    converge(pd);
+    const aggregate = workspaceSourceFingerprint(pd)!;
+    human(pd);
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Revise the first batch");
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: STAGE, "Prior Accepted Source Fingerprint": aggregate,
+    }, pd);
+    expect(currentSwarmSourceOpeningFingerprint(pd, STAGE)).toEqual({
+      state: "ready", fingerprint: aggregate, source: "prior-accepted",
+    });
+  }, 30_000);
+
+  test("immutable Unit binding accepts native reviews containing internal symlinks", () => {
+    const pd = fixture(true);
+    symlinkSync("alpha.ts", join(pd, "src/alpha-alias.ts"));
+    git(pd, ["add", "src/alpha-alias.ts"]);
+    git(pd, ["commit", "-qm", "internal source alias"]);
+    // Start with this reviewed source as the aggregate's initial baseline.
+    const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
+    converge(pd);
+    const ready = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(ready.ready, ready.errors.join("\n")).toBe(true);
+    expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+  }, 30_000);
+
+  test.each([{ repos: ["repo-a"] }, { repos: ["repo-a", "repo-b"] }])(
+    "transported child manifests retain reviewed bytes with repositories %j",
+    ({ repos }) => {
+      const pd = fixture(true, repos);
+      const path = join(seededRecordDir(pd), "construction/alpha", STAGE, "source-manifest.json");
+      const original = readFileSync(path);
+      converge(pd);
+      const approved = approveSwarmCheckpoint(pd, 1, BATCH);
+      expect(approved.approved).toBe(true);
+      expect(readFileSync(path)).toEqual(original);
+      // Parent ignore changes cannot redefine the immutable child's manifest.
+      writeFileSync(join(pd, repos[0], ".gitignore"), "src/\n");
+      const unchanged = resolveSwarmCheckpoint(pd, 1, BATCH);
+      expect(unchanged.ready, unchanged.errors.join("\n")).toBe(true);
+      expect(unchanged.approved).toBe(true);
+      writeFileSync(join(pd, repos[0], "src/alpha.ts"), "export const alpha = 2;\n");
+      expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
+    }, 30_000,
+  );
+
+  test("immutable manifest initialization stays private with ambient GIT_DIR", () => {
+    const pd = fixture();
+    const commit = git(pd, ["rev-parse", "HEAD"]);
+    const manifest = readFileSync(join(seededRecordDir(pd), "construction/alpha", STAGE, "source-manifest.json"));
+    const config = readFileSync(join(pd, ".git/config"));
+    const head = readFileSync(join(pd, ".git/HEAD"));
+    const before = process.env.GIT_DIR;
+    try {
+      process.env.GIT_DIR = join(pd, ".git");
+      const result = readCommittedUnitSourceManifest(pd, commit, true, STAGE, "alpha", manifest);
+      expect(result.ok, result.ok ? "" : result.reason).toBe(true);
+      expect(readFileSync(join(pd, ".git/config"))).toEqual(config);
+      expect(readFileSync(join(pd, ".git/HEAD"))).toEqual(head);
+    } finally {
+      if (before === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = before;
+    }
+  }, 30_000);
+
+  test.each(["wrong-repo", "source-binding"])("%s cannot certify transported child source", (kind) => {
+    const pd = fixture(true, ["repo-a", "repo-b"]);
+    converge(pd, 1, BATCH, kind);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
   }, 30_000);
 
   test.each(["attempt", "source", "artifact", "manifest", "set"])("%s change invalidates approval", (kind) => {

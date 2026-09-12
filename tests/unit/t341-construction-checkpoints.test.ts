@@ -2,7 +2,9 @@
 // function:verifyConstructionCheckpoint, function:approveConstructionCheckpoint,
 // function:rejectConstructionCheckpoint, audit:GATE_APPROVED, audit:GATE_REJECTED
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
+import * as fs from "node:fs";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -236,6 +238,54 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", cmd)).toThrow("explicit");
     }
   }, 60_000);
+
+  test.skipIf(process.platform === "win32" || !fs.existsSync("/bin/bash"))(
+    "Bash project checks verify, while a failed pipeline revokes prior approval",
+    () => {
+      const dir = project();
+      const command = 'set -o pipefail; checks=(src/alpha.ts); ' +
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expands the array in the project check.
+        '[[ -f "${checks[0]}" ]] && cat <(printf "%s\\n" "bash check passed")';
+      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit", command);
+      expect(verified.verified).toBe(true);
+      expect(verified.approved).toBe(false);
+      expect(verified.verification!.command).toBe(command);
+      expect(verified.verification!.exit_code).toBe(0);
+      expect(verified.verification!.stdout).toBe("bash check passed\n");
+      expect(verified.verification!.stderr).toBe("");
+      expect(verified.verification!.evidence_unchanged).toBe(true);
+      human(dir);
+      expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
+      const failed = verifyConstructionCheckpoint(dir, "alpha", "unit", "set -o pipefail; false | true");
+      expect(failed.verification!.exit_code).toBe(1);
+      expect(failed.verification!.evidence_unchanged).toBe(true);
+      expect(failed.verified).toBe(false);
+      expect(failed.approved).toBe(false);
+      expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve")).toThrow("Verify");
+      expect(approvals(dir)).toHaveLength(1);
+    }, 60_000,
+  );
+
+  test.skipIf(process.platform === "win32")("falls back to sh when Bash is absent", () => {
+    const dir = project();
+    const existsSync = fs.existsSync;
+    const bashAbsent = spyOn(fs, "existsSync").mockImplementation((path) =>
+      path === "/bin/bash" ? false : existsSync(path));
+    const spawn = spyOn(childProcess, "spawnSync");
+    try {
+      const command = 'test -f src/alpha.ts && printf "%s\\n" "POSIX fallback passed"';
+      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit", command);
+      expect(spawn).toHaveBeenCalledWith("/bin/sh", ["-c", command], expect.objectContaining({ cwd: dir }));
+      expect(verified.verified).toBe(true);
+      expect(verified.approved).toBe(false);
+      expect(verified.verification!.exit_code).toBe(0);
+      expect(verified.verification!.stdout).toBe("POSIX fallback passed\n");
+      expect(verified.verification!.evidence_unchanged).toBe(true);
+    } finally {
+      spawn.mockRestore();
+      bashAbsent.mockRestore();
+    }
+  }, 30_000);
 
   test("an edit during an otherwise passing check cannot mint a verification", () => {
     const dir = project();

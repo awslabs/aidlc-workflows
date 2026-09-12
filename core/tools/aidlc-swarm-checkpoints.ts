@@ -12,7 +12,6 @@ import {
   eventMatchesClaimAttempt,
   findStageBySlug,
   getField,
-  gitCommitSourceListing,
   hasUnsafeSingleLineCharacter,
   humanActedSinceGate,
   intentRepos,
@@ -21,9 +20,9 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   maximalAttemptEvents,
   readAuditShardEvents,
+  readCommittedUnitSourceManifest,
   readRegularFileNoFollowOrThrow,
   readStateFile,
-  readUnitSourceManifest,
   recordDir,
   recordFileTargetOrThrow,
   repoDir,
@@ -153,6 +152,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     const review = latest(rows.filter((row) => row.event === "REVIEW_COMPLETED" &&
       auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit));
     if (!review || !native || !attemptEventDefinitelyBefore(review, native) ||
+      (rejection !== null && !attemptEventDefinitelyBefore(rejection, review)) ||
       !eventMatchesClaimAttempt(pd, review.block, unit) ||
       auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
       auditBlockField(review.block, "Source Fingerprint") !== nativeSource ||
@@ -164,38 +164,31 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     try {
       const path = recordFileTargetOrThrow(root, `construction/${unit}/${STAGE}/source-manifest.json`);
       const bytes = readRegularFileNoFollowOrThrow(path, "Swarm Unit source manifest");
-      const manifest = readUnitSourceManifest(pd, STAGE, unit);
-      if (!manifest.ok || manifest.rawBytesSha256 !== createHash("sha256").update(bytes).digest("hex")) {
-        throw new Error(manifest.ok ? "source manifest changed while reading" : manifest.reason);
-      }
       const repo = merged && auditBlockField(merged.block, "Repo");
       if ((repos.length > 0 && (!repo || !repos.includes(repo))) ||
         (repos.length === 0 && repo !== null && repo !== "-")) {
         throw new Error("source merge does not identify the claimed repository");
       }
-      const committed = commit && gitCommitSourceListing(
-        repos.length ? repoDir(pd, repo!) : pd, commit, repos.length === 0,
+      if (!commit) throw new Error("immutable reviewed Source Commit is unavailable");
+      const manifest = readCommittedUnitSourceManifest(
+        repos.length ? repoDir(pd, repo!) : pd, commit, repos.length === 0, STAGE, unit, bytes,
       );
-      if (!committed) throw new Error("immutable reviewed Source Commit is unavailable");
-      const localKey = (key: string): string => {
-        const prefix = repos.length ? `${repo}\0` : "\0";
-        if (!key.startsWith(prefix)) throw new Error("a Unit's claims must belong to its source merge repository");
-        return key.slice(prefix.length - 1);
-      };
-      const localClaims = {
-        claims: new Set([...manifest.claims].map(localKey)),
-        prefixes: manifest.prefixes.map(localKey),
-      };
-      if (!review || unitSourceFingerprint(committed, localClaims, manifest.rawBytesSha256) !==
+      if (!manifest.ok) throw new Error(manifest.reason);
+      const committed = manifest.listing;
+      if (!review || unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256) !==
         auditBlockField(review.block, "Unit Source Fingerprint")) {
         throw new Error("source manifest or claimed source does not match the native reviewed binding");
       }
+      const parentClaims = {
+        claims: new Set([...manifest.claims].map((key) => repos.length ? `${repo}${key}` : key)),
+        prefixes: manifest.prefixes.map((key) => repos.length ? `${repo}${key}` : key),
+      };
       const projected = repos.length
         ? new Map([...committed].map(([key, value]) => [`${repo}${key}`, value]))
         : committed;
       if (!listing) throw new Error("claimed source cannot be fingerprinted");
-      source = unitSourceFingerprint(listing, manifest, manifest.rawBytesSha256);
-      if (source !== unitSourceFingerprint(projected, manifest, manifest.rawBytesSha256)) {
+      source = unitSourceFingerprint(listing, parentClaims, manifest.rawBytesSha256);
+      if (source !== unitSourceFingerprint(projected, parentClaims, manifest.rawBytesSha256)) {
         throw new Error("claimed source differs from the verified native Source Commit");
       }
     } catch (error) {
