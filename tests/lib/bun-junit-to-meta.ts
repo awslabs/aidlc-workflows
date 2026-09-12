@@ -15,8 +15,8 @@
 // FAILED_FILES by counting `.meta` files whose STATUS=FAIL — one increment per
 // FILE regardless of how many testcases failed inside it. So the bun exit code
 // is discarded; STATUS in the `.meta` is the single source of truth the parent
-// reads, and RC here is a self-consistent exit code (0 PASS / 1 FAIL) the tool
-// itself returns for any direct caller.
+// reads, and RC here is a self-consistent exit code (0 PASS/SKIP / 1 FAIL) the
+// tool itself returns for any direct caller.
 //
 // ─── VERIFIED bun 1.2.22 JUnit XML SHAPE (probed this session) ───────────────
 // Command: bun test <file> --reporter=junit --reporter-outfile=<X>
@@ -55,7 +55,7 @@
 // ─── .meta CONTRACT (run-tests.sh :287-292, re-confirmed this session) ───────
 // Exactly 6 lines, bash-sourceable (KEY=value, no spaces around =), in order:
 //   NAME=<basename, no extension>
-//   STATUS=<PASS|FAIL>
+//   STATUS=<PASS|FAIL|SKIP|UNMET>
 //   TESTS=<count of testcases>
 //   FAILED=<count of failures>
 //   DURATION=<seconds, may be float>
@@ -73,14 +73,16 @@
 //     is absent.
 //   - FAILED = root <testsuites failures> (fallback: sum of <testsuite failures>,
 //     final fallback: count of <failure ...> elements).
-//   - STATUS = FAIL iff FAILED > 0; PASS otherwise. (Skips do NOT fail a file —
-//     mirrors bun exit 0 on all-skip, and the runner treats only rc!=0 as FAIL.)
+//   - STATUS = FAIL iff FAILED > 0 or bun exited nonzero; SKIP iff every declared
+//     testcase skipped; PASS otherwise. Empty suites remain PASS because they
+//     declared no skipped testcases. The runner may overlay UNMET when the
+//     skipped file's own live gate was explicitly requested.
 //   - DURATION = root <testsuites time> float seconds (fallback: 0). Sources fine
 //     in bash; the bash-file branch emits an integer here, the contract permits a
 //     float, and aggregate does float-free integer += only on TESTS/FAILED.
-//   - RC = 0 when PASS, 1 when FAIL. Self-consistent with STATUS; the parent never
-//     reads RC for aggregation (it keys off STATUS), but RC keeps the `.meta`
-//     faithful to the bash-file shape and gives a direct caller a real exit code.
+//   - RC = 0 when PASS/SKIP, 1 when FAIL. The runner writes RC=1 for its UNMET
+//     overlay. RC keeps the `.meta` self-consistent and gives a direct caller a
+//     real exit code.
 //
 // CLI CONTRACT:
 //   bun bun-junit-to-meta.ts --xml <junit.xml> --out <target.meta> [--name <NAME>] [--bun-rc <N>]
@@ -101,14 +103,14 @@
 //                            XML). Without it, an import crash maps to PASS.
 //
 //   Process exits with the RC it wrote into the `.meta` (= --bun-rc when given,
-//   else 0 PASS / 1 FAIL). A usage error (no --out) exits 2 on stderr.
+//   else 0 PASS/SKIP / 1 FAIL). A usage error (no --out) exits 2 on stderr.
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 
 export interface MetaCounts {
   name: string;
-  status: "PASS" | "FAIL";
+  status: "PASS" | "FAIL" | "SKIP" | "UNMET";
   tests: number;
   failed: number;
   duration: string; // kept as a string so we preserve bun's float formatting verbatim
@@ -165,20 +167,27 @@ function sanitizeDuration(raw: string): string {
  * `xml` empty/whitespace (the empty-suite case where bun wrote no file) yields
  * 0 tests / 0 failures.
  */
-export function parseJUnit(xml: string): { tests: number; failed: number; duration: string } {
+export function parseJUnit(xml: string): {
+  tests: number;
+  failed: number;
+  skipped: number;
+  duration: string;
+} {
   const text = (xml ?? "").trim();
-  if (text === "") return { tests: 0, failed: 0, duration: "0" };
+  if (text === "") return { tests: 0, failed: 0, skipped: 0, duration: "0" };
 
   // ROOT <testsuites ...> opening tag (singular: there is one root document).
   const rootMatch = text.match(/<testsuites\b[^>]*>/);
   let tests: number | null = null;
   let failed: number | null = null;
+  let skipped: number | null = null;
   let duration: string | null = null;
 
   if (rootMatch) {
     const root = rootMatch[0];
     tests = attrInt(root, "tests");
     failed = attrInt(root, "failures");
+    skipped = attrInt(root, "skipped");
     duration = attrStr(root, "time");
   }
 
@@ -194,11 +203,13 @@ export function parseJUnit(xml: string): { tests: number; failed: number; durati
     if (!rootMatch) {
       let tSum = 0;
       let fSum = 0;
+      let sSum = 0;
       let dSum = 0;
       let sawDuration = false;
       for (const tag of suiteTags) {
         tSum += attrInt(tag, "tests") ?? 0;
         fSum += attrInt(tag, "failures") ?? 0;
+        sSum += attrInt(tag, "skipped") ?? 0;
         const d = attrStr(tag, "time");
         if (d !== null) {
           dSum += Number(d) || 0;
@@ -207,6 +218,7 @@ export function parseJUnit(xml: string): { tests: number; failed: number; durati
       }
       tests = tSum;
       failed = fSum;
+      skipped = sSum;
       duration = sawDuration ? String(dSum) : "0";
     }
   }
@@ -219,9 +231,12 @@ export function parseJUnit(xml: string): { tests: number; failed: number; durati
   if (tests === null) {
     tests = (text.match(/<testcase\b/g) ?? []).length;
   }
+  if (skipped === null) {
+    skipped = (text.match(/<skipped\b/g) ?? []).length;
+  }
   if (duration === null || duration === "") duration = "0";
 
-  return { tests, failed, duration };
+  return { tests, failed, skipped, duration };
 }
 
 /**
@@ -251,8 +266,10 @@ export function deriveName(metaPath: string): string {
  * would contribute +0 to FAILED_FILES, silently under-reporting the failure.
  *
  * Rule: STATUS=FAIL iff (parsed failures > 0) OR (bunRc is known and nonzero).
- * In the crash case (bunRc != 0 but parsed failed == 0) we synthesize
- * `failed = 1` so the FAIL is visible in the count, and RC mirrors bunRc.
+ * Otherwise STATUS=SKIP iff the document declares at least one testcase and
+ * every testcase skipped. Empty suites remain PASS. In the crash case
+ * (bunRc != 0 but parsed failed == 0) we synthesize `failed = 1` so the FAIL is
+ * visible in the count, and RC mirrors bunRc.
  *
  * `bunRc` is OPTIONAL (default null): omitting it preserves the original
  * XML-only behaviour exactly, so a caller that cannot supply the exit code (or
@@ -263,7 +280,12 @@ export function buildMeta(xml: string, name: string, bunRc: number | null = null
   const parsed = parseJUnit(xml);
   const tests = parsed.tests;
   const rcFail = bunRc !== null && bunRc !== 0;
-  const status: "PASS" | "FAIL" = parsed.failed > 0 || rcFail ? "FAIL" : "PASS";
+  const status: MetaCounts["status"] =
+    parsed.failed > 0 || rcFail
+      ? "FAIL"
+      : tests > 0 && parsed.skipped === tests
+        ? "SKIP"
+        : "PASS";
   // If bun reported a nonzero exit but the XML carried no countable failure
   // (the import-crash case), surface at least one failure so STATUS=FAIL is
   // backed by a nonzero FAILED count the parent's per-FILE aggregation honors.

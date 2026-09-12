@@ -4,7 +4,8 @@
 // tests/run-tests.sh remains as a POSIX compatibility wrapper. Keep behavior
 // aligned with the old runner because smoke/t05 drives the public runner
 // contract: flags, tier banners, START/DONE markers, summary fields, verbose
-// log dirs, debug trace locations, and the "exit == failed files" convention.
+// log dirs, debug trace locations, and the "exit == blocking files" convention
+// (FAIL plus explicitly requested live files that execute no tests).
 
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -53,7 +54,7 @@ const LIVE_MODEL_GATES = [
 ] as const;
 
 type Level = "smoke" | "unit" | "integration" | "e2e";
-type Status = "PASS" | "FAIL" | "SKIP";
+type Status = "PASS" | "FAIL" | "SKIP" | "UNMET";
 
 interface ParsedArgs {
   runSmoke: boolean;
@@ -428,6 +429,8 @@ if (needsLlm && !commandExists("timeout")) {
 
 let totalFiles = 0;
 let failedFiles = 0;
+let skippedFiles = 0;
+let unmetLiveFiles = 0;
 let totalTests = 0;
 let totalFailed = 0;
 const resultRows: ResultRow[] = [];
@@ -444,28 +447,48 @@ function shouldSkipForClaude(file: string): boolean {
   return !claudeGateOpen && isClaudeRequiredFile(file);
 }
 
+const requestedLiveGateCache = new Map<string, string[]>();
+
+function requestedLiveGates(file: string): string[] {
+  const cached = requestedLiveGateCache.get(file);
+  if (cached) return cached;
+
+  let source = "";
+  try {
+    source = readFileSync(file, "utf8");
+  } catch {
+    source = "";
+  }
+
+  const requested: string[] = [];
+  for (const gate of LIVE_MODEL_GATES) {
+    if (process.env[gate] !== "1") continue;
+    if (
+      source.includes(`process.env.${gate}`) ||
+      (gate === "AIDLC_CLAUDE_SDK_LIVE" && isClaudeRequiredFile(file))
+    ) {
+      requested.push(gate);
+    }
+  }
+  requestedLiveGateCache.set(file, requested);
+  return requested;
+}
+
+function blockingFiles(): number {
+  return failedFiles + unmetLiveFiles;
+}
+
 function writeMeta(name: string, meta: MetaCounts | ResultRow): void {
   const status = meta.status;
-  const rc = status === "FAIL" ? 1 : 0;
-  const content =
-    status === "SKIP"
-      ? [
-          `NAME=${name}`,
-          "STATUS=SKIP",
-          "TESTS=0",
-          "FAILED=0",
-          "DURATION=0",
-          "RC=0",
-          "",
-        ].join("\n")
-      : renderMeta({
-          name,
-          status,
-          tests: meta.tests,
-          failed: meta.failed,
-          duration: meta.duration,
-          rc,
-        });
+  const rc = status === "FAIL" || status === "UNMET" ? 1 : 0;
+  const content = renderMeta({
+    name,
+    status,
+    tests: meta.tests,
+    failed: meta.failed,
+    duration: meta.duration,
+    rc,
+  });
   writeFileSync(join(resultsDir, `${name}.meta`), content, "utf8");
 }
 
@@ -483,7 +506,10 @@ function parseMeta(file: string): ResultRow {
     const key = line.slice(0, eq);
     const value = line.slice(eq + 1);
     if (key === "NAME") row.name = value;
-    else if (key === "STATUS" && (value === "PASS" || value === "FAIL" || value === "SKIP")) {
+    else if (
+      key === "STATUS" &&
+      (value === "PASS" || value === "FAIL" || value === "SKIP" || value === "UNMET")
+    ) {
       row.status = value;
     } else if (key === "TESTS") row.tests = Number(value) || 0;
     else if (key === "FAILED") row.failed = Number(value) || 0;
@@ -503,6 +529,8 @@ function aggregateTierResults(): void {
     totalTests += row.tests;
     totalFailed += row.failed;
     if (row.status === "FAIL") failedFiles += 1;
+    else if (row.status === "SKIP") skippedFiles += 1;
+    else if (row.status === "UNMET") unmetLiveFiles += 1;
     resultRows.push(row);
   }
   for (const meta of metas) rmSync(meta, { force: true });
@@ -685,10 +713,16 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   if (filterRegex && !filterRegex.test(base) && !filterRegex.test(name)) return;
 
   if (shouldSkipForClaude(file)) {
-    process.stdout.write(`\n=== SKIP ${base} ===\n`);
-    process.stdout.write(`--- SKIP: ${base} (Claude substrate unavailable; derived live mechanism) ---\n`);
-    process.stdout.write(`=== DONE ${base} (SKIP) ===\n`);
-    writeMeta(name, { name, status: "SKIP", tests: 0, failed: 0, duration: "0" });
+    const requested = requestedLiveGates(file);
+    const status: Status = requested.length > 0 ? "UNMET" : "SKIP";
+    process.stdout.write(`\n=== ${status} ${base} ===\n`);
+    process.stdout.write(
+      status === "UNMET"
+        ? `--- UNMET: ${base} (${requested.map((gate) => `${gate}=1`).join(", ")} requested, but Claude substrate unavailable) ---\n`
+        : `--- SKIP: ${base} (Claude substrate unavailable; derived live mechanism) ---\n`,
+    );
+    process.stdout.write(`=== DONE ${base} (${status}) ===\n`);
+    writeMeta(name, { name, status, tests: 0, failed: 0, duration: "0" });
     return;
   }
 
@@ -787,6 +821,13 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     xml = "";
   }
   const meta = buildMeta(xml, name, run.rc);
+  const noTestsExecuted =
+    meta.status === "SKIP" || (meta.status === "PASS" && meta.tests === 0);
+  const requested = noTestsExecuted ? requestedLiveGates(file) : [];
+  if (requested.length > 0) {
+    meta.status = "UNMET";
+    meta.rc = 1;
+  }
   // Preserve a duration even if a future Bun omits root time.
   if (meta.duration === "0") meta.duration = String(Math.max(0, (Date.now() - start) / 1000));
   writeMeta(name, meta);
@@ -795,7 +836,17 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   const body = run.output;
   const doneBlock = (): void => {
     if (!args.debug) process.stdout.write(body);
-    process.stdout.write(status === "FAIL" ? `--- FAIL: ${base} ---\n` : `--- PASS: ${base} ---\n`);
+    if (status === "FAIL") {
+      process.stdout.write(`--- FAIL: ${base} ---\n`);
+    } else if (status === "UNMET") {
+      process.stdout.write(
+        `--- UNMET: ${base} (${requested.map((gate) => `${gate}=1`).join(", ")} requested, but no tests executed) ---\n`,
+      );
+    } else if (status === "SKIP") {
+      process.stdout.write(`--- SKIP: ${base} (every test skipped) ---\n`);
+    } else {
+      process.stdout.write(`--- PASS: ${base} ---\n`);
+    }
     process.stdout.write(`=== DONE ${base} (${status}) ===\n`);
   };
   if (parallelMode) {
@@ -814,7 +865,9 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
         `Test: ${base}`,
         `File: ${file}`,
         `Status: ${status}`,
-        `Exit code: ${run.rc}`,
+        `Requested live gates: ${requested.length > 0 ? requested.map((gate) => `${gate}=1`).join(", ") : "none"}`,
+        `Bun exit code: ${run.rc}`,
+        `Metadata RC: ${meta.rc}`,
         `Timestamp: ${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}`,
         "",
         "--- Output ---",
@@ -953,13 +1006,15 @@ function printSummary(): void {
   process.stdout.write("==============================\n");
   process.stdout.write(`Test files: ${totalFiles}\n`);
   process.stdout.write(`Failed files: ${failedFiles}\n`);
+  process.stdout.write(`Skipped files: ${skippedFiles}\n`);
+  process.stdout.write(`Unmet live files: ${unmetLiveFiles}\n`);
   process.stdout.write(`Total assertions: ${totalTests}\n`);
   process.stdout.write(`Failed assertions: ${totalFailed}\n`);
   if (args.verbose && logDir) {
     process.stdout.write(`Log directory: ${displayLogDirPath(logDir)}\n`);
   }
   process.stdout.write("==============================\n");
-  process.stdout.write(failedFiles > 0 ? "RESULT: FAIL\n" : "RESULT: PASS\n");
+  process.stdout.write(blockingFiles() > 0 ? "RESULT: FAIL\n" : "RESULT: PASS\n");
 }
 
 function writeVerboseSummary(): void {
@@ -993,17 +1048,23 @@ function writeVerboseSummary(): void {
     "Totals:",
     `  Test files: ${totalFiles}`,
     `  Failed files: ${failedFiles}`,
+    `  Skipped files: ${skippedFiles}`,
+    `  Unmet live files: ${unmetLiveFiles}`,
     `  Total assertions: ${totalTests}`,
     `  Failed assertions: ${totalFailed}`,
-    `  Result: ${failedFiles > 0 ? "FAIL" : "PASS"}`,
+    `  Result: ${blockingFiles() > 0 ? "FAIL" : "PASS"}`,
   );
   writeFileSync(join(logDir, "summary.txt"), `${lines.join("\n")}\n`, "utf8");
 
   const failures: string[] = [];
-  if (failedFiles > 0) {
+  if (blockingFiles() > 0) {
     for (const row of resultRows) {
-      if (row.status !== "FAIL") continue;
-      failures.push(`FAIL: ${row.name} (${row.failed} failed assertions)`);
+      if (row.status !== "FAIL" && row.status !== "UNMET") continue;
+      failures.push(
+        row.status === "FAIL"
+          ? `FAIL: ${row.name} (${row.failed} failed assertions)`
+          : `UNMET: ${row.name} (requested live gate executed no tests)`,
+      );
       const logFile = join(logDir, `${row.name}.log`);
       if (existsSync(logFile)) {
         // bun:test marks a failing case with a line that STARTS WITH `(fail)`
@@ -1030,11 +1091,11 @@ async function main(): Promise<number> {
   process.stdout.write("======================\n");
 
   if (args.runSmoke) await runTier("smoke", "Smoke Tests (structural)");
-  if (args.runSmoke && failedFiles > 0) {
+  if (args.runSmoke && blockingFiles() > 0) {
     process.stdout.write("\nSMOKE FAILURES DETECTED -- aborting before unit/integration levels\n");
     writeVerboseSummary();
     printSummary();
-    return failedFiles;
+    return blockingFiles();
   }
 
   if (args.runUnit) await runTier("unit", "Unit Tests (single-component isolation)");
@@ -1118,7 +1179,7 @@ async function main(): Promise<number> {
 
   writeVerboseSummary();
   printSummary();
-  return failedFiles;
+  return blockingFiles();
 }
 
 try {
