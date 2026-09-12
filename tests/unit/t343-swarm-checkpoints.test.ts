@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -465,6 +465,58 @@ describe("t343 completed swarm batch checkpoints", () => {
       if (before === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = before;
     }
+  }, 30_000);
+
+  test("concurrent immutable manifest reads isolate repositories and clean their private blob streams", async () => {
+    const repos = [fixture(), fixture()];
+    const cases = repos.map((pd, index) => {
+      writeFileSync(join(pd, "src/alpha.ts"), `export const alpha = ${index + 2};\n// ${String(index).repeat(256 * 1024)}\n`);
+      git(pd, ["add", "src/alpha.ts"]);
+      git(pd, ["commit", "-qm", "distinct concurrent reviewed source"]);
+      const manifest = readUnitSourceManifest(pd, STAGE, "alpha");
+      if (!manifest.ok) throw new Error(manifest.reason);
+      return {
+        pd, commit: git(pd, ["rev-parse", "HEAD"]),
+        file: join(seededRecordDir(pd), "construction/alpha", STAGE, "source-manifest.json"),
+        expected: unitSourceFingerprint(workspaceSourceListing(pd)!, manifest, manifest.rawBytesSha256),
+      };
+    });
+    const scratch = join(repos[0], ".aidlc", "manifest-concurrency");
+    mkdirSync(scratch, { recursive: true });
+    const sentinel = join(scratch, "cat-file.batch");
+    writeFileSync(sentinel, "existing shared temporary entry\n");
+    const driver = join(repos[0], ".aidlc", "manifest-concurrency.ts");
+    writeFileSync(driver, `
+import { readFileSync } from "node:fs";
+const { readCommittedUnitSourceManifest, unitSourceFingerprint } =
+  await import(${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-lib.ts"))});
+const [pd, commit, file, expected] = process.argv.slice(2);
+const bytes = readFileSync(file);
+for (let iteration = 0; iteration < 4; iteration++) {
+  const result = readCommittedUnitSourceManifest(pd, commit, true, "code-generation", "alpha", bytes);
+  if (!result.ok) throw new Error(result.reason);
+  if (unitSourceFingerprint(result.listing, result, result.rawBytesSha256) !== expected) {
+    throw new Error("immutable source belongs to a different repository");
+  }
+}
+const invalid = readCommittedUnitSourceManifest(pd, commit, true, "code-generation", "alpha", Buffer.from("{"));
+if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
+`);
+    const workers = cases.map(({ pd, commit, file, expected }) => Bun.spawn(
+      [process.execPath, driver, pd, commit, file, expected],
+      {
+        cwd: pd, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+        stdout: "pipe", stderr: "pipe",
+      },
+    ));
+    const results = await Promise.all(workers.map(async (worker) => ({
+      code: await worker.exited,
+      out: await new Response(worker.stdout).text(),
+      err: await new Response(worker.stderr).text(),
+    })));
+    for (const result of results) expect(result.code, `${result.out}\n${result.err}`).toBe(0);
+    expect(readFileSync(sentinel, "utf-8")).toBe("existing shared temporary entry\n");
+    expect(readdirSync(scratch)).toEqual(["cat-file.batch"]);
   }, 30_000);
 
   test.each(["wrong-repo", "source-binding"])("%s cannot certify transported child source", (kind) => {

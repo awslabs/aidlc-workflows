@@ -156,7 +156,7 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
 }
 
 function converge(pd: string, options: {
-  units?: string[]; batch?: string; legacy?: boolean; startedUnits?: string[]; splitStarts?: boolean;
+  units?: string[]; batch?: string; legacy?: boolean; unmerged?: boolean; startedUnits?: string[]; splitStarts?: boolean;
 } = {}): void {
   const floor = latestMainWorkflowStageRunFloorForProject(pd, STAGE);
   const listing = workspaceSourceListing(pd)!;
@@ -190,7 +190,7 @@ function converge(pd: string, options: {
       Stage: STAGE, "Run floor": floor, "Batch number": options.batch ?? "1", "Unit name": unit,
       ...(options.legacy ? {} : { "Source Commit": commit, "Source Fingerprint": fingerprint }),
     }, pd);
-    if (!options.legacy) appendAuditEntry("SWARM_SOURCE_MERGED", {
+    if (!options.legacy && !options.unmerged) appendAuditEntry("SWARM_SOURCE_MERGED", {
       Stage: STAGE, "Run floor": floor, "Batch number": options.batch ?? "1", "Unit name": unit,
       "Source Commit": commit, "Merge commit": commit, Repo: "-",
       "Previous Source Fingerprint": previous, "Source Fingerprint": fingerprint,
@@ -268,6 +268,50 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     }, pd);
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
   }, 30_000);
+
+  test("a proven pending subset retains the original group and still checks its completed peer's plan", () => {
+    const pd = fixture();
+    for (const unit of UNITS) beginCodeGeneration(pd, { unit });
+    const authority = resolveCodeGenerationAuthority(pd, { unit: "beta" });
+    const key = {
+      targetId: authority.targetId, runFloor: authority.runFloor,
+      fingerprint: evaluateCodeGenerationApproval(pd, { unit: "beta" }).approvalFingerprint!,
+    };
+    const receipt = readPlanApprovalReceipt(pd, key);
+    converge(pd, { units: ["alpha"] });
+    expect(next(pd)).toMatchObject({ kind: "invoke-swarm", units: ["beta"] });
+    const approval = evaluateCodeGenerationApproval(pd, { unit: "beta" });
+    expect(approval.ok, approval.reason).toBe(true);
+    expect(readPlanApprovalReceipt(pd, key)).toEqual(receipt);
+    // Completed peers are checked privately as part of the original group;
+    // the public dispatch authority still follows the pending directive.
+    expect(() => resolveCodeGenerationAuthority(pd, { unit: "alpha" })).toThrow("active swarm directive");
+    const path = join(codeGenerationRecordDir(pd, "alpha"), "code-generation-plan.md");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("- [x] Implement", "- [x] Implement additional behavior"));
+    expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
+  }, 30_000);
+
+  test.each(["unmerged", "legacy", "wrong-batch", "wrong-start-set", "later-start", "stale", "foreign"] as const)(
+    "%s evidence cannot narrow a protected group to pending units", (kind) => {
+      const pd = fixture();
+      for (const unit of UNITS) beginCodeGeneration(pd, { unit });
+      converge(pd, {
+        units: ["alpha"],
+        ...(kind === "unmerged" ? { unmerged: true } : {}),
+        ...(kind === "legacy" ? { legacy: true } : {}),
+        ...(kind === "wrong-batch" ? { batch: "2" } : {}),
+        ...(kind === "wrong-start-set" ? { startedUnits: ["beta"] } : {}),
+      });
+      if (kind === "later-start") appendAuditEntry("SWARM_STARTED", {
+        Stage: STAGE, "Run floor": latestMainWorkflowStageRunFloorForProject(pd, STAGE),
+        "Batch number": "1", "Unit names": "alpha", "Unit obligations": UNITS.join(","),
+      }, pd);
+      if (kind === "stale") appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, pd);
+      publish(pd, "invoke-swarm", kind === "foreign" ? ["beta", "foreign"] : ["beta"]);
+      expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
+      expect(() => beginCodeGeneration(pd, { unit: "beta" })).toThrow();
+    }, 30_000,
+  );
 
   test.each(["missing", "partial", "wrong-batch", "wrong-start-set", "foreign-start-member"] as const)(
     "%s convergence cannot turn a run-stage marker into grouped authority", (kind) => {
