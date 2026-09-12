@@ -308,13 +308,7 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via `Tas
 
 ---
 
-### Kiro CLI
-
-If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the `subagent` tool targeting the reviewer agent config).
-
----
-
-### Kiro IDE
+### Kiro
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the `subagent` tool targeting the reviewer agent config).
 
