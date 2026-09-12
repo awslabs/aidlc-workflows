@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AcceptedChange,
   activeIntentUuid,
+  delegatedWorktreeIntent,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -1489,6 +1490,10 @@ function codeGenerationAuthority(
   }
   const markerRevision = Number(issuanceRevision);
   const targetId = codeGenerationTargetId(target);
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated && marker.intent_uuid !== delegated.intentUuid) {
+    throw new Error("Code Generation directive does not match the delegated parent intent");
+  }
   const intentId = marker.intent_uuid ?? "bare-space";
   const sourceFloor =
     marker.code_generation_source_sha256 ?? UNBINDABLE_FINGERPRINT;
@@ -2769,7 +2774,12 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
     throw new Error("Worktree immutable base source listing is invalid.");
   }
   worktreeApprovalGit(child, ["cat-file", "-e", `${meta.baseCommit}^{commit}`]);
-  return { parent, child, repo, hash: hashObject(creation.block) };
+  const delegated = delegatedWorktreeIntent(child);
+  if (delegated && approvalPathKey(delegated.parent) !== approvalPathKey(parent)) {
+    throw new Error("Worktree intent belongs to a different approval parent");
+  }
+  const intentUuid = delegated?.intentUuid ?? activeIntentUuid(child);
+  return { parent, child, repo, intentUuid, hash: hashObject(creation.block) };
 }
 
 function parentWorktreeApproval(parentDir: string, unit: string) {
@@ -3077,7 +3087,7 @@ export function bindCodeGenerationWorktreeApproval(
       current.expectedBytes !== before.expectedBytes ||
       hashObject(current.discarded) !== hashObject(before.discarded) ||
       current.receipt.status !== "generation" ||
-      activeIntentUuid(current.child) !== current.evidence.authority.intentId) {
+      current.intentUuid !== current.evidence.authority.intentId) {
       throw new Error("Worktree approval context changed during transfer; no execution receipt was published.");
     }
     const childHead = worktreeApprovalGit(current.child, ["rev-parse", "--verify", "HEAD^{commit}"]);
@@ -3140,6 +3150,7 @@ function validateWorktreeDelegation(
   const parent = parentWorktreeApproval(provenance.parent, origin.unit);
   const { delegation: _delegation, ...copiedReceipt } = receipt;
   if (provenance.hash !== origin.provenanceSha256 ||
+      provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
     hashObject(parent.receipt) !== origin.parentReceiptSha256 ||
     hashObject(copiedReceipt) !== hashObject(parent.receipt) ||
     parent.receipt.status !== "generation" || receipt.status !== "generation" ||

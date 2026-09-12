@@ -3178,6 +3178,8 @@ export interface KiroIdeLegacyPlanApprovalHost {
 }
 
 function planApprovalRuntimeDir(projectDir: string): string {
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated) return join(projectDir, delegated.intentRecord, ".aidlc-plan-approval");
   return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
 }
 
@@ -4375,6 +4377,14 @@ export function resolveWorkflowSelection(
   projectDir: string,
   options: WorkflowSelectionOptions = {},
 ): WorkflowSelection {
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated) {
+    if ((options.space !== undefined && options.space !== delegated.space) ||
+      (options.intent !== undefined && options.intent !== delegated.intent)) {
+      throw new Error("Workflow selection does not match the delegated worktree intent");
+    }
+    return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
+  }
   const explicitSession = validSessionId(options.sessionId);
   let sessionId: string | null;
   if (explicitSession) {
@@ -4611,6 +4621,49 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   if (activeDir === null) return null;
   const match = listIntents(projectDir, sp).find((i) => i.dirName === activeDir);
   return match?.uuid ? match.uuid : null;
+}
+
+/** A sibling-only swarm worker inherits identity from its attested parent record, not a local registry. */
+export function delegatedWorktreeIntent(projectDir: string): {
+  parent: string; space: string; intent: string; intentRecord: string; intentUuid: string;
+} | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  if (activeIntentUuid(projectDir) !== null) return null;
+  assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
+  const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));
+  // Workspace-shell worktrees and non-swarm work retain their existing resolution.
+  if (meta?.repoSelector === null || meta?.swarmUnit === undefined) return null;
+  const record = typeof meta?.intentRecord === "string"
+    ? /^aidlc\/spaces\/([a-z][a-z0-9-]*)\/intents\/([^/]+)$/.exec(meta.intentRecord) : null;
+  if (meta?.version !== 1 || !record || record[2] === "." || record[2] === ".." ||
+    typeof meta.repoSelector !== "string" || !meta.repoSelector ||
+    typeof meta.swarmUnit !== "string" || meta.boltSlug !== boltSlugForUnit(meta.swarmUnit)) {
+    throw new Error("Invalid delegated worktree intent provenance");
+  }
+  const child = canonicalPathKey(projectDir);
+  const parent = dirname(dirname(dirname(child)));
+  if (canonicalPathKey(worktreePath(parent, meta.boltSlug)) !== child ||
+    relativeRecordDir(parent) !== meta.intentRecord) {
+    throw new Error("Delegated worktree does not match the active parent intent record");
+  }
+  assertNoSymlinkInChainOrThrow(parent, relative(parent, projectDir));
+  const [, space, intent] = record;
+  const intentUuid = listIntents(parent, space).find((entry) => entry.dirName === intent)?.uuid;
+  const unreadable: string[] = [];
+  const creations = maximalAttemptEvents(readAuditShardEvents(parent, intent, space, unreadable).filter(
+    (row) => row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === meta.boltSlug,
+  ));
+  const creation = creations.length === 1 ? creations[0] : null;
+  const path = creation && auditBlockField(creation.block, "Worktree path");
+  if (!intentUuid || unreadable.length || !creation || !path ||
+    canonicalPathKey(resolveAuditWorktreePath(parent, path)) !== child ||
+    auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
+    auditBlockField(creation.block, "Repo") !== meta.repoSelector ||
+    auditBlockField(creation.block, "Swarm Unit") !== meta.swarmUnit) {
+    throw new Error("Delegated worktree intent has no matching immutable creation authority");
+  }
+  return { parent, space, intent, intentRecord: meta.intentRecord, intentUuid };
 }
 
 // Resolve an intent UUID to its record across EVERY space (a conversation may
@@ -5432,7 +5485,8 @@ function resolveActiveDirectiveTarget(
   }
   const intentUuid = recordDirName === null
     ? null
-    : listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
+    : delegatedWorktreeIntent(canonicalProjectDir)?.intentUuid ??
+      listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
   const markerPath = join(root, ACTIVE_DIRECTIVE_MARKER);
   return {
     canonicalProjectDir,
