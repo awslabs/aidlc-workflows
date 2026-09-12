@@ -109,10 +109,13 @@ describe("t300 adversarial AI PR review", () => {
     );
   });
 
-  test("validator fails closed when repository inspection is missing, failed, or partial", () => {
+  test("validator binds inspection reporting to the immutable manifest", () => {
     const missing = review() as unknown as Record<string, unknown>;
     delete missing.inspection;
-    expect(() => validate(JSON.stringify(missing))).toThrow("inspection must be an object");
+    expect(validate(JSON.stringify(missing)).inspection).toEqual({
+      status: "complete",
+      changedFiles: ["core/example.ts"],
+    });
 
     const failed = {
       ...review(),
@@ -123,17 +126,20 @@ describe("t300 adversarial AI PR review", () => {
       findings: [],
       residualRisk: "The diff and snapshots could not be inspected.",
     };
-    expect(() => validate(JSON.stringify(failed))).toThrow("inspection did not complete");
+    expect(validate(JSON.stringify(failed)).inspection).toEqual({
+      status: "complete",
+      changedFiles: ["core/example.ts"],
+    });
 
     const partial = review();
     partial.inspection.changedFiles = [];
-    expect(() => validate(JSON.stringify(partial))).toThrow(
-      "must exactly match the changed-file manifest",
-    );
+    expect(validate(JSON.stringify(partial)).inspection.changedFiles).toEqual(["core/example.ts"]);
 
     const duplicate = review();
     duplicate.inspection.changedFiles = ["core/example.ts", "core/example.ts"];
-    expect(() => validate(JSON.stringify(duplicate))).toThrow("must not contain duplicates");
+    expect(validate(JSON.stringify(duplicate)).inspection.changedFiles).toEqual([
+      "core/example.ts",
+    ]);
   });
 
   test("validator rejects fabricated evidence and reserved output syntax", () => {
@@ -489,11 +495,11 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain("explicit release-preparation or");
     expect(aidlc).toContain("version-bump PR");
     expect(aidlc).toContain("Every PR must preserve existing changelog entries");
-    expect(aidlc).toContain("The runner separately verifies");
-    expect(aidlc).toContain("do not add a second");
-    expect(aidlc).toContain('Return `"status": "complete"`');
+    expect(aidlc).toContain("The runner verifies");
+    expect(aidlc).toContain("publisher records the immutable");
+    expect(aidlc).toContain("Do not return an `inspection` field");
     expect(aidlc).not.toContain('"status": "failed"');
-    expect(aidlc).toContain('"changedFiles"');
+    expect(aidlc).not.toContain('"changedFiles"');
     expect(aidlc).toContain('"requiredCorrection"');
     expect(aidlc).toContain('"source": "DIFF"');
     expect(aidlc).toContain('"source":"DIFF_FILE"');
