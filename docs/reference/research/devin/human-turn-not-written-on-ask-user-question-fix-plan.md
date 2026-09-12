@@ -23,6 +23,13 @@ A live Devin e2e run (`docs/rfcs/handoff-run-real-devin-session-notes.md`, §"BU
 
 ### Bug 1 (secondary) — Stop hook probe order deletes Plan Approval challenge
 
+**Historical diagnosis, superseded 2026-09-12:** the current branch already has
+the shared read-only observer fix from upstream PR #1000, and executable
+`resetPlanApprovalRuntime` has been removed. Keep the pre-probe carve-out as
+defense in depth; do not implement the optional reset-suppression recipe below.
+See [the fact-checked probe plan](stop-hook-read-only-probe-plan.md) for the current
+call path and regression coverage.
+
 - **File:** `core/hooks/aidlc-continue-workflow.ts` lines 1376–1466
 - **Root cause:** The Stop hook calls `runEngineNextDirective(projectDir, sessionId)` at line 1381 **before** checking `isPendingQuestionStop` at line 1466. The probe spawns `aidlc-orchestrate.ts next`, which can call `writeActiveDirectiveMarker`. When `preserveCodeGenerationAuthority` is false (`aidlc-lib.ts` lines 5153–5167 conditions not met — e.g., no `Unit Ownership: team` field and probe returns `load-steering`), `shouldResetRuntime` becomes true and `resetPlanApprovalRuntime` (`aidlc-lib.ts` line 5211/5226) deletes the plan-approval runtime directory, including the challenge file. By the time `isPendingQuestionStop` runs at line 1466, the challenge is gone. The only pre-probe carve-out is the resume-wait check (lines 1356–1374), which does not cover pending Plan Approval.
 - **Why this blocks the free-text workaround too:** A plain chat answer ends the agent's turn → Stop hook fires → probe deletes the challenge → `recordPlanApprovalHumanResponse` finds no challenge → returns `{recorded: false}` → `recordPlanApprovalReceipt` fails.

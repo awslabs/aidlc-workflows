@@ -90,11 +90,11 @@ deletes any of: the Plan Approval challenge, response or receipt under
 its revision; the steering-token key; the continuation cursor. A probe also mints
 no synthetic `STAGE_STARTED`, refreshes no claim cache, and bootstraps no diary.
 
-The one write NOT on that list is the advisory engine-turn marker
-`.aidlc-engine-touch`, whose mtime is a Stop-hook optimisation and carries no
-authority. The Stop probe must suppress it or the conversational carve-out below
-would be permanently dead; the route check does not, because `unit start` is real
-workflow engagement.
+Both observers also suppress the advisory engine-turn marker
+`.aidlc-engine-touch`. Its mtime is a Stop-hook optimisation and carries no
+authority, but a probe that touched it would make the conversational carve-out
+permanently false. The enclosing `unit start` operation is workflow engagement;
+its read-only route-check subprocess does not itself touch the marker.
 
 **The barrier.** The guarantee is a property of the code shape, not of an
 enumeration someone has to remember. Alongside the per-call-site suppressions, a

@@ -88,6 +88,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1714,6 +1715,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
     // The challenge file must survive the hook (the probe did not delete it).
     const runtimeDir = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
     const challengeFiles = readdirSync(runtimeDir).filter(
