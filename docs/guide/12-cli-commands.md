@@ -1177,8 +1177,11 @@ exact live Units, plan/questions fingerprints, and unchanged planned source.
 When some approved Units have landed, the remaining prepared workers retain
 their original approval as `next` narrows the pending set. Continue their
 existing worktrees after verifying the current approvals; a partial batch does
-not require another approval answer or a fresh `prepare`. Substantive plan or
-attempt changes still require the reported approval repair.
+not require another approval answer or a fresh `prepare`. This also applies
+after a checkpoint revision has been prepared. An interrupted revision setup
+can retry with its existing current approval; successful preparation removes
+the revision-preparation signal from subsequent `next` directives. Substantive
+plan or attempt changes still require the reported approval repair.
 Legacy protected-choice mediation, overrides, and unsupported harnesses use the
 single-Unit flow; per-Unit approval remains mandatory in either presentation.
 See [Construction Execution](../reference/03-orchestrator.md#construction-execution).

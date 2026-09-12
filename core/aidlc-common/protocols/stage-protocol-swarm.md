@@ -25,9 +25,10 @@ batch. Do not omit it because the skeleton checkpoint or autonomy grant passed.
 
 ### Continuing a partially completed batch
 
-After some Units land, `next` may emit only the batch's remaining Units. When
-`resume_existing` is absent, a narrower emitted set continues the original
-approved work; it does not by itself request new plans or approval.
+On continuation, `next` may emit the batch's full or remaining Unit set. Once
+the current checkpoint revision has a recorded native preparation, the engine
+omits `resume_existing` and returns the prepared workers to this continuation
+path. A narrower emitted set does not by itself request new plans or approval.
 
 For a remaining Unit already prepared in the current attempt, verify its
 existing approval in both the parent and its recorded worktree:
@@ -51,10 +52,17 @@ Request Changes uses the revision procedure below instead.
 
 ### Resuming a reviewed batch after Request Changes
 
-When the engine emits `resume_existing: true`, prepare the revised plans and
-obtain fresh Plan Approval for the rejection revision. Add `--resume-existing`
-to the ordinary `{{INVOKE}} engine swarm prepare` call with the directive's batch
-number and exact Unit set. The same flag covers both supported states:
+When the engine emits `resume_existing: true`, at least one pending Unit still
+needs preparation or recovery for the current rejection revision. Verify the
+current parent Plan Approval first. If the rejection retired that approval,
+prepare the revised plans and obtain fresh Plan Approval. If a current approval
+already exists, retain it when retrying interrupted preparation: do not clear
+its answer or replace its receipt just to retry setup.
+
+Add `--resume-existing` to the ordinary `{{INVOKE}} engine swarm prepare` call
+with the directive's batch number and exact Unit set. Already prepared members
+are retained by the tool's idempotent path. The same flag covers both supported
+worktree states:
 
 - **The child still exists:** the tool validates and preserves its source and
   archives old framework metadata for the same rejection revision before
@@ -66,6 +74,9 @@ number and exact Unit set. The same flag covers both supported states:
   revision and binds the fresh Plan Approval; it does not revive the old
   approval or pretend the original child survived. Missing worktrees without
   the required native landing evidence are refused.
+
+After preparation succeeds, a later `next` continues those workers without
+another Plan Approval, including when peers in the revision have already landed.
 
 Successful native source landing may remove the child, so do not promise that
 every post-merge worktree is preserved. Follow the emitted resume route and the

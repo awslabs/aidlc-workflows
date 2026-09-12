@@ -113,8 +113,10 @@ import {
   advanceContinuationCursor,
   activeUnitCheckpoint,
   approvedConstructionUnits,
+  attemptEventDefinitelyBefore,
   artifactFilename,
   auditBlockField,
+  boltSlugForUnit,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
   type CheckboxLine,
@@ -163,6 +165,7 @@ import {
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
   loadScopeMetadataAll,
+  maximalAttemptEvents,
   resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
@@ -5303,6 +5306,55 @@ function applySwarmCheckpointShape(
 // Scopes whose first Construction EXECUTE stage is a design stage therefore DO
 // swarm code-generation from the first Unit; scopes where code-generation is
 // itself the skeleton-gate stage still cannot, via the structural guard.
+function swarmRevisionNeedsPreparation(
+  projectDir: string, stage: string, batch: number, units: string[],
+): boolean {
+  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, stage);
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+  if (unreadable.length) return true;
+  const names = (row: AuditShardEvent, field: string): string[] =>
+    (auditBlockField(row.block, field) ?? "").split(",").map((unit) => unit.trim());
+  return units.some((unit) => {
+    const gates = maximalAttemptEvents(rows.filter((row) =>
+      (row.event === "GATE_REJECTED" || row.event === "GATE_APPROVED") &&
+      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
+      auditBlockField(row.block, "Stage") === stage &&
+      auditBlockField(row.block, "Run floor") === floor &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
+      (auditBlockField(row.block, "Unit") === unit ||
+        (auditBlockField(row.block, "Unit") === null && names(row, "Units").includes(unit))),
+    ));
+    if (!gates.length) return false;
+    if (gates.length !== 1) return true;
+    const rejection = gates[0];
+    if (rejection.event !== "GATE_REJECTED") return false;
+    const starts = maximalAttemptEvents(rows.filter((row) =>
+      row.event === "BOLT_STARTED" && auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit)));
+    const swarms = maximalAttemptEvents(rows.filter((row) =>
+      row.event === "SWARM_STARTED" &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      names(row, "Unit names").includes(unit)));
+    if (starts.length !== 1 || swarms.length !== 1) return true;
+    const swarm = swarms[0];
+    // A rejection requests preparation once. Its exact native preparation
+    // boundary then routes the preserved worker to continuation, including
+    // after a peer lands. An interrupted or newer fork still needs recovery.
+    if (auditBlockField(swarm.block, "Stage") !== stage ||
+      auditBlockField(swarm.block, "Run floor") !== floor ||
+      !attemptEventDefinitelyBefore(rejection, starts[0]) ||
+      !attemptEventDefinitelyBefore(starts[0], swarm)) return true;
+    try {
+      const revisions = JSON.parse(auditBlockField(swarm.block, "Resume revisions") ?? "{}");
+      const revision = createHash("sha256").update(rejection.block, "utf-8").digest("hex");
+      return revisions?.[unit] !== revision;
+    } catch {
+      return true;
+    }
+  });
+}
+
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -5440,14 +5492,8 @@ function tryEmitSwarm(
     "construction",
     "swarm",
   ];
-  const retryFloor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
-    readAuditShardEvents(projectDir).some((row) =>
-      row.event === "GATE_REJECTED" &&
-      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
-      auditBlockField(row.block, "Run floor") === retryFloor &&
-      pendingUnits!.includes(auditBlockField(row.block, "Unit") ?? "")
-    );
+    swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
   if (repos.length === 1) {
     const directive: Directive = {
       kind: "invoke-swarm",
