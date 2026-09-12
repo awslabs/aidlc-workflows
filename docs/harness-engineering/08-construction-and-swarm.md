@@ -134,6 +134,11 @@ Retry/Abort decision, and a checkpoint Request Changes starts a fresh revision.
 Once that revision's native preparation is recorded, subsequent directives
 continue its workers without another approval. Recovery of interrupted setup
 reuses current approval rather than replacing the receipt bound to the worker.
+For a native reviewer Retry that explicitly discards one worker, preparation can
+restore its recorded committed approved baseline without changing another
+worker's approval or pending work. The discard must identify the current worker;
+absence alone is not a recovery grant. A checkpoint revision retains its
+`--resume-existing` route, while an initial batch uses ordinary preparation.
 
 ## Shaping what can run in parallel — the Bolt-DAG
 
