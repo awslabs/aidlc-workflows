@@ -420,7 +420,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).not.toContain("actions/download-artifact");
     expect(WORKFLOW).not.toContain("matrix:");
     const jobs = WORKFLOW.slice(WORKFLOW.indexOf("\njobs:\n"));
-    expect(jobs.match(/^  [a-z_]+:$/gm)).toEqual(["  review:"]);
+    expect(jobs.match(/^ {2}[a-z_]+:$/gm)).toEqual(["  review:"]);
     expect(WORKFLOW).toContain("> /dev/null 2>&1");
     expect(WORKFLOW).toContain("model transcript was suppressed");
 
@@ -489,6 +489,11 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain("explicit release-preparation or");
     expect(aidlc).toContain("version-bump PR");
     expect(aidlc).toContain("Every PR must preserve existing changelog entries");
+    expect(aidlc).toContain(
+      "Return `\"status\": \"failed\"` only when required evidence",
+    );
+    expect(aidlc).toContain("remains inaccessible after a reasonable fallback");
+    expect(aidlc).toContain("A search with no matches");
     expect(aidlc).toContain('"status": "failed"');
     expect(aidlc).toContain('"changedFiles"');
     expect(aidlc).toContain('"requiredCorrection"');
