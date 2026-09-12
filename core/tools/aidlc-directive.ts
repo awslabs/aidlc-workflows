@@ -18,6 +18,11 @@
 // aidlc-lib.ts.
 
 import { GUARD_REMEDY_OPS, type GuardRemedy, isPlainObject } from "./aidlc-lib.ts";
+import {
+  guardOperationMatchesCommand,
+  guardOperationMatchesRemedy,
+  isGuardRecoveryOperation,
+} from "./aidlc-guard-operation.ts";
 
 // --- Public types ---
 
@@ -1152,6 +1157,8 @@ function checkGuardRemedies(
   const allowed = new Set([
     "op",
     "action",
+    "operation",
+    "interaction",
     "command",
     "requiresHuman",
     "executableNow",
@@ -1176,6 +1183,33 @@ function checkGuardRemedies(
     if (typeof remedy.action !== "string" || remedy.action.length === 0) {
       errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
     }
+    if (
+      "interaction" in remedy &&
+      !["command", "human-input", "external-work"].includes(String(remedy.interaction))
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must be command, human-input, or external-work`);
+    }
+    if ("operation" in remedy) {
+      if (
+        !isGuardRecoveryOperation(remedy.operation) ||
+        !guardOperationMatchesRemedy(
+          remedy.operation,
+          String(remedy.op),
+          String(o.stage),
+          typeof o.unit === "string" ? o.unit : undefined,
+        )
+      ) {
+        errors.push(`${kind}: remedies[${index}].operation must match the offered remedy and target`);
+      }
+      if (typeof remedy.command !== "string" || remedy.interaction !== "command") {
+        errors.push(`${kind}: remedies[${index}].operation requires a command interaction and command`);
+      }
+      if (remedy.requiresHuman !== true) {
+        errors.push(`${kind}: remedies[${index}].recovery reset requires human selection`);
+      }
+    } else if (remedy.interaction === "command") {
+      errors.push(`${kind}: remedies[${index}].command interaction requires an operation`);
+    }
     if ("command" in remedy) {
       if (typeof remedy.command !== "string" || remedy.command.trim().length === 0) {
         errors.push(`${kind}: remedies[${index}].command must be non-empty string`);
@@ -1185,12 +1219,21 @@ function checkGuardRemedies(
             `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
           );
         }
-        if (!/^bun \.[A-Za-z0-9_.-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
+        if (
+          !isGuardRecoveryOperation(remedy.operation) ||
+          !guardOperationMatchesCommand(remedy.operation, remedy.command)
+        ) {
           errors.push(
-            `${kind}: remedies[${index}].command must be a bun-qualified packaged AIDLC tool invocation`,
+            `${kind}: remedies[${index}].command must exactly render its structured recovery operation for a source or native install`,
           );
         }
       }
+    }
+    if (
+      (remedy.interaction === "human-input" && remedy.requiresHuman !== true) ||
+      (remedy.interaction === "external-work" && remedy.requiresHuman !== false)
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must agree with requiresHuman`);
     }
     if (typeof remedy.requiresHuman !== "boolean") {
       errors.push(`${kind}: remedies[${index}].requiresHuman must be boolean`);

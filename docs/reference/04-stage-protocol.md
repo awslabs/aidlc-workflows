@@ -994,11 +994,43 @@ engine from three inputs (low-wins): the stage's declared class, the active
 scope's `review_cap`, and any per-run `--review` override. A `none` resolution
 omits the reviewer block entirely and the stage runs reviewless.
 
+**Review boundary.** When a stage declares `summary_confirmation`, declared
+`*-questions` artifacts are writable human inputs. Their file manifest entry is
+`summary-input:sha256:<digest>`: after normalizing line endings,
+`summaryInputReviewFingerprint` masks only one visible summary-confirmation
+answer value (blank, `Looks correct`, or `Request changes`). Trailing comments
+and examples inside code fences remain bound. Every other part of
+the questions remains bound; an absent or ambiguous confirmation section/answer
+leaves the full normalized content bound. Missing and non-file entries remain
+distinct. Required-file presence and safe capture checks still apply, and
+snapshots retain the actual bytes for swarm merging. Only confirmation
+bookkeeping preserves the review fingerprint; substantive question changes
+invalidate its content binding even though the write is permitted.
+
+Reviewed outputs remain frozen. If `review_artifact` explicitly names a
+questions artifact, it remains fully byte-bound and frozen, including its
+confirmation answer; stages without `summary_confirmation` have no question
+exception.
+
+Editable summary questions still follow the human Q&A protocol. Generation
+requires the human's exact `Looks correct` answer and a successful
+summary-confirmation answer receipt. Identical reconfirmation in the same
+attempt preserves existing output authorization; a gate rejection alone does
+not withdraw it. Changed confirmed content requires fresh human confirmation,
+outputs regenerated or re-saved under that authorization, and the required
+fresh review through normal recovery. Editing questions grants no permission
+to edit frozen outputs or approve a plan. An `if-present` obligation persists
+once a summary-confirmation decision or confirmation participated in the
+current attempt, even if the questions file is deleted. Older question
+fingerprint projections may require fresh review through normal recovery;
+stored receipts are not rewritten and their format does not change. See
+[Summary inputs and reviewed outputs](12-state-machine.md#stage-machine).
+
 1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
    re-review after a Part 0 gate-rejection revision - the conductor first
    records the review request. The logger captures every declared artifact
-   through one stable file-identity snapshot, binds the request to exactly
-   those bytes plus the workspace and per-Unit source fingerprints where
+   through one stable file-identity snapshot, binds the request to the review
+   manifest above plus the workspace and per-Unit source fingerprints where
    applicable, mints a `Request Id`, and returns `requestId` and `reviewFile`
    in its JSON: the project-relative path under the intent record's
    `.aidlc-reviews/` directory where this request's review is written. The
@@ -1017,8 +1049,9 @@ omits the reviewer block entirely and the stage runs reviewless.
    validation tools from frontmatter - never the builder's `memory.md` or
    plan, so it forms independent judgment. A retry reuses the original
    artifact/source binding and request id and never rebaselines current bytes.
-   The review freeze stays on throughout a stale-receipt recovery: the reviewer
-   writes beside the artifact, never inside it, so no write window is needed.
+   The reviewed-output freeze stays on throughout a stale-receipt recovery:
+   the reviewer writes beside the artifact, never inside it, so no write
+   window is needed.
 2. **Review.** An `adversarial` review runs under the adversarial review contract:
    the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
@@ -1030,7 +1063,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    `reviewFile` path. The review contains one matching Verdict, Reviewer, and
    Iteration line, its findings table, and no second H2 section; the reviewer
    writes nothing else, in particular not the artifact it reviews. The request
-   binds artifact bytes and workspace source before dispatch; retry cannot
+   binds reviewed output bytes and workspace source before dispatch; retry cannot
    rebaseline either, and completion uses one stable file-identity snapshot.
    The reviewers run under a hard turn budget (`maxTurns: 60`),
    authored once in the persona frontmatter and enforced natively where the
@@ -1044,8 +1077,9 @@ omits the reviewer block entirely and the stage runs reviewless.
 3. **Verdict and decision brief.** The conductor records the verdict with the
    same `aidlc-log.ts review` command plus `--verdict`. The logger reads the
    review from the request's `reviewFile` (or `--review-file <path>`),
-   validates it, proves the dispatched artifact bytes and request-time source
-   identity are unchanged, and writes the review record
+   validates it, rechecks current summary confirmation and output admission,
+   proves the review manifest and request-time source identity are unchanged,
+   and writes the review record
    `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` or
    `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`
    (verdict, findings, reviewer, request id, artifact and source fingerprints,
@@ -1089,9 +1123,10 @@ omits the reviewer block entirely and the stage runs reviewless.
    all-Unit output enumeration it cannot verify. A stage-level request on a
    per-Unit stage with a resolved set covers every authoritative Unit, so every
    Unit's applicable required outputs must exist. The recorded receipt is terminal
-   whenever no further review pass follows it: any later output document write
-   means the review no longer covers the current document, so fixes happen
-   inside the iteration loop, never after the terminal receipt.
+   whenever no further review pass follows it: do not write reviewed output
+   documents before the gate. Fixes happen inside the iteration loop or after
+   the recorded lifecycle remedy reopens revision; summary-owned questions
+   follow the separate boundary above.
    Suggestions riding on a verdict are quoted at the gate for the human, not
    applied. If a final review already exists and the document genuinely needs
    changes, Request Changes can be recorded while the stage is active or
@@ -1119,7 +1154,7 @@ content-addressed audit records into later gates and re-review dispatches.
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
 request whose `--iteration` exceeds the stage's effective budget, so
 a conductor that loses count cannot run unbounded review passes. The only
-exception is a terminal receipt invalidated by a later `produces[]` write: the
+exception is a terminal receipt invalidated by a later reviewed-output write: the
 first request after stale evidence is exactly one marked recovery request at
 the next ordinal, even when normal adversarial budget remained. Either
 recovery verdict is terminal; a second invalidation requires human reset

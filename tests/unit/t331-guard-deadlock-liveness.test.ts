@@ -254,7 +254,7 @@ describe("bounded guard-remedy liveness", () => {
                 ) {
                   expect(summaryCoverage).not.toBe("current");
                   expect(reviewCoverage).not.toBe("current");
-                  expect(["in-progress", "awaiting-approval"]).toContain(
+                  expect(["in-progress", "awaiting-approval", "revising"]).toContain(
                     lifecycle,
                   );
                 }
@@ -317,8 +317,10 @@ describe("bounded guard-remedy liveness", () => {
       stage: "functional-design",
       reason_codes: ["TEST"],
       remedies: [{
-        op: "change-scope",
-        action: "Change scope.",
+        op: "restart-stage",
+        action: "Restart the stage.",
+        operation: { kind: "restart-stage", stage: "functional-design" },
+        interaction: "command",
         command: "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope>",
         requiresHuman: true,
         executableNow: true,
@@ -340,7 +342,7 @@ describe("bounded guard-remedy liveness", () => {
     expect(bare.valid).toBe(false);
     if (!bare.valid) {
       expect(bare.errors.join("\n")).toContain(
-        "bun-qualified packaged AIDLC tool invocation",
+        "structured recovery operation",
       );
     }
 
@@ -350,6 +352,13 @@ describe("bounded guard-remedy liveness", () => {
         ...base.remedies[0],
         command:
           "bun .ported.harness/tools/aidlc-orchestrate.ts next --stage functional-design",
+      }],
+    }).valid).toBe(true);
+    expect(validateDirective({
+      ...base,
+      remedies: [{
+        ...base.remedies[0],
+        command: "aidlc engine orchestrate next --stage functional-design",
       }],
     }).valid).toBe(true);
   });

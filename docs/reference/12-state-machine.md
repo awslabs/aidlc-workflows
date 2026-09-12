@@ -207,6 +207,54 @@ never to `approve`, `advance`, `finalize`, or `complete-workflow`. The adjacent
 summary-confirmation test bypass is
 `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`.
 
+**Summary inputs and reviewed outputs.** When a stage declares
+`summary_confirmation` (`required` or `if-present`), declared artifact names
+ending in `-questions` are writable human inputs. A file's review manifest entry
+is `summary-input:sha256:<digest>`, computed by `summaryInputReviewFingerprint`:
+after normalizing line endings, it masks only the canonical summary-confirmation
+`[Answer]:` value that is blank, `Looks correct`, or `Request changes`.
+Trailing HTML comments are retained, and answer-looking text inside code
+examples or comments is never masked.
+There must be exactly one confirmation section and one matching answer line;
+an absent or ambiguous match leaves the full normalized content bound. All
+other question answers, summary prose, comments, and sections remain bound.
+`missing` and `not-file` remain distinct manifest entries. Required-file
+presence and safe capture checks still apply, and snapshots retain the actual
+question bytes for swarm record merging.
+
+The review-freeze hook permits these question writes so the human Q&A protocol
+can proceed. Only confirmation bookkeeping preserves the review fingerprint;
+substantive changes invalidate the review's content binding. Other produced
+artifacts remain bound to their reviewed bytes and protected by the
+terminal-receipt freeze. An explicit `review_artifact` naming a questions
+artifact is the exception: that artifact remains fully byte-bound and frozen,
+including its confirmation answer.
+
+Reconfirming identical content in the same attempt preserves the summary
+authorization and does not require rewriting already-authorized outputs.
+A gate rejection alone also preserves that authorization and the outputs'
+descent; review receipts still follow their own rejection boundary. A
+`Request changes` answer at the summary checkpoint withdraws the active
+summary authorization.
+Changed confirmed content still requires the normal recovery sequence: obtain
+the human's confirmation, regenerate or re-save outputs under that authorization,
+and obtain the required fresh review. Use the offered lifecycle remedy to reopen
+frozen outputs; editing a questions file does not authorize editing those outputs
+or approve a plan. Existing Change Control rules continue to govern eligible
+drift separately.
+
+Terminal review recording rechecks current summary confirmation and output
+admission, as review requests do. A matching fingerprint alone cannot certify
+a review after the human withdrew confirmation or while outputs lack the
+required authorization. For `if-present`, once a summary-confirmation decision
+or confirmation has participated in the current attempt, deleting the questions
+file does not remove that obligation: the missing-file check refuses.
+
+This changes the review fingerprint projection, not the receipt format. Existing
+receipts using an older question fingerprint projection may no longer match and
+may require a fresh review through normal guard recovery. Stored evidence is not rewritten;
+the migration grants no approval or extra review allowance.
+
 **Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
 report path refuses `awaiting-approval`, `revised`, and `approved` while a
 declared support agent's contribution file
@@ -333,7 +381,7 @@ report awaiting-approval  →  [?] AwaitingApproval
 report. The conductor uses this to detect the revision-loop escape hatch
 (default is 3 cycles before offering to skip).
 
-When a revision changes a `produces[]` artifact on a stage whose directive
+When a revision changes a reviewed output or bound question content on a stage whose directive
 carries a reviewer, the conductor re-runs the `stage-protocol-reviewer.md` §12a step before
 reporting `revised` (stage-protocol Part 0). The engine verifies the fresh
 terminal receipt before accepting the `revised` report and re-opening the gate.
@@ -416,8 +464,8 @@ legacy Unit-less rows retain stage-global behavior.
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-summary-authorization/`, and a `Request changes` reply withdraws it. Reserved from public audit append. |
 | `PLAN_APPROVAL_RECORDED` | `tools/aidlc-log.ts` | Human-backed Code Generation plan receipt. The authority it records binds to intent, stage or Unit target, stage attempt (run floor), content fingerprint (the projected plan and instructions plus the Testing Contract hash), prompt (the questions file with answers blanked), and session response, never to the identity of the directive that presented the question nor to row order. The row also carries the directive epoch and the raw questions-file digest (`Questions SHA-256`) as provenance; both are recorded and never compared, so a note appended to the questions file after approval leaves the decision standing while a change to the prompt the human saw retires it. Protected runtime state is the authority; this row is provenance only. |
 | `PLAN_APPROVAL_OVERRIDDEN` | `tools/aidlc-log.ts` | The human-only break-glass exit for Plan Approval. Fires only when the human typed `Override Plan Approval: <reason>` as a prompt (the human-turn hook records that typed text under the session; a picked option never does), the conductor ran `answer --checkpoint plan-approval --override "<reason>"` with the same reason, and the normal receipt path refused. Carries `Reason`, `Failed Checks` (what the normal path refused), `Session`, `Unit` or `stage-level`, and `Fingerprint`; the paired `PLAN_APPROVAL_RECORDED` row carries `Override: yes`. The receipt it accompanies binds to plan content and stage attempt only, so no later check compares its source. The typed request is single-use and the conductor never proposes or initiates it |
-| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot records every declared artifact exactly as dispatched (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request. One coherent artifact snapshot must reproduce the requested bytes exactly: the reviewer writes no artifact, so `Request Fingerprint` and `Artifact Fingerprint` are the same identity. The review is read from the request's review file (or `--review-file`), validated with Bun's Markdown parser (one rendered Verdict matching `--verdict`, one Reviewer, one Iteration, no later Markdown or raw-HTML H1/H2; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint ownership), and written as the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` or `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` in the same locked transaction; the row names it (`Review Record`) and pins its bytes (`Review Record Digest`), and echoes the `Request Id`. Request-time and completion source fingerprints use the same Git-independent bounded filesystem identity and must match. Deprecated for this release cycle: a verdict is still accepted from a terminal `## Review` section a reviewer appended to `review_artifact` after the request (the bytes before it are the requested bytes and the request saw no appendix); that validated section is copied into the review record. A retried incomplete review may record `NOT-READY` with an empty review record. A malformed row is ignored and does not consume its pending request. |
+| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot captures the declared artifacts and binds the reviewed output bytes (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; summary-owned questions use the `summary-input:sha256:<digest>` projection described above, masking only the canonical confirmation answer unless explicitly named by `review_artifact`; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request and a fresh check of current summary confirmation and output admission. One coherent artifact snapshot must reproduce the request's review fingerprint, including exact reviewed output bytes and the summary-input projection above: the reviewer writes no artifact, so `Request Fingerprint` and `Artifact Fingerprint` are the same identity. The review is read from the request's review file (or `--review-file`), validated with Bun's Markdown parser (one rendered Verdict matching `--verdict`, one Reviewer, one Iteration, no later Markdown or raw-HTML H1/H2; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint ownership), and written as the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` or `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` in the same locked transaction; the row names it (`Review Record`) and pins its bytes (`Review Record Digest`), and echoes the `Request Id`. Request-time and completion source fingerprints use the same Git-independent bounded filesystem identity and must match. Deprecated for this release cycle: a verdict is still accepted from a terminal `## Review` section a reviewer appended to `review_artifact` after the request (the bytes before it are the requested bytes and the request saw no appendix); that validated section is copied into the review record. A retried incomplete review may record `NOT-READY` with an empty review record. A malformed row is ignored and does not consume its pending request. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
 ### Unit lifecycle (inline per-unit Construction stages)
@@ -484,7 +532,7 @@ Change Control decides the consequence of an input change after a human approval
 | `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 | `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the reviewer-module read-scope bound); one row per refusal |
-| `REVIEW_FREEZE_BLOCKED` | `hooks/aidlc-review-freeze.ts` | A file-tool or shell `produces[]` write refused because it would invalidate a fresh terminal review receipt before the gate (READY or terminal NOT-READY under the effective class); one row per refusal |
+| `REVIEW_FREEZE_BLOCKED` | `hooks/aidlc-review-freeze.ts` | A file-tool or shell reviewed-output write refused because it would invalidate a fresh terminal review receipt before the gate (READY or terminal NOT-READY under the effective class); summary-owned questions are excluded unless explicitly named by `review_artifact`; one row per refusal |
 | `PLAN_APPROVAL_BLOCKED` | `hooks/aidlc-plan-approval-guard.ts` | A code-generation developer-agent dispatch or workspace mutation refused because the active unit or zero-Unit stage target lacked a current fingerprinted plan, test instructions, Testing Contract, explicit approval, or matching worker-brief marker; one row per refusal |
 | `GUARD_DISABLED` | `hooks/aidlc-plan-approval-guard.ts` | A tool call passed the Plan Approval guard because its deterministic off-switch environment variable was set while a workflow existed. Carries `Guard` (`plan-approval-guard`) and `Tool`; one row per streak, appended only when the newest row in the active shard is not already this event for the same guard |
 
@@ -687,9 +735,9 @@ and the contributor question in
 
 ### Guard admission and recovery asks
 
-A guard that refuses returns a typed refusal, not a sentence the conductor has to
-interpret: the code, the blocked action, the invariant it protects, one sentence
-for the human, and the remedies that are executable from the current lifecycle
+A refusal handled by shared guard admission returns a typed contract: the code,
+the blocked action, the invariant it protects, one sentence for the human, and
+the remedies that are executable from the current lifecycle
 state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 `skipped`; for a team Unit, the Unit's own gate status). Every remedy carries a
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
@@ -700,6 +748,58 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `unset-unattended`). Routing decisions compare `op` and never the remedy
 sentence; the directive contract refuses an unknown `op`.
 
+**Operations and interaction.** Emitted remedies carry `interaction`, an
+`action` for presentation, `requiresHuman`, and `executableNow`. The conductor
+offers only executable remedies, waits for the human's selection, and follows
+the selected interaction:
+
+| `interaction` | Contract after selection |
+|---|---|
+| `command` | Execute the exact returned `command`, rendered from its structured `operation`. These reset operations require human selection; selection is sufficient to attempt the command. |
+| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; a Scope remedy needs the human's concrete Scope. |
+| `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
+
+`aidlc-guard-operation.ts` defines two operations:
+`{kind: "restart-stage", stage}` and `{kind: "abort-bolt", unit, slug}`.
+
+A stage restart first resolves its destination and returns the exact
+`jump execute` continuation. During unapproved native Code Generation, that
+continuation is admitted only for the current recovery ask's recorded human
+selection. Its target and Scope must match the selected operation and current
+state; its `redo` or `backward` direction is checked against the effective plan.
+Forward moves, extra arguments, shell wrappers, and additional work do not
+receive this exception. The reset produces no Plan Approval receipt.
+On Copilot, claiming the selected `next --stage` command temporarily requires
+rehydration. Its post-tool settlement preserves the consumed choice only for
+the matching claim, unchanged state, and exact successful restart instruction.
+The returned jump remains blocked until that delivery completes; unrelated
+prints or changed state cannot inherit the choice.
+Restart renders `aidlc engine orchestrate next --stage <stage>` in a native
+install; abort renders `aidlc engine bolt abort --name <unit> --slug <slug>
+--reason 'stale review recovery exhausted' --discard`. Source installs use
+`bun <harness-dir>/tools/aidlc-orchestrate.ts` or
+`bun <harness-dir>/tools/aidlc-bolt.ts` with the same arguments. These are
+templates for documentation: emitted commands contain concrete targets and no
+unresolved placeholders.
+
+The conductor must obtain human consent before aborting a Bolt. The Plan
+Approval hook's exact abort exception preserves source/native trusted-tool
+parity; it does not authenticate that consent. Direct refusal asks do not
+publish the selection marker used by the separately checked native restart
+continuation.
+
+Directive validation requires an exact rendering of the operation, including
+all arguments, and checks its remedy and target: restart matches the ask's stage
+and `restart-stage`, `redo-jump`, or `restore-or-jump`; abort matches the ask's
+Unit and `abort-bolt`, with its concrete slug carried by the operation. Wrappers, added
+flags, redirections, and trailing commands are not valid remedy commands.
+The conductor must not reconstruct commands from prose or invent missing
+arguments. Returned orchestrator directives follow the ordinary directive loop
+in both native and source mode. The operation module defines and renders these
+operations; the existing owning tools still enforce lifecycle admission and
+evidence. Recognizing a recovery command never grants Plan Approval, records a
+review verdict, or supplies human feedback.
+
 **One predicate per guard, shared.** The chain of guards for a lifecycle action
 is listed once (`admitStageAction` in `aidlc-state.ts`) and called by both the
 enforcing handler and the router: `report` and `next` run it on the same state
@@ -708,6 +808,19 @@ disagree about a refusal. The attempt as a guard sees it (budget, the single
 recovery slot, the pending review, and whether summary, review, and source
 evidence still cover the current bytes) is built in one place,
 `guardAttemptState`, from the shared attempt reducer.
+
+Review requests and terminal verdicts share `admitReviewSummary` in
+`aidlc-log.ts`. Both use the Unit's resolved gate and pending-request state
+when constructing a refusal. Both resolve Change Control at a governed
+checkpoint and record any relaxed acceptance once, returning its human notice;
+an invalid policy value or failed acceptance write prevents the review action.
+If a verdict fails after acceptance was recorded, its JSON error carries
+`change_notices` and includes those lines in the error text. The human receives
+the persisted acceptance notice on that failure; a later retry does not repeat it.
+A revising stage or Unit can re-confirm a withdrawn summary through its normal
+question flow. The recovery ask offers that interaction as well as a redo;
+valid re-confirmation can finish an unchanged pending review without another
+rejection or a new stage attempt.
 
 **One rule for first occurrence, at both sites.** A refusal renders as a
 guard-recovery `ask` the first time it happens. The router emits it as the
@@ -719,25 +832,38 @@ lifecycle state, attempt fields, the latest session/workflow/jump/rejection
 boundary, and the resource fingerprints); it carries no authority, and an
 observer reads it without writing. A refusal with no executable remedy is still a
 question: a terminal ask with an empty remedy list that names the situation, and
-past the repetition cap the guard-state signature for escalation. Nothing here
-ever emits an `error` directive or counts silently.
+past the repetition cap the guard-state signature for escalation. This shared
+guard-refusal path emits asks. An ordinary tool failure without that typed ask
+must be surfaced with its actual error; it is not a recovery directive or a
+successful operation. The refusal streak counts these guard states, not every
+tool failure.
 
 **The human's selection survives the re-ask.** A guard-recovery ask is published
 as an active-directive marker (`kind: "ask"`, `ask_type: "guard-recovery"`). The
-marker carries `remedies`, the offered `op`/`action` entries in display order. The
-human-turn hook records the human's remedy selection on it (`delivery: consumed`,
-`guard_recovery_response.status: awaiting-feedback`) together with the response's
-`selection_sha256` and `selected_op`; `selected_op` is null when the selection is
-unmatched or ambiguous. Their later feedback changes the response to `status:
-ready`. A repeated `next` that derives the same ask for an unchanged state, gate,
-and ordered remedy `op`/`action` entries returns the ask without rewriting the
-marker, and the Stop hook releases the turn on the ask, so the conductor is never
-told to re-present a question the human already answered. `reject` is allowed only
+marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
+and `interaction` entries in display order. The human-turn hook records the
+selection with `delivery: consumed`, `selection_sha256`, and `selected_op`;
+`selected_op` is null when the selection is unmatched or ambiguous. Command and
+external-work selections become `guard_recovery_response.status: ready`
+immediately, without a feedback hash. Human-input selections remain
+`awaiting-feedback` until a separate human answer supplies `feedback_sha256`
+and changes the status to `ready`. An unmatched selection authorizes no remedy.
+
+A repeated `next` preserves that response only when the state, gate, and ordered
+remedy `op`, `action`, structured `operation`, and `interaction` still match.
+A changed target or interaction therefore cannot inherit the old selection.
+The Stop hook releases the turn on the ask. `reject` is allowed only
 after `selected_op` records `request-changes` and matching human feedback arrives:
 `--feedback` must be that human's own words, compared whitespace-normalized. A
 paraphrase is refused, and a selection alone is refused with "ask what should
 change". Legacy consumed responses without `selected_op` are refused rather than
 treated as authorization.
+
+After upgrading from a runtime whose recovery marker stored only `op` and
+`action`, an in-flight ask is reissued once to obtain the structured operation
+and interaction. Repeat the selection and any requested feedback; an older
+selection is not treated as authority for the new contract.
+
 The ask names the blocked target, so it may carry a Unit; the reject
 names the gate the report path allows, which is `--unit <name>` under Unit
 Ownership: team and the stage alone under solo ownership (where `--unit` is

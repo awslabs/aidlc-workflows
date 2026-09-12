@@ -485,9 +485,10 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
     try {
       const r = run(["--integration", "--filter", "tZZ-ignored-shell-t05"]);
-      expect(r.status).toBe(0);
+      expect(r.status).toBe(1);
       expect(r.out).toContain("Test files: 0");
-      expect(r.out).toContain("RESULT: PASS");
+      expect(r.out).toContain("matched no test files");
+      expect(r.out).toContain("RESULT: FAIL");
       expect(r.out).not.toContain("this shell file should not run");
     } finally {
       rmSync(plant, { force: true });
@@ -577,14 +578,16 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       ["--all", "--debug", "--filter", "NO_SUCH_T05_TEST"],
       { AIDLC_TUI_LIVE: "0" },
     );
-    expect(explicitOff.status).toBe(0);
+    expect(explicitOff.status).toBe(1);
+    expect(explicitOff.out).toContain("matched no test files");
     expect(explicitOff.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");
 
     const noLlm = run(
       ["--all", "--debug", "--no-llm", "--filter", "NO_SUCH_T05_TEST"],
       { AIDLC_TUI_LIVE: undefined },
     );
-    expect(noLlm.status).toBe(0);
+    expect(noLlm.status).toBe(1);
+    expect(noLlm.out).toContain("matched no test files");
     expect(noLlm.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");
     expect(noLlm.out).not.toContain("AIDLC_TUI_LIVE=1 (defaulted");
   }, PER_TEST_TIMEOUT);
@@ -658,11 +661,17 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     }
   }, PER_TEST_TIMEOUT);
 
-  test("--no-llm runs the deterministic TUI substrate preflight", () => {
+  test("--no-llm dispatches the deterministic TUI preflight and requires execution", () => {
     const r = run(["--e2e", "--no-llm", "--filter", "t-tui-preflight"]);
-    expect(r.status).toBe(0);
     expect(r.out).toContain("=== START t-tui-preflight.serial.test.ts ===");
     expect(r.out).not.toContain("=== DONE t-tui-preflight.serial.test.ts (SKIP) ===");
+    if (r.out.includes("Explicitly selected file executed no test cases")) {
+      expect(r.status).toBe(1);
+      expect(r.out).toContain("Executed test cases: 0");
+      expect(r.out).toContain("Failed assertions: 0");
+    } else {
+      expect(r.status).toBe(0);
+    }
   }, PER_TEST_TIMEOUT);
 
   test("isolated git config preserves exact safe.directory values without leaking MSYS exclusions", () => {
