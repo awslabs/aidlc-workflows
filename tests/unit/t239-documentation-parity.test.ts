@@ -588,14 +588,24 @@ describe("documentation parity derives current behavior from authored implementa
     };
     const codexCell = (tier: Tier): string => {
       const { model, effort } = TIER_PROJECTIONS[tier].codex;
-      return model === null && effort === null
-        ? "no `model`/`model_reasoning_effort` keys"
+      if (model === null && effort === null) {
+        return "no `model`/`model_reasoning_effort` keys";
+      }
+      if (model === null) {
+        return `model omitted, \`model_reasoning_effort = "${effort}"\``;
+      }
+      return effort === null
+        ? `\`model = "${model}"\`, reasoning effort omitted`
         : `\`model = "${model}"\`, \`model_reasoning_effort = "${effort}"\``;
     };
     const opencodeCell = (tier: Tier): string => {
       const { model, variant } = TIER_PROJECTIONS[tier].opencode;
-      return model === null && variant === null
-        ? "no `model:`/`variant:` keys"
+      if (model === null && variant === null) {
+        return "no `model:`/`variant:` keys";
+      }
+      if (model === null) return `model omitted, \`variant: ${variant}\``;
+      return variant === null
+        ? `\`model: ${model}\`, variant omitted`
         : `\`model: ${model}\`, \`variant: ${variant}\``;
     };
 

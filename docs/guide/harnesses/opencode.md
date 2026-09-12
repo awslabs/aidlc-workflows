@@ -33,10 +33,10 @@ script (top-level dispatch, `process.exit`) crashes the session
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes dispatch through
   the installed `aidlc` executable.
-- **A model provider** — the shipped project `opencode.json` pins no session
-  model; your global opencode config supplies it. Tiered personas pin
-  `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per agent in
-  the project `opencode.json` if your provider differs.
+- **A model provider** — the shipped project `opencode.json` and agent
+  definitions pin no model. Your global opencode config supplies the provider
+  and session model; balanced reviewers retain only their medium reasoning
+  variant.
 
 ## Install
 

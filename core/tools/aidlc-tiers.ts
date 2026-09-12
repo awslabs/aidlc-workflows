@@ -6,13 +6,14 @@
 // whose output cascades downstream (architect, developer, product, ...): it
 // inherits the session's own model and effort so the user's ceiling is never
 // silently capped. `balanced` marks reviewer-shaped work (novel input judged
-// against explicit criteria): the measured reviewer baseline pins a mid-size
-// model at medium effort. `templated` marks dominantly pattern-following output
-// whose methodology already lives in knowledge (delivery plans, CI/CD config,
-// runbooks). It remains a distinct models-dial group, but its shipped baseline
-// now inherits the session model and effort. The names describe the WORK, not
-// the dial, so a reader can classify a new agent without knowing today's model
-// lineup.
+// against explicit criteria): the measured reviewer baseline uses Sonnet at
+// medium effort on Claude Code, while Codex and opencode inherit the session
+// model with a medium reasoning setting. `templated` marks dominantly
+// pattern-following output whose methodology already lives in knowledge
+// (delivery plans, CI/CD config, runbooks). It remains a distinct models-dial
+// group, but its shipped baseline now inherits the session model and effort.
+// The names describe the WORK, not the dial, so a reader can classify a new
+// agent without knowing today's model lineup.
 //
 // Projection targets (see TIER_PROJECTIONS):
 //   - Claude Code   agent .md frontmatter: `model:` and optional `effort:`.
@@ -22,11 +23,9 @@
 //                   `model: inherit` and NO effort line; `balanced` writes
 //                   `model: sonnet` with `effort: medium`.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
-//                   Omitted keys fall back to the shipped .codex/config.toml
-//                   session defaults (live-verified on codex-cli 0.139.0 and
-//                   0.142.5: a role TOML without `model` spawns on the
-//                   config.toml model + effort). `judgment`
-//                   omits both keys.
+//                   Every tier omits `model`, so roles inherit the user's
+//                   selected session/provider model. `judgment` also omits
+//                   effort; `balanced` pins medium effort.
 //   - Kiro CLI/IDE  every tier omits `"model"` — Kiro agents INHERIT the
 //                   session model (a shipped model ID resolves only when that
 //                   model is enabled on the user's install; a session on
@@ -133,10 +132,10 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // of an xhigh-inheriting one with no verdict/finding quality loss. A
     // session pinned to xhigh was silently doubling every review's cost.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     cursor: { model: null },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: "medium" },
     copilot: { model: null },
   },
   templated: {
