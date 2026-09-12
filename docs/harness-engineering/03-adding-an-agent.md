@@ -170,7 +170,11 @@ Mirroring the reference recipe, here is the workflow end to end.
    agents ship it today (see the reviewer personas' `## Turn Budget` section
    for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
-   Collaboration, optional Memory Focus, Key Principles).
+   Collaboration, optional Memory Focus, Key Principles). A review-only
+   persona follows the reviewer shape instead (Adversarial Posture, Advisory
+   Dispatch, Verification Discipline, Key Principles, Output Contract, Turn
+   Budget); the shipped reviewers are the reference and unit tests pin the
+   posture, discipline, and budget text.
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
