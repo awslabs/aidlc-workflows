@@ -213,6 +213,46 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       input: { command: "cd construction/U03-scoring && cat ../U01-infra/functional-design/design2.md" },
       block: true,
     },
+    // -- piped stdin-reading search (no path operand) --------------------------
+    // An ordinary search downstream of a pipe filters stdin. Modes that still
+    // traverse files (recursive grep, rg --files/-f -) are covered below.
+    // The first segment (an in-scope path) is allowed on its own merits.
+    {
+      name: "piped no-operand grep (2nd segment) reads stdin -> allowed",
+      tool: "Bash",
+      input: { command: "grep -rn latency construction/U03-scoring/ | grep ml" },
+      block: false,
+    },
+    {
+      name: "piped no-operand rg (2nd segment) reads stdin -> allowed",
+      tool: "Bash",
+      input: { command: "cat construction/U03-scoring/nfr.md | rg endpoint" },
+      block: false,
+    },
+    {
+      name: "three-stage pipeline, final no-operand grep reads stdin -> allowed",
+      tool: "Bash",
+      input: { command: "grep -rn x construction/U03-scoring/ | sort | grep y" },
+      block: false,
+    },
+    {
+      name: "first-segment recursive grep in a pipeline still blocks (opens '.')",
+      tool: "Bash",
+      input: { command: "grep -rn TODO | cat" },
+      block: true,
+    },
+    {
+      name: "no-operand grep after || (logical-or, not a pipe) still blocks",
+      tool: "Bash",
+      input: { command: "test -f x || grep -rn TODO" },
+      block: true,
+    },
+    {
+      name: "no-operand grep after ; (sequential, not a pipe) still blocks",
+      tool: "Bash",
+      input: { command: "echo hi ; grep -rn TODO" },
+      block: true,
+    },
     // -- Glob / Grep tools -------------------------------------------------------
     {
       name: "Glob pattern spanning siblings blocked",
@@ -350,6 +390,27 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(reason).toContain("the files supplied with the review");
   });
 
+  test("a no-operand recursive grep blocks with a defaulted '.' target", () => {
+    const v = evaluateReviewerScope(
+      "Bash",
+      { command: "grep -rn TODO" },
+      DISPATCH,
+      SCOPE_CONTEXT,
+    );
+    expect(v.block).toBe(true);
+    expect(v.target).toBe(".");
+    expect(v.defaulted).toBe(true);
+  });
+
+  test("blockReason flags a defaulted target as implicit, not typed", () => {
+    const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
+    const typed = blockReason("construction/U01-infra/design.md", full, false);
+    expect(typed).not.toContain("implicit recursive search");
+    const defaulted = blockReason(".", full, true);
+    expect(defaulted).toContain("names no path");
+    expect(defaulted).toContain("implicit recursive search");
+  });
+
   test("parseDispatchRecord accepts the documented shape and rejects malformed records", () => {
     const good = parseDispatchRecord(
       '{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-requirements","unit":"U03","exempt":["a.md"]}',
@@ -360,6 +421,91 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(parseDispatchRecord('{"reviewer":"r","stage":"s","unit":"","exempt":[]}')).toBeNull();
     expect(parseDispatchRecord('{"reviewer":"r","stage":"s","unit":"U03","exempt":[1]}')).toBeNull();
     expect(parseDispatchRecord('{"reviewer":"r","stage":"s","unit":"U03"}')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additional option parsing cases for the pipeline stdin exception.
+// ---------------------------------------------------------------------------
+
+describe("t221 piped search options preserve the reviewer boundary", () => {
+  const own = "construction/U03-scoring/nfr.md";
+  const sibling = "construction/U01-infra/private.md";
+  const pipe = `cat ${own} |`;
+  const judge = (command: string) =>
+    evaluateReviewerScope("Bash", { command }, DISPATCH, SCOPE_CONTEXT);
+
+  for (const command of ["grep", "rg"]) {
+    for (const options of [
+      "-e needle", "-eneedle", "-ne needle", "-neneedle",
+      "--regexp needle", "--regexp=needle", "-e ''",
+      "-f patterns.txt", "-fpatterns.txt", "-nfpatterns.txt", "--file=patterns.txt",
+      "-A 2 --regexp=needle",
+    ]) {
+      test(`${command} ${options}: check file operands while allowing stdin and current-unit files`, () => {
+        expect(judge(`${pipe} ${command} ${options} ${sibling}`)).toMatchObject({
+          block: true, target: sibling,
+        });
+        expect(judge(`${pipe} ${command} ${options} ${own}`).block).toBe(false);
+        expect(judge(`${pipe} ${command} ${options}`).block).toBe(false);
+      });
+    }
+    test(`${command}: pattern options can follow file operands`, () => {
+      expect(judge(`${pipe} ${command} ${sibling} --regexp=needle`)).toMatchObject({
+        block: true, target: sibling,
+      });
+    });
+    test(`${command}: a sibling pattern file is still a file read`, () => {
+      expect(judge(`${pipe} ${command} -f ${sibling}`)).toMatchObject({
+        block: true, target: sibling,
+      });
+      expect(judge(`${pipe} ${command} -f ${own}`).block).toBe(false);
+    });
+    test(`${command}: -- ends options and an empty quoted pattern stays a pattern`, () => {
+      expect(judge(`${pipe} ${command} '' ${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} -e needle -- -outside/${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} -- -needle`).block).toBe(false);
+      expect(judge(`${pipe} ${command} -e ${sibling}`).block).toBe(false);
+    });
+    test(`${command}: explicit sibling operands and input redirections still block`, () => {
+      expect(judge(`${pipe} ${command} needle ${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} needle < ${sibling}`).block).toBe(true);
+    });
+  }
+  for (const command of [
+    "rg --files", "rg -f -", "rg -f-", "rg --file=-",
+    "grep -rn needle", "grep -Rn needle", "grep --recursive needle",
+    "grep --dereference-recursive needle", "grep -d recurse needle",
+    "grep --directories=recurse needle",
+  ]) {
+    test(`${command} still traverses the implicit root after a pipe`, () => {
+      expect(judge(`${pipe} ${command}`)).toMatchObject({
+        block: true, target: ".", defaulted: true,
+      });
+      expect(judge(`${pipe} ${command} ${own}`).block).toBe(false);
+    });
+  }
+  test("rg filesystem modes preserve a current-unit glob constraint", () => {
+    for (const options of ["--files", "-f -"]) {
+      expect(judge(`${pipe} rg ${options} -g 'construction/U03-scoring/**'`).block).toBe(false);
+      expect(judge(`${pipe} rg ${options} --glob='construction/U01-infra/**'`).block).toBe(true);
+    }
+  });
+  test("option values are not parsed as more flags", () => {
+    expect(judge(`${pipe} grep -erecursive`).block).toBe(false);
+    expect(judge(`${pipe} rg -r replacement needle`).block).toBe(false);
+  });
+  test("grep/ripgrep aliases enforce the same option-supplied file operands", () => {
+    for (const command of ["egrep", "fgrep", "ripgrep"]) {
+      expect(judge(`${pipe} ${command} -eneedle ${sibling}`).block).toBe(true);
+      expect(judge(`${pipe} ${command} -eneedle`).block).toBe(false);
+    }
+  });
+  test("a pipe does not exempt a later command after a chain or group separator", () => {
+    for (const separator of ["&&", "||", ";", "&"]) {
+      expect(judge(`${pipe} grep needle ${separator} rg needle`).block).toBe(true);
+    }
+    expect(judge("(rg needle)").block).toBe(true);
   });
 });
 
@@ -381,6 +527,8 @@ function scratchProject(): string {
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
+    "aidlc-channel.ts",
+    "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",
   ]) {
@@ -488,6 +636,39 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
       tool_input: { command: "grep -rn x construction/U03-scoring/" },
     });
     expect(r.code).toBe(0);
+  });
+
+  test("piped no-operand grep (reads stdin) -> exit 0 while a first-segment recursive grep blocks", () => {
+    const proj = scratchProject();
+    seedRecord(proj);
+    const piped = runHook(proj, {
+      ...SIBLING_SWEEP,
+      tool_input: { command: "grep -rn x construction/U03-scoring/ | grep y" },
+    });
+    expect(piped.code).toBe(0);
+    const firstSeg = runHook(proj, {
+      ...SIBLING_SWEEP,
+      tool_input: { command: "grep -rn TODO | cat" },
+    });
+    expect(firstSeg.code).toBe(2);
+    expect(firstSeg.stderr).toContain("names no path");
+  });
+
+  test("piped filesystem modes and option-supplied sibling operands -> exit 2", () => {
+    const proj = scratchProject();
+    seedRecord(proj);
+    for (const command of [
+      "echo x | rg --files",
+      "echo x | rg -f -",
+      "echo x | grep -rn x",
+      "echo x | rg --regexp=x construction/U01-infra/private.md",
+      "echo x | grep -ex construction/U01-infra/private.md",
+      "echo x | grep -f patterns.txt construction/U01-infra/private.md",
+    ]) {
+      const result = runHook(proj, { ...SIBLING_SWEEP, tool_input: { command } });
+      expect(result.code, command).toBe(2);
+      expect(result.stderr).toContain("This review cannot open");
+    }
   });
 
   test("no record -> exit 0 even for a reviewer sibling sweep (nothing sound to enforce)", () => {
@@ -632,7 +813,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       const group = groups.find((g) =>
         (g.hooks ?? []).some(
           (h) => h.command ===
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine hook reviewer-scope`,
+            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook reviewer-scope`,
         ),
       );
       expect(group, harness.name).toBeDefined();

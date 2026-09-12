@@ -364,6 +364,49 @@ describe("t305 strict source-manifest validation", () => {
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
   });
 
+  test("rechecks mixed ignore matches and negations on each read of the same manifest", () => {
+    const { project, record } = fixture();
+    for (const name of ["allowed.tmp", "blocked.tmp"]) {
+      writeFileSync(join(project, name), "source\n");
+    }
+    manifest(record, "alpha", {
+      stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "app.ts" }, { path: "allowed.tmp" }, { path: "blocked.tmp" }],
+    });
+    const ignore = join(project, ".gitignore");
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n");
+    const first = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.reason).toContain("writes[2].path");
+      expect(first.reason).toContain("blocked.tmp");
+    }
+
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n!blocked.tmp\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
+  test("rechecks HEAD membership on each read of the same ignored claim", () => {
+    const { project, record } = fixture();
+    writeFileSync(join(project, ".gitignore"), "new.ts\n");
+    writeFileSync(join(project, "new.ts"), "source\n");
+    manifest(record, "alpha", {
+      stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "new.ts" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+
+    git(project, ["add", "-f", "--", "new.ts"]);
+    git(project, ["commit", "-qm", "track ignored source"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+
+    git(project, ["rm", "--cached", "--", "new.ts"]);
+    git(project, ["commit", "-qm", "stop tracking ignored source"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
   test("rejects a prefix containing a force-added ignored descendant", () => {
     const { project, record } = fixture();
     writeFileSync(join(project, ".gitignore"), "force-dir/*.secret\n");

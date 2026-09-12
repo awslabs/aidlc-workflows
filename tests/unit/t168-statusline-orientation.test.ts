@@ -32,7 +32,7 @@
 // line and the pre-auto-create workspace renders cleanly, not an error.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
@@ -130,5 +130,19 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
     const out = runStatusline(proj);
     expect(out).toContain("[AIDLC] ready");
     expect(out).not.toContain("stub-only");
+  });
+
+  test("an archived cursor or lone record paints `[AIDLC] ready`", () => {
+    seedIntent(proj, "retired-work", "default");
+    const state = stateFilePath(proj);
+    writeFileSync(
+      state,
+      readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Archived"),
+      "utf-8",
+    );
+    const out = runStatusline(proj);
+    expect(out).toContain("[AIDLC] ready");
+    expect(out).not.toContain("retired-work");
+    expect(out).not.toContain("CONSTRUCTION");
   });
 });

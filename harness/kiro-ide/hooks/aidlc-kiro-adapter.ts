@@ -169,9 +169,26 @@ const LEGACY_PLANNING_WRITE_TOOLS = new Set([
   "str_replace",
 ]);
 const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
+  "read",
   "fs_read",
+  "read_file",
+  "read_files",
+  "read_code",
+  "list_directory",
   "file_search",
+  "glob",
   "grep_search",
+  "grep",
+  "web_fetch",
+  "web_search",
+  // `disclose_context` activates skills or steering files into context. Kiro
+  // documents it under Context tools beside `introspect` and `knowledge` and
+  // gives it no write surface; anything an activated skill then asks for is
+  // still gated by its own PreToolUse call, and approval authority comes from
+  // the active directive and disk receipts, never from activated context. So it
+  // cannot mutate the workspace during a Plan Approval window, while denying it
+  // stopped a Windows customer mid-workflow (#1039).
+  "disclose_context",
   "thinking",
   "todo_list",
 ]);
@@ -195,13 +212,23 @@ function upsertTestingContract(plan: string, rendered: string): string {
   return `${plan.trimEnd()}\n\n${rendered}`;
 }
 
+function legacyToolCommand(
+  tool: "aidlc-log.ts" | "aidlc-orchestrate.ts",
+  args: string[],
+): string[] {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  return executable
+    ? [executable, "engine", tool.replace(/^aidlc-|\.ts$/g, ""), ...args]
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args];
+}
+
 function runLegacyPlanTool(
   projectDir: string,
   tool: "aidlc-log.ts",
   args: string[],
 ): { code: number; stdout: string; stderr: string } {
   const result = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args],
+    legacyToolCommand(tool, args),
     {
       cwd: projectDir,
       stdout: "pipe",
@@ -273,11 +300,7 @@ function runLegacyRecoveryNext(
   let args = ["next", "--project-dir", projectDir];
   for (let step = 0; step < 64; step++) {
     const result = Bun.spawnSync(
-      [
-        process.execPath,
-        join(HOOKS_DIR, "..", "tools", "aidlc-orchestrate.ts"),
-        ...args,
-      ],
+      legacyToolCommand("aidlc-orchestrate.ts", args),
       {
         cwd: projectDir,
         stdout: "pipe",

@@ -669,6 +669,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     );
   }
 
+  // The settled review and repeated gate checks span multiple CLI processes.
   test("relaxed keeps the Unit's verdict, writes the row for the Unit once, and tells the human", () => {
     const proj = teamProject("relaxed");
     settleUnit(proj);
@@ -689,7 +690,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(again.status, again.stderr).toBe(0);
     expect(printedNotices(again.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(1);
-  });
+  }, 30_000);
 
   test("strict is today's refusal for the Unit", () => {
     const proj = teamProject("strict");

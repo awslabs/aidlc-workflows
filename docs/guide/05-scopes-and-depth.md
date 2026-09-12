@@ -203,7 +203,9 @@ The engine analyzes your intent against keyword patterns:
 | "express", "lightweight" | `express` |
 | Explicit low-context fallback | `feature` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
 
-**Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate.
+**Disambiguation rule:** Descriptions longer than five words normally receive the compose offer below. An affirmative match for `refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE` instead proposes the matching scope, regardless of length. For example, "refactor the legacy authentication module to improve maintainability" proposes `refactor`. Generic words such as `fix` and `deploy` alone still receive the compose offer.
+
+The exemption checks every keyword, so "security vulnerability CVE-2026-12345" can identify `security-patch` even when `security` matches first. Nearby negation before a keyword, such as "do not refactor" or "not a proof of concept", does not activate the exemption; a later affirmative mention can still match. This is a lexical heuristic, so confirm that the proposed plan fits your intent. Among eligible scopes, the first alphabetical scope wins. Inputs of five words or fewer retain the existing alphabetical keyword matching. Plugin-specific keywords retain the length heuristic until plugins can declare their own keyword specificity.
 
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid:
 

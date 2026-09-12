@@ -33,7 +33,8 @@ diagnostic and lifecycle routes.
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
-| `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
+| `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
+| `/aidlc intent archive <name>` | Retire an in-flight intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -272,10 +273,32 @@ before changing state. See [Artifacts Reference](14-artifacts-reference.md).
 
 ### `/aidlc intent [name]` — List or switch intents
 
-Bare `/aidlc intent` lists the intents in the active space; add `--json` for
-structured output. `/aidlc intent <name>` switches the per-user active-intent
-cursor to an existing intent by unambiguous slug or full record-dir name. It
-never creates an intent or advances a workflow.
+Bare `/aidlc intent` lists the in-flight and completed intents in the active
+space; add `--json` for structured output (every row, archived included) and
+`--all` to show archived intents in the human listing. `/aidlc intent <name>`
+switches the per-user active-intent cursor to an existing intent by unambiguous
+slug or full record-dir name. It never creates an intent or advances a workflow.
+
+### `/aidlc intent archive <name>` — Retire an intent you will not finish
+
+`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight intent to
+the terminal `archived` status. Nothing is deleted: the record dir, its
+artifacts, and its audit shards stay exactly where they are, and the archive
+itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
+your `--reason` when you give one). The registry row flips to `archived`, the
+state file's `Status` flips to `Archived`, and the default `/aidlc intent`
+listing hides the row. If the archived intent was the active one, the per-user
+cursor is cleared, so the next `/aidlc` asks which intent to work on (or creates
+new work when none is left) instead of resuming retired stages.
+
+Archiving is refused for a completed intent (already terminal), for an intent
+with Bolt worktrees still in flight, and for a team-owned intent with claimed
+Units, because those still have work running in other checkouts.
+
+`/aidlc intent unarchive <name>` reverses it: the row returns to `in-flight`,
+`Status` returns to `Running` at the stage it stopped on, and `WORKFLOW_UNARCHIVED`
+is recorded. It does not move the cursor; switch to the revived intent with
+`/aidlc intent <name>` when you want to continue it.
 
 ### `/aidlc space [name]` — List or switch spaces
 
@@ -997,6 +1020,31 @@ projection implements the same operations with Bun/TypeScript tools under the
 harness directory, and direct tool calls remain useful for plumbing that has no
 public route. Prefer `aidlc` whenever a route is documented below.
 
+### `aidlc engine bolt set-autonomy` - change Construction approvals
+
+During Construction, ask in a typed message to "run the rest autonomously" or
+"gate every stage from here". Both requests work with skeleton-on or
+`skeleton: off`; skeleton-off has no automatic ladder prompt. The conductor
+records the explicit choice through:
+
+```bash
+aidlc engine bolt set-autonomy --mode autonomous
+aidlc engine bolt set-autonomy --mode gated
+```
+
+Both commands update `Construction Autonomy Mode` in `aidlc-state.md` and emit
+`AUTONOMY_MODE_SET`. Granting `autonomous` requires a fresh human turn; switching
+back to `gated` restores subsequent human approvals without requiring a fresh
+turn.
+
+On the default stage-major walk, autonomy skips later eligible Construction
+completion approvals. The first in-scope Construction stage still requires its
+own human approval, even if autonomy was granted earlier, and each Unit's Code
+Generation Plan Approval remains mandatory. Existing unit-major execution stays
+serial, suppresses swarm, and retains human stage gates for per-unit stages.
+See [Construction Execution](../reference/03-orchestrator.md#construction-execution)
+for the ladder and failure-handling rules.
+
 ### `aidlc engine workspace codekb` - resolve the code knowledge directory
 
 Use the public read-only query:
@@ -1246,6 +1294,32 @@ bun .claude/tools/aidlc-runtime.ts read requirements-analysis
 ```
 
 `runtime-graph.json` is gitignored. See [Artifacts Reference](14-artifacts-reference.md) for the artifact's shape and the [Runtime Graph](../reference/13-runtime-graph.md) reference chapter for the full schema.
+
+### `aidlc attest` — commit provenance
+
+Answers "which reviewed unit of work owns this commit's changes, and does the committed content still match what the reviewer approved?" Attribution is derived purely from committed content — the review receipts in the `audit/` shards plus the committed `reviewed-source-*.tsv` evidence files, read out of a git tree rather than your checkout — so it works on plain manual `git commit`s, in any clone, with no hooks, no commit-message trailers, and no pushed refs, and the same commit always resolves the same way.
+
+| Subcommand | What it does |
+|------------|--------------|
+| `resolve [<commit>]` | Read-only. Attribute the commit's first-parent delta (default `HEAD`) to reviewed units and classify each changed path: `verified` (committed content equals the reviewed content), `drifted` (reviewed but edited since), `unattested` (no unit claims it), `unverifiable` (evidence missing, tampered, or only in the gitignored local snapshot — fails closed), `indeterminate` (ambiguous receipts — fails closed), `excluded` (framework shell/record paths — harness shells already established in the range's base tree, not manifests introduced by the change or shells installed only in your checkout). JSON report on stdout. `--commit <rev>` is accepted as a flag form of the positional |
+| `resolve --diff <base>..<head>` | Same classification over an arbitrary range (`...` uses the merge-base, matching merge-request semantics) |
+| `resolve … --fail-on drifted,unattested,unverifiable,indeterminate` | Exit 3 when any path matches one of the named statuses — the gate form. Accepts any subset of the four; **name all four unless you mean to let unverified paths through** — omitting `unverifiable` passes paths whose reviewed content nothing could check |
+| `resolve … --record-ref <ref>` | Read receipts and evidence from `<ref>`'s tree instead of the commit under test. Point it at a ref the change cannot write (a protected branch, a records-only ref) so a change cannot supply its own approvals |
+| `resolve … --require-trust <level>` | Exit 3 unless the report's own basis reaches `informational` \| `reproducible` \| `independent` \| `signed` (`signed` means every input the verdict rests on — each relied-upon receipt's audit shard as well as the evidence file it selects — arrived in a signed commit). Every report carries a `trust` object saying which it achieved and why |
+| `anchor [--commit <rev>]` | Append a `SOURCE_COMMITTED` audit row recording that the commit landed reviewed claims. Enrichment only — `resolve` never reads anchors, so unanchored manual commits lose nothing. Explicit by default; set `AIDLC_SESSION_ANCHOR=1` to also sweep recent commits at session start |
+| `anchor --reconcile [--max-commits <n>]` | Sweep first-parent history (default 100 commits) and backfill anchors for attributable commits; already-anchored and swarm-merged commits are skipped, unattributable ones reported |
+
+```
+# Gate a branch: three-dot (merge-base) range, all four failable statuses,
+# receipts read from a ref the branch cannot write
+bun .claude/tools/aidlc-attest.ts resolve --diff origin/main...HEAD \
+  --record-ref origin/aidlc-records --require-trust independent \
+  --fail-on drifted,unattested,unverifiable,indeterminate
+```
+
+Three details make or break that recipe. Use `...` (three dots): `origin/main..HEAD` diffs the *tips*, so anything that landed on `origin/main` after the branch point shows up as a change of this branch and false-fails. Fetch enough history — a shallow checkout (`actions/checkout` defaults to depth 1) has no parent commit for the boundary, which `resolve` reports as an error rather than silently classifying the whole tree; set `fetch-depth: 0`. And decide deliberately whether you are *reporting* or *enforcing*: without `--record-ref`, a change that writes its own receipts can verify itself, which the report states (`trust.level: reproducible`) but does not prevent. Drop both trust flags and you get an honest informational report.
+
+Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `--intent <dir>`; each verb rejects the other's flags rather than ignoring them. See the [Commit Provenance](../reference/20-commit-provenance.md) reference chapter for the threat model, the trust ladder, and status semantics.
 
 ### Session skills — report on a workflow
 

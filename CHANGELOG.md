@@ -1,124 +1,26 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.9.7] - 2026-09-12
+## [2.8.2] - 2026-09-10
 
-Makes the temporary Testing Contract JSON repair visible without changing contract validation. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.7` / `install.ps1 -Version 2.9.7`) to refresh the parser and doctor together. Existing repair history is not backfilled; regenerate affected plans through normal approval before retiring the workaround.
+Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
 
-* `/aidlc --doctor` warns when a Testing Contract was successfully read via the raw LF/CR/tab repair, naming the affected file(s) and retained local log.
-* Valid JSON no longer invokes the fallback; invalid version/hash and unsupported JSON corruption still fail. Read-only engine probes remain write-free.
-* The fixed Devin CLI version remains unconfirmed; removal requires vendor confirmation, a captured write/read regression, a compatible supported baseline, and regenerated affected plans.
+* Short review-findings rows show the expected columns and, when applicable, suggest checking earlier cells for a missing value or `|` separator. Review completion remains refused until the row is corrected. Closes #1076.
+* Review-findings rows with surplus cells report the extra count. Well-formed rows, including escaped pipes and explicit blank cells, retain their existing behavior.
+* `aidlc version` reports `2.8.2`; the unpublished `2.8.6` development version is superseded.
+* Appending `## Assumption Confirmation` after a confirmed summary with an adjacent, blank-delimited `---`, `***`, or `___` no longer causes `SUMMARY_CONTENT_STALE` during stage completion. Code examples before the assumption heading and follow-up answers remain covered by the receipt, so substantive edits still require confirmation. Closes #1074.
+* Content appended under a `## ` heading is separated from the following `## ` heading by a blank line, keeping method files well-formed. Closes #1075.
 
-## [2.9.6] - 2026-09-12
-
-Closes a shared plan-approval guard bypass in compound shell commands containing Git checkpoints. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.6` / `install.ps1 -Version 2.9.6`) to refresh the installed guard. No workflow-record migration is required.
-
-* Before plan approval, adding `git add` or `git commit` to a shell command no longer exempts accompanying source writes or `git push` from the guard.
-* Standalone Git checkpoints and checkpoint-only compounds remain available; commands with concrete write targets or dynamic shell evaluation must pass the normal approval checks.
-
-## [2.9.5] - 2026-09-12
-
-Makes Devin's custom-agent model policy visible and projects native tool restrictions onto shipped core profiles. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.5` / `install.ps1 -Version 2.9.5`), refresh the shipped agent profiles and onboarding while preserving intentional local customizations, then restart Devin CLI. No workflow-record migration is required.
-
-* `/aidlc --doctor` and Devin onboarding explain that unpinned custom profiles use the organization's **Default subagent model** (documented router default: SWE-1.6), not automatic parent-model inheritance. The warning is advisory and does not claim to inspect the effective organization model.
-* Shipped Devin core profiles receive an `allowed-tools` list excluding direct subagent dispatch and skill invocation; core agent sources and other harnesses' agent permissions are unchanged.
-
-## [2.9.4] - 2026-09-12
-
-`/aidlc --doctor` on Devin now fails when the project has no valid SessionStart hook execution evidence, replacing the unconditional hook-approval reminder. **Upgrade:** update the Devin adapter and doctor together (`aidlc update`, or `install.sh --version 2.9.4` / `install.ps1 -Version 2.9.4`), merge the new `.devin/.aidlc-session-start.local.json` ignore entry into your project `.gitignore`, then fully restart Devin CLI (`/clear` is not enough) so the SessionStart hook can record evidence. No workflow-record migration is required.
-
-* The Devin SessionStart adapter writes `.devin/.aidlc-session-start.local.json` (gitignored, machine-local) after a successful core hook run; doctor fails with remediation when the marker is absent, unreadable, or malformed — inspect `/hooks`, approve the project's AI-DLC hooks if prompted, fully restart Devin CLI, and rerun `/aidlc --doctor`.
-* A valid marker is historical execution evidence only; it does not verify current hook approval.
-
-## [2.9.3] - 2026-09-12
-
-Corrects Devin CLI's structured-question binding and consolidates its shared question rules in the core protocol. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.3` / `install.ps1 -Version 2.9.3`) to refresh the installed question-rendering instructions. No workflow-record migration is required.
-
-* Devin's structured questions now map the neutral multi-select setting to the native `multi_select` field and describe answers by question text, selected labels, and optional custom text.
-* Devin's question batches avoid one-option remainders, and skipped or cancelled interactions remain distinct from selected answers.
-* Devin's rendering annex references the shared checkpoint and never-echo rules instead of maintaining duplicate instructions.
-
-## [2.9.2] - 2026-09-12
-
-AIDLC now requires Devin CLI 3000.10.21 or later. **Upgrade:** upgrade Devin CLI separately, then run `aidlc update` (or use `install.sh --version 2.9.2` / `install.ps1 -Version 2.9.2`) to update AIDLC. Updating AIDLC does not upgrade Devin CLI. No workflow-record migration is required.
-
-* Config diagnostics and `/aidlc --doctor` now use the same minimum Devin CLI version and consistent install/upgrade guidance.
-* Devin prerequisite documentation and the opt-in live E2E gate now use the shared support baseline.
-
-## [2.9.1] - 2026-09-12
-
-Restores the shared persona frontmatter contract for Devin CLI, including plugin agents. **Upgrade:** `aidlc update`, or `install.sh --version 2.9.1` / `install.ps1 -Version 2.9.1`, to replace previously stripped agent files. No workflow-record migration is required.
-
-* Devin agent files now retain `display_name`, `examples`, `disallowedTools`, and `maxTurns` wherever authored; Devin's native loader ignores these fields.
-* `devin doctor --json` may report CFG005 warnings for the retained fields. These warnings are expected and do not indicate a broken install.
-* AI-DLC requires `display_name` in agent metadata on every harness, including Devin; custom agents missing it must add it before running `/aidlc --doctor`.
-
-## [2.9.0] - 2026-09-09
-
-Fixes a Plan Approval session mismatch on the Devin CLI harness. The orchestrator read the binding file (`aidlc/.aidlc-sessions/<devin-session>`) which contains the intent UUID, and passed that as `--session` to `aidlc-log decision`/`answer`. The challenge was written as `challenge-<intent-uuid>.json`, but the `record-human-turn` hook receives the Devin session name and wrote no response (it looked for `challenge-<devin-session>.json` and found nothing). The `answer` command then failed with "Plan Approval requires the actual offered choice from this prompt and session." Both `recordPlanApprovalHumanResponse` and `certifyPlanApprovalReceipt` now fall back to `.current-session` when the challenge/response isn't found under the given session, so the response is written and certified under the Devin session name regardless of which identifier the orchestrator passed. **Upgrade:** `aidlc update`, or `install.sh --version 2.9.0` / `install.ps1 -Version 2.9.0`. No migration; existing workflow records resume normally.
-
-* `recordPlanApprovalHumanResponse` in `aidlc-testing-posture.ts`: falls back to `readCurrentSessionId` when `readPlanApprovalChallenge` returns null under the given session, writes the response under the effective session.
-* `certifyPlanApprovalReceipt`: falls back to `.current-session` for both challenge and response lookups when either is missing under the given session.
-
-## [2.8.9] - 2026-09-09
-
-Fixes three plan-approval guard false-positives that blocked the orchestrator during code-generation plan creation. `sed` without `-i`/`--in-place` (read-only pattern printing) was treated as a mutation command because it's in `TRACKED_SHELL_MUTATORS` — the guard now checks for `-i`/`--in-place` and treats `sed` without them as read-only. `mkdir` (creates directories, doesn't modify files) was missing from `READ_ONLY_SHELL_COMMANDS` — added. `bun -e` remains opaque (it can write files via `Bun.write`), so the orchestrator should use `bun <script>` for framework checks instead. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.9` / `install.ps1 -Version 2.8.9`. No migration; existing workflow records resume normally.
-
-* `sed` in `shellInvocationNeedsApproval`: returns true only when `-i`/`--in-place` is present; without those flags, `sed` is read-only (prints to stdout).
-* `mkdir` added to `READ_ONLY_SHELL_COMMANDS`.
-* Comment added to `isFrameworkToolInvocation` documenting that `bun -e` is intentionally NOT trusted (can write files via inline JavaScript).
-
-## [2.8.8] - 2026-09-09
-
-Fixes a Devin adapter issue where `ask_user_question` Plan Approval responses were not recorded, blocking the plan-approval receipt with "Plan Approval requires the actual offered choice from this prompt and session." Devin 3000.6.14 prefixes the `tool_response.output` string with `"User answered your questions:\n"` before the JSON payload, so `JSON.parse` failed on the prefix and the adapter extracted an empty response text — the `recordPlanApprovalHumanResponse` function was never called with the choice text, and no response file was written. The adapter's `normalizeToolResponse` now extracts the JSON object starting at the first `{` when the string has a non-JSON prefix. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.8` / `install.ps1 -Version 2.8.8`. No migration; existing workflow records resume normally.
-
-* New `extractJsonFromString` helper in `aidlc-devin-adapter.ts`: if the string is pure JSON, returns it as-is; if it has a non-JSON prefix, extracts the JSON starting at the first `{`.
-* `normalizeToolResponse` now calls `extractJsonFromString` on both the direct string and the `output` field, so `"User answered your questions:\n{...}"` is parsed correctly.
-
-## [2.8.7] - 2026-09-09
-
-Fixes a plan-approval guard false-positive where `cd` in shell commands made the shell opaque during code-generation. The `cd` command was missing from `READ_ONLY_SHELL_COMMANDS` — it changes directory but doesn't modify files — so `shellInvocationNeedsApproval` returned true for it, making every `cd ... && <read-only-cmd>` command opaque and trapping it in the guard. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.7` / `install.ps1 -Version 2.8.7`. No migration; existing workflow records resume normally.
-
-* Added `cd` to `READ_ONLY_SHELL_COMMANDS` in `aidlc-plan-approval-guard.ts`.
+* `aidlc-state.ts unit start|pause|resume` refuses while the engine routes the stage as a wave, leaves state and audit unchanged, and directs callers to `unit complete --wave`. Closes #1071.
+* `aidlc-state.ts set-construction-iteration unit-major` leaves the remaining units completable through the serial lifecycle even when a revised stage already has wave completion receipts.
 
 ## [2.8.6] - 2026-09-09
 
-Fixes a plan-approval guard false-positive where `2>&1` shell redirects blocked read-only inspection commands during code-generation. The shell command parser splits `2>&1` into a bare numeric invocation (`1`), which was not recognized as read-only — making the shell opaque and trapping commands like `ls ... 2>&1; echo ...; cat ...` that have no write targets. The guard now treats bare numeric invocation names as file-descriptor parsing artifacts (read-only), so `2>&1` no longer makes the shell opaque. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration; existing workflow records resume normally.
+**Superseded development entry:** No 2.8.6 release was published. The intended release version is 2.8.2, documented above; this entry is retained as development history.
 
-* `shellInvocationNeedsApproval` in `aidlc-plan-approval-guard.ts`: bare numeric names (`/^\d+$/`) return false (read-only) before the read-only command set check, recognizing `2>&1` file-descriptor artifacts.
+Fix a markdown-hygiene defect in the shared section writer: `appendUnderHeading` inserted new content flush against the following `## ` heading, so a bullet written under a section (for example a self-learning entry under `## Decided` in `project.md`) abutted the next heading with no separating blank line. The engine re-reads `project.md` every stage and the file is human-editable, so the malformed markdown could misgroup for a re-reading model or a stricter markdown tool. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration is required; existing files are corrected the next time content is appended to an affected section.
 
-## [2.8.5] - 2026-09-09
-
-Fixes a plan-approval guard false-positive that blocked the orchestrator from running framework-tool commands with shell artifacts (like `; echo` or `2>&1`) during code-generation plan creation. The guard's second early-exit path (trusted record-dir writes) required a non-opaque shell, but shell artifacts like `; echo` made the shell opaque because `echo` is not in the read-only command set. The `isFrameworkBash` exemption — already applied at the first early-exit — is now also applied at the second, so `aidlc-testing-posture.ts render > file 2>&1; echo` is allowed when all write targets are inside the code-generation record dir. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.5` / `install.ps1 -Version 2.8.5`. No migration; existing workflow records resume normally.
-
-* `aidlc-plan-approval-guard.ts` line 956: the trusted-record-dir early-exit now also checks `isFrameworkBash` (computed at line 903), matching the first early-exit's logic. An opaque shell wrapper around a trusted framework-tool invocation no longer traps commands whose write targets are all inside the record dir.
-
-## [2.8.4] - 2026-09-09
-
-Fixes a Testing Contract JSON parsing failure on the Devin CLI harness: when the orchestrator pasted the rendered `## Testing Contract` JSON block into `code-generation-plan.md` using Devin's `write` tool, the `\n` escape sequences in `applicable_notes[].text` were interpreted as actual newlines, producing invalid JSON. The `parseTestingContract` function then failed with "no valid ## Testing Contract JSON block", blocking the `begin` command and stalling code generation. The parser now repairs raw control characters inside JSON string values before calling `JSON.parse`, so the parsed object (and its contract hash) match the original. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.4` / `install.ps1 -Version 2.8.4`. No migration; existing workflow records resume normally.
-
-* New `repairJsonControlChars` helper in `core/tools/aidlc-testing-posture.ts` walks JSON text and replaces raw newlines/tabs/carriage-returns inside string values with their JSON escape sequences. The parsed object is identical to what `JSON.parse` would have produced from the uncorrupted JSON, so the contract hash still matches.
-* `parseTestingContract` now tries strict `JSON.parse` first, then falls back to `repairJsonControlChars` if that throws — preserving backward compatibility with harnesses whose write tools don't corrupt escape sequences.
-* Test case in `tests/unit/t299-testing-posture-wiring.test.ts` simulates the Devin write-tool corruption and verifies the repaired parse still matches the original contract.
-
-## [2.8.3] - 2026-09-09
-
-Fixes the S08 gate-receipt bug on the Devin CLI harness: `ask_user_question` approval gates refused every answer after the first with "no human reply has arrived after this question" because the Devin adapter skipped the `HUMAN_TURN` audit mint whenever it could not parse the `tool_response` shape. The interactive Devin 3000.6.14 `tool_response` shape was never captured (only the headless `-p` cancel case was), so the parser's `hasExplicitHumanSelection` returned false on real answers and the gate failed closed. The adapter now mints a `HUMAN_TURN` for any `ask_user_question` PostToolUse that is not a genuine cancellation (`success:false` or cancellation text), treating the hook firing itself as evidence the user interacted. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.3` / `install.ps1 -Version 2.8.3`. No migration; existing workflow records resume normally.
-
-* Devin adapter `record-human-turn` case: skip only for genuine cancellations (`tool_response.success === false` or cancellation phrase in `output`), not for unrecognized answer shapes. A `success:true` response mints a `HUMAN_TURN` regardless of whether the inner JSON shape matches the expected `{answers:...}` envelope.
-* New `isAskUserQuestionCancellation` helper in `harness/devin/hooks/aidlc-devin-adapter.ts` distinguishes dismissed widgets from answered ones with unrecognized response shapes.
-* `hasExplicitHumanSelection` and `explicitHumanSelectionText` now recognize the real Devin 3000.6.14 interactive answer shape — a single object `{selected: ["<label>"], skipped: false}` keyed by question text — captured from a live session export (`evidence/devin-e2e-run/fourth-run/devin-session-1.txt`). The `{answers:...}` wrapper is now optional (the export format has no wrapper).
-* Test fixtures `postToolUse_askUserQuestion_unrecognizedShape` (success:true, unrecognized JSON), `postToolUse_askUserQuestion_cancelled` (success:false), `postToolUse_askUserQuestion_native3000_unwrapped` and `postToolUse_askUserQuestion_native3000_wrapped` (real Devin 3000.6.14 shape) added to `tests/fixtures/devin-hook-payloads/payloads.json`; test cases 13e–13h in `tests/unit/t332-devin-adapter.test.ts` assert the mint, skip, and native-shape recognition.
-
-## [2.8.2] - 2026-09-09
-
-Adds the **Devin CLI** harness — the eighth distribution from one harness-neutral core. Devin CLI (cognition.ai) now runs the full AI-DLC lifecycle natively: the 14 personas dispatch via the `run_subagent` tool, a `hooks.v1.json` adapter wires the 17 framework hooks, and `.devin/rules/aidlc.md` auto-loads the method pointer into ambient context on session start. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`; configure a project with `aidlc config --harness devin`. No migration for existing harnesses.
-
-* New harness: `aidlc config --harness devin` projects `core/` + `harness/devin/` into `.devin/` (engine tree) plus a project-root `aidlc/` workspace shell and `AGENTS.md`. Invoked with `/aidlc`.
-* The packager strips Devin-ignored agent frontmatter fields (`display_name`, `examples`, `disallowedTools`, `maxTurns`) for clean `devin doctor` output, and adds `triggers: [user]` to generated runners and the `aidlc-knowledge`/`aidlc-outcomes-pack` skills so Devin's skill loader activates them.
-* `aidlc-runtime-paths.ts` discovers `.devin` installs and resolves the `devin` distribution (with a metadata-unavailable fallback), so a `.devin` install whose `harness.json` is unreadable no longer falls back to `claude`.
-* Native binary release gates assert the `devin` runtime distribution and its `config.json` (permissions + `read_config_from`).
-* Docs (README, AGENTS, glossary, harness-engineering overview) list Devin CLI alongside the other harnesses; new guide at `docs/guide/harnesses/devin.md`.
+* Content appended under a `## ` heading is now separated from the following `## ` heading by exactly one blank line, keeping method files (`memory/project.md`, `project-guardrails.md`) well-formed. The terminal end-of-file append is unchanged — no spurious trailing blank line is added. Closes #1075.
 
 ## [2.8.1] - 2026-09-08
 

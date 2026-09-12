@@ -61,7 +61,6 @@ import {
   requireLiveClaimForTeamUnit,
   resolveBoltDag,
   resolveProjectDir,
-  setFieldStrict,
   setOrInsertField,
   validateUnitName,
   slugify,
@@ -404,6 +403,12 @@ function handleStart(args: string[]): void {
       failJson("start-worktree", flags.slug, "state-read-failed", errorMessage(e));
     }
   }
+  if (stateContent && getField(stateContent, "Status") === "Archived") {
+    error(
+      "Cannot start a Bolt for an Archived workflow. Bring it back first with " +
+        "`/aidlc intent unarchive <name>`.",
+    );
+  }
   const teamOwnership = isTeamUnitOwnership(stateContent);
   const unitSlug = teamOwnership && !flags.name.includes(",")
     ? resolveTeamUnitSlug(pd, flags.name, flags.slug)
@@ -597,6 +602,12 @@ function handleComplete(args: string[]): void {
     stateContent = readStateFile(pd);
   } catch {
     // Legacy non-worktree completion can emit against an audit-only fixture.
+  }
+  if (stateContent && getField(stateContent, "Status") === "Archived") {
+    error(
+      "Cannot complete a Bolt for an Archived workflow. Bring it back first with " +
+        "`/aidlc intent unarchive <name>`.",
+    );
   }
   const teamOwnership = isTeamUnitOwnership(stateContent);
   const unitSlug = teamOwnership && !flags.name.includes(",")
@@ -1097,6 +1108,13 @@ function handleSetAutonomy(args: string[]): void {
   // One lock covers presence check -> audit consume -> state write. Otherwise
   // two grants, or a grant racing approval, can both observe one fresh turn.
   withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    if (getField(content, "Status") === "Archived") {
+      error(
+        "Cannot change autonomy for an Archived workflow. Bring it back first with " +
+          "`/aidlc intent unarchive <name>`.",
+      );
+    }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
     // human's ladder-prompt grant and consumes that turn through the emitted
     // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
@@ -1115,10 +1133,25 @@ function handleSetAutonomy(args: string[]): void {
     }
 
     // Validate state-file shape before the audit-first mutation.
-    const content = readStateFile(pd);
+    //
+    // `Construction Autonomy Mode` is declared by the shipped state template
+    // (knowledge/aidlc-shared/state-template.md, under `## Current Status`) but
+    // the generator does not emit it, so a real state file usually lacks the
+    // line. setFieldStrict throws "Field not found in state file" in that case,
+    // which made the grant unrecordable and `autonomous` unreachable — see
+    // issue #1045. setOrInsertField writes it where the template declares it,
+    // healing both freshly generated and pre-existing state files without an
+    // init-time shape change or a migration. The shape check survives:
+    // appendUnderHeading throws when `## Current Status` is absent, so a
+    // malformed state file still fails closed before the audit-first mutation.
     let updated: string;
     try {
-      updated = setFieldStrict(content, "Construction Autonomy Mode", flags.mode);
+      updated = setOrInsertField(
+        content,
+        "## Current Status",
+        "Construction Autonomy Mode",
+        flags.mode,
+      );
     } catch (e) {
       error(`State update failed: ${errorMessage(e)}`);
     }

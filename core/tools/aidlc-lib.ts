@@ -208,8 +208,28 @@ export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cur
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
 // layout (lib copied loose in a test, a non-dotted parent) falls through to the
 // CWD probe instead of returning a bogus harness dir.
-function isHarnessDirName(name: string): boolean {
+export function isHarnessDirName(name: string): boolean {
   return /^\.[a-z0-9][a-z0-9._-]*$/i.test(name);
+}
+
+/** Where a harness shell announces itself, relative to the shell dir. */
+export const HARNESS_SHELL_MANIFEST_REL = "tools/data/harness.json";
+
+/** The manifest test that makes a dot-dir a harness shell rather than an
+ *  ordinary hidden directory someone reviewed. Exported alongside
+ *  HARNESS_SHELL_MANIFEST_REL so a caller that must judge a *git tree* instead
+ *  of the checkout (commit provenance) applies the identical rule: two answers
+ *  to "is this a shell?" would mean two answers to "is this path excluded?". */
+export function isHarnessShellManifest(bytes: Buffer | string): boolean {
+  if (bytes.length > 64 * 1024) return false;
+  try {
+    const parsed = JSON.parse(
+      typeof bytes === "string" ? bytes : bytes.toString("utf-8"),
+    ) as { name?: unknown };
+    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function deriveHarnessDir(): string {
@@ -710,6 +730,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
   "create",
+  "archive",
+  "unarchive",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -719,23 +741,32 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "archive",
   "rename",
   "show",
   "birth",
 ]);
 
+// The two intent lifecycle verbs that retire and revive a record without
+// touching its files: `archive` moves an in-flight intent to the terminal
+// `archived` status, `unarchive` brings it back to `in-flight`.
+export type IntentLifecycleVerb = "archive" | "unarchive";
+
 export type WorkspaceCommand =
-  | { kind: "list"; noun: WorkspaceNoun; json: boolean }
+  // `all` is only ever set (true) for `intent list --all`; a plain list omits
+  // it so existing shape consumers keep matching the two-field object.
+  | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
+  // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
+  // utility argv verbatim, the same way `create-intent` forwards its args.
+  | { kind: IntentLifecycleVerb; noun: "intent"; name: string; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name";
-      verb: "switch" | "create" | "space-create";
+      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
       message: string;
     }
   | {
@@ -749,7 +780,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create",
+  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb,
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -788,11 +819,19 @@ function isReservedFutureWorkspaceVerb(
   return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
-function explicitWorkspaceList(
-  noun: WorkspaceNoun,
-  tokens: string[],
-): WorkspaceCommand {
-  return { kind: "list", noun, json: tokens[2] === "--json" };
+function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
+  return token === "archive" || token === "unarchive";
+}
+
+// `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
+// in either order after the verb. `--all` (intents only) includes archived
+// records, which the default listing hides; the `all` field is set only when
+// requested so the plain list keeps its two-field shape.
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+  const flags = tokens.slice(2);
+  const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
+  if (noun === "intent" && flags.includes("--all")) command.all = true;
+  return command;
 }
 
 export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
@@ -813,8 +852,11 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
   if (verbOrName === undefined) {
     return { kind: "list", noun, json: false };
   }
-  if (verbOrName === "--json") {
-    return { kind: "list", noun, json: true };
+
+  if (verbOrName === "--json" || (noun === "intent" && verbOrName === "--all")) {
+    // A bare list with flags only (`intent --json`, `intent --all --json`):
+    // re-read the flags from the verb position onward.
+    return explicitWorkspaceList(noun, [tokens[0], "list", ...tokens.slice(1)]);
   }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
@@ -832,6 +874,13 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
+    }
+    if (isIntentLifecycleVerb(verbOrName)) {
+      const name = tokens[2];
+      if (name === undefined || name.startsWith("--")) {
+        return missingWorkspaceName(noun, verbOrName);
+      }
+      return { kind: verbOrName, noun, name, rest: tokens.slice(3) };
     }
   }
 
@@ -856,8 +905,17 @@ export function workspaceCommandUtilityArgv(
   command: WorkspaceCommand,
 ): string[] | null {
   switch (command.kind) {
-    case "list":
-      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "list": {
+      const argv: string[] = [command.noun];
+      if (command.json) argv.push("--json");
+      if (command.all) argv.push("--all");
+      return argv;
+    }
+    case "archive":
+    case "unarchive":
+      // The lifecycle verbs forward verbatim, trailing flags included:
+      // `intent archive <name> --reason <text>`.
+      return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
       return command.explicit
         ? [command.noun, "switch", command.name]
@@ -1396,11 +1454,24 @@ export function decodeHarnessPlainText(
 // strings match, which is a pre-existing class shared with the old detectors.
 // That direction fails closed: over-detection nudges, never releases.
 
+const engineCommandHarnessPattern = KNOWN_HARNESS_DIRS
+  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+const sourceEngineDispatcherPath =
+  String.raw`(?:${engineCommandHarnessPattern})[/\\]tools[/\\]aidlc\.ts`;
+// Normalize the source dispatcher's executable token, including quoted project
+// roots. Leave surrounding shell wrappers, arguments, and legacy tools intact.
+const sourceEngineDispatcher = new RegExp(
+  String.raw`\bbun[ \t]+(?:"(?:[^"\r\n]*[/\\])?${sourceEngineDispatcherPath}"|'(?:[^'\r\n]*[/\\])?${sourceEngineDispatcherPath}'|(?:[^\s"';&|<>]*[/\\])?${sourceEngineDispatcherPath})[ \t]+(?=engine\b)`,
+  "g",
+);
+
 // Authored methodology uses the native dispatcher's hidden engine namespace.
 // Canonicalize only the engine tools these detectors own so the Bun and native
 // spellings share one classification policy. Other engine tools remain untouched.
 function canonicalEngineCommand(text: string): string {
   return text
+    .replace(sourceEngineDispatcher, "aidlc ")
     .replace(
       /\baidlc\s+engine\s+orchestrate\s+help\b/g,
       "aidlc help",
@@ -1417,31 +1488,28 @@ function canonicalEngineCommand(text: string): string {
 // conductor engaged the workflow this turn"; their presence in the turn that
 // answered the human disqualifies the turn from the conversational carve-out (a
 // conductor that ran the engine and then quit mid-loop must still be nudged).
-export function isEngineToolCall(name: string, input: unknown): boolean {
+export function isEngineToolCall(name: string, input: unknown, observedOutput?: unknown): boolean {
   const cmd =
     input !== null && typeof input === "object"
       ? String((input as Record<string, unknown>).command ?? "")
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const text = canonicalEngineCommand(
-    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
-  );
-  // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
-  // workflow engagement (a chat turn that ran git/cat/ls etc.).
-  if (
-    !/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(text) &&
-    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(text)
-  ) {
-    return false;
-  }
+  const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  const text = canonicalEngineCommand(rawText);
   // Split on shell separators so a CHAINED command is judged per sub-command,
   // not as one blob. Otherwise a read-only flag anywhere in the line
   // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
   for (const seg of segments) {
-    if (isEngineEngagementSegment(seg)) return true;
+    // Path normalization can remove substitutions from a quoted dispatcher path.
+    // Preserve that uncertainty rather than granting a terminal-command exemption.
+    if (isEngineEngagementSegment(
+      seg,
+      segments.length === 1 ? observedOutput : undefined,
+      !/\$\(|`/.test(rawText),
+    )) return true;
   }
   return false;
 }
@@ -1478,6 +1546,183 @@ function legacyEngineEngagementSegment(seg: string): boolean {
   return true;
 }
 
+// Kiro's prompt tokenizer deliberately preserves unquoted backslashes that a
+// shell removes. Use it only after ruling out that ambiguity and nested shell
+// execution throughout the segment, including executable prefixes/assignments.
+function literalEngineCommand(seg: string): { command: string; args: string[] } | "uncertain" | "opaque" | null {
+  // This one trailing descriptor merge changes output streams, not argv.
+  // Every other unquoted redirection remains outside literal classification.
+  seg = seg.replace(/(?:^|\s)2>&1\s*$/, "");
+  if (/\$\(|`/.test(seg)) return "uncertain";
+  let quote: "'" | '"' | null = null;
+  const rawTokens: string[] = [];
+  let tokenStart = -1;
+  for (let i = 0; i < seg.length; i++) {
+    const ch = seg[i];
+    if (quote === null && /\s/.test(ch)) {
+      if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart, i));
+      tokenStart = -1;
+      continue;
+    }
+    if (tokenStart < 0) tokenStart = i;
+    if (quote) {
+      if (ch === "\\" && quote === '"' && /["\\$`\n]/.test(seg[i + 1] ?? "")) {
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === "\\" || "()[]{}*?;|<>&$".includes(ch)) {
+      return "uncertain";
+    }
+  }
+  if (quote) return "uncertain";
+  if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart));
+  const tokens = splitKiroCommandArgs(seg);
+  if (tokens.length !== rawTokens.length) return "uncertain";
+  const base = (token: string): string => token.replaceAll("\\", "/").split("/").pop() ?? "";
+  // Only transparent prefixes establish an executable position. In particular,
+  // words following sh -c (or an arbitrary script) are data, not an executable.
+  let commandIndex = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rawTokens[commandIndex] ?? "")) commandIndex++;
+  if (["command", "exec"].includes(tokens[commandIndex])) {
+    commandIndex++;
+    if (tokens[commandIndex] === "--") commandIndex++;
+    if (tokens[commandIndex]?.startsWith("-")) return "uncertain";
+  }
+  if (base(tokens[commandIndex] ?? "") === "env") {
+    commandIndex++;
+    if (tokens[commandIndex] === "--") commandIndex++;
+    if (tokens[commandIndex]?.startsWith("-")) return "uncertain";
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex] ?? "")) commandIndex++;
+  }
+  if (commandIndex >= tokens.length) return null;
+  const viaBun = base(tokens[commandIndex]) === "bun";
+  if (viaBun) commandIndex++;
+  if (commandIndex >= tokens.length) return null;
+  if (!/^(?:aidlc|aidlc\.ts|aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?)$/.test(base(tokens[commandIndex]))) {
+    // Unsupported interpreters do not become Bun transports merely because a
+    // later argument names aidlc.ts. Opaque scripts remain conservative.
+    return "opaque";
+  }
+  let command = tokens[commandIndex].replaceAll("\\", "/").split("/").pop() ?? "";
+  if (command === "aidlc.ts") {
+    if (
+      !/(?:^|[/\\])bun$/.test(tokens[commandIndex - 1] ?? "") ||
+      !new RegExp(`${sourceEngineDispatcherPath}$`).test(tokens[commandIndex])
+    ) return "opaque";
+    command = "aidlc";
+  }
+  const native = command === "aidlc";
+  // Match dispatcher global extraction, then the orchestrator's own attempt
+  // selector extraction. Neither consumes options after the literal delimiter.
+  const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
+    const clean: string[] = [];
+    let literal = false;
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--") literal = true;
+      if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
+        if (i + 1 >= args.length) return null;
+        i++;
+      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
+        continue;
+      } else {
+        clean.push(arg);
+      }
+    }
+    return clean;
+  };
+  let args = stripGlobals(tokens.slice(commandIndex + 1), !native);
+  if (!args) return null;
+  if (native && args[0] === "engine") args.shift();
+  if (native && ["orchestrate", "next", "report", "park"].includes(args[0])) {
+    args = stripGlobals(args, true);
+    if (!args) return null;
+  }
+  return { command, args };
+}
+
+function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
+  const args = invocation.args.slice();
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") args.shift();
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return false;
+  }
+  if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  // Legacy entry points do not extract the dispatcher's bare global flags.
+  // Keep mixed positional/global forms conservative; trailing list flags remain valid.
+  if (
+    invocation.command !== "aidlc" &&
+    args.slice(0, -1).some((arg) =>
+      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
+    )
+  ) return false;
+  // The --config alias (including a refused section name) returns before
+  // workflow inspection. Depth/review modifiers do not share that guarantee.
+  if (args[0] === "--config" && args.length <= 2) return true;
+  const workspace = parseWorkspaceCommand(args);
+  return workspace.kind !== "not-workspace" && workspace.kind !== "create-intent";
+}
+
+// A modifier-only next can initialize work or dispatch configuration depending
+// on state. Its own successful result must prove the terminal branch ran; the
+// transcript reader owns call/result identity, ordering and human-turn binding.
+function isTerminalConfigurationDispatch(
+  invocation: { command: string; args: string[] },
+  observedOutput: unknown,
+): boolean {
+  let output: string;
+  if (typeof observedOutput === "string") {
+    output = observedOutput;
+  } else if (
+    Array.isArray(observedOutput) && observedOutput.length > 0 &&
+    observedOutput.every((part) => isPlainObject(part) && part.type === "text" && typeof part.text === "string")
+  ) {
+    output = observedOutput.map((part) => part.text).join("");
+  } else {
+    return false;
+  }
+  const args = invocation.args.slice();
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") args.shift();
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return false;
+  }
+  if (args.shift() !== "next" || args.length === 0 || args.length % 2 !== 0) return false;
+  const values = new Map<string, string>();
+  for (let i = 0; i < args.length; i += 2) {
+    if (!["--depth", "--test-strategy", "--review"].includes(args[i]) || values.has(args[i])) return false;
+    values.set(args[i], args[i + 1]);
+  }
+  const key = values.has("--depth") ? "depth" : values.has("--test-strategy") ? "test-strategy" : "review";
+  const expected = ["config", "set", key, values.get(`--${key}`)];
+  if (values.has("--depth") && values.has("--test-strategy")) {
+    expected.push("--test-strategy", values.get("--test-strategy"));
+  } else if (values.has("--review") && key !== "review") {
+    expected.push("--review", values.get("--review"));
+  }
+  try {
+    const parsed: unknown = JSON.parse(output);
+    // emit() uses canonical JSON; duplicate keys, concatenated objects and
+    // convenient embedded fragments cannot establish a dispatch receipt.
+    if (JSON.stringify(parsed) !== output.trim()) return false;
+    // Lazy load avoids the directive validator's import cycle with this module.
+    const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
+    const validated = validateDirective(parsed);
+    if (!validated.valid || validated.data.kind !== "print") return false;
+    const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
+    if (!match) return false;
+    const command = literalEngineCommand(canonicalEngineCommand(match[1]));
+    return command !== null && typeof command !== "string" && command.command === "aidlc" &&
+      JSON.stringify(command.args) === JSON.stringify(expected);
+  } catch {
+    return false;
+  }
+}
+
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately
 // ask "what stage am I on?" answered with `--status` / `next --status` /
@@ -1489,7 +1734,26 @@ function legacyEngineEngagementSegment(seg: string): boolean {
 // state/jump/bolt/swarm verb we do not specifically recognise is treated as
 // engagement (BLOCK), so an unrecognised mutating verb can never leak through as
 // "chat" - the conservative direction for loop integrity.
-export function isEngineEngagementSegment(seg: string): boolean {
+export function isEngineEngagementSegment(
+  seg: string,
+  observedOutput?: unknown,
+  allowLiteralCommand = true,
+): boolean {
+  const invocation = allowLiteralCommand ? literalEngineCommand(seg) : "uncertain";
+  if (invocation === "uncertain" || invocation === "opaque") {
+    // Retain the legacy name boundary even when a shell operator touches the
+    // executable; e.g. aidlc-state.ts>out approve still invokes the state tool.
+    return /\baidlc\s/.test(seg) ||
+      /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?(?=\s|[<>;&|()])/.test(seg) ||
+      (invocation === "uncertain" && (
+        /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) ||
+        /\baidlc\.ts\b/.test(seg)
+      ));
+  }
+  if (invocation) {
+    if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
+    seg = `${invocation.command} ${invocation.args.join(" ")}`;
+  }
   if (
     /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)
@@ -1579,17 +1843,14 @@ function shellCommandSegments(command: string): string[] {
 // Classify commands for the rebuild-stage-graph hook's cheap PostToolUse gate.
 // Transition matching stays intentionally lexical, but the recursion guard
 // only examines real unquoted shell-command segments.
-const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
-  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  .join("|");
 const runtimeCompileTool = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
 );
 const runtimeCompileReport = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
 );
 const runtimeCompileSelf = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
+  `\\bbun\\b.*(?:${engineCommandHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
 );
 
 export function classifyRuntimeCompileCommand(
@@ -1597,7 +1858,7 @@ export function classifyRuntimeCompileCommand(
 ): "reject" | "fire" | "pass" {
   const canonical = canonicalEngineCommand(command);
   const invokesRuntime = shellCommandSegments(command).some((segment) =>
-    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(segment)
+    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(canonicalEngineCommand(segment))
   );
   if (runtimeCompileSelf.test(command) || invokesRuntime) {
     return "reject";
@@ -1727,7 +1988,18 @@ export function activeIntent(
   } catch {
     // no cursor → fall through to lone-intent
   }
-  const records = listIntentDirs(projectDir, sp);
+  // Archived records never resolve implicitly: a space whose only record was
+  // archived reads as "no active intent" (creation is correct), not as that
+  // retired record silently coming back. An explicit cursor naming an archived
+  // record still resolves above, so the engine can explain it instead of
+  // guessing. The registry is read ONCE and matched in memory: this is the
+  // hot path of intent resolution, and an unregistered (orphan) record has no
+  // status, so it stays live work.
+  const registry = readIntentRegistry(projectDir, sp);
+  const records = listIntentDirs(projectDir, sp).filter((dirName) => {
+    const row = registry.find((entry) => recordDirMatches(entry, dirName));
+    return row === undefined || !isArchivedIntent(row);
+  });
   if (records.length === 1) return records[0];
   // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
@@ -2436,6 +2708,18 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
   return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
 }
 
+// The intent status lifecycle is a registry-row field. Creation writes
+// `in-flight`; workflow completion flips it to `complete`; `intent archive`
+// flips an in-flight row to `archived` and `intent unarchive` restores
+// `in-flight`. `archived` is the only status a human moves a row INTO and back
+// OUT of, so it gets a named constant and predicate; the other two stay the
+// literals the creation and completion paths already write.
+export const ARCHIVED_INTENT_STATUS = "archived";
+
+export function isArchivedIntent(entry: { status: string }): boolean {
+  return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
+}
+
 export function intentsRegistryPath(projectDir: string, space?: string): string {
   return join(intentsDir(projectDir, space), "intents.json");
 }
@@ -2606,6 +2890,49 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
     writeFileSync(join(dir, ACTIVE_INTENT_POINTER), `${dirName}\n`, "utf-8");
   } catch {
     /* per-user cursor; best-effort */
+  }
+}
+
+// Remove a space's active-intent cursor so no record resolves implicitly until
+// the human picks one (`intent <name>`) or creates new work. Best-effort and
+// idempotent, like the writer: an absent cursor is already the desired state.
+export function clearActiveIntentCursor(
+  projectDir: string,
+  space?: string,
+  expectedIntent?: string,
+): void {
+  const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
+  if (expectedIntent !== undefined) {
+    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(path, staged);
+    } catch {
+      return;
+    }
+    try {
+      const captured = readFileSync(staged, "utf-8").trim();
+      if (captured !== expectedIntent && !existsSync(path)) {
+        try {
+          renameSync(staged, path);
+          return;
+        } catch {
+          // A concurrent switch won the destination. Keep its newer cursor.
+        }
+      }
+    } catch {
+      // An unreadable captured cursor is stale runtime state.
+    }
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* already moved or removed */
+    }
+    return;
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
@@ -3615,11 +3942,12 @@ export function clearSessionRebindOffer(
 }
 
 interface SessionPidEntry {
-  sessionId: string;
+  // A null session stops ancestry fallback while SessionStart refreshes a PID.
+  sessionId: string | null;
   startTime: string | null;
 }
 
-interface ProcessIdentity {
+export interface ProcessIdentity {
   ppid: number;
   startTime: string | null;
 }
@@ -3715,8 +4043,9 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
     if (parsed === null || typeof parsed !== "object") return null;
     const candidate = parsed as Partial<SessionPidEntry>;
     if (
-      typeof candidate.sessionId !== "string" ||
-      validSessionId(candidate.sessionId) === null ||
+      (candidate.sessionId !== null &&
+        (typeof candidate.sessionId !== "string" ||
+          validSessionId(candidate.sessionId) === null)) ||
       (candidate.startTime !== null && typeof candidate.startTime !== "string")
     ) {
       return null;
@@ -3727,6 +4056,22 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
   }
 }
 
+function writeSessionPidRecord(
+  projectDir: string,
+  pid: number,
+  entry: SessionPidEntry,
+): void {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return;
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    // Readers and GC must never mistake an in-progress refresh for bad JSON.
+    writeFileAtomic(path, `${JSON.stringify(entry)}\n`);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
 // Write one PID ownership record. Exported for deterministic ancestry tests;
 // production callers normally use writeSessionPidAncestry().
 export function writeSessionPidEntry(
@@ -3734,6 +4079,7 @@ export function writeSessionPidEntry(
   pid: number,
   sessionId: string,
   deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
   const path = sessionPidEntryPath(projectDir, pid);
@@ -3745,20 +4091,19 @@ export function writeSessionPidEntry(
   ) {
     return;
   }
-  const identity = processIdentity(pid, deadlineMs);
-  try {
-    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
-    const entry: SessionPidEntry = {
-      sessionId,
-      startTime: identity?.startTime ?? null,
-    };
-    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
-  } catch {
-    /* per-user runtime state; best-effort */
-  }
+  const resolvedIdentity =
+    identity === undefined ? processIdentity(pid, deadlineMs) : identity;
+  writeSessionPidRecord(projectDir, pid, {
+    sessionId,
+    startTime: resolvedIdentity?.startTime ?? null,
+  });
 }
 
-function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
+function gcSessionPidEntries(
+  projectDir: string,
+  deadlineMs: number,
+  skip: ReadonlySet<number> = new Set(),
+): void {
   let names: string[];
   try {
     names = readdirSync(sessionPidMapDir(projectDir));
@@ -3766,17 +4111,21 @@ function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
     return;
   }
   for (const name of names) {
-    if (Date.now() >= deadlineMs || !/^\d+$/.test(name)) continue;
+    if (!/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs) break;
     const pid = Number.parseInt(name, 10);
+    if (skip.has(pid)) continue;
     const entry = readSessionPidEntry(projectDir, pid);
-    const identity = processIdentity(pid, deadlineMs);
-    const stale =
-      !entry ||
-      !processIsAlive(pid) ||
-      (entry.startTime !== null &&
-        (identity?.startTime === null ||
-          identity?.startTime === undefined ||
-          identity.startTime !== entry.startTime));
+    let stale: boolean;
+    if (!entry || !processIsAlive(pid)) {
+      stale = true;
+    } else if (entry.startTime !== null) {
+      const identity = processIdentity(pid, deadlineMs);
+      if (identity === null) continue;
+      stale = identity.startTime !== entry.startTime;
+    } else {
+      stale = false;
+    }
     if (!stale) continue;
     try {
       unlinkSync(join(sessionPidMapDir(projectDir), name));
@@ -3793,17 +4142,25 @@ export function writeSessionPidAncestry(projectDir: string, sessionId: string): 
   sessionAncestryCache.delete(projectDir);
   if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
-  gcSessionPidEntries(projectDir, deadline);
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
-    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    if (pid <= 1 || seen.has(pid)) break;
     seen.add(pid);
+    // Retire this PID's previous session before the bounded lookup. If lookup
+    // fails, a null record stops later tools from falling through to an older
+    // ancestor when process inspection recovers. A verified write replaces it.
+    writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
+    if (Date.now() >= deadline) break;
     const identity = processIdentity(pid, deadline);
     if (!identity) break;
-    writeSessionPidEntry(projectDir, pid, sessionId, deadline);
+    writeSessionPidEntry(projectDir, pid, sessionId, deadline, identity);
     pid = identity.ppid;
   }
+  // GC is best-effort hygiene: dead pids are reaped without spawning, a live
+  // process whose identity cannot be read within the budget is left alone, and
+  // entries written by this ancestry walk are never re-examined.
+  gcSessionPidEntries(projectDir, deadline, seen);
 }
 
 // Resolve the nearest mapped ancestor of the calling process. Every failure is
@@ -4991,7 +5348,8 @@ function contentSha256(value: string): string {
 // Lifecycle and Phase Progress, Scope, Depth, Test Strategy, Revision Count,
 // Unit Ownership, Unit Gate Rhythm, Construction Iteration, Skeleton Stance,
 // Parked, Project Type, State Version, Total Stages, In Progress), and the cache
-// layer is dropped. Changing a routing field still invalidates the directive.
+// layer and empty separator lines are dropped. Changing a routing field still
+// invalidates the directive.
 //
 // Blacklist rather than allowlist, deliberately: a new routing field must be
 // covered by default, and only a field someone consciously classifies as cache
@@ -5041,7 +5399,7 @@ const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
 // Drop the cache layer from aidlc-state.md. Deliberately line-based and
 // field-named rather than section-wide: dropping a whole section would also drop
 // anything appended after it (the template's last section is a cache section), so
-// an unrecognised line anywhere in the file still binds the directive.
+// an unrecognised nonempty line anywhere in the file still binds the directive.
 export function projectStateForDigest(stateContent: string): string {
   const kept: string[] = [];
   let inDerivedTable = false;
@@ -5051,6 +5409,11 @@ export function projectStateForDigest(stateContent: string): string {
   // field's physical line and drop both, leaving a live routing change invisible to
   // the digest.
   for (const line of stateContent.split(/\r\n|[\n\r\u2028\u2029]/)) {
+    // setOrInsertField adds Markdown separators through appendUnderHeading.
+    // Removing or projecting out its field leaves those empty lines behind.
+    // They carry no state authority; retain every other line byte-exact, including
+    // whitespace-only lines, rather than trimming potentially meaningful content.
+    if (line === "") continue;
     if (line.startsWith("## ")) {
       inDerivedTable = line.trim() === STATE_DIGEST_DERIVED_TABLE_SECTION;
       kept.push(line);
@@ -7264,6 +7627,48 @@ export function isAutonomousConstructionDecision(
   return stagePhase === "construction" && isAutonomousMode(stateContent);
 }
 
+function firstConstructionApprovalStage(
+  scope: string,
+  stateContent: string,
+): StageEntry | null {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const overrides = parseStateStageSuffixes(stateContent);
+  const skipped = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
+  // Conditional skips move the first actual approval; completed stages do not.
+  // Keep [x] in the search so approving the anchor does not protect every
+  // subsequent stage in turn. Plan overrides use the router's precedence.
+  return loadStageGraph().find((stage) =>
+    stage.phase === "construction" &&
+    !skipped.has(stage.slug) &&
+    (overrides.get(stage.slug) ?? mapping.stages[stage.slug]) === "EXECUTE"
+  ) ?? null;
+}
+
+// Completion approvals have a narrower grant than ordinary Construction
+// decisions. In particular, an early on-demand grant cannot approve the first
+// Construction stage, and the existing unit-major walk keeps its stage gates.
+// Keep report and state mutation on the same policy instead of interpreting
+// gate:true independently in each caller.
+export function isAutonomousConstructionGate(
+  stateContent: string | null,
+  stage: { slug: string; phase: string; for_each?: string },
+): boolean {
+  if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
+  const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
+  if (!scope) return false;
+  const first = firstConstructionApprovalStage(scope, stateContent!);
+  if (first === null || first.slug === stage.slug) return false;
+  return !(
+    getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&
+    stage.for_each === "unit-of-work"
+  );
+}
+
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
 // "a gate is actually OPEN" predicate for the per-harness preToolUse floors.
 // Without it a floor would keep refusing tool calls AFTER a legitimate approval
@@ -7580,6 +7985,27 @@ function visibleHeading(
 // Hash the normalized semantic questions content the human confirmed. The
 // shared protocol does not impose names on pre-checkpoint sections, while
 // follow-up Q<n> sections after an assumption decision remain hashable.
+// A thematic break (`---`, `***`, `___`) placed before the sanctioned
+// `## Assumption Confirmation` heading is presentation, not confirmed content.
+// It must fall inside the excluded range so appending that section — with or
+// without a leading rule — leaves the confirmed-content digest unchanged.
+const ASSUMPTION_THEMATIC_BREAK = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
+function assumptionExclusionStart(lines: string[], headingLine: number): number {
+  let i = headingLine - 1;
+  while (i >= 0 && lines[i].trim() === "") i--;
+  // Only a blank-delimited rule is a thematic break; a rule immediately under
+  // text is a setext underline and must not be swept into the exclusion.
+  if (
+    i >= 0 &&
+    ASSUMPTION_THEMATIC_BREAK.test(lines[i]) &&
+    (i === 0 || lines[i - 1].trim() === "")
+  ) {
+    return i;
+  }
+  return headingLine;
+}
+
 export function summaryConfirmationContentHash(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
@@ -7634,7 +8060,9 @@ export function summaryConfirmationContentHash(content: string): string {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }
       postSummaryAssumptionSeen = true;
-      openExcludedAssumption = line;
+      // Heading visibility blanks code blocks. Only actual source whitespace
+      // may be crossed when excluding an adjacent thematic break.
+      openExcludedAssumption = assumptionExclusionStart(lines, line);
       continue;
     }
 
@@ -9037,6 +9465,29 @@ export interface AuditShardEvent {
 // can preserve append order only within one shard; equal second-precision
 // timestamps across shards are causally unordered and must not be resolved by
 // filename position when authority or attempt freshness depends on the result.
+// Split ONE shard's bytes into events, preserving append position. Factored out
+// of readAuditShardEvents so a reader whose shard bytes do not come from the
+// working tree shares this parser rather than reimplementing the block grammar:
+// aidlc-attest.ts reads shards out of a git tree (`git cat-file`) to resolve a
+// commit against the record as that commit carried it. Two copies of the
+// `\n---\n` split and the Event/Timestamp filter would be free to drift, and a
+// drifted audit parser silently changes which receipt counts as newest.
+export function parseAuditShardEvents(
+  content: string,
+  shard: string,
+  shardIndex: number,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  for (let pos = 0; pos < blocks.length; pos++) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const timestamp = auditBlockField(blocks[pos], "Timestamp");
+    if (!event || !timestamp) continue;
+    rows.push({ block: blocks[pos], event, pos, shard, shardIndex, timestamp });
+  }
+  return rows;
+}
+
 export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
@@ -9065,20 +9516,7 @@ export function readAuditShardEvents(
       unreadableShards?.push(shards[shardIndex]);
       continue; // vanished or refused shard; growth during read is tolerated
     }
-    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
-    for (let pos = 0; pos < blocks.length; pos++) {
-      const event = auditBlockField(blocks[pos], "Event");
-      const timestamp = auditBlockField(blocks[pos], "Timestamp");
-      if (!event || !timestamp) continue;
-      rows.push({
-        block: blocks[pos],
-        event,
-        pos,
-        shard: shards[shardIndex],
-        shardIndex,
-        timestamp,
-      });
-    }
+    rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
   }
   return rows;
 }
@@ -10643,6 +11081,27 @@ export function parseReviewSection(
   const findings: ReviewFinding[] = [];
   for (const line of table.slice(2)) {
     const cells = splitMarkdownRow(line);
+    // Check arity before positional reads: a missing cell can shift later
+    // values left, but its intended column cannot be recovered reliably.
+    // Show the expected order and offer a hint when a trailing status fits.
+    if (cells.length !== headers.length) {
+      const rowId = cells[index.get("ID") ?? 0]?.trim() || "?";
+      if (cells.length < headers.length) {
+        const lastCell = cells.at(-1) ?? "";
+        const hint = headers.at(-1) === "Status" && validReviewFindingStatus(lastCell)
+          ? `The last cell ${JSON.stringify(lastCell)} looks like Status; check earlier cells for a missing value or "|" separator`
+          : 'Check for a missing cell or "|" separator';
+        throw new Error(
+          `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}. ` +
+            `Expected columns: ${headers.join(" | ")}. ${hint}`,
+        );
+      }
+      throw new Error(
+        `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}: ${
+          cells.length - headers.length
+        } unexpected extra cell(s)`,
+      );
+    }
     const value = (name: string): string =>
       cells[index.get(name) ?? -1]?.trim() ?? "";
     const id = value("ID");
@@ -14404,13 +14863,14 @@ function sourceIdentityBudget(name: string, fallback: number): number {
 function isSourceHarnessShellDir(root: string, name: string): boolean {
   if (!isHarnessDirName(name)) return false;
   try {
-    const manifestPath = join(root, name, "tools", "data", "harness.json");
+    const manifestPath = join(
+      root,
+      name,
+      ...HARNESS_SHELL_MANIFEST_REL.split("/"),
+    );
     const stat = lstatSync(manifestPath);
     if (!stat.isFile() || stat.size > 64 * 1024) return false;
-    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
-      name?: unknown;
-    };
-    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+    return isHarnessShellManifest(readFileSync(manifestPath, "utf-8"));
   } catch {
     return false;
   }
@@ -16485,7 +16945,7 @@ export function sourceListingSha256(serialized: string): string {
   return createHash("sha256").update(serialized, "utf-8").digest("hex");
 }
 
-function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
+export function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
   if (path.length === 0) return { reason: "writes[].path must be non-empty" };
   if (path.includes("\0")) return { reason: "writes[].path cannot contain a NUL byte" };
   if (path.includes("\\")) return { reason: "writes[].path must use POSIX '/' separators, not backslashes" };
@@ -16501,13 +16961,27 @@ function normalizeManifestSourcePath(path: string): { path: string; prefix: bool
   return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
 }
 
-function sourcePathIsExcluded(
+export interface SourceExclusionContext {
+  /** Harness shell dirs of the tree being judged, supplied instead of being
+   *  discovered under `projectDir`. Commit provenance passes this: shells found
+   *  on disk would make a commit's `excluded` paths depend on which harnesses
+   *  happen to be installed in the current checkout, so the same SHA would
+   *  classify `.claude/settings.json` differently in two clones. */
+  harnessShellDirs: ReadonlySet<string>;
+}
+
+export function sourcePathIsExcluded(
   path: string,
   carriesWorkspaceShell: boolean,
   projectDir?: string,
+  context?: SourceExclusionContext,
 ): boolean {
   const withoutTrailingSlash = path.replace(/\/+$/, "");
   const segments = withoutTrailingSlash.split("/");
+  const isShellDir = (name: string): boolean =>
+    context !== undefined
+      ? isHarnessDirName(name) && context.harnessShellDirs.has(name)
+      : projectDir !== undefined && isSourceHarnessShellDir(projectDir, name);
   if (
     carriesWorkspaceShell &&
     (
@@ -16515,10 +16989,7 @@ function sourcePathIsExcluded(
       path === ".aidlc/" ||
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
-      (
-        projectDir !== undefined &&
-        isSourceHarnessShellDir(projectDir, segments[0])
-      )
+      isShellDir(segments[0])
     )
   ) return true;
 
@@ -16571,6 +17042,180 @@ interface GitPathModeIndex {
 }
 
 type GitPathModeIndexCache = Map<string, GitPathModeIndex | null>;
+
+interface GitSourceClaimValidationRepoCache {
+  head: string | null;
+  headAndTreeLoaded: boolean;
+  ignored: Map<string, boolean>;
+  ignoredBatchAttempted: boolean;
+  ignoredPathspecs: Set<string>;
+  treeModes: Map<string, string> | null;
+}
+
+type GitSourceClaimValidationCache =
+  Map<string, GitSourceClaimValidationRepoCache>;
+
+function gitSourceClaimRepoKey(sourceRepoDir: string): string {
+  try {
+    return realpathSync(sourceRepoDir);
+  } catch {
+    return resolvePath(sourceRepoDir);
+  }
+}
+
+function gitSourceClaimRepoCache(
+  sourceRepoDir: string,
+  cache: GitSourceClaimValidationCache,
+): GitSourceClaimValidationRepoCache {
+  const repoKey = gitSourceClaimRepoKey(sourceRepoDir);
+  let repoCache = cache.get(repoKey);
+  if (repoCache === undefined) {
+    repoCache = {
+      head: null,
+      headAndTreeLoaded: false,
+      ignored: new Map(),
+      ignoredBatchAttempted: false,
+      ignoredPathspecs: new Set(),
+      treeModes: null,
+    };
+    cache.set(repoKey, repoCache);
+  }
+  return repoCache;
+}
+
+function seedGitSourceClaimIgnorePath(
+  sourceRepoDir: string,
+  literalPath: string,
+  cache: GitSourceClaimValidationCache,
+): void {
+  gitSourceClaimRepoCache(sourceRepoDir, cache)
+    .ignoredPathspecs.add(`./${literalPath.replace(/\/+$/, "")}`);
+}
+
+function gitSourceClaimHeadAndTree(
+  sourceRepoDir: string,
+  cache: GitSourceClaimValidationCache,
+): {
+  head: string | null;
+  treeModes: Map<string, string> | null;
+} {
+  const repoCache = gitSourceClaimRepoCache(sourceRepoDir, cache);
+  if (!repoCache.headAndTreeLoaded) {
+    const head = spawnSync(
+      "git",
+      ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    repoCache.head =
+      head.status === 0 && head.stdout.trim() ? head.stdout.trim() : null;
+    if (repoCache.head === null) {
+      repoCache.treeModes = new Map();
+    } else {
+      const listed = spawnSync(
+        "git",
+        [
+          "-C",
+          sourceRepoDir,
+          "ls-tree",
+          "-r",
+          "-t",
+          "-z",
+          "--full-tree",
+          repoCache.head,
+        ],
+        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (listed.status !== 0) {
+        repoCache.treeModes = null;
+      } else {
+        const treeModes = new Map<string, string>();
+        for (const record of listed.stdout.split("\0")) {
+          const tab = record.indexOf("\t");
+          if (tab === -1) continue;
+          const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1];
+          if (mode !== undefined) treeModes.set(record.slice(tab + 1), mode);
+        }
+        repoCache.treeModes = treeModes;
+      }
+    }
+    repoCache.headAndTreeLoaded = true;
+  }
+  return { head: repoCache.head, treeModes: repoCache.treeModes };
+}
+
+function seedGitSourceClaimIgnoredPaths(
+  sourceRepoDir: string,
+  repoCache: GitSourceClaimValidationRepoCache,
+): void {
+  if (repoCache.ignoredBatchAttempted) return;
+  repoCache.ignoredBatchAttempted = true;
+  const pathspecs = [...repoCache.ignoredPathspecs];
+  if (pathspecs.length === 0) return;
+  const checked = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-z",
+      "--stdin",
+      "-n",
+      "-v",
+      "--no-index",
+      "--",
+    ],
+    {
+      encoding: "utf-8",
+      input: `${pathspecs.join("\0")}\0`,
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (checked.status !== 0 && checked.status !== 1) return;
+  const fields = checked.stdout.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  if (fields.length % 4 !== 0) return;
+  const ignored = new Map<string, boolean>();
+  for (let index = 0; index < fields.length; index += 4) {
+    const pattern = fields[index + 2];
+    const pathname = fields[index + 3];
+    const value = pattern.length > 0 && !pattern.startsWith("!");
+    ignored.set(pathname, value);
+    if (!pathname.startsWith("./")) ignored.set(`./${pathname}`, value);
+  }
+  for (const [pathspec, value] of ignored) {
+    repoCache.ignored.set(pathspec, value);
+  }
+}
+
+function gitSourceClaimIgnored(
+  sourceRepoDir: string,
+  literalPathspec: string,
+  cache: GitSourceClaimValidationCache,
+): { ok: boolean; ignored: boolean } {
+  const repoCache = gitSourceClaimRepoCache(sourceRepoDir, cache);
+  seedGitSourceClaimIgnoredPaths(sourceRepoDir, repoCache);
+  const cached = repoCache.ignored.get(literalPathspec);
+  if (cached !== undefined) return { ok: true, ignored: cached };
+  const checked = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-q",
+      "--no-index",
+      "--",
+      literalPathspec,
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (checked.status === 0 || checked.status === 1) {
+    const ignored = checked.status === 0;
+    repoCache.ignored.set(literalPathspec, ignored);
+    return { ok: true, ignored };
+  }
+  return { ok: false, ignored: false };
+}
 
 function currentGitPathMode(
   sourceRepoDir: string,
@@ -16730,6 +17375,7 @@ function ignoredSourceClaimReason(
   path: string,
   prefix: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  sourceClaimValidation: GitSourceClaimValidationCache,
   carriesWorkspaceShell: boolean,
 ): string | null {
   if (!isGitRepoDir(sourceRepoDir)) return null;
@@ -16754,32 +17400,17 @@ function ignoredSourceClaimReason(
   }
 
   let headTracked = false;
-  const head = spawnSync(
-    "git",
-    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const headState = gitSourceClaimHeadAndTree(
+    sourceRepoDir,
+    sourceClaimValidation,
   );
-  if (head.status === 0 && head.stdout.trim()) {
-    const listed = spawnSync(
-      "git",
-      [
-        "-C",
-        sourceRepoDir,
-        "ls-tree",
-        "-z",
-        "--full-tree",
-        head.stdout.trim(),
-        "--",
-        literalPathspec,
-      ],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-    );
-    if (listed.status !== 0) {
+  if (headState.head !== null) {
+    if (headState.treeModes === null) {
       return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
     }
-    const entry = listed.stdout.split("\0").find(Boolean);
-    if (entry) {
-      const headIsDirectory = /^040000 /.test(entry);
+    const mode = headState.treeModes.get(literalPath);
+    if (mode !== undefined) {
+      const headIsDirectory = mode === "040000";
       if (!prefix && !currentExists && headIsDirectory) {
         return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
       }
@@ -16787,20 +17418,15 @@ function ignoredSourceClaimReason(
     }
   }
 
-  const ignored = spawnSync(
-    "git",
-    [
-      "-C",
-      sourceRepoDir,
-      "check-ignore",
-      "-q",
-      "--no-index",
-      "--",
-      literalPathspec,
-    ],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const ignored = gitSourceClaimIgnored(
+    sourceRepoDir,
+    literalPathspec,
+    sourceClaimValidation,
   );
-  if (ignored.status === 0) {
+  if (!ignored.ok) {
+    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (ignored.ignored) {
     if (
       sourcePathIsRegistered(
         sourceRepoDir,
@@ -16812,9 +17438,6 @@ function ignoredSourceClaimReason(
     }
     if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
-  }
-  if (ignored.status !== 1) {
-    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
   }
   if (!prefix && currentIsDirectory) {
     const currentMode = currentGitPathMode(
@@ -16843,8 +17466,8 @@ function ignoredSourceClaimReason(
         "-C",
         sourceRepoDir,
         "read-tree",
-        ...(head.status === 0 && head.stdout.trim()
-          ? [head.stdout.trim()]
+        ...(headState.head !== null
+          ? [headState.head]
           : ["--empty"]),
       ],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
@@ -16930,6 +17553,7 @@ function symlinkClaimTargetReason(
   prefix: boolean,
   carriesWorkspaceShell: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  sourceClaimValidation: GitSourceClaimValidationCache,
 ): string | null {
   const links = manifestClaimSymlinkPaths(
     sourceRepoDir,
@@ -17036,6 +17660,7 @@ function symlinkClaimTargetReason(
         repoRelative,
         false,
         pathModeIndexes,
+        sourceClaimValidation,
         carriesWorkspaceShell,
       );
       if (ignored !== null) {
@@ -17119,6 +17744,44 @@ export function readUnitSourceManifest(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const pathModeIndexes: GitPathModeIndexCache = new Map();
+  // Cache only this manifest read: later review, verdict, and finalize checks
+  // must observe fresh HEAD and ignore rules, even for the same manifest.
+  const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
+
+  for (const candidate of value.writes) {
+    if (!isPlainObject(candidate) || typeof candidate.path !== "string") {
+      continue;
+    }
+    if ("repo" in candidate && typeof candidate.repo !== "string") continue;
+    const declaredRepo =
+      typeof candidate.repo === "string" ? candidate.repo : undefined;
+    let canonicalRepo = declaredRepo;
+    if (canonicalRepo !== undefined) {
+      if (
+        !isValidRepoName(canonicalRepo) ||
+        !recordedRepoSet.has(canonicalRepo)
+      ) {
+        continue;
+      }
+    } else if (recordedRepos.length > 1) {
+      continue;
+    } else if (recordedRepos.length === 1) {
+      canonicalRepo = recordedRepos[0];
+    }
+    const normalized = normalizeManifestSourcePath(candidate.path);
+    if ("reason" in normalized) continue;
+    const sourceRepoDir =
+      worktreeRelative
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    seedGitSourceClaimIgnorePath(
+      sourceRepoDir,
+      normalized.path,
+      sourceClaimValidation,
+    );
+  }
 
   try {
   for (let index = 0; index < value.writes.length; index++) {
@@ -17167,6 +17830,7 @@ export function readUnitSourceManifest(
       normalized.path,
       normalized.prefix,
       pathModeIndexes,
+      sourceClaimValidation,
       carriesWorkspaceShell,
     );
     if (ignoredReason !== null) {
@@ -17178,6 +17842,7 @@ export function readUnitSourceManifest(
       normalized.prefix,
       carriesWorkspaceShell,
       pathModeIndexes,
+      sourceClaimValidation,
     );
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
@@ -17239,6 +17904,20 @@ export function unitSourceFingerprint(
   manifestSha256: string,
 ): string {
   return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+}
+
+/** Parse committed reviewed-source evidence bytes (the serializeUnitSourceListing
+ *  shape): a `manifest\t<sha256>\t-` header row binding the source-manifest bytes,
+ *  then the claim-restricted per-path listing. Null on any malformed row. */
+export function parseUnitSourceListing(
+  serialized: string,
+): { manifestSha256: string; listing: WorkspaceSourceListing } | null {
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
+  if (header === null) return null;
+  const listing = parseSourceListing(serialized.slice(newline + 1));
+  return listing === null ? null : { manifestSha256: header[1], listing };
 }
 
 function validSourceSnapshotFingerprint(fingerprint: string): string | null {
@@ -17324,6 +18003,40 @@ export function sourceBaselineAuditFields(
   };
 }
 
+/** Record-relative, posix-separated location of a unit's stage record files. One
+ *  grammar for both readers: the filesystem readers join it onto a record dir,
+ *  and the git-tree reader in aidlc-attest.ts appends it to a tree path, so a
+ *  layout change cannot move one reader without moving the other. */
+export function unitStageRecordRelPath(
+  unit: string,
+  stageSlug: string,
+  fileName: string,
+): string {
+  return `construction/${unit}/${stageSlug}/${fileName}`;
+}
+
+/** Record-relative path of a unit's committed reviewed-listing evidence. */
+export function reviewedSourceEvidenceRelPath(
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return unitStageRecordRelPath(unit, stageSlug, `reviewed-source-${hash12}.tsv`);
+}
+
+/** Committed per-unit reviewed-listing evidence beside source-manifest.json. */
+export function reviewedSourceEvidencePath(
+  recordDirPath: string,
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return join(
+    recordDirPath,
+    ...reviewedSourceEvidenceRelPath(unit, stageSlug, hash12).split("/"),
+  );
+}
+
 /** Write a content-addressed unit listing snapshot including its manifest header. */
 export function writeUnitSourceSnapshot(
   projectDir: string,
@@ -17334,10 +18047,20 @@ export function writeUnitSourceSnapshot(
   manifestSha256: string,
 ): string {
   const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const record = recordDir(projectDir);
   const unitError = validateUnitName(unit);
-  if (dir === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
+  if (dir === null || record === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
   const serialized = serializeUnitSourceListing(listing, claimModel, manifestSha256);
   const hash = sourceListingSha256(serialized);
+  // Dual-write the identical bytes into the COMMITTED record beside the unit's
+  // source-manifest.json. The receipt's Unit Source Fingerprint is the sha256
+  // of exactly these bytes, so the committed audit shards already tamper-bind
+  // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
+  // (aidlc-attest.ts) without the machine-local .aidlc-source-review/ copy.
+  writeSourceSnapshot(
+    reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
+    serialized,
+  );
   return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
@@ -17567,6 +18290,7 @@ export function currentStageSourceBaseline(
 export interface UnitSourceSnapshot {
   listing: WorkspaceSourceListing;
   manifestSha256: string;
+  serialized: string;
 }
 
 /** Read a unit snapshot only after full-hash verification and strict parsing. */
@@ -17586,7 +18310,9 @@ export function readUnitSourceSnapshot(
   const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
   if (header === null) return null;
   const listing = parseSourceListing(serialized.slice(newline + 1));
-  return listing === null ? null : { listing, manifestSha256: header[1] };
+  return listing === null
+    ? null
+    : { listing, manifestSha256: header[1], serialized };
 }
 
 
@@ -27866,7 +28592,17 @@ export function appendUnderHeading(
   const remainder = content.slice(bodyStart);
   const nextMatch = nextHeading.exec(remainder);
   const insertAt = nextMatch ? bodyStart + nextMatch.index : content.length;
-  return content.slice(0, insertAt) + newContent + content.slice(insertAt);
+  // When the insertion point is a following `## ` heading, callers that pass
+  // single-`\n`-terminated content would abut the heading with no separating
+  // blank line, producing malformed markdown (e.g. a bullet directly above
+  // `## Scope Overrides` in project.md). Add exactly one blank line in that
+  // case — but only when a heading actually follows (never in the terminal
+  // end-of-file append) and the content does not already end with a blank line.
+  const separator =
+    nextMatch && newContent.endsWith("\n") && !newContent.endsWith("\n\n")
+      ? "\n"
+      : "";
+  return content.slice(0, insertAt) + newContent + separator + content.slice(insertAt);
 }
 
 export function replaceSection(

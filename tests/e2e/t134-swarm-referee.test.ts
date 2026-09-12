@@ -103,9 +103,11 @@ const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const fixtures: string[] = [];
+// Serial Git worktree removal across this file's fixtures can exceed Bun's
+// default 5s hook budget; bound cleanup separately from the product test cases.
 afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
-});
+}, 30_000);
 
 /**
  * make_swarm_fixture (t134.sh:80-95): a real git repo on `main` in Construction

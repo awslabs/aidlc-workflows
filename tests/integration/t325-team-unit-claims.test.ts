@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-unit:adopt, subcommand:aidlc-unit:claim, subcommand:aidlc-unit:release, subcommand:aidlc-unit:participate, subcommand:aidlc-unit:status, subcommand:aidlc-utility:claim, subcommand:aidlc-utility:release, subcommand:aidlc-utility:participate, subcommand:aidlc-state:sync-unit-scope-stage, subcommand:aidlc-orchestrate:next, function:UNIT_SCOPE_FILE, function:UNIT_PARKED_FILE, function:CLAIM_GENERATIONS_FILE, function:UNIT_PARTICIPANT_FILE, function:CLAIM_REGISTRY_CACHE_FILE, function:UNIT_RELEASE_PENDING_FILE, function:unitScopePath, function:unitParkedPath, function:claimGenerationsPath, function:unitParticipantPath, function:claimRegistryCachePath, function:unitReleasePendingPath, function:readUnitScopeStamp, function:readApplicableTeamUnitScopeStamp, function:writeUnitScopeStamp, function:clearUnitScopeStamp, function:readClaimGenerations, function:writeClaimGeneration, function:clearClaimGeneration, function:readUnitClaimRegistryCache, function:writeUnitClaimRegistryCache, function:claimAttemptFields, function:eventMatchesClaimAttempt, function:effectiveUnitGateRhythm, function:hasAnyUnitClaimRefs, function:validateLiveUnitScope, function:requireLiveClaimForTeamUnit, function:isWalkingSkeletonUnitOnMain, function:worktreeClaimBoundaryMatches, function:ensureCloneId, function:invalidateLiveClaimPayloadCache
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -28,6 +28,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+// Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
+setDefaultTimeout(60_000);
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");

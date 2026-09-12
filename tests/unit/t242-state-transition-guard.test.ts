@@ -281,6 +281,15 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["bun .claude/tools/aidlc.ts intent create", "aidlc.ts intent create"],
       [
+        "bun .claude/tools/aidlc.ts intent archive other-intent --reason done",
+        "aidlc.ts intent archive",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent unarchive other-intent",
+        "aidlc-utility.ts intent unarchive",
+      ],
+      ["aidlc intent archive other-intent", "aidlc intent archive"],
+      [
         "bun .claude/tools/aidlc.ts space create other-space",
         "aidlc.ts space create",
       ],

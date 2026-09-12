@@ -62,9 +62,9 @@ When the argument is freeform text (not a known scope keyword):
    - "mvp" / "minimum viable" maps to `mvp`
    - "workshop" / "lab" / "training" maps to `workshop`
    - "express" / "lightweight" maps to `express`
-   - The underlying no-keyword resolver defaults to `feature`; the user-facing
+   - The underlying no-keyword resolver defaults to `classic` in a stock install; the user-facing
      cold-start path offers composition first for no-match or rich prose
-3. Disambiguation rule: if the text contains BOTH a scope keyword AND a longer project description (more than 5 words), the match is treated as incidental and the COMPOSE OFFER fires instead of a silent default.
+3. Disambiguation rule: descriptions longer than five words receive the compose offer unless an affirmative high-specificity keyword (`refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE`) matches. The exemption checks every keyword, including those after an earlier generic match in the same scope, and rejects occurrences with nearby preceding negation. Eligible scopes retain the alphabetical tie-break. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent) for examples and limitations.
 4. On a clear keyword match, confirms with the user, naming the effective ceremony from the compiled grid and workspace scan: `Starting a "[scope]" workflow for: "[text]" - [N] of [T] stages, [G] approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.` Greenfield previews apply the same reverse-engineering skip as intent creation. A per-unit clause is appended only when the scope executes `units-generation` and its Construction stages fan out over the resulting Unit DAG.
 5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 26, feature = all 33`) so the magnitude difference is visible before choosing.
 6. On confirmation, proceeds as with an explicit scope. The original freeform text is stored as `Initial Intent` in `aidlc-state.md`.
@@ -243,8 +243,8 @@ Construction stage has a checkbox per Unit from `unit-of-work-dependency.md`;
 Unit and one cell per applicable per-Unit Construction stage plus its Unit gate;
 the Stage Progress rows remain one row per stage and become derived from those
 columns. `Construction Autonomy Mode: [unset|autonomous|gated]` is recorded
-under **Current Status** — written after the ladder prompt fires and honoured
-on session resume.
+under **Current Status** — written by a ladder answer or an explicit on-demand
+grant or revocation, and honoured on session resume.
 
 During active team fan-out, unscoped main emits a turn-terminal `notice` whose
 message is the deterministic Team Construction board: Unit Progress, locally
@@ -481,7 +481,30 @@ Shipped per-stage structure:
 2. After the last Unit of that stage settles, the engine re-emits the stage with `gate: true` — one stage-level approval.
 3. Code Generation's per-Unit completion gate inside `code-generation.md` is **suppressed**; Step 3 Plan Approval remains a hard stop. Under an autonomous swarm the Code Generation stage gate is presented only after the **final** DAG batch has converged.
 
-The **walking-skeleton gate** is the first in-scope Construction EXECUTE stage (`isSkeletonGateStage`). Immediately after that gate approves, the orchestrator fires the **ladder prompt** exactly once per workflow, records `Construction Autonomy Mode: autonomous|gated` in `aidlc-state.md`, and emits `AUTONOMY_MODE_SET`. On the default walk, `autonomous` skips the remaining Construction *stage* gates (except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle `gate: true` re-entry, which the conductor auto-approves under autonomy). Opt-in `Construction Iteration: unit-major` suppresses swarm and **retains** the per-stage gate cascade.
+The first in-scope Construction EXECUTE stage always requires its own human
+approval, including under `skeleton: off` and when autonomy was granted earlier.
+Under skeleton-on with a non-empty Unit DAG, this is the **walking-skeleton
+gate**. After it approves, the conductor presents the **ladder prompt** once per
+intent if no autonomy choice has already been recorded. Skeleton-off has no
+automatic ladder prompt.
+
+The human can grant or revoke autonomy on demand at any point during
+Construction, under either skeleton stance: "run the rest autonomously" or
+"gate every stage from here". The conductor records either an on-demand request
+or a ladder answer through `aidlc engine bolt set-autonomy --mode autonomous|gated`,
+which writes `Construction Autonomy Mode` and emits `AUTONOMY_MODE_SET`. Escalation
+requires a fresh human turn; revocation to `gated` does not. An existing choice
+is honoured on resume and is not repeated at the ladder. See the
+[command reference](../guide/12-cli-commands.md#aidlc-engine-bolt-set-autonomy-change-construction-approvals)
+for invocation examples.
+
+On the default stage-major walk, `autonomous` skips subsequent eligible
+Construction *stage* gates. The first stage's approval and each Unit's Code
+Generation Plan Approval remain human-owned. Halt-and-ask and the Build-and-Test
+loop-back's rung 4 still stop for the human; the swarm settle `gate: true`
+re-entry is auto-approved by the conductor under autonomy. Existing opt-in
+`Construction Iteration: unit-major` stays serial, suppresses swarm, and
+**retains human stage gates for per-unit stages**.
 
 Units eligible to run in parallel (dependency prerequisites satisfied, no mutual dependency) form a **batch**. The orchestrator may dispatch stage 3.5 Code Generation for a batch by issuing **N `Task` calls in a single assistant message**. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
 
@@ -493,6 +516,8 @@ Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 
 - Solo Code Generation failure: halt, emit `BOLT_FAILED` on the swarm/worktree path, present retry / skip / abort.
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Unit. Retry re-runs only the failed Unit; the batch siblings stay `[x]`.
+
+This example assumes skeleton-on and no previously recorded autonomy choice:
 
 ```mermaid
 sequenceDiagram
@@ -512,6 +537,8 @@ sequenceDiagram
 
     Note over O,T: Remaining design stages stage-major, then Code Generation
     Note over O,T: Units B + C eligible in parallel CG batch
+    O->>U: Plan Approval for each Unit in the batch
+    U->>O: Approve each Unit's plan
     O->>T: Task(B code-gen) + Task(C code-gen) in ONE message
     par Parallel execution
         T->>UB: spawn subagent for Unit B
@@ -525,7 +552,7 @@ sequenceDiagram
     O->>O: All Units done → run 3.6 Build and Test, then 3.7 CI Pipeline
 ```
 
-<!-- Text fallback: The orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
+<!-- Text fallback: With skeleton-on and no recorded autonomy choice, the orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the user approves each Unit's plan before the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
 
 State and audit safety under parallel dispatch: `aidlc-audit.ts` uses mkdir-based locking so concurrent appends are safe. Lifecycle writes happen only after all required Task results return and the conductor reports one outcome; the engine serialises the internal state transition. No state-race risk.
 

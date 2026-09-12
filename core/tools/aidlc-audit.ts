@@ -63,6 +63,8 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_COMPLETED",
   "WORKFLOW_PARKED",
   "WORKFLOW_UNPARKED",
+  "WORKFLOW_ARCHIVED",
+  "WORKFLOW_UNARCHIVED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -215,6 +217,11 @@ const VALID_EVENT_TYPES = new Set([
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
+  // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
+  // commit observed to land reviewed unit claims. Enrichment ONLY: attest
+  // resolve derives attribution purely from committed receipts + evidence and
+  // never reads these anchors, so an unanchored manual commit still resolves.
+  "SOURCE_COMMITTED",
 ]);
 // --- Event type to human-readable heading ---
 
@@ -233,6 +240,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_COMPLETED: "Workflow Completion",
   WORKFLOW_PARKED: "Workflow Parked",
   WORKFLOW_UNPARKED: "Workflow Unparked",
+  WORKFLOW_ARCHIVED: "Workflow Archived",
+  WORKFLOW_UNARCHIVED: "Workflow Unarchived",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",
@@ -314,6 +323,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
   SWARM_DEGRADED: "Swarm Degraded",
+  SOURCE_COMMITTED: "Source Committed",
 };
 
 // --- Helpers ---
@@ -421,6 +431,11 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Commit-provenance anchors: `aidlc-attest.ts anchor` derives attribution
+  // from receipts + evidence and deduplicates on (Commit, Repo). A CLI-forged
+  // row would suppress the genuine derived anchor the same way a forged
+  // DOCUMENT_INDEXED suppresses provenance repair.
+  "SOURCE_COMMITTED",
   // Change Control provenance: a governed checkpoint owns the acceptance row
   // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
   // a change look already reported and suppress the genuine row.

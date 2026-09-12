@@ -402,8 +402,8 @@ export function mutationBlockReason(
     : `modify workspace path "${target}"`;
   return (
     `Code generation cannot ${action} for ${scope} because ` +
-    `the plan, unit-test instructions, and current Testing Contract are fingerprinted and ` +
-    `approved.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
+    `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
+    `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for Steps 2-3. Record the human's explicit "Approve Plan" answer before beginning ` +
     `Step 4 generation.`
   );
@@ -536,6 +536,53 @@ function normalizedCommandName(name: string): string {
   return basename(name).toLowerCase().replace(/\.exe$/, "");
 }
 
+function lastFlagValue(args: string[], flag: string): string | null {
+  let value: string | null = null;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== flag) continue;
+    const candidate = args[index + 1];
+    if (!candidate || candidate.startsWith("--")) return null;
+    value = candidate;
+    index++;
+  }
+  return value;
+}
+
+function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean {
+  const command = name.toLowerCase();
+  return (
+    (command === "aidlc" || command === "aidlc.exe") &&
+    isPlanApprovalPrerequisite(args)
+  );
+}
+
+function isPlanApprovalPrerequisite(args: string[]): boolean {
+  if (args[0] !== "engine") return false;
+
+  const noun = args[1];
+  const verb = args[2];
+  // The conductor re-enters through next on each human turn, and continue
+  // delivers the remaining stage rules. Requiring approval for that transport
+  // traps installations before they can finish presenting or answering it.
+  // Lifecycle reports and generation remain subject to the approval guard.
+  if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
+    return true;
+  }
+  if (
+    noun === "testing-posture" &&
+    ["resolve", "render", "fingerprint", "verify"].includes(verb)
+  ) {
+    return true;
+  }
+  if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
+
+  const routeArgs = args.slice(3);
+  return (
+    lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
+    lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
+  );
+}
+
 function gitSubcommand(args: string[]): string | null {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -561,7 +608,13 @@ function isFrameworkToolInvocation(
   cwd: string,
   name: string,
   args: string[],
+  executableResolutionChanged = false,
+  dataDriven = false,
+  wrapped = false,
 ): boolean {
+  if (isNativePlanApprovalPrerequisite(name, args)) {
+    return !executableResolutionChanged && !dataDriven;
+  }
   if (normalizedCommandName(name) !== "bun") return false;
   if (
     args.some((arg) =>
@@ -585,9 +638,26 @@ function isFrameworkToolInvocation(
   const projectLexical = resolve(projectDir);
   const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
+  const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
   if (
     dirname(absolute) !== trustedToolsDir ||
-    !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute))
+    (!unifiedEntryPoint && !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute)))
+  ) {
+    return false;
+  }
+  // The installed Bun entry point dispatches both planning and mutation routes.
+  // Give it the native planning exceptions only, after checking the interpreter
+  // and arguments. Wrappers may change cwd after parsing, so require a direct
+  // invocation. The same real-file/no-symlink boundary below still applies.
+  if (
+    unifiedEntryPoint &&
+    (
+      !["bun", "bun.exe"].includes(name.toLowerCase()) ||
+      wrapped ||
+      executableResolutionChanged ||
+      dataDriven ||
+      !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1))
+    )
   ) {
     return false;
   }
@@ -606,15 +676,23 @@ function isFrameworkToolInvocation(
 function shellInvocationNeedsApproval(
   projectDir: string,
   cwd: string,
-  invocation: { name: string; args: string[] },
+  invocation: {
+    name: string;
+    args: string[];
+    executable?: string;
+    launchers?: string[];
+    dataDriven?: boolean;
+    executableResolutionChanged?: boolean;
+  },
   hasConcreteTargets: boolean,
+  cwdChanged = false,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
   // `2>&1` and similar file-descriptor redirects are parsed by
   // shellCommandInvocations as a bare numeric invocation (e.g. `1`).
   // These are parsing artifacts, not real commands — treat them as
   // read-only so they don't make the shell opaque.
-  if (/^\d+$/.test(name)) return false;
+  if (/^\d+$/.test(name) && invocation.executable === undefined) return false;
   if (name === "sort") {
     return invocation.args.some(
       (arg) => arg === "-o" || arg === "--output" || arg.startsWith("--output="),
@@ -646,7 +724,19 @@ function shellInvocationNeedsApproval(
     }
     return subcommand === null || !READ_ONLY_GIT_SUBCOMMANDS.has(subcommand);
   }
-  if (isFrameworkToolInvocation(projectDir, cwd, name, invocation.args)) return false;
+  if (
+    isFrameworkToolInvocation(
+      projectDir,
+      cwd,
+      invocation.executable ?? invocation.name,
+      invocation.args,
+      invocation.executableResolutionChanged,
+      invocation.dataDriven,
+      (invocation.launchers?.length ?? 0) > 0 || cwdChanged,
+    )
+  ) {
+    return false;
+  }
   if (
     TRACKED_SHELL_MUTATORS.has(name) &&
     hasConcreteTargets &&
@@ -718,11 +808,18 @@ async function mutationIntent(
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
-    const { shellCommandInvocations, shellWriteTargets } = await import(
-      "./aidlc-review-freeze.ts"
-    );
+    const {
+      shellCommandAltersExecutableResolution,
+      shellCommandInvocationDetails,
+      shellCommandInvocations,
+      shellWriteTargets,
+    } = await import("./aidlc-review-freeze.ts");
     targets = shellWriteTargets(command, cwd);
     const dynamicEvaluation = shellUsesDynamicEvaluation(command);
+    const detailedInvocations = shellCommandInvocationDetails(command);
+    const cwdChanged = detailedInvocations.some((invocation) =>
+      ["cd", "pushd", "popd"].includes(normalizedCommandName(invocation.name))
+    );
     // `git add` and `git commit` of inception-phase artifacts (scope, codekb,
     // intents, memory) are not code-generation writes. The guard's purpose is
     // to prevent code-generation before Plan Approval, not to prevent git
@@ -747,8 +844,9 @@ async function mutationIntent(
     }
     opaqueShell =
       dynamicEvaluation ||
-      shellCommandInvocations(command).some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0)
+      shellCommandAltersExecutableResolution(command) ||
+      detailedInvocations.some((invocation) =>
+        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, cwdChanged)
       );
   } else if (WRITE_TOOLS.has(toolName)) {
     const input = toolInput ?? {};
@@ -922,10 +1020,21 @@ export async function run(input: string): Promise<number> {
     let isFrameworkBash = false;
     if (mutation.opaqueShell && toolName === "Bash" && typeof toolInput.command === "string") {
       try {
-        const { shellCommandInvocations } = await import("./aidlc-review-freeze.ts");
-        isFrameworkBash = shellCommandInvocations(toolInput.command).some(
-          (inv) => isFrameworkToolInvocation(projectDir, cwd, inv.name, inv.args),
+        const {
+          shellCommandAltersExecutableResolution,
+          shellCommandInvocationDetails,
+        } = await import("./aidlc-review-freeze.ts");
+        const invocations = shellCommandInvocationDetails(toolInput.command);
+        const cwdChanged = invocations.some((invocation) =>
+          ["cd", "pushd", "popd"].includes(normalizedCommandName(invocation.name))
         );
+        isFrameworkBash =
+          !shellUsesDynamicEvaluation(toolInput.command) &&
+          !shellCommandAltersExecutableResolution(toolInput.command) &&
+          invocations.length > 0 &&
+          invocations.every((invocation) =>
+            !shellInvocationNeedsApproval(projectDir, cwd, invocation, mutation.targets.length > 0, cwdChanged)
+          );
       } catch {
         isFrameworkBash = false;
       }

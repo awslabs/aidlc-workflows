@@ -147,6 +147,7 @@ interface CliResult {
 
 /** Spawn `bun <tool> <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ... --project-dir "$PROJ"`. */
 function run(tool: string, args: string[], p: string): CliResult {
+  const startedAt = Date.now();
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
     encoding: "utf-8",
     env: {
@@ -155,8 +156,22 @@ function run(tool: string, args: string[], p: string): CliResult {
     },
   });
   const stdout = res.stdout ?? "";
+  if (res.error || res.status === null) {
+    throw new Error(
+      `Fixture CLI did not exit normally after ${Date.now() - startedAt}ms: ${
+        JSON.stringify({
+          tool,
+          args,
+          signal: res.signal,
+          error: res.error?.message,
+          stdout,
+          stderr: res.stderr ?? "",
+        })
+      }`,
+    );
+  }
   return {
-    status: res.status ?? -1,
+    status: res.status,
     stdout,
     out: `${stdout}${res.stderr ?? ""}`,
   };
@@ -331,6 +346,8 @@ let stateAfterReject: string;
 let stateAfterRevise: string;
 let stateAfterApprove: string;
 
+// This fixture initializes a project and performs the full CLI lifecycle before
+// the cases. Its combined subprocess work needs a bounded setup budget on CI.
 beforeAll(() => {
   proj = createTestProject();
 
@@ -375,7 +392,7 @@ beforeAll(() => {
   // Step 5: advance — approve already auto-advanced, so this replays cleanly.
   advanceAck = run(STATE, ["advance", "requirements-analysis"], proj);
   expect(advanceAck.status).toBe(0);
-});
+}, 30_000);
 
 afterAll(() => {
   cleanupTestProject(proj);

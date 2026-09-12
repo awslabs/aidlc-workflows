@@ -22,9 +22,9 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (95 events, 23 categories)
+## Event Registry (98 events, 24 categories)
 
-### Workflow Lifecycle (4 events)
+### Workflow Lifecycle (6 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -32,6 +32,8 @@ deduplicate timestamp fields produced by older versions.
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
+| ✓ `WORKFLOW_ARCHIVED` | In-flight intent retired by a human (`Status: Archived`, registry `archived`); record and audit shards preserved | Timestamp, Stage; optional Reason | `tools/aidlc-utility.ts intent archive` |
+| ✓ `WORKFLOW_UNARCHIVED` | Archived intent returned to `Running` / `in-flight` | Timestamp, Stage | `tools/aidlc-utility.ts intent unarchive` |
 
 ### Phase Lifecycle (4 events)
 
@@ -316,11 +318,19 @@ Six events emit from the swarm referee `aidlc-swarm.ts` — the deterministic ve
 | `SWARM_COMPLETED` | All Units in the batch finished (converged or failed); batch closed | Timestamp, Batch number, Converged count, Failed count | `tools/aidlc-swarm.ts` |
 | `SWARM_DEGRADED` | `AIDLC_USE_SWARM=1` was requested but the Workflow tool was unavailable, so the conductor ran the subagent floor (loud-degrade) | Timestamp, Batch number, Requested driver, Fallback driver | `tools/aidlc-swarm.ts` |
 
+### Commit Provenance (1 event)
+
+Emitted by `aidlc attest anchor` when a commit is observed to have landed reviewed source claims. Enrichment ONLY: `aidlc attest resolve` never reads these rows — attribution stays a pure function of committed content (REVIEW_COMPLETED receipts + committed `reviewed-source-<hash12>.tsv` evidence) — so a commit that was never anchored still resolves identically. One row per involved intent per (commit, repo); re-anchoring dedupes, and commits already carrying a `SWARM_SOURCE_MERGED` receipt for the same (commit, repo) are skipped rather than double-recorded.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `SOURCE_COMMITTED` | A commit's changed paths were attributed to reviewed units (an explicit `anchor` invocation, or the opt-in session-start reconcile sweep) | Timestamp, Commit, Repo (recorded selector or `-` for the workspace root), Units, Attributed Paths, Observed (`session` \| `reconciled`) | `tools/aidlc-attest.ts anchor` (runAnchor — also called by the session-start hook's sweep when `AIDLC_SESSION_ANCHOR=1`) |
+
 ## Hook-Generated Format
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

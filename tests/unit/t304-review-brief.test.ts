@@ -23,6 +23,7 @@ import {
   auditBlockField,
   findStageBySlug,
   readAllAuditShards,
+  readAuditShardEvents,
   reviewArtifactEntries,
   sourcePathKey,
   writeUnitSourceSnapshot,
@@ -353,6 +354,128 @@ describe("t304 executable review brief scenarios", () => {
     expect(renderFindingsContext([second])).toContain(
       "requirements-analysis-questions.md > Q4",
     );
+  });
+
+  test.each(["New", "Unresolved", "Resolved", "Accepted risk", "Rejected: duplicate"])(
+    "a short findings row offers a repair hint for trailing status %s",
+    (status) => {
+      // Required action was omitted here, but the parser cannot identify
+      // that column reliably from the remaining positional values.
+      const shortRow =
+        `| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | ${status} |`;
+      expect(() =>
+        parseReviewArtifact(
+          reviewMarkdown("NOT-READY", [shortRow]),
+          "aidlc/requirements.md",
+        )
+      ).toThrow(
+        "aidlc/requirements.md#R-05: row has 5 cells, header declares 6. " +
+          "Expected columns: ID | Severity | Location | Finding | Required action | Status. " +
+          `The last cell ${JSON.stringify(status)} looks like Status; check earlier cells for a missing value or "|" separator`,
+      );
+    },
+  );
+
+  test.each([
+    ["| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | Fix it |", 5],
+    ["| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing |", 4],
+    ["| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | |", 5],
+  ] satisfies [string, number][])("a short row without a recognizable trailing status shows the expected columns: %s", (row, count) => {
+    expect(() =>
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [row]),
+        "aidlc/requirements.md",
+      )
+    ).toThrow(
+      `aidlc/requirements.md#R-05: row has ${count} cells, header declares 6. ` +
+        "Expected columns: ID | Severity | Location | Finding | Required action | Status. " +
+        'Check for a missing cell or "|" separator',
+    );
+  });
+
+  test("reordered headers keep their declared order without treating a non-final Status as shifted", () => {
+    const review = reviewMarkdown("NOT-READY", [
+      "| R-05 | Resolved | Minor | aidlc/requirements.md > FR-1 | New |",
+    ]).replace(
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "| ID | Status | Severity | Location | Finding | Required action |",
+    );
+    expect(() => parseReviewArtifact(review, "aidlc/requirements.md")).toThrow(
+      "aidlc/requirements.md#R-05: row has 5 cells, header declares 6. " +
+        "Expected columns: ID | Status | Severity | Location | Finding | Required action. " +
+        'Check for a missing cell or "|" separator',
+    );
+  });
+
+  test("a findings row with extra cells reports the surplus", () => {
+    const longRow =
+      "| R-06 | Minor | aidlc/requirements.md > FR-1 | Extra | Fix it | New | surplus |";
+    expect(() =>
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [longRow]),
+        "aidlc/requirements.md",
+      )
+    ).toThrow("row has 7 cells, header declares 6: 1 unexpected extra cell(s)");
+  });
+
+  test("valid findings preserve escaped pipes and explicit empty cells", () => {
+    expect(
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [
+          ROW_NEW,
+          String.raw`| R-02 | Minor | aidlc/requirements.md > A\|B | A\|B is missing | | New |`,
+        ]).replace("|---|---|---|---|---|---|", "|:---|---:|:---:|---|---|---|"),
+        "aidlc/requirements.md",
+      )!.findings.map(({ id, location, finding, requiredAction, status }) =>
+        ({ id, location, finding, requiredAction, status })
+      ),
+    ).toEqual([
+      {
+        id: "R-01",
+        location: "aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements.md > FR-1",
+        finding: "Deadline is missing",
+        requiredAction: "Add a delivery date",
+        status: "New",
+      },
+      {
+        id: "R-02",
+        location: "aidlc/requirements.md > A|B",
+        finding: "A|B is missing",
+        requiredAction: "",
+        status: "New",
+      },
+    ]);
+  });
+
+  test("review completion carries the short-row repair hint without recording a terminal receipt", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const base = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, base, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, reviewMarkdown("NOT-READY", [
+      "| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | New |",
+    ]).replace(/^# Requirements\n\n/, ""), "utf-8");
+    const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+    expect(completed.status).not.toBe(0);
+    const diagnostic = JSON.parse(completed.stderr).error;
+    expect(diagnostic).toContain('Refusing REVIEW_COMPLETED for "requirements-analysis"');
+    expect(diagnostic).toContain("row has 5 cells, header declares 6");
+    expect(diagnostic).toContain('The last cell "New" looks like Status');
+    expect(diagnostic).not.toContain('missing "Status"');
+    expect(
+      readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+    ).toHaveLength(0);
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {

@@ -291,6 +291,14 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-distribution.ts"),
     );
     copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-channel.ts"),
+      join(proj, ".claude", "tools", "aidlc-channel.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-version.ts"),
+      join(proj, ".claude", "tools", "aidlc-version.ts"),
+    );
+    copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-artifact-vocabulary.ts"),
       join(proj, ".claude", "tools", "aidlc-artifact-vocabulary.ts"),
     );

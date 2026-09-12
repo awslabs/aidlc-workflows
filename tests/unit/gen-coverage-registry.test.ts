@@ -797,6 +797,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // when their segment stopped saying cli. Same predicate, same honesty ratchet:
   // a new spawning test still cannot land without a human edit here.
   const EXPECTED_NONE_TO_CLI = [
+    "unit/t-kiro-ide-native-recovery.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
@@ -913,6 +914,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t337 spawns the shipped doctor to pin the "Workspace source boundary
     // binds" row, which reads a real source walk against a real workspace.
     "unit/t337-source-boundary-reason.test.ts",
+    "unit/t339-construction-autonomy-gates.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
@@ -947,8 +949,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t173-session-switch-restamp.test.ts",
     "integration/t175-space-create-memory-isolation.test.ts",
     "integration/t185-stage-artifact-guard.test.ts",
-    "integration/t188-plugin-compose.test.ts",
+    "integration/t188-plugin-compose.serial.test.ts",
     "integration/t224-plugin-selection.test.ts",
+    "integration/t300-plugin-kit.test.ts",
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t314-plugin-reinstall-doctor.test.ts",
@@ -994,6 +997,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t-tui-custom-harness.serial.test.ts",
     "e2e/t-tui-render-colour.serial.test.ts",
     "unit/gen-coverage-registry.test.ts",
+    "unit/t-claude-hook-project-root.test.ts",
     "unit/t-memory-seed.test.ts",
     "unit/t07-hook-audit-logger.test.ts",
     "unit/t08.test.ts",
@@ -1096,6 +1100,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t319-doctor-hooks-blocked.test.ts",
     "unit/t315-pipeline-link-receipts.test.ts",
     "unit/t329-document-input.test.ts",
+    "unit/t330-release-channel-grammar.test.ts",
+    "unit/t331-preview-channel-lifecycle.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
     "unit/t320-review-confirmation-deadlock.test.ts",
     "unit/t321-source-recovery-freeze.test.ts",
@@ -1109,6 +1115,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.
     "unit/t305-per-unit-attribution-receipts.test.ts",
+    // t312 spawns aidlc-attest/aidlc-log because commit-provenance acceptance
+    // is defined over real receipts, manual git commits, and CLI exit codes.
+    "unit/t312-attest-resolve-anchor.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",
@@ -1143,7 +1152,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t94-sensor-fire-hook.test.ts",
     "unit/t96.test.ts",
     "unit/t97.test.ts",
-    "integration/t311-session-binding-writers.test.ts",
+    "integration/t311-session-binding-writers.serial.test.ts",
     "e2e/t113.test.ts",
     "e2e/t122-stop-hook-e2e.test.ts",
     "e2e/t126-emitter-pairing-cofire.test.ts",

@@ -116,6 +116,7 @@ type Alias = {
 };
 
 export const TOOLS = {
+  attest: "aidlc-attest.ts",
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
@@ -385,6 +386,7 @@ export const ROUTES: readonly Route[] = [
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
       "config --unpin",
+      "config --channel [stable|preview]",
     ],
   },
   {
@@ -405,7 +407,7 @@ export const ROUTES: readonly Route[] = [
       { command: "update [args]", summary: "install and activate a framework release" },
     ],
     all: [
-      "update [--version <version>] [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--check|--dry-run] [--json|--quiet]",
+      "update [--version <version>] [--channel <stable|preview>] [--from <dir>] [--release-base-url <url>] [--release-api-url <url>] [--ca-bundle <path>] [--offline] [--check|--dry-run] [--json|--quiet]",
     ],
   },
   {
@@ -643,6 +645,35 @@ export const ROUTES: readonly Route[] = [
     targets: { fork: "audit-fork", merge: "audit-merge" },
   },
   {
+    // Commit provenance. `resolve` is read-only attribution and `anchor` appends
+    // a SOURCE_COMMITTED audit event, so the route mutates the project at most.
+    // It is a public noun (`aidlc attest resolve`, no engine prefix) because it
+    // is invoked by people and pipelines outside a workflow turn, but hidden
+    // from the capped top-level help like the other non-`top` public nouns.
+    // Never pinned: `attest` is not a PINNED_TOP_LEVEL_ROUTE, and the launcher
+    // drift guard compares the two.
+    id: "attest",
+    group: "attest",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["resolve", "anchor"],
+    tool: TOOLS.attest,
+    namespace: "public",
+    visibility: "hidden",
+    projectRequirement: "required",
+    pinPolicy: "active",
+    networkPolicy: "forbidden",
+    mutationScope: "project",
+    outputModes: ["human", "json"],
+    human: [
+      { command: "attest <verb>", summary: "resolve commits/diffs to reviewed units; anchor commits" },
+    ],
+    all: [
+      "resolve [commit|--commit <rev>] [--diff <base>..<head>] [--record-ref <ref>] [--require-trust <level>] [--fail-on <statuses>]",
+      "anchor [--commit <rev>] [--reconcile]",
+    ],
+  },
+  {
     id: "graph",
     group: "graph",
     kind: "noun-passthrough",
@@ -759,11 +790,23 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
-    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
+    human: [
+      {
+        command: "intent [list|switch|create|archive|unarchive]",
+        summary: "list, switch, create, archive, or unarchive intent context",
+      },
+    ],
+    all: [
+      "list [--json] [--all]",
+      "switch <name>",
+      "<name>",
+      "create [args]",
+      "archive <name> [--reason <text>]",
+      "unarchive <name>",
+    ],
   },
   {
     id: "space",
@@ -1214,6 +1257,7 @@ const COMMAND_HELP_USAGE: Record<PublicCommand, string> = {
 
 const ROOT_CONFIG_HELP_VALUE_FLAGS = new Set([
   "--ca-bundle",
+  "--channel",
   "--from",
   "--harness",
   "--mcp",
@@ -1261,6 +1305,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       "",
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
+      "  --channel [name]  Show or set the machine release channel (stable, preview)",
       "  --show            Show the selected section without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
@@ -1284,7 +1329,11 @@ export function renderCommandHelp(command: PublicCommand): string {
   };
   const examples: Partial<Record<Exclude<PublicCommand, "config">, string[]>> = {
     doctor: [`  ${invoke} doctor`, `  ${invoke} doctor --verbose`],
-    update: [`  ${invoke} update --check`, `  ${invoke} update --dry-run`],
+    update: [
+      `  ${invoke} update --check`,
+      `  ${invoke} update --dry-run`,
+      `  ${invoke} update --channel preview`,
+    ],
     use: [`  ${invoke} use 2.6.2`],
     uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`],
   };
@@ -1964,6 +2013,8 @@ type DelegateModule = {
 
 async function loadDelegate(tool: string): Promise<DelegateModule | null> {
   switch (tool) {
+    case TOOLS.attest:
+      return import("./aidlc-attest.ts");
     case TOOLS.audit:
       return import("./aidlc-audit.ts");
     case TOOLS.bolt:
@@ -2170,6 +2221,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     } else if (
       action.target === "audit-and-sensors" ||
       action.target === "log-subagent" ||
+      action.target === "plan-approval-guard" ||
+      action.target === "record-human-turn" ||
       action.target === "rebuild-stage-graph" ||
       action.target === "session-start" ||
       action.target === "continue-workflow" ||

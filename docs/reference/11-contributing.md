@@ -77,7 +77,7 @@ generated native projections, not copied from those sidecars.
 verification record for each binary. The generated flat directory is the
 contract consumed by the installer and `release packaging tooling`.
 
-The tag-triggered release workflow is deliberately candidate-preserving:
+The release workflow is deliberately candidate-preserving:
 verification and installer lint run first; target-native jobs produce binaries
 and evidence; `package-release.ts` runs once to create `release-candidate`; the
 staging job checksums and uploads it without signing; and Unix/Windows lifecycle
@@ -86,7 +86,22 @@ the exported bundle, validates the complete inventory, and uploads one
 `attested-release` artifact. `release` rechecks the tag and checksums, creates
 the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
-candidate. The full trust design is
+candidate.
+
+Stable releases start from pushed version tags in `.github/workflows/release.yml`.
+The isolated `.github/workflows/preview-release.yml` workflow schedules or
+manually dispatches preview builds from `main`, gates them through callable CI,
+stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
+never "latest". Previews publish at most once per UTC day. Scheduled and manual
+runs share `release-preview` workflow concurrency; each later run re-reads
+releases and skips if that day already has a published preview, even if `main`
+advanced. Unchanged sources also skip. Drafts and orphan tags do not consume
+the daily allowance: the planner can retry with an unoccupied id, whose `.N`
+counter does not authorize extra public releases that day.
+
+Stable and preview publication use the `release` and `preview` environments
+respectively and serialize independently. The full trust design, including
+how overnight publication timestamps count toward the daily cap, is
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Testing
@@ -214,7 +229,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference.
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist; plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.

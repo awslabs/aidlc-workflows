@@ -325,13 +325,25 @@ describe("t231 plugin list and sync handlers", () => {
 describe("t231 config and update lifecycle routing", () => {
   test("config reaches the dedicated delegate and does not create an intent record on source failure", () => {
     const project = emptyProject();
+    const machine = tempDir("aidlc-t231-empty-machine-");
+    // Keep this source failure independent of runtimes installed on the host.
+    const missingSource = join(project, "missing-runtime");
     const result = run(
-      [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config", "--project-dir", project],
+      [
+        BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config",
+        "--project-dir", project, "--from", missingSource,
+      ],
       project,
+      {
+        // This case needs a missing runtime, regardless of the developer's install.
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_RUNTIME_ROOT: "",
+      },
     );
 
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain("no installed harness runtime");
+    expect(result.status, result.out).toBe(4);
+    expect(result.stdout).toContain(`init source does not exist: ${missingSource}`);
     expect(existsSync(join(project, "aidlc", "spaces", "default", "intents"))).toBe(false);
   });
 

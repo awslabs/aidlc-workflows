@@ -45,6 +45,8 @@ import {
   maximalAttemptEvents,
   projectStateForDigest,
   readPlanApprovalReceipt,
+  removeField,
+  setOrInsertField,
   stateDigest,
   writeFileAtomic,
   writeBufferAtomic,
@@ -473,6 +475,55 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     });
   }
 
+  for (const [layout, initial] of [
+    ["with section separators", STATE],
+    ["without section separators", STATE.replace(/\n\n/g, "\n")],
+  ]) {
+    test(`Unit lifecycle mirror insertion and removal preserve authority ${layout}`, () => {
+      const fields = ["Active Unit", "Unit State", "Unit Pause Reason", "Unit Next Action"];
+      const idle = fields.reduce((state, field) => removeField(state, field), initial);
+      const digest = stateDigest(idle);
+      let state = idle;
+      const mirror = (field: string, value: string) => {
+        state = setOrInsertField(state, "## Runtime State", field, value);
+        expect(stateDigest(state)).toBe(digest);
+      };
+      // Repeated lifecycles accumulate separator lines in the serialized state.
+      for (let cycle = 0; cycle < 2; cycle++) {
+        mirror("Active Unit", "alpha");
+        mirror("Unit State", "in-progress");
+        mirror("Unit State", "paused");
+        mirror("Unit Pause Reason", "session ending");
+        mirror("Unit Next Action", "resume generation");
+        mirror("Unit State", "in-progress");
+        for (const field of ["Unit Pause Reason", "Unit Next Action", ...fields]) {
+          state = removeField(state, field);
+          expect(stateDigest(state)).toBe(digest);
+        }
+      }
+      expect(state).not.toBe(idle);
+    });
+
+    test(`park invalidates authority and unpark restores it ${layout}`, () => {
+      let state = initial;
+      const digest = stateDigest(initial);
+      for (let cycle = 0; cycle < 2; cycle++) {
+        for (const [field, value] of [
+          ["Parked", "2026-09-01T11:00:00Z"],
+          ["Parked At Stage", "code-generation"],
+        ]) {
+          state = setOrInsertField(state, "## Runtime State", field, value);
+          expect(stateDigest(state)).not.toBe(digest);
+        }
+        state = removeField(state, "Parked");
+        expect(stateDigest(state)).not.toBe(digest);
+        state = removeField(state, "Parked At Stage");
+        expect(stateDigest(state)).toBe(digest);
+      }
+      expect(state).not.toBe(initial);
+    });
+  }
+
   const visible: Array<[string, string]> = [
     ["Current Stage", STATE.replace("- **Current Stage**: code-generation", "- **Current Stage**: build-and-test")],
     ["a Stage Progress checkbox", STATE.replace("- [-] code-generation", "- [x] code-generation")],
@@ -483,6 +534,9 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     ["Revision Count", STATE.replace("- **Revision Count**: 0", "- **Revision Count**: 1")],
     ["In Progress", STATE.replace("- **In Progress**: code-generation", "- **In Progress**: build-and-test")],
     ["Project Type", STATE.replace("- **Project Type**: Brownfield", "- **Project Type**: Greenfield")],
+    ["spaces on a routing line", STATE.replace("- **Scope**: feature", "- **Scope**: feature  ")],
+    ["a space-only line", STATE.replace("## Runtime State\n", "## Runtime State\n \n")],
+    ["a tab-only line", STATE.replace("## Runtime State\n", "## Runtime State\n\t\n")],
     // The projection names the fields it ignores rather than skipping whole
     // sections, so content it has never seen still binds -- including content
     // appended at the very end of the file, after the last cache section.
@@ -506,11 +560,22 @@ describe("t330 (2) the state digest the active directive binds to", () => {
         "- **Languages**: TypeScript\u2028- **Status**: Completed",
       ),
     ],
+    [
+      "a routing field after U+2029 on an ignored field's line",
+      STATE.replace(
+        "- **Languages**: TypeScript",
+        "- **Languages**: TypeScript\u2029- **Status**: Completed",
+      ),
+    ],
     ["prose added inside the derived grid", STATE.replace("| alpha | - | [-] | [ ] |", "| alpha | - | [-] | [ ] |\nhand-written note")],
   ];
   for (const [name, mutated] of visible) {
     test(`bound: ${name}`, () => {
       expect(stateDigest(mutated)).not.toBe(baseline);
+      // A cache insertion and its separator must not conceal a substantive edit.
+      expect(stateDigest(setOrInsertField(
+        mutated, "## Runtime State", "Unit Pause Reason", "session ending",
+      ))).not.toBe(baseline);
     });
   }
 
@@ -528,6 +593,13 @@ describe("t330 (2) the state digest the active directive binds to", () => {
 
   test("an empty state file projects to an empty string", () => {
     expect(projectStateForDigest("")).toBe("");
+  });
+
+  test("empty separator lines carry no authority and projection is idempotent", () => {
+    const projected = projectStateForDigest(STATE);
+    expect(projected.split("\n")).not.toContain("");
+    expect(projectStateForDigest(`\n\n${STATE.replace(/\n/g, "\n\n")}\n\n`)).toBe(projected);
+    expect(projectStateForDigest(projected)).toBe(projected);
   });
 });
 

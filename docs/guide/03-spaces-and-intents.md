@@ -103,6 +103,13 @@ scope, repos, status}` — and a **record dir** holding that run's state, audit
 trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
 
+The row's `status` is the intent's lifecycle: `in-flight` from creation,
+`complete` once the last in-scope gate closes, or `archived` when you retire
+work you will not finish (`/aidlc intent archive <name>`). Archiving never
+deletes anything — the record dir and audit trail stay put, the default listing
+just stops showing the row (`/aidlc intent list --all` still does), and
+`/aidlc intent unarchive <name>` puts it back in flight.
+
 You never create an intent with a special command. The first time you describe
 work, the engine **auto-creates** an intent for you:
 

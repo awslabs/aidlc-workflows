@@ -24,6 +24,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
+import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -103,12 +104,15 @@ function gate(result: TargetResult, name: string): GateResult {
   return found as GateResult;
 }
 
+// The binary reports whatever id the build stamped: the source version or, in a
+// release run that sets AIDLC_BUILD_VERSION, a preview id.
+const VERSION_LINE = new RegExp(
+  `^aidlc\\s+(${VERSION_ID_PATTERN})(?:\\s+\\(runtime\\s+${VERSION_ID_PATTERN}\\))?$`,
+);
+
 function stampedVersion(stdout: string): string {
   const trimmed = stdout.trim();
-  const prefixed =
-    /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s+\(runtime\s+[0-9]+\.[0-9]+\.[0-9]+\))?$/
-      .exec(trimmed);
-  return prefixed?.[1] ?? trimmed;
+  return VERSION_LINE.exec(trimmed)?.[1] ?? trimmed;
 }
 
 describe("t238 build-binaries release builder", () => {

@@ -2,6 +2,11 @@
 //
 // covers: file:scripts/package.ts (emitPlugins), file:scripts/plugin-hooks-template/compose.ts
 //
+// Serial by design: two lock-wait cases hold the workspace lock for 5.5 s and
+// assert queued tool processes wait past the default budget, then finish within
+// TIMEOUT_MS. Three sibling workers composing plugins pushed both past 60 s, so
+// this file runs alone (`.serial.`) rather than beside them.
+//
 // WHAT. A plugin authored in plugins/<name>/ is emitted by the packager as a
 // per-harness host plugin (dist/plugins/<name>/<harness>/), and its compose hook
 // merges the plugin into a base install: new stages copied, the contribution

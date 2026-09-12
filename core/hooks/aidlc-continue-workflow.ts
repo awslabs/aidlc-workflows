@@ -809,9 +809,46 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     return false; // unreadable transcript: fall through to the cap
   }
   const lines = raw.split("\n");
-  // Parse to a flat sequence of {role, engineCall} events in file order.
-  type Turn = { role: "user" | "assistant"; engineCall: boolean; humanPrompt: boolean };
+  // Keep tool calls separate, including calls in the same assistant message.
+  // A terminal result for one call must never erase another call's engagement.
+  type Turn = {
+    role: "user" | "assistant";
+    engineCall: boolean;
+    humanPrompt: boolean;
+    call?: { id: string | null; name: string; input: unknown };
+    result?: { id: string | null; output: unknown; failed: boolean };
+  };
   const turns: Turn[] = [];
+  const engineCallIds = new Set<string>();
+  const callId = (value: unknown): string | null =>
+    typeof value === "string" && value.trim().length > 0 ? value : null;
+  const recordCall = (id: unknown, name: string, input: unknown): void => {
+    const engineCall = isEngineToolCall(name, input);
+    const normalizedId = callId(id);
+    if (engineCall && normalizedId !== null) engineCallIds.add(normalizedId);
+    turns.push({
+      role: "assistant",
+      engineCall,
+      humanPrompt: false,
+      // All IDs participate in duplicate detection; only engine inputs are
+      // needed for result validation.
+      call: { id: normalizedId, name, input: engineCall ? input : undefined },
+    });
+  };
+  const recordResult = (id: unknown, output: unknown, failed: unknown): void => {
+    const normalizedId = callId(id);
+    turns.push({
+      role: "assistant",
+      engineCall: false,
+      humanPrompt: false,
+      result: {
+        id: normalizedId,
+        // Do not retain large Read/Task outputs or results preceding their call.
+        output: normalizedId !== null && engineCallIds.has(normalizedId) ? output : undefined,
+        failed: failed !== undefined && failed !== false,
+      },
+    });
+  };
   for (const line of lines) {
     if (line.trim().length === 0) continue;
     let o: unknown;
@@ -843,7 +880,15 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const isToolResult =
           Array.isArray(content) &&
           content.some((x) => (x as Record<string, unknown>)?.type === "tool_result");
-        if (isToolResult) continue; // a tool_result is not a human prompt
+        if (isToolResult) {
+          for (const block of content) {
+            const result = block as Record<string, unknown>;
+            if (result?.type === "tool_result") {
+              recordResult(result.tool_use_id, result.content, result.is_error);
+            }
+          }
+          continue; // a tool_result is not a human prompt
+        }
         // Defence-in-depth: the hook's continuation text is injected as a user
         // turn; exclude it by content even if a future build drops `isMeta`.
         const asText =
@@ -865,15 +910,17 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
             content.some((x) => (x as Record<string, unknown>)?.type === "text"));
         if (isHuman) turns.push({ role: "user", engineCall: false, humanPrompt: true });
       } else if (type === "assistant" && role === "assistant" && Array.isArray(content)) {
-        let engineCall = false;
+        let hasToolCall = false;
         for (const block of content) {
           const b = block as Record<string, unknown>;
-          if (b?.type === "tool_use" && isEngineToolCall(String(b.name ?? ""), b.input)) {
-            engineCall = true;
-            break;
+          if (b?.type === "tool_use") {
+            recordCall(b.id, String(b.name ?? ""), b.input);
+            hasToolCall = true;
           }
         }
-        turns.push({ role: "assistant", engineCall, humanPrompt: false });
+        if (!hasToolCall) {
+          turns.push({ role: "assistant", engineCall: false, humanPrompt: false });
+        }
       }
     } else {
       // Codex rollout JSONL: {type:"response_item", payload:{type, role, content,
@@ -932,11 +979,13 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         if (typeof parsedArgs.command !== "string") {
           parsedArgs = { ...parsedArgs, command: typeof args === "string" ? args : JSON.stringify(args) };
         }
-        const engineCall = isEngineToolCall(
+        recordCall(
+          payload.call_id,
           /^(bash|shell|execute_bash|local_shell_call)$/i.test(name) ? "Bash" : name,
           parsedArgs,
         );
-        turns.push({ role: "assistant", engineCall, humanPrompt: false });
+      } else if (ptype === "function_call_output") {
+        recordResult(payload.call_id, payload.output, payload.is_error);
       }
     }
   }
@@ -951,10 +1000,45 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
   }
   if (lastHumanIdx === -1) return false; // no human prompt found: cannot confirm chat
 
-  // Any engine call AFTER that prompt means the conductor engaged the workflow;
-  // a mid-loop bail must still be nudged. Zero engine calls -> conversational.
+  // Correlate across the entire transcript so reused IDs are never accepted as
+  // proof. The matching result must follow its call in the current human turn.
+  const callsById = new Map<string, number[]>();
+  const resultsById = new Map<string, number[]>();
+  for (let i = 0; i < turns.length; i++) {
+    const call = turns[i].call;
+    if (call?.id) {
+      const indices = callsById.get(call.id) ?? [];
+      indices.push(i);
+      callsById.set(call.id, indices);
+    }
+    const result = turns[i].result;
+    if (result?.id) {
+      const indices = resultsById.get(result.id) ?? [];
+      indices.push(i);
+      resultsById.set(result.id, indices);
+    }
+  }
+
+  // A config modifier can start a workflow or dispatch a terminal utility.
+  // Only that call's validated terminal result can resolve the ambiguity;
+  // every other engine call after the human prompt still requires continuation.
   for (let i = lastHumanIdx + 1; i < turns.length; i++) {
-    if (turns[i].engineCall) return false;
+    const turn = turns[i];
+    if (!turn.engineCall) continue;
+    const call = turn.call;
+    if (call?.id && callsById.get(call.id)?.length === 1) {
+      const results = resultsById.get(call.id);
+      if (results?.length === 1 && results[0] > i) {
+        const result = turns[results[0]].result;
+        if (
+          result && !result.failed &&
+          !isEngineToolCall(call.name, call.input, result.output)
+        ) {
+          continue;
+        }
+      }
+    }
+    return false;
   }
   return true;
 }

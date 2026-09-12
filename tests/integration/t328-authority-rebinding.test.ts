@@ -39,6 +39,7 @@ import {
   artifactFilename,
   hookChildEnv,
   sessionsDir,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -561,13 +562,19 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       p.next({}, ["--resume"]);
     }],
     ["parking and resuming", (p) => {
-      spawn([BUN, p.tool("orchestrate"), "park", "--project-dir", p.dir], p.env, p.dir);
-      spawn(
+      const beforeDigest = stateDigest(readFileSync(p.statePath, "utf-8"));
+      const parked = spawn([BUN, p.tool("orchestrate"), "park", "--project-dir", p.dir], p.env, p.dir);
+      expect(parked.code, parked.stderr).toBe(0);
+      expect(stateDigest(readFileSync(p.statePath, "utf-8"))).not.toBe(beforeDigest);
+      const unparked = spawn(
         [BUN, p.tool("state"), "unpark", "--project-dir", p.dir],
         { ...p.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
         p.dir,
       );
-      p.next({}, ["--resume"]);
+      expect(unparked.code, unparked.stderr).toBe(0);
+      expect(stateDigest(readFileSync(p.statePath, "utf-8"))).toBe(beforeDigest);
+      const resumed = p.next({}, ["--resume"]);
+      expect(resumed.code, resumed.stderr).toBe(0);
     }],
     ["a new session", (p) => {
       spawn(
@@ -960,6 +967,8 @@ describe("t328 (5) the per-Unit walk", () => {
     const target = { unit: directive.unit as string };
     const presentation = presentPlan(p, target);
     expect(answer(p, presentation, "Approve Plan").code).toBe(0);
+    const beforeDigest = stateDigest(readFileSync(p.statePath, "utf-8"));
+    const beforeAuthority = authority(p, target);
 
     const started = spawn(
       [
@@ -978,6 +987,8 @@ describe("t328 (5) the per-Unit walk", () => {
       p.dir,
     );
     expect(started.code, started.stderr).toBe(0);
+    expect(stateDigest(readFileSync(p.statePath, "utf-8"))).toBe(beforeDigest);
+    expect(authority(p, target)).toEqual(beforeAuthority);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
     const begin = spawn(
       [BUN, p.tool("testing-posture"), "begin", "--unit", target.unit as string, "--project-dir", p.dir],
@@ -985,6 +996,23 @@ describe("t328 (5) the per-Unit walk", () => {
       p.dir,
     );
     expect(begin.code, begin.stderr).toBe(0);
+    const brief = spawn(
+      [BUN, p.tool("testing-posture"), "brief", "--unit", target.unit as string, "--project-dir", p.dir],
+      p.env,
+      p.dir,
+    );
+    expect(brief.code, brief.stderr).toBe(0);
+    const dispatch = spawn(
+      [BUN, p.hook("plan-approval-guard")],
+      p.env,
+      p.dir,
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief.stdout },
+      }),
+    );
+    expect(dispatch.code, dispatch.stderr).toBe(0);
   }, 180000);
 
   test("after a Unit is paused or completed, the engine and the Stop hook agree it is not active", async () => {
@@ -994,6 +1022,7 @@ describe("t328 (5) the per-Unit walk", () => {
     const target = { unit };
     const presentation = presentPlan(p, target);
     expect(answer(p, presentation, "Approve Plan").code).toBe(0);
+    const beforeDigest = stateDigest(readFileSync(p.statePath, "utf-8"));
     const unitVerb = (verb: string, extra: string[] = []) =>
       spawn(
         [
@@ -1017,6 +1046,7 @@ describe("t328 (5) the per-Unit walk", () => {
       unitVerb("pause", ["--reason", "session ending", "--next-action", "resume generation"])
         .code,
     ).toBe(0);
+    expect(stateDigest(readFileSync(p.statePath, "utf-8"))).toBe(beforeDigest);
 
     // The read-only route and the Stop hook must give the same answer. A hook that
     // re-fed the run-stage here would be telling the conductor to continue work the
@@ -1031,6 +1061,7 @@ describe("t328 (5) the per-Unit walk", () => {
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
 
     expect(unitVerb("resume").code).toBe(0);
+    expect(stateDigest(readFileSync(p.statePath, "utf-8"))).toBe(beforeDigest);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
 
     for (const name of ["code-summary", "traceability"]) {
@@ -1040,6 +1071,7 @@ describe("t328 (5) the per-Unit walk", () => {
       );
     }
     expect(unitVerb("complete").code).toBe(0);
+    expect(stateDigest(readFileSync(p.statePath, "utf-8"))).toBe(beforeDigest);
     const afterComplete = JSON.parse(p.next(p.probeEnv).stdout.trim()) as Record<
       string,
       unknown

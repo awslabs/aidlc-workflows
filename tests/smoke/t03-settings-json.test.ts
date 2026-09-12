@@ -123,7 +123,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
 describe("statusLine [.sh test 10]", () => {
   test("statusLine.command routes through the Bun copy-channel dispatcher", () => {
     const cmd = settings.statusLine?.command ?? "";
-    expect(cmd).toBe("bun .claude/tools/aidlc.ts engine statusline");
+    expect(cmd).toBe('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline');
   });
 });
 

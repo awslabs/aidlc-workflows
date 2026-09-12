@@ -47,7 +47,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { auditLockDir } from "../../core/tools/aidlc-lib.ts";
+import { auditLockDir, stateDigest } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -316,7 +316,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       status: "in-flight",
     }])}\n`);
     const state = "- **Current Stage**: requirements-analysis\n";
-    const stateSha256 = createHash("sha256").update(state).digest("hex");
+    const stateSha256 = stateDigest(state);
     writeFileSync(join(recordDir, "aidlc-state.md"), state);
     writeFileSync(join(recordDir, ".aidlc-active-directive.json"), `${JSON.stringify({
       version: 2,

@@ -696,6 +696,13 @@ the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
 
+SessionStart retires each visited PID's previous session before checking its
+process identity. Until that check succeeds, a record with `sessionId: null`
+stops ancestry fallback at that PID. A failed or timed-out refresh therefore
+cannot restore the previous session when process inspection recovers; explicit
+payload identity, environment identity, and the shared-cursor fallback still
+apply. A later successful SessionStart replaces the null record.
+
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
 `ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
@@ -751,7 +758,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 95-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 98-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

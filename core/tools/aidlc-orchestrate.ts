@@ -137,6 +137,7 @@ import {
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
+  isAutonomousConstructionGate,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -149,6 +150,7 @@ import {
   isPerUnitStage,
   isReadOnlyEngineProbe,
   isRegularFile,
+  isArchivedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -1830,6 +1832,7 @@ function composeDispatchDirective(
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${flags.intent}".` : "."),
+      "This returned directive has selected the composer path. The named-stage fast path is available only BEFORE calling next compose, even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
@@ -1906,7 +1909,12 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  const intents = listIntents(projectDir, space, selection.intent);
+  // Archived intents are retired work: they never block creation and are never
+  // offered as a pick (the listing shows them only under --all). A space whose
+  // every record is archived therefore reads as zero intents here.
+  const intents = listIntents(projectDir, space, selection.intent).filter(
+    (intent) => !isArchivedIntent(intent),
+  );
   if (intents.length === 0) return null; // zero intents → creation is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
@@ -2428,10 +2436,17 @@ function scopeDefaultSkeletonStance(scope: string): SkeletonStance {
 // Both skeleton-on AND skeleton-off present a gate at Bolt 1: skeleton-on forces
 // an always-gate "regardless of Construction Autonomy Mode" (SKILL.md Step 5 /
 // "When skeleton-on" §1); skeleton-off runs Bolt 1 "as a regular Bolt with the
-// standard batch-gate path", and since `Construction Autonomy Mode` is `unset`
-// (treated as `gated`) until the post-Bolt-1 ladder prompt sets it, that batch
-// gate IS presented (it is only skipped when `autonomous`, which cannot be true
-// before Bolt 1 ships). The stance changes the CEREMONY (solo + always-gate +
+// standard batch-gate path". NOTE the NODE gate this function resolves is not
+// the Bolt-level gate: this one is the stage approval gate for the skeleton-gate
+// stage (the first in-scope Construction EXECUTE stage — a design stage such as
+// functional-design in scopes that run one, code-generation in scopes that do
+// not), and it stays `true` in every stance so that stage is always reviewed.
+// The autonomy-governed gates are the REMAINING Construction stage gates, and
+// the human can now grant autonomy ON DEMAND at any point in Construction (see
+// aidlc-common/protocols/stage-protocol-construction.md § Autonomy grant), so an
+// `autonomous` grant can predate the first of them. The earlier rationale here —
+// that autonomy "cannot be true before Bolt 1 ships" — no longer holds and must
+// not be relied on. The stance changes the CEREMONY (solo + always-gate +
 // ladder prompt vs regular Bolt + batch gate) — orchestration the conductor
 // runs — not whether a gate is presented at Bolt 1. The gate axis is on for all
 // construction work (only bootstrap init stages auto-proceed; gate-axis ≠
@@ -2452,8 +2467,9 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
       // skeleton-on: always-gate at Bolt 1.
       return true;
     case "off":
-      // skeleton-off: regular Bolt; the standard gate is still presented at
-      // Bolt 1 (autonomy is gated until the post-Bolt-1 ladder sets it).
+      // skeleton-off: regular Bolt. This NODE gate (the skeleton-gate stage's
+      // own approval gate) is still presented — the autonomy-governed gates are
+      // the REMAINING Construction stage gates.
       return true;
     case "scope-dependent": {
       // Fall back to the active scope's metadata to SELECT the ceremony.
@@ -4297,6 +4313,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       return;
     }
   }
+  // Archived is terminal for routing, including scoped Unit checkouts. Keep
+  // this before Unit jump/park handling so every next shape returns the same
+  // archived result instead of reviving or locally parking retired work.
+  if (
+    stateContent &&
+    !flags.newIntent &&
+    getField(stateContent, "Status") === "Archived"
+  ) {
+    const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+    emit({
+      kind: "done",
+      reason:
+        `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
+        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+    });
+    return;
+  }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
@@ -4681,8 +4715,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
-  //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
-  //     is within the matcher's word bound): a one-line confirm naming the
+  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input or an
+  //     affirmative high-specificity match in long prose): a one-line confirm naming the
   //     MATCHED scope, with "name another scope" and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
@@ -5147,14 +5181,23 @@ function applySettledSwarmShape(
 //
 // On any trigger miss it returns false and emits nothing, so the caller falls
 // back to the normal run-stage emit (which keeps its computed gate, including the
-// skeleton round-trip sentinel). The skeleton Bolt 1 is protected two ways:
-// temporally (autonomy stays unset until the ladder fires after Bolt 1 ships) AND
-// structurally: the isSkeletonGateStage guard below refuses to swarm the
-// walking-skeleton gate stage regardless of autonomy state. The structural guard
-// matters for scopes where the per-unit build stage (code-generation) IS the
-// skeleton-gate stage (poc / bugfix / security-patch): there the skeleton's
-// always-gated approval must never be bypassed by a stray autonomous setting, so
-// the engine enforces it rather than trusting the conductor's ordering.
+// skeleton round-trip sentinel). The skeleton Bolt 1 is protected STRUCTURALLY:
+// the isSkeletonGateStage guard below refuses to swarm the walking-skeleton gate
+// stage regardless of autonomy state. That structural guard is now the only
+// protection, and it is sufficient: it matters for scopes where the per-unit
+// build stage (code-generation) IS the skeleton-gate stage (poc / bugfix /
+// security-patch), where the skeleton's always-gated approval must never be
+// bypassed by a stray autonomous setting, so the engine enforces it rather than
+// trusting the conductor's ordering.
+//
+// It used to ALSO be protected temporally ("autonomy stays unset until the
+// ladder fires after Bolt 1 ships"). That premise no longer holds: the human can
+// grant autonomy on demand at any point in Construction, so an autonomous grant
+// can predate the first Unit-building stage by design (see
+// aidlc-common/protocols/stage-protocol-construction.md § Autonomy grant).
+// Scopes whose first Construction EXECUTE stage is a design stage therefore DO
+// swarm code-generation from the first Unit; scopes where code-generation is
+// itself the skeleton-gate stage still cannot, via the structural guard.
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -7919,10 +7962,12 @@ function checkPipelineLinkEvidence(
     ok: false,
     message:
       `${refusal}: ${missing.join(", ")}. ` +
-      `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
+      `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
+      `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
+      `Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ` +
+      `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
       `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}` +
-      `${singleRun ? " --single" : ""}\`. ` +
-      `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
+      `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`,
   };
 }
 
@@ -8283,6 +8328,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit(errorDirective(stale));
         return;
       }
+      if (getField(sc, "Status") === "Archived") {
+        const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+        emit(errorDirective(
+          `Intent "${archivedIntent}" is archived, so report cannot mutate its workflow state. ` +
+            `Bring it back with /aidlc intent unarchive ${archivedIntent}.`,
+        ));
+        return;
+      }
     }
   }
 
@@ -8506,7 +8559,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const protectedTeamHumanGate =
         stageCheckbox.state !== "completed" &&
-        readAutonomyMode(stateContent) !== "autonomous" &&
         process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
@@ -8618,7 +8670,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const protectedHumanGate =
     isGated &&
     stageCheckbox.state !== "completed" &&
-    readAutonomyMode(stateContent) !== "autonomous" &&
+    !isAutonomousConstructionGate(stateContent, node) &&
     resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
 
   if (flags.overrideBlockingSensors) {
@@ -8787,6 +8839,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         printDirective(
           revalidatingOpenGate
             ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+            : flags.result === "rejected" && node.mode === "pipeline"
+            ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
+              `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
+              `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
+              `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
+              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.`
             : `Recorded ${flags.result} for "${slug}".`,
         ),
         changeNoticesFromToolOutput(res.stdout),

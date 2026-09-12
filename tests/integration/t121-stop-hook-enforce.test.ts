@@ -100,7 +100,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -646,7 +646,9 @@ function seedTranscript(
 type TranscriptEntry =
   | { kind: "human"; text: string }
   | { kind: "text" }
-  | { kind: "bash"; command: string }
+  | { kind: "bash"; command: string; id?: string }
+  | { kind: "bashBatch"; calls: Array<{ command: string; id: string }> }
+  | { kind: "result"; id: string; output: unknown; failed?: boolean }
   | { kind: "meta"; text: string }
   | { kind: "userText"; text: string };
 
@@ -698,10 +700,30 @@ function seedTranscriptEntries(
               type: "assistant",
               message: {
                 role: "assistant",
-                content: [{ type: "tool_use", name: "Bash", input: { command: e.command } }],
+                content: [{ type: "tool_use", ...(e.id ? { id: e.id } : {}), name: "Bash", input: { command: e.command } }],
               },
             }),
           );
+          break;
+        case "bashBatch":
+          lines.push(JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: e.calls.map((call) => ({
+                type: "tool_use", id: call.id, name: "Bash", input: { command: call.command },
+              })),
+            },
+          }));
+          break;
+        case "result":
+          lines.push(JSON.stringify({
+            type: "user",
+            message: {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: e.id, content: e.output, is_error: e.failed ?? false }],
+            },
+          }));
           break;
       }
     } else {
@@ -752,11 +774,29 @@ function seedTranscriptEntries(
               type: "response_item",
               payload: {
                 type: "function_call",
+                ...(e.id ? { call_id: e.id } : {}),
                 name: "Bash",
                 arguments: JSON.stringify({ command: e.command }),
               },
             }),
           );
+          break;
+        case "bashBatch":
+          for (const call of e.calls) {
+            lines.push(JSON.stringify({
+              type: "response_item",
+              payload: {
+                type: "function_call", call_id: call.id, name: "Bash",
+                arguments: JSON.stringify({ command: call.command }),
+              },
+            }));
+          }
+          break;
+        case "result":
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: { type: "function_call_output", call_id: e.id, output: e.output, is_error: e.failed ?? false },
+          }));
           break;
       }
     }
@@ -765,6 +805,23 @@ function seedTranscriptEntries(
   const path = join(proj, name);
   writeFileSync(path, `${lines.join("\n")}\n`, "utf-8");
   return path;
+}
+
+function terminalDepthDispatch(proj: string): string {
+  // The ordinary hook fixtures deliberately omit engine-only metadata; the
+  // real dispatcher requires a current state version before reading modifiers.
+  const statePath = seededStateFile(proj);
+  writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
+  const result = spawnSync(BUN, [
+    join(dirname(UTILITY_TS), "aidlc-orchestrate.ts"),
+    "next", "--depth", "extreme", "--project-dir", proj,
+  ], { encoding: "utf-8", env: process.env });
+  expect(result.status, result.stderr).toBe(0);
+  const directive = JSON.parse(result.stdout);
+  expect(directive.kind, result.stdout).toBe("print");
+  expect(directive.message).toContain("config set depth extreme");
+  expect(directive.message).toContain("then print its output verbatim and stop.");
+  return result.stdout;
 }
 
 /**
@@ -1630,9 +1687,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       ),
     ) as { unit?: string; state_sha256?: string };
     expect(syncedMarker.unit).toBe("alpha");
-    expect(syncedMarker.state_sha256).toBe(
-      createHash("sha256").update(syncedState, "utf-8").digest("hex"),
-    );
+    expect(syncedMarker.state_sha256).toBe(stateDigest(syncedState));
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
@@ -2442,6 +2497,118 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe(""); // allowed: read-only query is not engagement
   }, 30000);
 
+  test("(h) terminal workspace navigation through next allows the stop in both transcript formats", () => {
+    for (const format of ["claude", "codex"] as const) {
+      const proj = makeProject();
+      seedActive(proj, "intent-capture");
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "/aidlc space-create teamB" },
+        {
+          kind: "bash",
+          command: "bun .claude/tools/aidlc.ts engine orchestrate next space-create teamB",
+        },
+        {
+          kind: "bash",
+          command: "bun .claude/tools/aidlc.ts engine space create teamB",
+        },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc, format).toBe(0);
+      expect(r.out, format).toBe("");
+    }
+  }, 30000);
+
+  const depthNext = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+  const configSet = "bun .claude/tools/aidlc.ts engine config set depth extreme";
+  const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";
+  const depthCall: TranscriptEntry = { kind: "bash", id: "depth-call", command: depthNext };
+  const depthResult = (output: unknown): TranscriptEntry =>
+    ({ kind: "result", id: "depth-call", output });
+
+  test("(h) a matched terminal config dispatch allows stopping after its utility refuses the value", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const textArray of [false, true]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const output = terminalDepthDispatch(proj);
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc --depth extreme" },
+          depthCall,
+          depthResult(textArray ? [{ type: "text", text: output }] : output),
+          { kind: "bash", id: "config-call", command: configSet },
+          { kind: "result", id: "config-call", output: "Invalid depth: extreme", failed: true },
+        ]);
+        const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
+        expect(result.rc, format).toBe(0);
+        expect(result.out, format).toBe("");
+      }
+    }
+  }, 30000);
+
+  const configProofCases: Array<{
+    label: string;
+    entries: (output: string) => TranscriptEntry[];
+  }> = [
+    { label: "missing result", entries: () => [depthCall] },
+    { label: "mismatched result ID", entries: (output) => [depthCall, { kind: "result", id: "other-call", output }] },
+    { label: "malformed result", entries: () => [depthCall, depthResult("{broken")] },
+    { label: "real workflow result", entries: () => [depthCall, depthResult(JSON.stringify({ kind: "run-stage", stage: "intent-capture" }))] },
+    { label: "nonterminal print", entries: (output) => [depthCall, depthResult(JSON.stringify({ ...JSON.parse(output), continue: true }))] },
+    { label: "different config operation", entries: (output) => [depthCall, depthResult(output.replace("depth extreme", "depth minimal"))] },
+    { label: "failed dispatch", entries: (output) => [depthCall, { kind: "result", id: "depth-call", output, failed: true }] },
+    { label: "bare workflow next", entries: (output) => [{ kind: "bash", id: "depth-call", command: workflowNext }, depthResult(output)] },
+    { label: "chained workflow call", entries: (output) => [{ kind: "bash", id: "depth-call", command: `${depthNext} && ${workflowNext}` }, depthResult(output)] },
+    { label: "opaque wrapper", entries: (output) => [{ kind: "bash", id: "depth-call", command: `sh -c '${workflowNext}' aidlc next --depth extreme` }, depthResult(output)] },
+    { label: "another engaged row", entries: (output) => [depthCall, depthResult(output), { kind: "bash", id: "workflow-call", command: workflowNext }] },
+    {
+      label: "parallel workflow call in the same assistant row",
+      entries: (output) => [
+        { kind: "bashBatch", calls: [{ id: "depth-call", command: depthNext }, { id: "workflow-call", command: workflowNext }] },
+        depthResult(output),
+      ],
+    },
+    {
+      label: "earlier workflow call in the same assistant row",
+      entries: (output) => [
+        { kind: "bashBatch", calls: [{ id: "workflow-call", command: workflowNext }, { id: "depth-call", command: depthNext }] },
+        depthResult(output),
+      ],
+    },
+    { label: "duplicate tool-use ID", entries: (output) => [depthCall, depthCall, depthResult(output)] },
+    { label: "duplicate result ID", entries: (output) => [depthCall, depthResult(output), depthResult(output)] },
+    { label: "result preceding its call", entries: (output) => [depthResult(output), depthCall] },
+    {
+      label: "result from an earlier human turn",
+      entries: (output) => [
+        { kind: "bash", id: "old-call", command: depthNext },
+        { kind: "human", text: "continue this workflow" },
+        depthCall,
+        { kind: "result", id: "old-call", output },
+      ],
+    },
+  ];
+  for (const scenario of configProofCases) {
+    test(`(h) terminal config proof stays conservative: ${scenario.label}`, () => {
+      for (const format of ["claude", "codex"] as const) {
+        const proj = makeProject();
+        seedActive(proj);
+        const output = terminalDepthDispatch(proj);
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc --depth extreme" },
+          ...scenario.entries(output),
+        ]);
+        const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
+        expect(result.rc, format).toBe(0);
+        expect(JSON.parse(result.out).decision, format).toBe("block");
+      }
+    }, 30000);
+  }
+
   test("(h) chat + `aidlc-utility status` after the human prompt allows the stop", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
@@ -2458,6 +2625,32 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
+  }, 30000);
+
+  test("(h) workspace navigation ends without starting the pending workflow", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const entry of [
+        "aidlc engine orchestrate",
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "bun .claude/tools/aidlc-orchestrate.ts",
+      ]) {
+        const proj = makeProject();
+        seedActive(proj, "intent-capture");
+        const transcript = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc space-create teamB" },
+          { kind: "bash", command: `${entry} next space-create teamB` },
+          { kind: "bash", command: "bun .claude/tools/aidlc.ts engine space create teamB" },
+          { kind: "text" },
+        ]);
+        const result = runHook(
+          proj,
+          JSON.stringify({ stop_hook_active: false, transcript_path: transcript }),
+          "run-stage",
+        );
+        expect(result.rc, result.out).toBe(0);
+        expect(result.out).toBe("");
+      }
+    }
   }, 30000);
 
   test("(h) chat + `aidlc-orchestrate --doctor` / `--help` / `--version` each allow the stop", () => {

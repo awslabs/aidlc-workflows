@@ -185,7 +185,7 @@ The statusline is configured in `.claude/settings.json`:
 ```json
 "statusLine": {
   "type": "command",
-  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
+  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts\" engine statusline"
 }
 ```
 

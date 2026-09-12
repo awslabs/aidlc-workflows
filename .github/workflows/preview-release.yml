@@ -1,0 +1,732 @@
+name: Preview Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+# Scheduled and manual preview runs share one repository-wide slot. A later run
+# observes the prior publication before allocating another retry-safe build id.
+concurrency:
+  group: release-preview
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
+      skip: ${{ steps.plan.outputs.skip == 'true' }}
+      preview_version: ${{ steps.plan.outputs.preview_version }}
+      preview_plan: ${{ steps.plan.outputs.preview_plan }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Validate preview source
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            schedule | workflow_dispatch) ;;
+            *) exit 1 ;;
+          esac
+          test "$GITHUB_REF" = "refs/heads/main"
+          git fetch --no-tags origin main
+          # A queued run may no longer be the tip. Let it observe today's
+          # publication and skip before requiring current main for a build.
+          source_sha="$GITHUB_SHA"
+          test "$(git rev-parse HEAD^{commit})" = "$source_sha"
+          git merge-base --is-ancestor "$source_sha" origin/main
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Plan preview publication
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHORIZED_SHA: ${{ steps.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/aidlc-preview-plan.json"
+          bun scripts/plan-preview-release.ts \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-digest "$AUTHORIZED_SHA" \
+            --output "$plan"
+          if [ "$(jq -r 'type' "$plan")" != null ]; then
+            test "$AUTHORIZED_SHA" = "$(git rev-parse origin/main^{commit})"
+          fi
+          {
+            printf 'preview_plan='
+            jq -c . "$plan"
+          } >> "$GITHUB_OUTPUT"
+      - name: Require immutable preview releases
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = true
+
+  gate:
+    needs: validate
+    if: needs.validate.outputs.skip != 'true'
+    uses: ./.github/workflows/ci.yml
+
+  verify:
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # Regenerate the projections from core/ + harness/ so the release gate
+      # tests CI-built bytes; the --check inside `bun run check` then acts as a
+      # generator-determinism guard rather than a staleness check.
+      - run: bun scripts/package.ts
+      - run: bun run check
+      - name: ShellCheck installer
+        run: shellcheck scripts/install.sh
+
+  test_smoke:
+    name: Release tests (smoke)
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - run: bun tests/run-tests.ts --smoke
+
+  test_unit:
+    name: Release tests (unit shard ${{ matrix.shard }}/4)
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # Each shard owns an independent checkout. Tests remain serial inside
+      # the shard so package regeneration cannot race dist/ readers.
+      - run: bun scripts/package.ts
+      - name: Install zsh (t244 completion syntax check)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+      - run: bun tests/run-tests.ts --unit --shard ${{ matrix.shard }}/4
+
+  test_deep:
+    name: Release tests (integration + e2e, deterministic)
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - run: bun tests/run-tests.ts --integration --e2e --no-llm --parallel 8
+
+  test:
+    name: Release tests
+    if: ${{ !cancelled() && needs.validate.outputs.skip != 'true' }}
+    needs: [validate, test_smoke, test_unit, test_deep]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every release test tier
+        env:
+          SMOKE_RESULT: ${{ needs.test_smoke.result }}
+          UNIT_RESULT: ${{ needs.test_unit.result }}
+          DEEP_RESULT: ${{ needs.test_deep.result }}
+        run: |
+          test "$SMOKE_RESULT" = "success"
+          test "$UNIT_RESULT" = "success"
+          test "$DEEP_RESULT" = "success"
+
+  native-smoke:
+    needs: [validate, verify, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # t238 builds the native binary from dist-release/; regenerate first so
+      # the smoke proves CI-built bytes on every OS in the matrix.
+      - run: bun scripts/package.ts
+        env:
+          AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
+      - run: bun test tests/unit/t238-build-binaries.test.ts
+        env:
+          AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
+      - if: runner.os == 'Windows'
+        run: bun test tests/unit/t244-install-management.test.ts -t "t244 Windows and completion release surfaces"
+      - name: PSScriptAnalyzer installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $findings = @(Invoke-ScriptAnalyzer -Path scripts/install.ps1)
+          if ($findings.Count -gt 0) {
+            $findings | Format-Table -AutoSize | Out-String | Write-Error
+            exit 1
+          }
+
+  build:
+    needs: [validate, native-smoke]
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: bun-linux-x64
+            directory: linux-x64
+          - runner: ubuntu-latest
+            target: bun-linux-x64-musl
+            directory: linux-x64-musl
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            directory: linux-arm64
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64-musl
+            directory: linux-arm64-musl
+          - runner: macos-15-intel
+            target: bun-darwin-x64
+            directory: darwin-x64
+          - runner: macos-15
+            target: bun-darwin-arm64
+            directory: darwin-arm64
+          - runner: windows-latest
+            target: bun-windows-x64
+            directory: windows-x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # Build from projections regenerated on this runner, never from the
+      # committed trees; the --check that follows is the generator-determinism
+      # guard (regen twice, byte-compare), not a staleness check.
+      - run: bun scripts/package.ts
+      - run: bun scripts/package.ts --check
+      - run: bun scripts/build-binaries.ts --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            build/binaries/${{ matrix.directory }}
+            build/binaries/build-results-${{ matrix.directory }}.json
+
+  musl-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: bun-linux-x64-musl
+            directory: linux-x64-musl
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64-musl
+            directory: linux-arm64-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: build/binaries
+      - run: chmod +x "build/binaries/${TARGET_DIR}/aidlc"
+        env:
+          TARGET_DIR: ${{ matrix.directory }}
+      - run: docker run --rm -v "$PWD:/work:ro" alpine:3.20 sh -c "apk add libgcc libstdc++ >/dev/null && /work/build/binaries/${TARGET_DIR}/aidlc version"
+        env:
+          TARGET_DIR: ${{ matrix.directory }}
+
+  stage-release:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AIDLC_BUILD_VERSION: ${{ needs.validate.outputs.preview_version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: binary-*
+          path: build/binaries
+          merge-multiple: true
+      - run: bun scripts/package.ts
+      - run: bun scripts/package-release.ts --require-release-matrix
+        env:
+          AIDLC_RELEASE_SOURCE_DIGEST: ${{ needs.validate.outputs.sha }}
+      - name: Re-verify staged release checksums
+        working-directory: build/release
+        run: sha256sum -c checksums.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate
+          path: build/release
+
+  windows-lifecycle:
+    needs: stage-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      - name: Install, route through stable shim, and uninstall
+        shell: pwsh
+        run: |
+          $env:AIDLC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP 'aidlc-machine'
+          $env:AIDLC_BIN_DIR = Join-Path $env:AIDLC_INSTALL_ROOT 'bin'
+          $env:AIDLC_ALLOW_ADMIN_INSTALL = '1'
+          $releaseRoot = (Resolve-Path ./build/release).Path
+          Set-Content -LiteralPath (Join-Path $releaseRoot 'aidlc-release.intoto.jsonl') `
+            -Value 'aidlc-lifecycle-provenance-fixture'
+          $ghFixture = Join-Path $env:RUNNER_TEMP 'aidlc-gh.ps1'
+          $env:AIDLC_TEST_GH_MARKER = Join-Path $env:RUNNER_TEMP 'aidlc-gh-verified'
+          $env:AIDLC_TEST_GH_REPOSITORY = 'awslabs/aidlc-workflows'
+          $env:AIDLC_TEST_GH_WORKFLOW = 'awslabs/aidlc-workflows/.github/workflows/preview-release.yml'
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $releaseRoot 'version.json') |
+            ConvertFrom-Json
+          $env:AIDLC_TEST_GH_SOURCE_REF = $manifest.sourceRef
+          $env:AIDLC_TEST_GH_SOURCE_DIGEST = $manifest.sourceDigest
+          $env:AIDLC_TEST_GH_CHECKSUM_SHA = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseRoot 'checksums.txt')
+          ).Hash.ToLowerInvariant()
+          @'
+          param(
+            [Parameter(ValueFromRemainingArguments = $true)]
+            [string[]]$Remaining
+          )
+          $subject = if ($Remaining.Count -ge 3) {
+            [IO.Path]::GetFullPath($Remaining[2])
+          } else {
+            ''
+          }
+          $bundle = if ($Remaining.Count -ge 5) {
+            [IO.Path]::GetFullPath($Remaining[4])
+          } else {
+            ''
+          }
+          $expectedBundle = if ($subject) {
+            Join-Path ([IO.Path]::GetDirectoryName($subject)) 'aidlc-release.intoto.jsonl'
+          } else {
+            ''
+          }
+          if (
+            $Remaining.Count -eq 3 -and
+            $Remaining[0] -eq 'attestation' -and
+            $Remaining[1] -eq 'verify' -and
+            $Remaining[2] -eq '--help'
+          ) {
+            @(
+              '--signer-workflow string'
+              '--source-ref string'
+              '--source-digest string'
+            )
+            exit 0
+          }
+          if (
+            ($Remaining.Count -ne 9 -and $Remaining.Count -ne 13) -or
+            $Remaining[0] -ne 'attestation' -or
+            $Remaining[1] -ne 'verify' -or
+            [IO.Path]::GetFileName($subject) -ne 'checksums.txt' -or
+            -not (Test-Path -LiteralPath $subject -PathType Leaf) -or
+            $Remaining[3] -ne '--bundle' -or
+            $bundle -ne $expectedBundle -or
+            -not (Test-Path -LiteralPath $bundle -PathType Leaf) -or
+            $Remaining[5] -ne '--repo' -or
+            $Remaining[6] -ne $env:AIDLC_TEST_GH_REPOSITORY -or
+            $Remaining[7] -ne '--signer-workflow' -or
+            $Remaining[8] -ne $env:AIDLC_TEST_GH_WORKFLOW -or
+            (
+              $Remaining.Count -eq 13 -and (
+                $Remaining[9] -ne '--source-ref' -or
+                $Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
+                $Remaining[11] -ne '--source-digest' -or
+                $Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST
+              )
+            ) -or
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $subject).Hash.ToLowerInvariant() -ne
+              $env:AIDLC_TEST_GH_CHECKSUM_SHA
+          ) {
+            exit 2
+          }
+          Add-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER `
+            -Value "verified-$($Remaining.Count)"
+          exit 0
+          '@ | Set-Content -LiteralPath $ghFixture -Encoding Ascii
+          $env:AIDLC_GH_BIN = $ghFixture
+          Get-Content (Join-Path $releaseRoot 'checksums.txt') | ForEach-Object {
+            if ($_ -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)$') {
+              throw "malformed checksum row: $_"
+            }
+            $path = Join-Path $releaseRoot $Matches[2]
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "checksummed asset is missing: $($Matches[2])"
+            }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches[1]) {
+              throw "checksum mismatch: $($Matches[2])"
+            }
+          }
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath $env:AIDLC_TEST_GH_MARKER -PathType Leaf)) {
+            throw 'offline installer did not verify release provenance'
+          }
+          $verificationPasses = Get-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER
+          if (
+            $verificationPasses -notcontains 'verified-9' -or
+            $verificationPasses -notcontains 'verified-13'
+          ) {
+            throw 'offline installer did not bind the trusted source digest'
+          }
+          $command = Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd'
+          & $command version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
+          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8}\.[1-9][0-9]*)?\\aidlc\.exe$') {
+            throw "invalid active executable pointer: $pointer"
+          }
+          $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
+          [IO.Directory]::CreateDirectory($env:COPILOT_HOME) | Out-Null
+          $harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')
+          foreach ($harness in $harnesses) {
+            $project = Join-Path $env:RUNNER_TEMP "aidlc-$harness-project-$([Guid]::NewGuid().ToString('N'))"
+            [IO.Directory]::CreateDirectory($project) | Out-Null
+            if ($harness -eq 'copilot') {
+              @{ trustedFolders = @($project) } |
+                ConvertTo-Json |
+                Set-Content -LiteralPath (Join-Path $env:COPILOT_HOME 'config.json')
+            }
+            & $command config --project-dir $project --harness $harness --mcp none --quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $command doctor --project-dir $project --quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $command uninstall --purge --yes --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $deadline = [DateTime]::UtcNow.AddSeconds(60)
+          while ([DateTime]::UtcNow -lt $deadline) {
+            $commandExists = Test-Path -LiteralPath $command
+            $rootExists = Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT
+            if (-not $commandExists -and -not $rootExists) { break }
+            Start-Sleep -Milliseconds 100
+          }
+          if (Test-Path -LiteralPath $command) { throw 'aidlc.cmd survived uninstall' }
+          if (Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT) { throw 'install root survived purge uninstall' }
+
+  unix-lifecycle:
+    needs: stage-release
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      - name: Consume the checksummed release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$release" && sha256sum -c checksums.txt)
+          else
+            (cd "$release" && shasum -a 256 -c checksums.txt)
+          fi
+          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-machine"
+          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-bin"
+          printf 'aidlc-lifecycle-provenance-fixture\n' \
+            >"$release/aidlc-release.intoto.jsonl"
+          gh_bin="$RUNNER_TEMP/aidlc-gh"
+          gh_marker="$RUNNER_TEMP/aidlc-gh-verified"
+          manifest_version="$(
+            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9A-Za-z.-]*\)".*/\1/p' \
+              "$release/version.json" | head -n 1
+          )"
+          test -n "$manifest_version"
+          manifest_source_ref="$(
+            sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' \
+              "$release/version.json" | head -n 1
+          )"
+          case "$manifest_version" in
+            *-preview.*) expected_source_ref=refs/heads/main ;;
+            *) expected_source_ref="refs/tags/v$manifest_version" ;;
+          esac
+          test "$manifest_source_ref" = "$expected_source_ref"
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksums_sha="$(sha256sum "$release/checksums.txt" | awk '{print $1}')"
+          else
+            checksums_sha="$(shasum -a 256 "$release/checksums.txt" | awk '{print $1}')"
+          fi
+          cat >"$gh_bin" <<'AIDLC_GH_FIXTURE'
+          #!/bin/sh
+          if [ "$#" -eq 3 ] && [ "$1" = attestation ] &&
+            [ "$2" = verify ] && [ "$3" = --help ]; then
+            printf '%s\n' \
+              '--signer-workflow string' \
+              '--source-ref string' \
+              '--source-digest string'
+            exit 0
+          fi
+          { [ "$#" -eq 9 ] || [ "$#" -eq 11 ] || [ "$#" -eq 13 ]; } || exit 2
+          [ "$1" = attestation ] || exit 2
+          [ "$2" = verify ] || exit 2
+          case "$3" in /*/checksums.txt) ;; *) exit 2 ;; esac
+          [ -f "$3" ] || exit 2
+          [ "$4" = --bundle ] || exit 2
+          [ "$5" = "${3%/checksums.txt}/aidlc-release.intoto.jsonl" ] || exit 2
+          [ -f "$5" ] || exit 2
+          [ "$6" = --repo ] || exit 2
+          [ "$7" = "$AIDLC_TEST_GH_REPOSITORY" ] || exit 2
+          [ "$8" = --signer-workflow ] || exit 2
+          [ "$9" = "$AIDLC_TEST_GH_WORKFLOW" ] || exit 2
+          if [ "$#" -ge 11 ]; then
+            [ "${10}" = --source-ref ] || exit 2
+            [ "${11}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
+          fi
+          if [ "$#" -eq 13 ]; then
+            [ "${12}" = --source-digest ] || exit 2
+            [ "${13}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "$3" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "$3" | awk '{print $1}')"
+          fi
+          [ "$actual" = "$AIDLC_TEST_GH_CHECKSUM_SHA" ] || exit 2
+          printf "verified-%s\n" "$#" >>"$AIDLC_TEST_GH_MARKER"
+          exit 0
+          AIDLC_GH_FIXTURE
+          chmod +x "$gh_bin"
+          env PATH="/usr/bin:/bin" \
+            AIDLC_INSTALL_ROOT="$AIDLC_INSTALL_ROOT" \
+            AIDLC_BIN_DIR="$AIDLC_BIN_DIR" \
+            AIDLC_GH_BIN="$gh_bin" \
+            AIDLC_TEST_GH_MARKER="$gh_marker" \
+            AIDLC_TEST_GH_REPOSITORY="awslabs/aidlc-workflows" \
+            AIDLC_TEST_GH_WORKFLOW="awslabs/aidlc-workflows/.github/workflows/preview-release.yml" \
+            AIDLC_TEST_GH_SOURCE_REF="$manifest_source_ref" \
+            AIDLC_TEST_GH_SOURCE_DIGEST="$(
+              sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' \
+                "$release/version.json" | head -n 1
+            )" \
+            AIDLC_TEST_GH_CHECKSUM_SHA="$checksums_sha" \
+            sh "$release/install.sh" --from "$release" --offline --quiet
+          test -s "$gh_marker"
+          grep -qx 'verified-9' "$gh_marker"
+          grep -qx 'verified-11' "$gh_marker"
+          grep -qx 'verified-13' "$gh_marker"
+          command="$AIDLC_BIN_DIR/aidlc"
+          env PATH="/usr/bin:/bin" "$command" version
+          export COPILOT_HOME="$RUNNER_TEMP/aidlc-copilot-home"
+          mkdir -p "$COPILOT_HOME"
+          for harness in claude codex copilot cursor kiro kiro-ide opencode; do
+            project="$(mktemp -d "$RUNNER_TEMP/aidlc-$harness-project.XXXXXX")"
+            if [ "$harness" = copilot ]; then
+              printf '{"trustedFolders":["%s"]}\n' "$project" > "$COPILOT_HOME/config.json"
+            fi
+            env PATH="/usr/bin:/bin" "$command" config \
+              --project-dir "$project" --harness "$harness" --mcp none --quiet
+            env PATH="/usr/bin:/bin" "$command" doctor \
+              --project-dir "$project" --quiet
+          done
+
+  publish:
+    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Recheck preview source
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      - run: test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      - name: Re-verify staged release checksums
+        working-directory: build/release
+        run: sha256sum -c checksums.txt
+      - name: Attest staged release assets
+        id: provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: build/release/*
+      - name: Stage offline provenance bundle
+        run: |
+          test -f "$ATTESTATION_BUNDLE"
+          cp "$ATTESTATION_BUNDLE" build/release/aidlc-release.intoto.jsonl
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+      - name: Validate complete attested release candidate
+        run: |
+          bun scripts/verify-release.ts candidate \
+            --directory build/release \
+            --tag "$RELEASE_TAG" \
+            --source-digest "$AUTHORIZED_SHA"
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: attested-release
+          path: build/release
+          if-no-files-found: error
+
+  release:
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: attested-release
+          path: build/release
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Recheck preview source
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
+          (cd build/release && sha256sum -c checksums.txt)
+      - name: Create preview GitHub Release
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/aidlc-preview-plan.json"
+          printf '%s\n' "$PREVIEW_PLAN" >"$plan"
+          test "$RELEASE_TAG" = "$(jq -r .tag "$plan")"
+          test "$AUTHORIZED_SHA" = "$(jq -r .sourceDigest "$plan")"
+          bun scripts/publish-release.ts \
+            --directory build/release \
+            --tag "$RELEASE_TAG" \
+            --channel preview \
+            --preview-plan "$plan" \
+            --staging-tag "aidlc-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --target "$AUTHORIZED_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --changelog "$PWD/CHANGELOG.md" \
+            --expected-assets 13
+      - name: Verify uploaded asset inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          find build/release -mindepth 1 -maxdepth 1 -type f -exec basename {} \; |
+            LC_ALL=C sort >"$RUNNER_TEMP/local-assets.txt"
+          gh release view "$RELEASE_TAG" --json assets --jq ".assets[].name" |
+            LC_ALL=C sort >"$RUNNER_TEMP/remote-assets.txt"
+          diff -u "$RUNNER_TEMP/local-assets.txt" "$RUNNER_TEMP/remote-assets.txt"
+
+  release-result:
+    name: Release result
+    if: ${{ !cancelled() }}
+    needs: [validate, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require publication or an intentional preview skip
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+          RELEASE_SKIP: ${{ needs.validate.outputs.skip }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          test "$VALIDATE_RESULT" = success
+          if [ "$RELEASE_SKIP" = true ]; then
+            test "$RELEASE_RESULT" = skipped
+            exit 0
+          fi
+          test "$RELEASE_RESULT" = success

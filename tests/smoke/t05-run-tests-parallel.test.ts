@@ -86,12 +86,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import {
+  assignWeightedShards,
+  parseShardSpec,
+  type ShardConfig,
+} from "../lib/test-sharding.ts";
 
 // The runner lives at <repo>/tests/run-tests.sh. We invoke it with `bash` to
 // match how the suite (and the .sh) ran it — the runner is not chmod-dependent
 // in the test path, and `bash <script>` is the runner's documented entrypoint.
 const TESTS_ROOT = join(REPO_ROOT, "tests");
 const RUNNER = join(TESTS_ROOT, "run-tests.sh");
+const UNIT_SHARD_CONFIG = JSON.parse(
+  readFileSync(join(TESTS_ROOT, "unit-shard-weights.json"), "utf-8"),
+) as ShardConfig;
 
 interface RunResult {
   status: number;
@@ -191,6 +199,113 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     // (run-tests.sh:90 `${PARALLEL:-<missing>}`). STRONGER than the .sh, which
     // only checked rc==2 here.
     expect(r.out).toContain("ERROR: --parallel requires a positive integer");
+  }, PER_TEST_TIMEOUT);
+
+  test("rejects malformed and out-of-range --shard values", () => {
+    for (const bad of ["0/4", "1/0", "5/4", "abc"]) {
+      const r = run(["--unit", "--shard", bad]);
+      expect(r.status).toBe(2);
+      expect(r.out).toContain("ERROR: --shard");
+    }
+    const missing = run(["--unit", "--shard"]);
+    expect(missing.status).toBe(2);
+    expect(missing.out).toContain("ERROR: --shard");
+  }, PER_TEST_TIMEOUT);
+
+  test("--shard is restricted to a unit-only invocation", () => {
+    const smoke = run(["--smoke", "--shard", "1/4"]);
+    expect(smoke.status).toBe(2);
+    expect(smoke.out).toContain(
+      "ERROR: --shard requires --unit with no other level or profile flags",
+    );
+
+    const profile = run(["--ci", "--shard", "1/4"]);
+    expect(profile.status).toBe(2);
+    expect(profile.out).toContain(
+      "ERROR: --shard requires --unit with no other level or profile flags",
+    );
+  }, PER_TEST_TIMEOUT);
+
+  test("rejects shard counts that create empty shards", () => {
+    const files = readdirSync(join(TESTS_ROOT, "unit"))
+      .filter((file) => file.endsWith(".test.ts"))
+      .sort();
+    const affinityFiles = new Set(UNIT_SHARD_CONFIG.affinityGroups.flat());
+    const assignableGroups =
+      files.length - affinityFiles.size + UNIT_SHARD_CONFIG.affinityGroups.length;
+    const invalidCount = assignableGroups + 1;
+
+    expect(() =>
+      assignWeightedShards(files, invalidCount, UNIT_SHARD_CONFIG)
+    ).toThrow(
+      `--shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+    );
+
+    const r = run(
+      ["--unit", "--shard", `${invalidCount}/${invalidCount}`],
+      { AIDLC_TEST_PACKAGE_READY: "1" },
+    );
+    expect(r.status).toBe(2);
+    expect(r.out).toContain(
+      `ERROR: --shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+    );
+    expect(r.out).not.toContain("RESULT: PASS");
+  }, PER_TEST_TIMEOUT);
+
+  test("four weighted unit shards cover every file once and preserve binary affinity", () => {
+    const files = readdirSync(join(TESTS_ROOT, "unit"))
+      .filter((file) => file.endsWith(".test.ts"))
+      .sort();
+    const shards = assignWeightedShards(files, 4, UNIT_SHARD_CONFIG);
+    const flattened = shards.flat();
+
+    expect(shards.every((shard) => shard.length > 0)).toBe(true);
+    expect(flattened.length).toBe(files.length);
+    expect(new Set(flattened).size).toBe(files.length);
+    expect([...flattened].sort()).toEqual(files);
+
+    const producer = shards.findIndex((shard) =>
+      shard.includes("t238-build-binaries.test.ts"),
+    );
+    const consumer = shards.findIndex((shard) =>
+      shard.includes("t249-copilot-adapter.test.ts"),
+    );
+    expect(producer).toBeGreaterThanOrEqual(0);
+    expect(consumer).toBe(producer);
+    expect(
+      shards[producer].indexOf("t238-build-binaries.test.ts"),
+    ).toBeLessThan(
+      shards[producer].indexOf("t249-copilot-adapter.test.ts"),
+    );
+  }, PER_TEST_TIMEOUT);
+
+  test("unit shard CLI runs only the selected deterministic shard", () => {
+    const file = "t68-version-changelog-sync.test.ts";
+    const files = readdirSync(join(TESTS_ROOT, "unit"))
+      .filter((entry) => entry.endsWith(".test.ts"))
+      .sort();
+    const shards = assignWeightedShards(files, 4, UNIT_SHARD_CONFIG);
+    const selected = shards.findIndex((shard) => shard.includes(file)) + 1;
+    expect(selected).toBeGreaterThan(0);
+    expect(parseShardSpec(`${selected}/4`)).toEqual({
+      index: selected,
+      total: 4,
+    });
+
+    const r = run([
+      "--unit",
+      "--shard",
+      `${selected}/4`,
+      "--filter",
+      "t68-version-changelog-sync",
+    ]);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(
+      `## Unit Tests (single-component isolation) (shard=${selected}/4)`,
+    );
+    expect(r.out).toContain(`=== START ${file} ===`);
+    expect(r.out).toContain("Test files: 1");
+    expect(r.out).toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------

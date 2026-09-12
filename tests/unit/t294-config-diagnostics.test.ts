@@ -58,9 +58,16 @@ function run(
   cwd: string,
   env: NodeJS.ProcessEnv = {},
 ): { status: number; stdout: string; stderr: string } {
+  // Keep the host's active runtime out of fixture source selection.
+  const machine = temp("aidlc-t294-machine-");
   const result = spawnSync(BUN, [INIT, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: {
+      ...process.env,
+      AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      ...env,
+    },
     encoding: "utf-8",
     timeout: 60_000,
   });
@@ -94,6 +101,8 @@ function install(harness: string): string {
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+    // Host active-version runtimes must not join this fixture's source discovery.
+    AIDLC_INSTALL_ROOT: temp("aidlc-t294-runtime-machine-"),
     AWS_ACCESS_KEY_ID: "test-access",
     AWS_SECRET_ACCESS_KEY: "test-secret",
     ...extra,
@@ -305,7 +314,7 @@ describe("t294 runtime diagnostics", () => {
     ["3000.10.22", "found"],
     ["3000.11.0", "found"],
     ["3001.0.0", "found"],
-  ])("Devin diagnostics classifies %s as %s", (version, status) => {
+  ] as const)("Devin diagnostics classifies %s as %s", (version, status) => {
     const result = probeHarnessCli("devin", {
       interactivePath: "/bin",
       which: () => "/bin/devin",

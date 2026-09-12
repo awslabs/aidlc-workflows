@@ -114,11 +114,12 @@ function releaseBinaryName(): string {
   return `aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
 }
 
+// Removing the accumulated temporary trees can exceed bun's 5s hook default.
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+}, 120_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
 // the canonical temp root (macOS aliases /var to /private/var).
@@ -1189,15 +1190,21 @@ describe("t243 project initialization", () => {
     expect(readFileSync(target)).toEqual(before);
     expect(readdirSync(project).sort()).toEqual(rootEntries);
 
-    writeFileSync(state, readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Completed"));
-    const completed = run(INIT, [
+    writeFileSync(
+      state,
+      readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Archived"),
+    );
+    const registry = JSON.parse(readFileSync(join(intentsDir, "intents.json"), "utf-8"));
+    registry[0].status = "archived";
+    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    const archived = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
       newer,
     ], project);
-    expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+    expect(archived.status, archived.stdout + archived.stderr).toBe(0);
     expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
   }, 60_000);
 
@@ -1309,7 +1316,7 @@ describe("t243 project initialization", () => {
     };
     expect(merged.mcpServers.context7).toEqual(custom);
     expect(merged.projectSetting).toBe(true);
-  });
+  }, 60_000);
 
   test("MCP consent and managed AGENTS blocks preserve user-owned configuration", () => {
     const claudeProject = temp("aidlc-t240-mcp-matrix-");
