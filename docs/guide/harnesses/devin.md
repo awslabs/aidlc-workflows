@@ -62,10 +62,17 @@ git checkout v2
 
 ## Approve hooks
 
-Devin prompts to approve project hooks on first run. Run `/hooks`, approve the
-AI-DLC hooks, then **fully restart Devin CLI** (`/clear` is not enough —
-unapproved hooks silently no-op). This is the one manual step; the doctor
-surfaces an advisory if hooks are unapproved.
+Devin may prompt to approve project hooks on first run. Inspect the loaded
+hooks via `/hooks` — per the official
+[hooks reference](https://docs.devin.ai/cli/extensibility/hooks/overview),
+`/hooks` lists the currently loaded hooks and their source files — approve the
+AI-DLC hooks if prompted, then **fully restart Devin CLI** (`/clear` is not
+enough — unapproved hooks silently no-op). The SessionStart adapter records
+each successful run in `.devin/.aidlc-session-start.local.json` (gitignored,
+machine-local); `/aidlc --doctor` fails when that evidence is absent or
+invalid. A valid marker is historical execution evidence only — it does not
+verify current hook approval, that every hook/gate works, or that approval was
+not later revoked.
 
 ## Optional MCP setup
 
@@ -167,8 +174,9 @@ AI-DLC guard hooks enforce workflow-specific invariants: state-transition
 ownership, reviewer scope, review-artifact freezes, and approval before code
 generation. They are conditional workflow guards, not a general
 destructive-command security boundary or a replacement for Devin permission
-policies, organization controls, and appropriate OS sandboxing. Approve project
-hooks via `/hooks` and fully restart Devin CLI to activate them.
+policies, organization controls, and appropriate OS sandboxing. Inspect project
+hooks via `/hooks`, approve them if prompted, and fully restart Devin CLI to
+activate them.
 
 The allow-only shape and broad file-tool grants follow Claude Code;
 framework-scoped shell grants follow both Claude Code and Kiro CLI. This does
@@ -191,9 +199,18 @@ cursors and machine-local runtime.
 
 Run `/aidlc --doctor` after install. It checks the adapter and the four wiring
 files (`hooks.v1.json`, `config.json`, `mcp_config.json`, and `rules/aidlc.md`),
-checks the Devin CLI version, and surfaces the hook-approval advisory. The MCP
-check verifies registry presence, not live MCP availability; disabled servers do
-not fail it.
+checks the Devin CLI version, and verifies hook execution evidence: the
+SessionStart adapter writes `.devin/.aidlc-session-start.local.json` after a
+successful run, and doctor fails when that marker is absent or invalid —
+inspect `/hooks`, approve the AI-DLC hooks if prompted, fully restart Devin
+CLI, then rerun doctor (if evidence is still missing, check
+`.devin/hooks.v1.json`, the hook runtime, and `.devin` write permissions). A
+valid marker is historical execution evidence only; it does not verify current
+hook approval. The marker path is ignored by the shipped `.gitignore`;
+existing installs must update the adapter and doctor together, merge the new
+ignore entry, and fully restart Devin CLI to generate evidence. The MCP check
+verifies registry presence, not live MCP availability; disabled servers do not
+fail it.
 
 `devin doctor --json` emits CFG005 warnings for `display_name`, `examples`,
 `disallowedTools`, and `maxTurns` on `.devin/agents/*.md` when those fields are

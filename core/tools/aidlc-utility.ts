@@ -3228,12 +3228,28 @@ export async function collectDoctorReport(
           `Desktop discovery: no Devin Desktop installation found (checked OS-appropriate paths); PATH lookup also failed`,
       });
     }
-    // Hook approval reminder (advisory pass-with-label): Devin CLI prompts to
-    // approve project hooks on first run; unapproved hooks never fire.
+    // Hook execution evidence is historical: SessionStart writes a local marker.
+    // Missing or invalid evidence leaves hook approval/execution unverified.
+    let lastHookRun: string | undefined;
+    try {
+      const marker = JSON.parse(readFileSync(
+        join(projectDir, harness, ".aidlc-session-start.local.json"),
+        "utf-8",
+      )) as { lastRun?: unknown } | null;
+      if (
+        typeof marker?.lastRun === "string" &&
+        new Date(marker.lastRun).toISOString() === marker.lastRun
+      ) {
+        lastHookRun = marker.lastRun;
+      }
+    } catch {}
     results.push({
-      pass: true,
-      label:
-        "hook approval: approve the project's hooks via /hooks then fully restart Devin CLI (/clear is not enough — unapproved hooks silently no-op)",
+      pass: lastHookRun !== undefined,
+      label: lastHookRun
+        ? `Devin hook execution evidence: SessionStart last ran ${lastHookRun} (historical evidence only; current hook approval is not verified)`
+        : "Devin hook execution evidence: no valid SessionStart marker; hook approval/execution is unverified",
+      fix: lastHookRun ? undefined
+        : "inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions",
     });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");

@@ -226,10 +226,22 @@ function runAdapter(
 describe("t332 devin adapter — stdin shim normalizes Devin payloads to core hooks", () => {
   // --- session-start: re-wrap into hookSpecificOutput ---
 
+  const MARKER_REL = join(".devin", ".aidlc-session-start.local.json");
+  function markerPath(dir: string): string {
+    return join(dir, MARKER_REL);
+  }
+  function expectCanonicalIsoBounded(lastRun: unknown, before: string, after: string): void {
+    expect(typeof lastRun).toBe("string");
+    expect(new Date(lastRun as string).toISOString()).toBe(lastRun as string);
+    expect((lastRun as string) >= before && (lastRun as string) <= after).toBe(true);
+  }
+
   test("1: session-start emits the Devin hookSpecificOutput wrapper with workflow context", () => {
     const dir = scratchProject(true);
     try {
+      const before = new Date().toISOString();
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart as Record<string, unknown>, dir));
+      const after = new Date().toISOString();
       expect(r.code).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
@@ -237,6 +249,8 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       expect(out.hookSpecificOutput?.hookEventName).toBe("SessionStart");
       expect(typeof out.hookSpecificOutput?.additionalContext).toBe("string");
       expect(out.hookSpecificOutput?.additionalContext ?? "").not.toBe("");
+      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as { lastRun?: unknown };
+      expectCanonicalIsoBounded(marker.lastRun, before, after);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -245,7 +259,9 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   test("2: session-start with no active workflow is exit 0 (no workflow context injected)", () => {
     const dir = scratchProject(false);
     try {
+      const before = new Date().toISOString();
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart as Record<string, unknown>, dir));
+      const after = new Date().toISOString();
       expect(r.code).toBe(0);
       // No state → the core hook emits no AIDLC WORKFLOW ACTIVE context. It may
       // still emit a session-binding line (the runtime session id), but the
@@ -256,8 +272,94 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         };
         expect(out.hookSpecificOutput?.additionalContext ?? "").not.toContain("AIDLC WORKFLOW ACTIVE");
       }
+      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as { lastRun?: unknown };
+      expectCanonicalIsoBounded(marker.lastRun, before, after);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2a: session-start refreshes a pre-existing marker to the current run", () => {
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(markerPath(dir), `${JSON.stringify({ lastRun: "2020-01-01T00:00:00.000Z" })}\n`, "utf-8");
+      const before = new Date().toISOString();
+      const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart as Record<string, unknown>, dir));
+      const after = new Date().toISOString();
+      expect(r.code).toBe(0);
+      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as { lastRun?: unknown };
+      expect(marker.lastRun).not.toBe("2020-01-01T00:00:00.000Z");
+      expectCanonicalIsoBounded(marker.lastRun, before, after);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2b: session-start marker-write failure warns on stderr but still forwards context (exit 0)", () => {
+    const dir = scratchProject(true);
+    try {
+      mkdirSync(markerPath(dir), { recursive: true });
+      const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart as Record<string, unknown>, dir));
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain("could not write Devin SessionStart evidence");
+      const out = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { additionalContext?: string };
+      };
+      expect(out.hookSpecificOutput?.additionalContext ?? "").not.toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2c: no marker for malformed stdin, a non-SessionStart payload, or a non-session-start target", () => {
+    const dir = scratchProject(false);
+    try {
+      let r = runAdapter(dir, "session-start", FIXTURES.malformed as string);
+      expect(r.code).toBe(0);
+      expect(existsSync(markerPath(dir))).toBe(false);
+      r = runAdapter(dir, "session-start", withCwd(FIXTURES.userPromptSubmit as Record<string, unknown>, dir));
+      expect(r.code).toBe(0);
+      expect(existsSync(markerPath(dir))).toBe(false);
+      r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop as Record<string, unknown>, dir));
+      expect(r.code).toBe(0);
+      expect(existsSync(markerPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2d: no marker when the core session-start hook exits non-zero", () => {
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(dir, ".devin", "hooks", "aidlc-session-start.ts"),
+        "process.exit(1);\n",
+        "utf-8",
+      );
+      const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart as Record<string, unknown>, dir));
+      expect(r.code).toBe(0);
+      expect(existsSync(markerPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2e: session-start marker is written to DEVIN_PROJECT_DIR, not the payload cwd", () => {
+    const projA = scratchProject(true);
+    const projB = scratchProject(false);
+    try {
+      const adapter = join(projA, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const payload = { ...FIXTURES.sessionStart as Record<string, unknown>, cwd: projB };
+      const r = runAdapterExplicit(adapter, "session-start", payload, {
+        env: { ...process.env, DEVIN_PROJECT_DIR: projA, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        cwd: projB,
+      });
+      expect(r.code).toBe(0);
+      expect(existsSync(markerPath(projA))).toBe(true);
+      expect(existsSync(markerPath(projB))).toBe(false);
+    } finally {
+      rmSync(projA, { recursive: true, force: true });
+      rmSync(projB, { recursive: true, force: true });
     }
   });
 

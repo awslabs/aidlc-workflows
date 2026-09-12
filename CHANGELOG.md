@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.4] - 2026-09-12
+
+`/aidlc --doctor` on Devin now fails when the project has no valid SessionStart hook execution evidence, replacing the unconditional hook-approval reminder. **Upgrade:** update the Devin adapter and doctor together (`aidlc update`, or `install.sh --version 2.9.4` / `install.ps1 -Version 2.9.4`), merge the new `.devin/.aidlc-session-start.local.json` ignore entry into your project `.gitignore`, then fully restart Devin CLI (`/clear` is not enough) so the SessionStart hook can record evidence. No workflow-record migration is required.
+
+* The Devin SessionStart adapter writes `.devin/.aidlc-session-start.local.json` (gitignored, machine-local) after a successful core hook run; doctor fails with remediation when the marker is absent, unreadable, or malformed — inspect `/hooks`, approve the project's AI-DLC hooks if prompted, fully restart Devin CLI, and rerun `/aidlc --doctor`.
+* A valid marker is historical execution evidence only; it does not verify current hook approval.
+
 ## [2.9.3] - 2026-09-12
 
 Corrects Devin CLI's structured-question binding and consolidates its shared question rules in the core protocol. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.3` / `install.ps1 -Version 2.9.3`) to refresh the installed question-rendering instructions. No workflow-record migration is required.

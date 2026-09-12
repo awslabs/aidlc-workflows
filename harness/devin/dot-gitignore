@@ -82,4 +82,5 @@ aidlc/diagnostics/
 # aidlc/spaces/*/intents/*/<phase>/<stage>/*.md (artifacts + diary).
 .devin/config.local.json
 .devin/mcp_config.local.json
+.devin/.aidlc-session-start.local.json
 AGENTS.local.md

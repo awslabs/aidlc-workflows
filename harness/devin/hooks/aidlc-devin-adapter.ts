@@ -66,6 +66,7 @@
 //                  audit-and-sensors | sync-workflow-state | log-subagent |
 //                  rebuild-stage-graph | validate-state | continue-workflow
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isNonAnswer, validSessionId } from "../tools/aidlc-lib.ts";
@@ -549,6 +550,18 @@ export async function run(
         ...(devin.session_id ? { session_id: devin.session_id } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
+      if (r.code === 0 && devin.hook_event_name === "SessionStart") {
+        try {
+          mkdirSync(join(projectDir, ".devin"), { recursive: true });
+          writeFileSync(
+            join(projectDir, ".devin", ".aidlc-session-start.local.json"),
+            `${JSON.stringify({ lastRun: new Date().toISOString() })}\n`,
+            "utf-8",
+          );
+        } catch {
+          process.stderr.write("AI-DLC: could not write Devin SessionStart evidence; check .devin write permissions and rerun /aidlc --doctor after restarting Devin CLI.\n");
+        }
+      }
       const wrapped = wrapContext(r.stdout, "SessionStart");
       if (wrapped) process.stdout.write(wrapped);
       return 0;

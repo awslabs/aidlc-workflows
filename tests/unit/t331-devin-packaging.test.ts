@@ -40,6 +40,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
@@ -265,7 +266,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     const context7 = authored.mcpServers.context7;
     expect(context7.url).toBe(kiro.mcpServers.context7.url);
     expect(context7.disabled).toBe(kiro.mcpServers.context7.disabled);
-    expect(context7.headers).toEqual({ CONTEXT7_API_KEY: "${CONTEXT7_API_KEY}" });
+    expect(context7.headers).toEqual({ CONTEXT7_API_KEY: `\${CONTEXT7_API_KEY}` });
     expect("type" in context7).toBe(false);
     expect("command" in context7).toBe(false);
   });
@@ -338,7 +339,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(agents).not.toContain("Review the broad `mcp__*` permission grant");
       expect(agents).toContain(root === DEVIN_ROOT
         ? "`bun .devin/tools/*`"
-        : "`" + trustedCommand() + "`");
+        : `\`${trustedCommand()}\``);
     }
   });
 
@@ -350,22 +351,30 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(harness.harnessDir).toBe(".devin");
   });
 
-  test("9: doctor recognizes a pristine dist/devin install (devin rows present, Claude fallback absent)", () => {
+  test("9: doctor gates on Devin hook execution evidence (absent marker fails; adapter run passes; invalid marker fails)", () => {
     const root = mkdtempSync(join(tmpdir(), "t331-devin-doctor-"));
     try {
       const project = join(root, "project");
       cpSync(DEVIN_ROOT, project, { recursive: true });
-      const r = spawnSync(
-        "bun",
-        [join(project, ".devin", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
-        {
-          cwd: project,
-          encoding: "utf-8",
-          env: { ...process.env, AIDLC_HARNESS_DIR: ".devin" },
-        },
-      );
-      const output = `${r.stdout}${r.stderr}`;
-      expect(r.status, output).toBe(0);
+      const markerPath = join(project, ".devin", ".aidlc-session-start.local.json");
+      const runDoctor = () => {
+        const r = spawnSync(
+          "bun",
+          [join(project, ".devin", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
+          {
+            cwd: project,
+            encoding: "utf-8",
+            env: { ...process.env, AIDLC_HARNESS_DIR: ".devin" },
+          },
+        );
+        return { status: r.status, output: `${r.stdout}${r.stderr}` };
+      };
+      let { status, output } = runDoctor();
+      expect(status, output).toBe(1);
+      expect(output).toContain("Devin hook execution evidence: no valid SessionStart marker");
+      expect(output).toContain("/hooks");
+      expect(output).toContain("fully restart Devin CLI");
+      expect(existsSync(markerPath)).toBe(false);
       // Devin-specific rows.
       expect(output).toContain("aidlc-devin-adapter.ts present");
       expect(output).toContain("hooks.v1.json present");
@@ -373,11 +382,60 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(output).toContain("mcp_config.json present");
       expect(output).toContain("rules/aidlc.md present");
       expect(output).toContain("devin CLI version");
-      expect(output).toContain("hook approval");
       // The Claude settings.json fallback must NOT appear.
       expect(output).not.toContain("settings.json present");
+
+      const a = spawnSync(
+        "bun",
+        [join(project, ".devin", "hooks", "aidlc-devin-adapter.ts"), "session-start"],
+        {
+          cwd: project,
+          input: JSON.stringify({ hook_event_name: "SessionStart", cwd: project }),
+          encoding: "utf-8",
+          env: { ...process.env, DEVIN_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: undefined },
+        },
+      );
+      expect(a.status, `${a.stdout}${a.stderr}`).toBe(0);
+      expect(existsSync(markerPath)).toBe(true);
+      const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { lastRun?: unknown };
+      expect(typeof marker.lastRun).toBe("string");
+      expect(new Date(marker.lastRun as string).toISOString()).toBe(marker.lastRun as string);
+
+      ({ status, output } = runDoctor());
+      expect(status, output).toBe(0);
+      expect(output).toContain("Devin hook execution evidence: SessionStart last ran");
+      expect(output).toContain("current hook approval is not verified");
+
+      for (const bad of ["", "not-json", "null", "{}", '{"lastRun":123}', '{"lastRun":"not-a-date"}']) {
+        writeFileSync(markerPath, bad, "utf-8");
+        ({ status, output } = runDoctor());
+        expect(status, `marker=${JSON.stringify(bad)}\n${output}`).toBe(1);
+        expect(output).toContain("Devin hook execution evidence: no valid SessionStart marker");
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("9b: shipped devin trees carry no marker and ignore it via the shipped .gitignore", () => {
+    for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
+      expect(existsSync(join(root, ".devin", ".aidlc-session-start.local.json")), root).toBe(false);
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf-8");
+      expect(gitignore.split(/\r?\n/), root).toContain(".devin/.aidlc-session-start.local.json");
+    }
+    const proj = mkdtempSync(join(tmpdir(), "t331-devin-gitignore-"));
+    try {
+      const init = spawnSync("git", ["init"], { cwd: proj, encoding: "utf-8" });
+      expect(init.status, `${init.stdout}${init.stderr}`).toBe(0);
+      cpSync(join(DEVIN_ROOT, ".gitignore"), join(proj, ".gitignore"));
+      const r = spawnSync(
+        "git",
+        ["check-ignore", "--no-index", ".devin/.aidlc-session-start.local.json"],
+        { cwd: proj, encoding: "utf-8" },
+      );
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
     }
   });
 
