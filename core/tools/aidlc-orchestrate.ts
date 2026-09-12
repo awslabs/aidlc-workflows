@@ -9392,9 +9392,10 @@ if (import.meta.main) {
     main(process.argv.slice(2));
   } catch (e) {
     // Any uncaught read error (missing graph, malformed state) surfaces as a
-    // non-zero exit with the message on stderr — never a half-emitted
-    // directive on stdout.
-    console.error(`aidlc-orchestrate: ${errorMessage(e)}`);
+    // non-zero exit with JSON on stderr — never a half-emitted directive on
+    // stdout. The shape matches the compiled dispatcher when main throws
+    // in-process, so the copy and native channels agree.
+    process.stderr.write(`${JSON.stringify({ error: errorMessage(e) })}\n`);
     process.exit(1);
   }
 }
