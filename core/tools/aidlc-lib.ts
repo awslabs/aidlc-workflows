@@ -7627,6 +7627,28 @@ export function isAutonomousConstructionDecision(
   return stagePhase === "construction" && isAutonomousMode(stateContent);
 }
 
+function firstConstructionApprovalStage(
+  scope: string,
+  stateContent: string,
+): StageEntry | null {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const overrides = parseStateStageSuffixes(stateContent);
+  const skipped = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
+  // Conditional skips move the first actual approval; completed stages do not.
+  // Keep [x] in the search so approving the anchor does not protect every
+  // subsequent stage in turn. Plan overrides use the router's precedence.
+  return loadStageGraph().find((stage) =>
+    stage.phase === "construction" &&
+    !skipped.has(stage.slug) &&
+    (overrides.get(stage.slug) ?? mapping.stages[stage.slug]) === "EXECUTE"
+  ) ?? null;
+}
+
 // Completion approvals have a narrower grant than ordinary Construction
 // decisions. In particular, an early on-demand grant cannot approve the first
 // Construction stage, and the existing unit-major walk keeps its stage gates.
@@ -7639,7 +7661,7 @@ export function isAutonomousConstructionGate(
   if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
   const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
   if (!scope) return false;
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstConstructionApprovalStage(scope, stateContent!);
   if (first === null || first.slug === stage.slug) return false;
   return !(
     getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&

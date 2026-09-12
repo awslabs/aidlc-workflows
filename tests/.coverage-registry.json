@@ -10070,6 +10070,10 @@
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
