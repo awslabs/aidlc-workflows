@@ -427,8 +427,7 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 |---------|-----------------------------|
 | Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
-| Kiro CLI | Writes the AWS MCP URL and metadata in `.kiro/settings/mcp.json` |
-| Kiro IDE | Records and instructs only; the chat model must be selected manually in the IDE |
+| Kiro | Records and instructs only. This row's registry ships no `aws-mcp` entry to rewrite, and the chat model is chosen in the host — the IDE's model picker or the CLI's `/model` |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
 | GitHub Copilot | Records acknowledgement of the manual BYOK environment setup |
 | Cursor | Records acknowledgement of the manual provider and model-picker setup |
