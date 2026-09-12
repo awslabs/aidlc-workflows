@@ -489,12 +489,10 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain("explicit release-preparation or");
     expect(aidlc).toContain("version-bump PR");
     expect(aidlc).toContain("Every PR must preserve existing changelog entries");
-    expect(aidlc).toContain(
-      "Return `\"status\": \"failed\"` only when required evidence",
-    );
-    expect(aidlc).toContain("remains inaccessible after a reasonable fallback");
-    expect(aidlc).toContain("A search with no matches");
-    expect(aidlc).toContain('"status": "failed"');
+    expect(aidlc).toContain("The runner separately verifies");
+    expect(aidlc).toContain("do not add a second");
+    expect(aidlc).toContain('Return `"status": "complete"`');
+    expect(aidlc).not.toContain('"status": "failed"');
     expect(aidlc).toContain('"changedFiles"');
     expect(aidlc).toContain('"requiredCorrection"');
     expect(aidlc).toContain('"source": "DIFF"');
