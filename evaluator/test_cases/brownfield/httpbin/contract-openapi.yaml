@@ -1,0 +1,20 @@
+openapi: 3.0.0
+info:
+  title: httpbin /base64 error-handling contract
+  version: "1.0"
+# Bugfix task oracle (see _brownfield-task-defs/bugfix-httpbin-base64.md).
+# The Flask app is auto-detected/booted by the contract runner (no x-app needed).
+paths:
+  /base64/{value}:
+    get:
+      operationId: decode_base64
+      x-test-cases:
+        - name: valid base64url decodes to 200
+          path: /base64/SFRUUEJJTiBpcyBhd2Vzb21l
+          expected_status: 200
+        - name: malformed base64 returns 400 not 200
+          path: /base64/not-valid-base64-input
+          expected_status: 400
+        - name: wrong-length base64 returns 400 not 200
+          path: /base64/a
+          expected_status: 400

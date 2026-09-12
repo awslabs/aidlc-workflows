@@ -1,0 +1,18 @@
+name: bugfix-httpbin-base64
+description: "Brownfield BUGFIX — httpbin /base64 error handling (Flask/WSGI)"
+kind: brownfield
+task_type: bugfix
+# Repeatability: the seed is a frozen snapshot of psf/httpbin at this exact
+# upstream commit. Pinned so the testbed is durable — a re-run months later
+# scores against the identical code. Verified at preflight against
+# UPSTREAM_COMMIT (source of truth); a mismatch aborts the run loudly.
+upstream_repo: https://github.com/psf/httpbin
+upstream_commit: f7b02ae1c6f760a26d08e0e080097e6c9b2cc923
+# Brownfield: seed an existing repo, drive a modify-this-repo task, score
+# against a contract. No greenfield vision/golden-docs.
+seed_repo: seed/                       # pristine psf/httpbin (bug already latent)
+task: task.md                          # the modify-this-repo instruction
+contract_openapi: contract-openapi.yaml  # 3 explicit /base64 assertions
+framework: flask
+# Secondary regression gate: the testbed's own pytest suite (run by post_run).
+tags: [brownfield, bugfix, flask]

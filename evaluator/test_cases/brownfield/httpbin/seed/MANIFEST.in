@@ -1,0 +1,4 @@
+include README.md LICENSE.ISC LICENSE.MIT AUTHORS tox.ini
+recursive-include tests *.py
+recursive-include httpbin/templates *
+recursive-include httpbin/static *
