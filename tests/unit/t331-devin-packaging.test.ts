@@ -46,6 +46,8 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { trustedCommand } from "../../core/tools/aidlc-command.ts";
+import { HARNESS_HONESTY } from "../../core/tools/aidlc-model-policy.ts";
+import manifest from "../../harness/devin/manifest.ts";
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -405,6 +407,37 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(status, output).toBe(0);
       expect(output).toContain("Devin hook execution evidence: SessionStart last ran");
       expect(output).toContain("current hook approval is not verified");
+      expect(output).toContain("Devin subagent model:");
+      expect(output).toContain("Default subagent model");
+      expect(output).toContain("SWE-1.6");
+      expect(output).toContain("effective organization setting/model not inspected");
+      expect(output).toContain("None disables subagents");
+
+      const jsonRun = spawnSync(
+        "bun",
+        [join(project, ".devin", "tools", "aidlc-doctor.ts"), "--json", "--offline", "--project-dir", project],
+        {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".devin" },
+        },
+      );
+      expect(jsonRun.status, `${jsonRun.stdout}${jsonRun.stderr}`).toBe(0);
+      const envelope = JSON.parse(jsonRun.stdout) as {
+        data: {
+          checks: Array<{ pass: boolean; severity?: string; label: string }>;
+          warnings: number;
+          failed: number;
+        };
+      };
+      const advisory = envelope.data.checks.filter((check) =>
+        check.label.startsWith("Devin subagent model:"),
+      );
+      expect(advisory.length).toBe(1);
+      expect(advisory[0]!.pass).toBe(false);
+      expect(advisory[0]!.severity).toBe("warn");
+      expect(envelope.data.warnings).toBeGreaterThanOrEqual(1);
+      expect(envelope.data.failed).toBe(0);
 
       for (const bad of ["", "not-json", "null", "{}", '{"lastRun":123}', '{"lastRun":"not-a-date"}']) {
         writeFileSync(markerPath, bad, "utf-8");
@@ -469,7 +502,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       const claudeFm = claude.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
       const withoutTierProjection = (frontmatter: string) => frontmatter
         .split(/\r?\n/)
-        .filter((line) => !/^(?:tier|model|effort|variant):/.test(line))
+        .filter((line) => !/^(?:tier|model|effort|variant|allowed-tools):/.test(line))
         .join("\n");
       for (const field of ["display_name", "examples", "disallowedTools", "maxTurns"]) {
         const key = new RegExp(`^${field}:`, "m");
@@ -493,6 +526,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(fm).toMatch(/^display_name:\s*Product Agent/m);
     expect(fm).toMatch(/^examples:/m);
     expect(fm).toMatch(/^disallowedTools:\s*Task/m);
+    expect(fm).not.toMatch(/^allowed-tools:/m);
     // The architecture-reviewer has maxTurns in core; Claude keeps it.
     const reviewer = readFileSync(join(claudeAgents, "aidlc-architecture-reviewer-agent.md"), "utf-8");
     const reviewerFm = reviewer.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
@@ -566,5 +600,110 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     // It SHOULD explain that the engine resolves memory at runtime.
     expect(stub).toContain("engine");
     expect(stub.toLowerCase()).toContain("resolver");
+  });
+
+  test("9c: a Claude install gets no Devin subagent-model advisory", () => {
+    const root = mkdtempSync(join(tmpdir(), "t331-claude-doctor-"));
+    try {
+      const project = join(root, "project");
+      cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+      const r = spawnSync(
+        "bun",
+        [join(project, ".claude", "tools", "aidlc-doctor.ts"), "--json", "--offline", "--project-dir", project],
+        {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
+        },
+      );
+      const envelope = JSON.parse(r.stdout) as {
+        data: { checks: Array<{ label: string }> };
+      };
+      expect(
+        envelope.data.checks.filter((check) =>
+          check.label.startsWith("Devin subagent model:"),
+        ).length,
+      ).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("19: all 14 core Devin profiles carry the native allowed-tools allowlist", () => {
+    const expectedTools = ["read", "write", "edit", "apply_patch", "notebook_read", "notebook_edit", "grep", "glob", "exec", "get_output", "write_to_process", "kill_shell", "web_search", "webfetch", "todo_write", "request_scope", "mcp_list_servers", "mcp_list_tools", "mcp_call_tool", "mcp_read_resource"];
+    const coreDir = join(REPO_ROOT, "core", "agents");
+    const coreFiles = readdirSync(coreDir).filter((file) => file.endsWith("-agent.md")).sort();
+    expect(coreFiles.length).toBe(14);
+    expect(manifest.frontmatterAdditions!.filter(({ file }) => file.startsWith("agents/")).map(({ file }) => file.slice("agents/".length)).sort()).toEqual(coreFiles);
+    for (const root of [ENGINE, join(REPO_ROOT, "dist-release", "devin", ".devin")]) {
+      const invoke = root === ENGINE ? "bun .devin/tools/aidlc.ts" : "aidlc";
+      for (const file of coreFiles) {
+        const raw = readFileSync(join(root, "agents", file), "utf-8");
+        const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)!;
+        const fm = Bun.YAML.parse(match[1]) as Record<string, unknown>;
+        expect(fm["allowed-tools"], `${root}/${file}`).toEqual(expectedTools);
+        expect([...match[1].matchAll(/^allowed-tools:/gm)].length).toBe(1);
+        for (const key of ["tools", "model", "max-nesting"]) expect(key in fm).toBe(false);
+        const core = readFileSync(join(coreDir, file), "utf-8");
+        const coreMatch = core.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)!;
+        const coreFm = Bun.YAML.parse(coreMatch[1]) as Record<string, unknown>;
+        const withoutProjection = (fields: Record<string, unknown>) => Object.fromEntries(
+          Object.entries(fields).filter(([key]) => !["tier", "model", "effort", "variant", "allowed-tools"].includes(key)),
+        );
+        expect(withoutProjection(fm), `${root}/${file}: authored metadata`).toEqual(withoutProjection(coreFm));
+        const body = raw
+          .slice(match[0].length)
+          .replace(/^<!-- aidlc-delegated-knowledge-preflight -->\r?\n[^\n]*\r?\n\r?\n/, "")
+          .split("\n---\n\n<!-- Absorbed at build time")[0]!;
+        const coreBody = core
+          .slice(coreMatch[0].length)
+          .replaceAll("{{HARNESS_DIR}}", ".devin")
+          .replaceAll("{{INVOKE}}", invoke);
+        expect(body.trimEnd()).toBe(coreBody.trimEnd());
+      }
+    }
+  });
+
+  test("20: no other harness's agent tree carries the Devin allowlist", () => {
+    const allowlistLine = "allowed-tools: [read, write, edit, apply_patch, notebook_read, notebook_edit, grep, glob, exec, get_output, write_to_process, kill_shell, web_search, webfetch, todo_write, request_scope, mcp_list_servers, mcp_list_tools, mcp_call_tool, mcp_read_resource]";
+    const harnessDirs = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".github"];
+    const offenders: string[] = [];
+    for (const distRoot of ["dist", "dist-release"]) {
+      for (const harness of readdirSync(join(REPO_ROOT, distRoot))) {
+        if (harness === "devin" || harness === "plugins") continue;
+        const harnessRoot = join(REPO_ROOT, distRoot, harness);
+        for (const dirName of harnessDirs) {
+          const agentsDir = join(harnessRoot, dirName, "agents");
+          if (!existsSync(agentsDir)) continue;
+          for (const file of walk(agentsDir)) {
+            if (readFileSync(file, "utf-8").includes(allowlistLine)) {
+              offenders.push(file);
+            }
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("21: Devin onboarding explains the subagent model policy and native allowlist", () => {
+    for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
+      const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
+      expect(agents).toContain("Default subagent model");
+      expect(agents).toContain("SWE-1.6");
+      expect(agents).toContain("not automatic parent-model inheritance");
+      expect(agents).toContain("does not inspect the effective organization setting/model");
+      expect(agents).toContain("**None** disables subagents");
+      expect(agents).toContain("a Devin-native `allowed-tools` list without `run_subagent`, `read_subagent`, or `skill`");
+      expect(agents).toContain("the parent conductor owns delegation");
+      expect(agents).toContain("subject to their `allowed-tools` lists and host permissions");
+      expect(agents).not.toContain("subject to their `tools:` allowlists");
+    }
+  });
+
+  test("22: model-policy honesty names the default subagent model, not session inheritance", () => {
+    const message = HARNESS_HONESTY.devin.message;
+    expect(message).toContain("default subagent model");
+    expect(message).not.toContain("Devin CLI inherits the session model");
   });
 });

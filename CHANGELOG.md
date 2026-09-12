@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.5] - 2026-09-12
+
+Makes Devin's custom-agent model policy visible and projects native tool restrictions onto shipped core profiles. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.5` / `install.ps1 -Version 2.9.5`), refresh the shipped agent profiles and onboarding while preserving intentional local customizations, then restart Devin CLI. No workflow-record migration is required.
+
+* `/aidlc --doctor` and Devin onboarding explain that unpinned custom profiles use the organization's **Default subagent model** (documented router default: SWE-1.6), not automatic parent-model inheritance. The warning is advisory and does not claim to inspect the effective organization model.
+* Shipped Devin core profiles receive an `allowed-tools` list excluding direct subagent dispatch and skill invocation; core agent sources and other harnesses' agent permissions are unchanged.
+
 ## [2.9.4] - 2026-09-12
 
 `/aidlc --doctor` on Devin now fails when the project has no valid SessionStart hook execution evidence, replacing the unconditional hook-approval reminder. **Upgrade:** update the Devin adapter and doctor together (`aidlc update`, or `install.sh --version 2.9.4` / `install.ps1 -Version 2.9.4`), merge the new `.devin/.aidlc-session-start.local.json` ignore entry into your project `.gitignore`, then fully restart Devin CLI (`/clear` is not enough) so the SessionStart hook can record evidence. No workflow-record migration is required.

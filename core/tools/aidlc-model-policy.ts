@@ -163,7 +163,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: false,
     groupEffort: false,
     message:
-      "Devin CLI inherits the session model; agent surfaces carry no model keys.",
+      "AI-DLC does not project Devin model or effort overrides; shipped custom profiles use the default subagent model, not automatic parent-model inheritance. Ask an admin to review the organization's Default subagent model setting.",
   }),
 });
 

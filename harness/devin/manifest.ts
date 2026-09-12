@@ -19,6 +19,23 @@
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
+const DELEGATION_AGENTS = [
+  "aidlc-composer-agent",
+  "aidlc-developer-agent",
+  "aidlc-architect-agent",
+  "aidlc-product-lead-agent",
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-product-agent",
+  "aidlc-design-agent",
+  "aidlc-delivery-agent",
+  "aidlc-aws-platform-agent",
+  "aidlc-compliance-agent",
+  "aidlc-devsecops-agent",
+  "aidlc-quality-agent",
+  "aidlc-pipeline-deploy-agent",
+  "aidlc-operations-agent",
+] as const;
+
 const manifest: HarnessManifest = {
   name: "devin",
   productName: "Devin CLI",
@@ -114,6 +131,12 @@ const manifest: HarnessManifest = {
   frontmatterAdditions: [
     { file: "skills/aidlc-knowledge/SKILL.md", lines: ["triggers: [user]"] },
     { file: "skills/aidlc-outcomes-pack/SKILL.md", lines: ["triggers: [user]"] },
+    ...DELEGATION_AGENTS.map((agent) => ({
+      file: `agents/${agent}.md`,
+      lines: [
+        "allowed-tools: [read, write, edit, apply_patch, notebook_read, notebook_edit, grep, glob, exec, get_output, write_to_process, kill_shell, web_search, webfetch, todo_write, request_scope, mcp_list_servers, mcp_list_tools, mcp_call_tool, mcp_read_resource]",
+      ],
+    })),
   ],
 
   // plugin omitted → the packager derives the default `.devin-plugin` +

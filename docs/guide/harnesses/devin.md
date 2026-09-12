@@ -143,10 +143,28 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
   engine binary is invoked via `exec` (`bun .devin/tools/...`). The agent slug
   is passed as the `profile` field of each `run_subagent` call (the adapter and
   the `deliver-stage-rules` / `plan-approval-guard` hooks match on
-  `tool_input.profile`, not the prompt text). **Dispatched agents run on the
-  default subagent model (SWE-1.6 by default), not the parent's model** — the
-  AIDLC agent files carry no `model:` frontmatter. To run dispatched agents on
-  your primary model, set the org/enterprise "Default subagent model" to it.
+  `tool_input.profile`, not the prompt text). Shipped AI-DLC custom profiles
+  carry no `model:` and use the **default subagent model**, not automatic
+  inheritance of the parent's model. The documented Subagent router default is
+  SWE-1.6; an org/enterprise admin can select another model in **Default
+  subagent model**, or **None** to disable subagents. The default can coincide
+  with the parent's selected model. Custom profiles can also pin `model:`;
+  AI-DLC does not project those overrides. `/aidlc --doctor` warns about the
+  shipped policy but does not inspect the effective organization
+  setting/model. See
+  [Devin model resolution](https://docs.devin.ai/cli/subagents#which-model-does-a-subagent-use).
+- **Subagent tool restriction** — the Devin projection adds an explicit
+  `allowed-tools` list to every shipped core agent profile, excluding
+  `run_subagent`, `read_subagent`, and `skill`; the parent conductor owns
+  dispatch. This enforces direct tool exclusion independently of the default
+  nesting depth. The retained `disallowedTools: Task` metadata is for other
+  harnesses and is not the Devin enforcement mechanism. Devin documents
+  `allowed-tools` as a restrictive list (all tools when omitted; `tools` is an
+  alias), and always withholds `ask_user_question` from subagents. Shell and
+  external-service behavior still depend on host permissions; this is not a
+  general sandbox. This profile-level tool availability is distinct from the
+  project permission auto-approval list in `.devin/config.json`. See
+  [Devin profile fields](https://docs.devin.ai/cli/subagents#frontmatter-fields).
 - **Method ambient context** — `.devin/rules/aidlc.md` is auto-loaded by Devin
   (no `@`-import chain, unlike Claude). AIDLC's stage resolver reads
   `aidlc/spaces/<space>/memory/` directly, so stage correctness is unaffected.
@@ -210,7 +228,11 @@ hook approval. The marker path is ignored by the shipped `.gitignore`;
 existing installs must update the adapter and doctor together, merge the new
 ignore entry, and fully restart Devin CLI to generate evidence. The MCP check
 verifies registry presence, not live MCP availability; disabled servers do not
-fail it.
+fail it. `/aidlc --doctor` also warns (non-failing) about the shipped subagent
+model policy but does not inspect the effective organization setting/model.
+Existing installs should update AIDLC, refresh the shipped agent profiles and
+onboarding while preserving intentional local customizations, and restart
+Devin CLI; no workflow-record migration is required.
 
 `devin doctor --json` emits CFG005 warnings for `display_name`, `examples`,
 `disallowedTools`, and `maxTurns` on `.devin/agents/*.md` when those fields are

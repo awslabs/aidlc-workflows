@@ -3209,6 +3209,12 @@ export async function collectDoctorReport(
       label: devinVerResult.label,
       fix: devinVerResult.fix || undefined,
     });
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: "Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)",
+      fix: 'Ask an organization/enterprise admin to review "Default subagent model" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker.',
+    });
     // Desktop discovery advisory (advisory pass-with-label): if the Desktop
     // binary was discovered, note that Desktop execution is separately
     // unverified. If neither PATH nor Desktop found the binary, the main

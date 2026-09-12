@@ -127,6 +127,10 @@ describe("t333 ensemble protocol harness-binding parity", () => {
     expect(body).toContain("ask_user_question");
     // The nesting-depth-0 rule (the parent dispatches every participant).
     expect(body).toContain("nesting depth defaults to 0");
+    expect(body).toContain("allowed-tools");
+    expect(body).toContain("excluding");
+    expect(body).toContain("effective organization setting/model");
+    expect(body).not.toContain("latent gap");
   });
 
   test("the Devin SKILL.md carries the must-dispatch instruction", () => {
