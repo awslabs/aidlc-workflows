@@ -288,7 +288,7 @@ Before initial protected prepare, the approved parent application source must
 be committed and reproducible. In particular, commit the approved inline
 skeleton source before preparing parallel Units. This is an explicit action;
 the tool never commits automatically and checks all Units before creating any
-child. See [Swarm prepare](12-cli-commands.md#aidlc-engine-swarm-prepare---prepare-a-reproducible-batch).
+child. See [Swarm prepare](12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
 ```mermaid
 flowchart LR

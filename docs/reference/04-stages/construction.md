@@ -171,7 +171,7 @@ A rejected batch with `resume_existing: true` requires fresh Plan Approval and
 metadata. If native source landing removed a child, the tool can recreate it from
 the already-landed parent source when the required landing evidence exists,
 retaining the rejection revision. It does not promise preservation of every
-post-merge child. See [Swarm prepare](../../guide/12-cli-commands.md#aidlc-engine-swarm-prepare---prepare-a-reproducible-batch).
+post-merge child. See [Swarm prepare](../../guide/12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
 **Failure handling.** A Code Generation failure always halts Construction
 regardless of autonomy mode. Options are retry (re-run just the failed
