@@ -1400,11 +1400,21 @@ if (target === "enforce-approval-gate") {
 }
 
 // Maintain the delegation latch before any target runs, so a guard registered on
-// the same event still sees an accurate inflight set. Placed here rather than
-// inside one target because several targets are registered on the dispatch tools;
-// the latch is keyed by payload, so being called from more than one of them for
-// the same event is a no-op rather than a double count.
-if (INPUT_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) === 0) {
+// the same event still sees an accurate inflight set.
+//
+// ONE target owns the ledger, and it is `log-subagent` because that is the only
+// target registered on BOTH edges of a dispatch. This used to run for every
+// INPUT_TARGET on the reasoning that the ledger is keyed by payload, so a second
+// caller for the same event would be "a no-op rather than a double count". That
+// was wrong: `openDelegation` mints a FRESH group per call, and a close cancels
+// only the most-recent group for the key. Dispatch tools match two ledger-writing
+// targets on PreToolUse (`log-subagent`, `plan-approval-guard`) and one on
+// PostToolUse, so every dispatch opened two groups and closed one — leaving a
+// window inflight until its TTU. A live legacy window then kept the lifecycle
+// guard refusing the main session's own verbs, which is the wedge measured on a
+// real run: `next` was refused with the composer named as the caller long after
+// the composer had finished.
+if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
   const dispatchTool = ide.toolName ?? "";
   const isDispatch =
     DISPATCH_TOOL_NAMES.has(dispatchTool) ||

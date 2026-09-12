@@ -1158,6 +1158,40 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("5d4: a second target on the same dispatch event opens no second window", () => {
+    // Regression, measured on a real run: dispatch tools match TWO ledger-writing
+    // targets on PreToolUse (`log-subagent`, `plan-approval-guard`) but only one
+    // on PostToolUse. The ledger write used to run for every INPUT_TARGET on the
+    // reasoning that a repeat for the same event was "a no-op rather than a double
+    // count" - but `openDelegation` mints a fresh group per call and a close
+    // cancels only the most-recent group, so every dispatch opened two and closed
+    // one. The leftover window kept the lifecycle guard refusing the MAIN
+    // session's own verbs with the finished delegate named as the caller.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      const crew = ["aidlc-composer-agent"];
+      openCrewWindow(dir, crew);
+      // The same host event, delivered to the other target registered on it.
+      runAdapter(dir, "plan-approval-guard", crewPayload(dir, crew, "PreToolUse"));
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "the window is open once, not twice",
+      ).toBe(2);
+      closeCrewWindow(dir, crew);
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "one close releases the dispatch, whatever else saw the same event",
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
     // Regression: with two DIFFERENT personas inflight the adapter used to forward
     // an empty identity, so the core guard passed the call through - the exact gap

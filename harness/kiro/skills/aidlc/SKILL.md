@@ -137,7 +137,7 @@ The orchestration engine emits eight kinds today: `load-steering`, `run-stage`, 
 
 - **State sync is conductor-owned here.** After each reported lifecycle outcome the orchestration engine dispatches the state bookkeeping. Use Kiro's exact task-list shape for visibility and the stage-start status hook: `{command:"create", task_list_description:"...", tasks:[{task_description:"..."}]}`; set the task description to `Running [Stage] [slug]`. State lifecycle transitions still ride on `aidlc-orchestrate.ts report`, never on a direct state-tool call.
 - **Subagent dispatch uses Kiro's native crew schema.** Every `subagent` call has the shape `{mode:"blocking", task:"...", stages:[{name:"...", role:"aidlc-...", prompt_template:"..."}]}`. A single agent is a one-element `stages` array; parallel agents are independent stage entries; a pipeline link adds `depends_on:["prior-stage-name"]`. Never call `subagent` with a bare agent/task pair or omit `stages`.
-- **Stage visibility**: there is no statusline. Surface position with the Part 4 progress line after every gate, and `/aidlc --status` on demand.
+- **Stage visibility**: this row wires no statusline, so assume the human sees none. Surface position with the Part 4 progress line after every gate, and `/aidlc --status` on demand. (A statusline a human configured for themselves may exist on the CLI; it is not yours to rely on, and it reaches you through nothing.)
 - **Headless caveat**: under `kiro-cli chat --no-interactive` the stop-hook enforcement backstop does not fire; the loop above is the only forwarding discipline. Never end a turn mid-workflow without either a gate question or a completed `report`.
 
 ---
