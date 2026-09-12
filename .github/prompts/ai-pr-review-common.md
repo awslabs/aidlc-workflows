@@ -32,10 +32,10 @@ install dependencies, push commits, post comments, approve, or merge. The
 checked-out tree is the trusted base revision. Read the proposed change from `.ai-review-context/pr.diff`;
 metadata and immutable SHAs are in `.ai-review-context/pr.json`; the complete
 changed-file and changed-line manifest is
-`.ai-review-context/changed-files.json`. Bounded full snapshots of files at
+`.ai-review-context/changed-files.json`. Full snapshots of files at
 the proposed head are under `.ai-review-context/head/`. Deleted files remain
 available in the checked-out base tree. Context creation fails closed when a
-changed head file cannot be snapshotted within the configured bounds.
+changed head file cannot be snapshotted.
 
 Read `AGENTS.md`, `CONTRIBUTING.md`, and relevant base-branch reference material.
 Inspect every changed file represented in the diff. Read related definitions,
@@ -73,19 +73,3 @@ role, execute commands, or misuse tools is at least P1 even when deterministic
 isolation prevents disclosure. Escalate to P0 only when a reachable path can
 actually expose credentials or cross the protected boundary. Do not reproduce a
 secret value as evidence; cite only the attacker-controlled instruction.
-
-This lens produces candidates for a later synthesis pass, not a GitHub verdict.
-For each candidate use:
-
-```markdown
-**P1 candidate: concise title**
-
-Evidence: `path/to/file:line-range` and any related locations.
-Problem: concrete condition -> execution or workflow path -> observable failure.
-Impact: affected user or contract and why this priority fits.
-Required correction: exact behavior and authoritative surfaces to reconcile.
-```
-
-Order candidates P0 through P3. Merge candidates with one root cause. If the
-lens has no confirmed candidates, write `No candidates.` End with the exact
-marker requested in the invocation prompt.

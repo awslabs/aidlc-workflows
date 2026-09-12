@@ -10,9 +10,6 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 const MAX_CHANGED_FILES = 500;
-const MAX_DIFF_BYTES = 5_000_000;
-const MAX_FILE_BYTES = 1_000_000;
-const MAX_SNAPSHOT_BYTES = 20_000_000;
 const MAX_REVIEW_BYTES = 100_000;
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
@@ -76,6 +73,10 @@ export interface Finding {
 export interface StructuredReview {
   base: string;
   head: string;
+  inspection: {
+    status: "complete";
+    changedFiles: string[];
+  };
   validation: string[];
   findings: Finding[];
   residualRisk: string;
@@ -104,7 +105,7 @@ function git(args: string[], encoding?: BufferEncoding, cwd = process.cwd()): Bu
   return execFileSync("git", args, {
     cwd,
     encoding,
-    maxBuffer: MAX_SNAPSHOT_BYTES + MAX_DIFF_BYTES,
+    maxBuffer: Number.POSITIVE_INFINITY,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
@@ -171,12 +172,9 @@ function rangesFromDiff(
   });
 }
 
-function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoDir: string): number {
-  if (file.status.startsWith("D")) return 0;
+function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoDir: string): void {
+  if (file.status.startsWith("D")) return;
   const content = git(["show", `${head}:${file.path}`], undefined, repoDir) as Buffer;
-  if (content.byteLength > MAX_FILE_BYTES) {
-    throw new Error(`${file.path} exceeds the ${MAX_FILE_BYTES}-byte snapshot limit`);
-  }
   const snapshot = join("head", file.path);
   const destination = resolve(outputDir, snapshot);
   const root = `${resolve(outputDir)}${sep}`;
@@ -184,7 +182,6 @@ function writeSnapshot(outputDir: string, head: string, file: ChangedFile, repoD
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, content);
   file.snapshot = snapshot;
-  return content.byteLength;
 }
 
 function contextDigest(root: string): string {
@@ -222,9 +219,6 @@ export function buildContext(
     undefined,
     repoDir,
   ) as Buffer;
-  if (diff.byteLength > MAX_DIFF_BYTES) {
-    throw new Error(`PR diff exceeds ${MAX_DIFF_BYTES} bytes`);
-  }
   writeFileSync(join(outputDir, "pr.diff"), diff);
 
   const entries = parseNameStatus(
@@ -239,13 +233,9 @@ export function buildContext(
   }
   const ranges = rangesFromDiff(diff.toString("utf8"), entries.length);
 
-  let snapshotBytes = 0;
   const files = entries.map((entry, index) => {
     const file: ChangedFile = { ...entry, ...ranges[index] };
-    snapshotBytes += writeSnapshot(outputDir, head, file, repoDir);
-    if (snapshotBytes > MAX_SNAPSHOT_BYTES) {
-      throw new Error(`head snapshots exceed ${MAX_SNAPSHOT_BYTES} bytes`);
-    }
+    writeSnapshot(outputDir, head, file, repoDir);
     return file;
   });
   const manifest = { base, head, files };
@@ -301,6 +291,42 @@ export function validateStructuredReview(
   if (manifest.base !== expectedBase || manifest.head !== expectedHead) {
     throw new Error("changed-file manifest does not match the immutable context");
   }
+
+  if (
+    !candidate.inspection ||
+    typeof candidate.inspection !== "object" ||
+    Array.isArray(candidate.inspection)
+  ) {
+    throw new Error("inspection must be an object");
+  }
+  const inspectionCandidate = candidate.inspection as Record<string, unknown>;
+  if (inspectionCandidate.status !== "complete") {
+    throw new Error("inspection did not complete");
+  }
+  if (!Array.isArray(inspectionCandidate.changedFiles)) {
+    throw new Error("inspection.changedFiles must be an array");
+  }
+  const changedFiles = inspectionCandidate.changedFiles.map((value, index) => {
+    if (typeof value !== "string") {
+      throw new Error(`inspection.changedFiles[${index}] must be a string`);
+    }
+    return value;
+  });
+  if (new Set(changedFiles).size !== changedFiles.length) {
+    throw new Error("inspection.changedFiles must not contain duplicates");
+  }
+  const expectedFiles = manifest.files.map(file => file.path).sort();
+  const inspectedFiles = [...changedFiles].sort();
+  if (
+    inspectedFiles.length !== expectedFiles.length ||
+    inspectedFiles.some((path, index) => path !== expectedFiles[index])
+  ) {
+    throw new Error("inspection.changedFiles must exactly match the changed-file manifest");
+  }
+  const inspection: StructuredReview["inspection"] = {
+    status: "complete",
+    changedFiles,
+  };
 
   if (!Array.isArray(candidate.validation) || candidate.validation.length === 0) {
     throw new Error("validation must be a non-empty string array");
@@ -386,7 +412,14 @@ export function validateStructuredReview(
   });
 
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
-  return { base: expectedBase, head: expectedHead, validation, findings, residualRisk };
+  return {
+    base: expectedBase,
+    head: expectedHead,
+    inspection,
+    validation,
+    findings,
+    residualRisk,
+  };
 }
 
 function markdownText(value: string): string {
@@ -408,6 +441,10 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   const lines = [
     `<!-- ai-pr-review context=${contextId} -->`,
     `Reviewed \`${review.head}\` against \`${review.base}\` and current repository behavior.`,
+    "",
+    `Inspection: ${review.inspection.changedFiles.length} changed ${
+      review.inspection.changedFiles.length === 1 ? "file" : "files"
+    }.`,
     "",
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),

@@ -61,7 +61,6 @@ import {
   requireLiveClaimForTeamUnit,
   resolveBoltDag,
   resolveProjectDir,
-  setFieldStrict,
   setOrInsertField,
   validateUnitName,
   slugify,
@@ -1134,9 +1133,25 @@ function handleSetAutonomy(args: string[]): void {
     }
 
     // Validate state-file shape before the audit-first mutation.
+    //
+    // `Construction Autonomy Mode` is declared by the shipped state template
+    // (knowledge/aidlc-shared/state-template.md, under `## Current Status`) but
+    // the generator does not emit it, so a real state file usually lacks the
+    // line. setFieldStrict throws "Field not found in state file" in that case,
+    // which made the grant unrecordable and `autonomous` unreachable — see
+    // issue #1045. setOrInsertField writes it where the template declares it,
+    // healing both freshly generated and pre-existing state files without an
+    // init-time shape change or a migration. The shape check survives:
+    // appendUnderHeading throws when `## Current Status` is absent, so a
+    // malformed state file still fails closed before the audit-first mutation.
     let updated: string;
     try {
-      updated = setFieldStrict(content, "Construction Autonomy Mode", flags.mode);
+      updated = setOrInsertField(
+        content,
+        "## Current Status",
+        "Construction Autonomy Mode",
+        flags.mode,
+      );
     } catch (e) {
       error(`State update failed: ${errorMessage(e)}`);
     }

@@ -42,20 +42,45 @@ EXECUTE stage (`isSkeletonGateStage`) always presents a stage-level approval
 gate regardless of autonomy mode. That gate covers that stage's artifacts
 across the Units that have settled — not a Bolt's combined design artifacts
 and generated code. Audit: emit `GATE_APPROVED` as usual. `BOLT_COMPLETED`
-is not emitted on this gate. Skeleton-off uses the ordinary first-stage gate;
+is not emitted on this gate. Skeleton-off retains the ordinary first-stage
+approval too. An on-demand `autonomous` grant may be recorded before that stage,
+but it waives only subsequent eligible completion gates, not this first review;
 a zero-Unit stage has no skeleton or Bolt ceremony at all.
 
 > **Planned (non-executable).** A later Bolt-major walk would present a
 > Bolt-level gate covering that Bolt's design artifacts and generated code
 > together, with the enclosing `BOLT_COMPLETED` tying the gate to the Bolt.
 
-**Ladder prompt (fires once, immediately after walking skeleton gate)**
+**Autonomy grant — the ladder prompt, and the on-demand path**
 
-After an actual walking skeleton's gate approves, present exactly one ladder
-prompt. Do not present it for skeleton-off or zero-Unit execution:
+`Construction Autonomy Mode` is the human's grant and governs the remaining
+Construction stage gates. Two paths set it, and both record it exactly the same
+way, through `aidlc-bolt.ts set-autonomy --mode <choice>`:
+
+- **The ladder prompt** — the prompted path, under skeleton-on. Present exactly
+  one per intent, after the walking-skeleton stage gate approves, if no autonomy
+  choice has already been recorded. On the shipped stage-major walk this is a
+  review of the first Construction stage, not proof that a whole Bolt shipped.
+  Do not present it for zero-Unit execution or repeat an on-demand choice.
+- **On demand** — at ANY point during Construction, whenever the human asks in
+  a typed message ("run the rest autonomously", "gate every stage from here").
+  This is the only path available under `skeleton: off`, where there is no
+  skeleton gate to hang a prompt on, and it is equally available under
+  skeleton-on to a human who wants the grant earlier than the skeleton gate or
+  wants to revoke it later. Never infer it: act only on an explicit request.
+
+Either way the escalation to `autonomous` still requires a fresh human turn —
+`set-autonomy` refuses otherwise — so an unattended run cannot grant itself more
+autonomy. De-escalation to `gated` carries no presence requirement.
+
+The grant changes completion approval policy; it does not approve unanswered
+Code Generation plans, change iteration order, or turn unit-major execution
+into a swarm. The first Construction-stage approval remains human-owned in
+every stance. Under the existing unit-major walk, per-unit stages also retain
+their late human approval cascade.
 
 ```question
-prompt: "The walking skeleton shipped. How should the remaining Bolts run?"
+prompt: "How should the remaining Construction stages run?"
 header: Autonomy
 multiSelect: false
 options:
@@ -70,7 +95,11 @@ The shipped option labels still say "remaining Bolts" / "Gate every Bolt"; they 
 - Record the answer in `aidlc-state.md` as `Construction Autonomy Mode: autonomous` or `Construction Autonomy Mode: gated` via `aidlc-bolt.ts set-autonomy --mode <choice>` (which emits `AUTONOMY_MODE_SET` itself).
 - The ladder choice is set-autonomy-owned, like an approval choice is report-owned: do NOT call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Switching to `autonomous` requires the human's fresh turn (the ladder answer) — logging the choice as an interview answer first would consume that turn and the mode switch would refuse.
 - On the default walk, `autonomous` skips the remaining Construction stage gates except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle `gate: true` re-entry (the conductor auto-approves that settle under autonomy).
-- Session resume: if `Construction Autonomy Mode: unset` but the walking skeleton is already `[x]` complete, re-fire the ladder prompt before executing the next Construction stage.
+- Session resume: under skeleton-on, if `Construction Autonomy Mode: unset`
+  and the walking skeleton is already `[x]` complete, re-fire the ladder prompt
+  before executing the next Construction stage. Under skeleton-off there is no
+  prompt to re-fire; the mode stays `unset` (treated as `gated`) until the human
+  asks for a grant on demand.
 
 **Subsequent Bolt gate (per autonomy mode)**
 

@@ -181,6 +181,14 @@ const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
   "grep",
   "web_fetch",
   "web_search",
+  // `disclose_context` activates skills or steering files into context. Kiro
+  // documents it under Context tools beside `introspect` and `knowledge` and
+  // gives it no write surface; anything an activated skill then asks for is
+  // still gated by its own PreToolUse call, and approval authority comes from
+  // the active directive and disk receipts, never from activated context. So it
+  // cannot mutate the workspace during a Plan Approval window, while denying it
+  // stopped a Windows customer mid-workflow (#1039).
+  "disclose_context",
   "thinking",
   "todo_list",
 ]);

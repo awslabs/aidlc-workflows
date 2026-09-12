@@ -2805,7 +2805,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       for (const toolName of [
         "read", "fs_read", "read_file", "read_files", "read_code",
         "list_directory", "file_search", "glob", "grep_search", "grep",
-        "web_fetch", "web_search",
+        "web_fetch", "web_search", "disclose_context",
       ]) {
         const modern = runIdeStdin(
           dir,
@@ -2904,6 +2904,61 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           }),
         ).code,
       ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // #1039 (latch path): the legacy write-recovery latch classifies through the
+  // same `mutationCapableTool()` predicate as the approval window, so a Kiro read
+  // arriving while the latch is open was denied for a legacy write that never
+  // completed PostToolUse mediation. Listed reads must pass while the write and
+  // shell denies on the latch stay in place. Adapted from #1040.
+  test("Kiro reads including disclose_context pass the legacy write-recovery latch while writes and shell stay denied (#1039)", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const statePath = seededStateFile(dir);
+      rmSync(statePath, { force: true });
+      expect(
+        runIde(dir, "audit-and-sensors", ctx("fs_write", `Deleted the ${statePath} file.`)).code,
+      ).toBe(0);
+      const latched = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} }));
+      expect(latched.code, latched.stderr).toBe(2);
+      expect(latched.stderr).toContain("did not complete PostToolUse mediation");
+      for (const toolName of [
+        "read_file", "read_files", "list_directory", "read_code", "fs_read",
+        "web_fetch", "disclose_context",
+      ]) {
+        const legacy = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName, toolArgs: {} }));
+        expect(legacy.code, `legacy ${toolName}: ${legacy.stderr}`).toBe(0);
+        const modern = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            cwd: dir,
+            tool_name: toolName,
+            tool_input: { path: join(dir, "README.md") },
+          }),
+        );
+        expect(modern.code, `1.x ${toolName}: ${modern.stderr}`).toBe(0);
+      }
+      // The latch still denies writes and shell. The legacy writes are denied *as
+      // the latch* -- the reason line distinguishes that branch from the ordinary
+      // pre-approval deny -- while a shell name routes to legacy recovery instead
+      // and fails closed there, so only its exit code is asserted.
+      for (const toolName of ["fs_write", "str_replace"]) {
+        const denied = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName, toolArgs: {} }));
+        expect(denied.code, `${toolName}: ${denied.stderr}`).toBe(2);
+        expect(denied.stderr, toolName).toContain("did not complete PostToolUse mediation");
+      }
+      const shell = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "execute_bash", toolArgs: {} }));
+      expect(shell.code, `execute_bash: ${shell.stderr}`).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

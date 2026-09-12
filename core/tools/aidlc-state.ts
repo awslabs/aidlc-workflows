@@ -80,7 +80,7 @@ import {
   humanPresenceGuardDisabled,
   unattendedHumanPresenceHint,
   intentRepos,
-  isAutonomousConstructionDecision,
+  isAutonomousConstructionGate,
   isAutonomousMode,
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
@@ -5374,7 +5374,7 @@ function verifyApprovalDecision(
   forceHuman = false,
 ): { approvalInput: string | undefined; autonomousDecision: boolean } {
   const autonomousDecision =
-    !forceHuman && isAutonomousConstructionDecision(content, stage.phase);
+    !forceHuman && isAutonomousConstructionGate(content, stage);
   const approvalInput = userInput?.trim();
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
@@ -5847,7 +5847,7 @@ function handleReject(args: string[]): void {
     );
   }
   const autonomousDecision =
-    !teamGate && isAutonomousConstructionDecision(content, stage.phase);
+    !teamGate && isAutonomousConstructionGate(content, stage);
   if (
     !autonomousDecision &&
     feedbackStatus === "not-applicable" &&

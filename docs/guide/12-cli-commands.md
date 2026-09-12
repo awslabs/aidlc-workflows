@@ -1019,6 +1019,31 @@ projection implements the same operations with Bun/TypeScript tools under the
 harness directory, and direct tool calls remain useful for plumbing that has no
 public route. Prefer `aidlc` whenever a route is documented below.
 
+### `aidlc engine bolt set-autonomy` - change Construction approvals
+
+During Construction, ask in a typed message to "run the rest autonomously" or
+"gate every stage from here". Both requests work with skeleton-on or
+`skeleton: off`; skeleton-off has no automatic ladder prompt. The conductor
+records the explicit choice through:
+
+```bash
+aidlc engine bolt set-autonomy --mode autonomous
+aidlc engine bolt set-autonomy --mode gated
+```
+
+Both commands update `Construction Autonomy Mode` in `aidlc-state.md` and emit
+`AUTONOMY_MODE_SET`. Granting `autonomous` requires a fresh human turn; switching
+back to `gated` restores subsequent human approvals without requiring a fresh
+turn.
+
+On the default stage-major walk, autonomy skips later eligible Construction
+completion approvals. The first in-scope Construction stage still requires its
+own human approval, even if autonomy was granted earlier, and each Unit's Code
+Generation Plan Approval remains mandatory. Existing unit-major execution stays
+serial, suppresses swarm, and retains human stage gates for per-unit stages.
+See [Construction Execution](../reference/03-orchestrator.md#construction-execution)
+for the ladder and failure-handling rules.
+
 ### `aidlc engine workspace codekb` - resolve the code knowledge directory
 
 Use the public read-only query:

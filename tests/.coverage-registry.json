@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 965,
+    "total": 966,
     "enumeratedByClass": {
-      "function": 656,
+      "function": 657,
       "audit": 98,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 390,
+      "function": 391,
       "audit": 56,
       "scope": 11,
       "stage": 11,
@@ -3442,6 +3442,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAutonomousConstructionGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9298,6 +9310,10 @@
         {
           "file": "tests/unit/t33.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10054,6 +10070,10 @@
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10287,6 +10307,10 @@
         },
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
           "mechanism": "cli"
         }
       ],

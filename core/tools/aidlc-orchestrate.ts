@@ -137,6 +137,7 @@ import {
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
+  isAutonomousConstructionGate,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -2436,10 +2437,17 @@ function scopeDefaultSkeletonStance(scope: string): SkeletonStance {
 // Both skeleton-on AND skeleton-off present a gate at Bolt 1: skeleton-on forces
 // an always-gate "regardless of Construction Autonomy Mode" (SKILL.md Step 5 /
 // "When skeleton-on" §1); skeleton-off runs Bolt 1 "as a regular Bolt with the
-// standard batch-gate path", and since `Construction Autonomy Mode` is `unset`
-// (treated as `gated`) until the post-Bolt-1 ladder prompt sets it, that batch
-// gate IS presented (it is only skipped when `autonomous`, which cannot be true
-// before Bolt 1 ships). The stance changes the CEREMONY (solo + always-gate +
+// standard batch-gate path". NOTE the NODE gate this function resolves is not
+// the Bolt-level gate: this one is the stage approval gate for the skeleton-gate
+// stage (the first in-scope Construction EXECUTE stage — a design stage such as
+// functional-design in scopes that run one, code-generation in scopes that do
+// not), and it stays `true` in every stance so that stage is always reviewed.
+// The autonomy-governed gates are the REMAINING Construction stage gates, and
+// the human can now grant autonomy ON DEMAND at any point in Construction (see
+// aidlc-common/protocols/stage-protocol-construction.md § Autonomy grant), so an
+// `autonomous` grant can predate the first of them. The earlier rationale here —
+// that autonomy "cannot be true before Bolt 1 ships" — no longer holds and must
+// not be relied on. The stance changes the CEREMONY (solo + always-gate +
 // ladder prompt vs regular Bolt + batch gate) — orchestration the conductor
 // runs — not whether a gate is presented at Bolt 1. The gate axis is on for all
 // construction work (only bootstrap init stages auto-proceed; gate-axis ≠
@@ -2460,8 +2468,9 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
       // skeleton-on: always-gate at Bolt 1.
       return true;
     case "off":
-      // skeleton-off: regular Bolt; the standard gate is still presented at
-      // Bolt 1 (autonomy is gated until the post-Bolt-1 ladder sets it).
+      // skeleton-off: regular Bolt. This NODE gate (the skeleton-gate stage's
+      // own approval gate) is still presented — the autonomy-governed gates are
+      // the REMAINING Construction stage gates.
       return true;
     case "scope-dependent": {
       // Fall back to the active scope's metadata to SELECT the ceremony.
@@ -5173,14 +5182,23 @@ function applySettledSwarmShape(
 //
 // On any trigger miss it returns false and emits nothing, so the caller falls
 // back to the normal run-stage emit (which keeps its computed gate, including the
-// skeleton round-trip sentinel). The skeleton Bolt 1 is protected two ways:
-// temporally (autonomy stays unset until the ladder fires after Bolt 1 ships) AND
-// structurally: the isSkeletonGateStage guard below refuses to swarm the
-// walking-skeleton gate stage regardless of autonomy state. The structural guard
-// matters for scopes where the per-unit build stage (code-generation) IS the
-// skeleton-gate stage (poc / bugfix / security-patch): there the skeleton's
-// always-gated approval must never be bypassed by a stray autonomous setting, so
-// the engine enforces it rather than trusting the conductor's ordering.
+// skeleton round-trip sentinel). The skeleton Bolt 1 is protected STRUCTURALLY:
+// the isSkeletonGateStage guard below refuses to swarm the walking-skeleton gate
+// stage regardless of autonomy state. That structural guard is now the only
+// protection, and it is sufficient: it matters for scopes where the per-unit
+// build stage (code-generation) IS the skeleton-gate stage (poc / bugfix /
+// security-patch), where the skeleton's always-gated approval must never be
+// bypassed by a stray autonomous setting, so the engine enforces it rather than
+// trusting the conductor's ordering.
+//
+// It used to ALSO be protected temporally ("autonomy stays unset until the
+// ladder fires after Bolt 1 ships"). That premise no longer holds: the human can
+// grant autonomy on demand at any point in Construction, so an autonomous grant
+// can predate the first Unit-building stage by design (see
+// aidlc-common/protocols/stage-protocol-construction.md § Autonomy grant).
+// Scopes whose first Construction EXECUTE stage is a design stage therefore DO
+// swarm code-generation from the first Unit; scopes where code-generation is
+// itself the skeleton-gate stage still cannot, via the structural guard.
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -8542,7 +8560,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const protectedTeamHumanGate =
         stageCheckbox.state !== "completed" &&
-        readAutonomyMode(stateContent) !== "autonomous" &&
         process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
@@ -8654,7 +8671,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const protectedHumanGate =
     isGated &&
     stageCheckbox.state !== "completed" &&
-    readAutonomyMode(stateContent) !== "autonomous" &&
+    !isAutonomousConstructionGate(stateContent, node) &&
     resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
 
   if (flags.overrideBlockingSensors) {
