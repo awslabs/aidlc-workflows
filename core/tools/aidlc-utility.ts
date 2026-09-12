@@ -3741,6 +3741,7 @@ export async function collectDoctorReport(
   // environment that produces drops, so an unreadable dir/file is named
   // rather than reported "none recorded".
   const advisoryEntries: string[] = [];
+  let repairDropsRecorded = false;
   let dropsUnreadable = 0;
   if (heartbeatDirExists) {
     try {
@@ -3753,6 +3754,16 @@ export async function collectDoctorReport(
           if (lines.length === 0) continue;
           const hook = f.replace(".drops", "");
           const reasons = lines.map((l) => l.split("\t").slice(1).join(" "));
+          if (hook === "testing-contract-repair") {
+            repairDropsRecorded = true;
+            results.push({
+              pass: false,
+              severity: "warn",
+              label: `Testing-posture contract was read via repair (historical): ${lines.length} read(s); ${[...new Set(reasons)].join("; ")}`,
+              fix: `Inspect the named plan file(s) and ${join(healthDir, f)}. Regenerate valid Testing Contract JSON through the normal plan-approval workflow; investigate the writer. Retire this log only after investigation. This history does not prove current corruption or a fixed Devin CLI version.`,
+            });
+            continue;
+          }
           const degraded = reasons.filter((r) => r.includes("[degraded]"));
           if (degraded.length > 0) {
             const last = reasons[reasons.length - 1].slice(0, 160);
@@ -3789,7 +3800,7 @@ export async function collectDoctorReport(
       pass: true,
       label: `Hook drops recorded (advisory): ${advisoryEntries.join(", ")} - a hook swallowed a failure and fail-opened; inspect the named .drops file(s) under .aidlc-hooks-health/ for the reasons, then delete them once investigated`,
     });
-  } else {
+  } else if (!repairDropsRecorded) {
     results.push({
       pass: true,
       label: "Hook drops: none recorded",

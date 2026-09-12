@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.7] - 2026-09-12
+
+Makes the temporary Testing Contract JSON repair visible without changing contract validation. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.7` / `install.ps1 -Version 2.9.7`) to refresh the parser and doctor together. Existing repair history is not backfilled; regenerate affected plans through normal approval before retiring the workaround.
+
+* `/aidlc --doctor` warns when a Testing Contract was successfully read via the raw LF/CR/tab repair, naming the affected file(s) and retained local log.
+* Valid JSON no longer invokes the fallback; invalid version/hash and unsupported JSON corruption still fail. Read-only engine probes remain write-free.
+* The fixed Devin CLI version remains unconfirmed; removal requires vendor confirmation, a captured write/read regression, a compatible supported baseline, and regenerated affected plans.
+
 ## [2.9.6] - 2026-09-12
 
 Closes a shared plan-approval guard bypass in compound shell commands containing Git checkpoints. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.6` / `install.ps1 -Version 2.9.6`) to refresh the installed guard. No workflow-record migration is required.

@@ -5,9 +5,10 @@
 // combination, approval fingerprinting, and the normal/swarm authored surfaces
 // that consume the contract.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   approvalFingerprint,
   buildPlanProfile,
@@ -34,6 +35,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   extractMarkdownSection,
+  hooksHealthDir,
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
@@ -788,6 +790,267 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       expect(stale.reason).toContain("stale");
     } finally {
       rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t299 (4b) repair telemetry", () => {
+  const repairDrop = (root: string) =>
+    join(hooksHealthDir(root), "testing-contract-repair.drops");
+
+  function repairContract(note?: string) {
+    return resolve({
+      org: ORG,
+      team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+      ...(note === undefined ? {} : { project: note }),
+    });
+  }
+
+  function fencedJson(rendered: string): {
+    start: number;
+    end: number;
+    block: string;
+  } {
+    const start = rendered.indexOf("```json\n") + "```json\n".length;
+    const end = rendered.lastIndexOf("\n```");
+    return { start, end, block: rendered.slice(start, end) };
+  }
+
+  function corruptJsonEscapes(rendered: string): string {
+    const { start, end, block } = fencedJson(rendered);
+    const corrupted = block
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t");
+    return rendered.slice(0, start) + corrupted + rendered.slice(end);
+  }
+
+  const fence = (json: string) =>
+    `# Plan\n\n## Testing Contract\n\n\`\`\`json\n${json}\n\`\`\`\n`;
+
+  test("repair telemetry: repaired file-backed parse logs a filename-only event per read", () => {
+    const root = mkdtempSync(join(tmpdir(), "t299-repair-"));
+    try {
+      const planPath = join(root, "construction", "code-generation-plan.md");
+      const contract = repairContract("Keep notes.\nSecond line.");
+      const corrupted = corruptJsonEscapes(renderTestingContract(contract));
+      const plan = `# Plan\n\n${corrupted}`;
+      const parsed = parseTestingContract(plan, {
+        projectDir: root,
+        planPath,
+      });
+      expect(parsed).toEqual(contract);
+      const lines = readFileSync(repairDrop(root), "utf-8")
+        .trimEnd()
+        .split("\n");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(
+        /^\d{4}-\d{2}-\d{2}T[\d:.]+Z\t\[advisory\] Testing Contract read via repair: /,
+      );
+      expect(lines[0]).toContain('"construction/code-generation-plan.md"');
+      expect(lines[0]).not.toContain(contract.ordering);
+      expect(lines[0]).not.toContain(contract.contract_sha256);
+      parseTestingContract(plan, { projectDir: root, planPath });
+      expect(
+        readFileSync(repairDrop(root), "utf-8").trimEnd().split("\n"),
+      ).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("repair telemetry: strict-valid JSON parses once and writes no telemetry", () => {
+    const root = mkdtempSync(join(tmpdir(), "t299-repair-"));
+    try {
+      const planPath = join(root, "construction", "code-generation-plan.md");
+      const contract = repairContract();
+      const rendered = renderTestingContract(contract);
+      const { block } = fencedJson(rendered);
+      const spy = spyOn(JSON, "parse");
+      let parsed: unknown;
+      let calls: unknown[][] = [];
+      try {
+        parsed = parseTestingContract(`# Plan\n\n${rendered}`, {
+          projectDir: root,
+          planPath,
+        });
+        calls = [...spy.mock.calls];
+      } finally {
+        spy.mockRestore();
+      }
+      expect(parsed).toEqual(contract);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe(block);
+      expect(existsSync(repairDrop(root))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("repair telemetry: raw LF, CR, and tab repair preserves escaped quotes and backslashes", () => {
+    const root = mkdtempSync(join(tmpdir(), "t299-repair-"));
+    try {
+      const note = 'line\rreturn\ttab\nnewline "quoted" \\path';
+      const contract = repairContract(note);
+      const rendered = renderTestingContract(contract);
+      const { block } = fencedJson(rendered);
+      expect(block).toContain("\\r");
+      expect(block).toContain("\\t");
+      expect(block).toContain("\\n");
+      const corrupted = corruptJsonEscapes(rendered);
+      expect(
+        parseTestingContract(`# Plan\n\n${corrupted}`, {
+          projectDir: root,
+          planPath: join(root, "construction", "code-generation-plan.md"),
+        }),
+      ).toEqual(contract);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("repair telemetry: invalid, tampered, or unsupported contracts return null and log nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "t299-repair-"));
+    try {
+      const planPath = join(root, "construction", "code-generation-plan.md");
+      const source = { projectDir: root, planPath };
+      const contract = repairContract("note\nsecond");
+      const rendered = renderTestingContract(contract);
+      const { block } = fencedJson(rendered);
+      const cases: string[] = [
+        fence(block.slice(0, block.lastIndexOf("}"))),
+        fence(`${block.slice(0, block.lastIndexOf("}"))},}`),
+        fence('{"version": 1, "a": "x\\qy"}'),
+        fence('{"version": 1, "a": "x\by"}'),
+        "# Plan\n\n## Testing Contract\n\nnot fenced json\n",
+        fence(block.replace('"version": 1', '"version": 2')),
+        fence(block.replace(/sha256:[0-9a-f]{64}/, "sha256:zz")),
+        fence(block.replace('"tdd"', '"bdd"')),
+        fence("null"),
+        fence("[1, 2]"),
+      ];
+      const tamperedCorrupted = corruptJsonEscapes(
+        rendered.replace('"tdd"', '"bdd"'),
+      );
+      cases.push(`# Plan\n\n${tamperedCorrupted}`);
+      for (const text of cases) {
+        expect(parseTestingContract(text, source)).toBeNull();
+      }
+      expect(existsSync(repairDrop(root))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const env of ["AIDLC_STOP_HOOK_PROBE", "AIDLC_ROUTE_CHECK"]) {
+    test(`repair telemetry: ${env} probe parses repaired input without telemetry`, () => {
+      const root = mkdtempSync(join(tmpdir(), "t299-repair-"));
+      try {
+        const contract = repairContract("note\nsecond");
+        const corrupted = corruptJsonEscapes(renderTestingContract(contract));
+        const previous = process.env[env];
+        process.env[env] = "1";
+        try {
+          expect(
+            parseTestingContract(`# Plan\n\n${corrupted}`, {
+              projectDir: root,
+              planPath: join(root, "construction", "code-generation-plan.md"),
+            }),
+          ).toEqual(contract);
+        } finally {
+          if (previous === undefined) delete process.env[env];
+          else process.env[env] = previous;
+        }
+        expect(existsSync(hooksHealthDir(root))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("repair telemetry: file-backed approval consumption records the plan source", () => {
+    const project = mkdtempSync(join(tmpdir(), "t299-repair-approval-"));
+    try {
+      const memoryDir = join(project, "aidlc", "spaces", "default", "memory");
+      const recordDir = join(project, "aidlc", "spaces", "default", "intents");
+      const stageDir = join(
+        recordDir,
+        "construction",
+        "auth",
+        "code-generation",
+      );
+      mkdirSync(memoryDir, { recursive: true });
+      mkdirSync(stageDir, { recursive: true });
+      writeFileSync(
+        join(memoryDir, "org.md"),
+        `# Org\n\n## Testing Posture\n\n${ORG}\n`,
+      );
+      writeFileSync(
+        join(memoryDir, "team.md"),
+        "# Team\n\n## Testing Posture\n\n- **Methodology**: tdd\n- **Ordering**: tests first.\n",
+      );
+      writeFileSync(join(memoryDir, "project.md"), "# Project\n");
+      writeFileSync(
+        join(recordDir, "aidlc-state.md"),
+        [
+          "# State",
+          "- **Project Type**: Greenfield",
+          "- **Scope**: feature",
+          "- **Test Strategy**: Standard",
+          "- **Current Stage**: code-generation",
+          "",
+        ].join("\n"),
+      );
+      const state = readFileSync(join(recordDir, "aidlc-state.md"), "utf-8");
+      writeActiveDirectiveMarker(project, {
+        kind: "run-stage",
+        stage: "code-generation",
+        unit: "auth",
+        state_sha256: stateDigest(state),
+      });
+
+      const contract = resolveTestingPosture(project);
+      const rendered = renderTestingContract(contract);
+      const planPath = join(stageDir, "code-generation-plan.md");
+      const corruptedPlan = `# Plan\n\n${corruptJsonEscapes(rendered)}\n## Steps\n\n- [ ] Run profile\n`;
+      writeFileSync(planPath, corruptedPlan);
+      evaluateCodeGenerationApproval(project, { unit: "auth" });
+      const drops = readFileSync(repairDrop(project), "utf-8")
+        .trimEnd()
+        .split("\n");
+      expect(drops).toHaveLength(1);
+      expect(drops[0]).toContain(
+        "construction/auth/code-generation/code-generation-plan.md",
+      );
+      expect(readFileSync(planPath, "utf-8")).toBe(corruptedPlan);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("repair telemetry: text-only parse stays pure", () => {
+    const contract = repairContract("note\nsecond");
+    const corrupted = corruptJsonEscapes(renderTestingContract(contract));
+    expect(parseTestingContract(`# Plan\n\n${corrupted}`)).toEqual(contract);
+  });
+
+  test("repair telemetry: a failed log write cannot reject a validated repaired contract", () => {
+    const root = mkdtempSync(join(tmpdir(), "t299-repair-log-failure-"));
+    try {
+      const healthDir = hooksHealthDir(root);
+      mkdirSync(dirname(healthDir), { recursive: true });
+      writeFileSync(healthDir, "not a directory");
+      const contract = repairContract("note\nsecond");
+      const plan = `# Plan\n\n${corruptJsonEscapes(renderTestingContract(contract))}`;
+      expect(
+        parseTestingContract(plan, {
+          projectDir: root,
+          planPath: join(root, "construction", "code-generation-plan.md"),
+        }),
+      ).toEqual(contract);
+      expect(readFileSync(healthDir, "utf-8")).toBe("not a directory");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

@@ -19,6 +19,7 @@ import {
   readCurrentSessionId,
   docsRoot,
   getField,
+  isReadOnlyEngineProbe,
   isoTimestamp,
   latestMainWorkflowStageRunFloorForProject,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -36,6 +37,7 @@ import {
   readPlanApprovalResponse,
   readPlanApprovalViolation,
   recordAcceptedChanges,
+  recordHookDrop,
   renderChangedPaths,
   governedChangeControl,
   resolveBoltDag,
@@ -1035,6 +1037,10 @@ function rawMarkdownSection(content: string, heading: string): string {
 // values with their JSON escape sequences, making the JSON parseable again.
 // The parsed object is identical to what JSON.parse would have produced
 // from the original (uncorrupted) JSON, so the contract hash still matches.
+// TODO: Remove this fallback after the Devin write-tool escape bug's fixed
+// version is vendor-confirmed (UNCONFIRMED as of 2026-09-12), a captured
+// write/read regression verifies it, the supported baseline includes that
+// version, and affected stored plans are regenerated through normal approval.
 function repairJsonControlChars(json: string): string {
   let result = "";
   let inString = false;
@@ -1066,30 +1072,53 @@ function repairJsonControlChars(json: string): string {
   return result;
 }
 
-export function parseTestingContract(plan: string): TestingPostureContract | null {
+export function parseTestingContract(
+  plan: string,
+  source?: { projectDir: string; planPath: string },
+): TestingPostureContract | null {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
   const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
   if (!match) return null;
   const raw = match[1];
-  // Try strict JSON.parse first; if it fails, attempt to repair control
-  // characters that a harness write tool may have introduced into string
-  // values (Devin 3000.6.14 converts \n escape sequences to newlines).
-  for (const candidate of [raw, repairJsonControlChars(raw)]) {
+  // Try strict JSON.parse first; only a syntax failure attempts to repair
+  // control characters that a harness write tool may have introduced into
+  // string values (Devin 3000.6.14 converts \n escape sequences to
+  // newlines). A repaired parse that survives the same version/hash
+  // validation is recorded as a repair-read event so the fallback stays
+  // visible; read-only engine probes keep the same result but write nothing.
+  let repaired = false;
+  try {
+    let parsed: TestingPostureContract;
     try {
-      const parsed = JSON.parse(candidate) as TestingPostureContract;
-      if (
-        parsed.version !== 1 ||
-        !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
-      ) {
-        continue;
-      }
-      const { contract_sha256: recorded, ...body } = parsed;
-      if (hashObject(body) === recorded) return parsed;
+      parsed = JSON.parse(raw) as TestingPostureContract;
     } catch {
-      // try next candidate
+      const candidate = repairJsonControlChars(raw);
+      if (candidate === raw) return null;
+      parsed = JSON.parse(candidate) as TestingPostureContract;
+      repaired = true;
     }
+    if (
+      parsed.version !== 1 ||
+      !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
+    ) {
+      return null;
+    }
+    const { contract_sha256: recorded, ...body } = parsed;
+    if (hashObject(body) !== recorded) return null;
+    if (repaired && source && !isReadOnlyEngineProbe()) {
+      const file = JSON.stringify(
+        toPosix(relative(source.projectDir, source.planPath)),
+      ).replaceAll("[", "\\u005b");
+      recordHookDrop(
+        source.projectDir,
+        "testing-contract-repair",
+        `[advisory] Testing Contract read via repair: ${file}`,
+      );
+    }
+    return parsed;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 // --- The Plan Approval content projection -------------------------------------
@@ -1551,7 +1580,9 @@ function codeGenerationApprovalArtifacts(
   const planExists = plan.trim().length > 0;
   const instructionsExist = instructions.trim().length > 0;
   const approvedAnswer = questionsFileApproved(questions);
-  const embedded = planExists ? parseTestingContract(plan) : null;
+  const embedded = planExists
+    ? parseTestingContract(plan, { projectDir, planPath })
+    : null;
   const current = planExists ? resolveTestingPosture(projectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
   const contractValid =
@@ -2683,7 +2714,8 @@ export function main(argv: string[]): void {
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const stageDir = authority.stageDir;
-        const plan = readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
+        const planPath = join(stageDir, "code-generation-plan.md");
+        const plan = readFileSync(planPath, "utf-8");
         const instructions = readFileSync(
           join(stageDir, "unit-test-instructions.md"),
           "utf-8",
@@ -2697,7 +2729,7 @@ export function main(argv: string[]): void {
             "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
           );
         }
-        const embedded = parseTestingContract(plan);
+        const embedded = parseTestingContract(plan, { projectDir, planPath });
         const current = resolveTestingPosture(projectDir);
         if (
           !embedded ||
