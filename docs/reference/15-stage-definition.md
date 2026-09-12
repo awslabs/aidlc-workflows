@@ -459,12 +459,23 @@ not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
 class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap to
-`advisory`, while `express` caps to `none`), and the per-run override — a cap
+`review_cap` (the shipped `bugfix`, `poc`, and `workshop` scopes cap to
+`advisory`, while `classic` and `express` cap to `none`), and the per-run override — a cap
 or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
+
+Scope frontmatter also accepts three ceremony switches, each `on` | `off`
+(absent means on): `sensors`, `learnings`, and `summary_confirmation`.
+The last is distinct from a stage's `summary_confirmation: required | if-present`:
+the scope/intent policy decides whether that checkpoint applies at all.
+`/aidlc --sensors on|off`, `/aidlc --learnings on|off`, and
+`/aidlc --summary-confirmation on|off` override an intent's scope default.
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off.
+Classic disables all three; stage approvals, Plan Approval, human-turn
+authority, audit, and team write protection remain in force.
 
 ---
 
@@ -526,7 +537,7 @@ Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
 were slot-in changes, not body restructures. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
 the pull-import model. Shared sensor behavior is defined once in
-`stage-protocol.md` §14, while the full learning ritual is defined in §13.
+`stage-protocol.md` §14, while `stage-protocol-learnings.md` §13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
 
 **milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
 else. Most stage files already use `## Steps` as their first body heading.

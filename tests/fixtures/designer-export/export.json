@@ -2699,7 +2699,6 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "classic",
         "workshop",
         "express"
       ],
@@ -2783,7 +2782,6 @@
         "enterprise",
         "feature",
         "infra",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -2877,7 +2875,6 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "classic",
         "workshop",
         "express"
       ],
@@ -2975,7 +2972,6 @@
         "enterprise",
         "feature",
         "infra",
-        "classic",
         "workshop",
         "express"
       ],
@@ -3067,7 +3063,6 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3160,7 +3155,6 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3261,7 +3255,6 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3382,18 +3375,23 @@
         "code-generation": "EXECUTE",
         "build-and-test": "EXECUTE",
         "ci-pipeline": "EXECUTE",
-        "deployment-pipeline": "EXECUTE",
-        "environment-provisioning": "EXECUTE",
-        "deployment-execution": "EXECUTE",
-        "observability-setup": "EXECUTE",
-        "incident-response": "EXECUTE",
-        "performance-validation": "EXECUTE",
-        "feedback-optimization": "EXECUTE"
+        "deployment-pipeline": "SKIP",
+        "environment-provisioning": "SKIP",
+        "deployment-execution": "SKIP",
+        "observability-setup": "SKIP",
+        "incident-response": "SKIP",
+        "performance-validation": "SKIP",
+        "feedback-optimization": "SKIP"
       },
       "keywords": [],
-      "description": "V1-style lifecycle without ideation ceremony - the implicit default",
-      "skeleton": true,
-      "changeControl": "relaxed"
+      "description": "V1-style ceremony through Inception and Construction - the implicit default",
+      "skeleton": false,
+      "changeControl": "relaxed",
+      "ceremony": {
+        "sensors": "off",
+        "learnings": "off",
+        "summary_confirmation": "off"
+      }
     },
     "enterprise": {
       "depth": "Comprehensive",

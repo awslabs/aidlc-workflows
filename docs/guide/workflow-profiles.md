@@ -10,7 +10,7 @@ choice from different perspectives:
 - **Workflow profile** is the user-facing experience: what kind of work you are
   doing and how much ceremony it needs.
 - **Scope** is the engine setting stored in `aidlc-state.md`: the exact stage
-  route, depth, test strategy, and review ceiling used for that workflow.
+  route, depth, test strategy, review ceiling, and ceremony switches used for that workflow.
 
 Choose a profile explicitly with `/aidlc <profile>` or describe the work and let
 AI-DLC suggest one. A keyword match or compose offer confirms the route before
@@ -21,7 +21,7 @@ and gate counts.
 
 | Workflow profile | Best for | Stages | Depth | Test strategy | Start with |
 |------------------|----------|--------|-------|---------------|------------|
-| **Classic** | General work using the established lifecycle without Ideation | 26 / 33 | Standard | Standard | `/aidlc classic` |
+| **Classic** | V1-style ceremony through Inception and Construction | 19 / 33 | Standard | Standard | `/aidlc classic` |
 | **Express** | The lightest requirements-to-code-and-test path | 10 / 33 | Minimal | Minimal | `/aidlc express` |
 | **Feature** | A production feature using the complete lifecycle | 33 / 33 | Standard | Standard | `/aidlc feature` |
 | **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 33 | Comprehensive | Comprehensive | `/aidlc enterprise` |
@@ -40,15 +40,24 @@ greenfield project. For the exact stage-by-profile matrix, see
 
 ## `classic`
 
-**Choose Classic when:** you want the established AI-DLC lifecycle and the work
-does not need an Ideation phase. It starts with Inception, then moves through
-Construction and the applicable Operation stages.
+**Choose Classic when:** you want v1-style ceremony: Inception and Construction
+with one human approval per stage. It skips Ideation and leaves Operation as a
+placeholder. Stage-declared execution modes and support agents are unchanged.
 
 Classic is the implicit engine default when neither you nor
 `AWS_AIDLC_DEFAULT_SCOPE` names another profile. In the conversational cold-start
 flow, a rich task description may still receive an adaptive compose offer before
-anything is created. Classic uses Standard artifacts and tests, and caps normal
-stage reviews at one advisory pass.
+anything is created. Classic uses Standard artifacts and tests. Walking-skeleton
+ceremony, sensors, the learnings ritual, and summary confirmation are off.
+Reviewers are off in the gated flow; explicit autonomy keeps the single
+pre-merge review. Approval gates, Plan Approval, human-turn authority, audit,
+and team cross-unit write protection remain in force.
+
+Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
+`/aidlc --summary-confirmation on|off` to override the scope for an intent.
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off,
+even when the intent says on.
 
 Do not choose Classic when the problem itself is still unclear and would benefit
 from market research, feasibility analysis, or explicit scope discovery; choose

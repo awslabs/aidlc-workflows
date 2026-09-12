@@ -36,7 +36,7 @@
 //       -> Test 8: both isExecute("security-patch", <slug>) === true (the .sh
 //       collapsed both into one `ok`; kept as one test() with two expects to
 //       match the single .sh assertion, observing both fields).
-//   - .sh Test 9  classic == 26         -> Test 9: execCount("classic") === 26.
+//   - .sh Test 9  classic == 26         -> classic now executes 19 (v1 parity).
 //
 // 10 scope cases -> 9 expect()-bearing test() cases. STRONGER additions noted
 // inline (S1: ScopeDefinition shape guard; S2: every stage value is EXECUTE or
@@ -165,10 +165,10 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
     expect(isExecute("security-patch", "deployment-execution")).toBe(true);
   });
 
-  // 9. Classic: skips ideation only.
-  test("9: classic executes exactly 26 stages", () => {
+  // 9. Classic: skips ideation and operation.
+  test("9: classic executes exactly 19 stages", () => {
     const n = execCount("classic");
-    expect(n).toBe(26);
+    expect(n).toBe(19);
   });
 
   test("9b: workshop remains a compatible 26-stage scope", () => {

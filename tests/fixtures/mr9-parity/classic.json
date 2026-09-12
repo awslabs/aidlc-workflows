@@ -132,36 +132,36 @@
   {
     "slug": "deployment-pipeline",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "environment-provisioning",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "deployment-execution",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "observability-setup",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "incident-response",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "performance-validation",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "feedback-optimization",
     "phase": "operation",
-    "action": "EXECUTE"
+    "action": "SKIP"
   }
 ]
