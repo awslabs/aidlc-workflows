@@ -538,9 +538,9 @@ never adds MCP entries.
 
 On Claude Code, `.mcp.json` is the consent-managed surface: `--check` verifies
 both `defaults` and `none`, and later plain config refreshes reapply the answer.
-Kiro CLI always ships `.kiro/settings/mcp.json`; `defaults` is satisfied by
-that file and its five shipped servers, while `none` is an instruct-only
-preference and does not remove a framework-owned file. The current Codex,
+Kiro always ships `.kiro/settings/mcp.json`; `defaults` is satisfied by
+that file and the two keyless HTTP servers it declares, while `none` is an
+instruct-only preference and does not remove a framework-owned file. The current Codex,
 opencode, Copilot, and Cursor distributions ship no MCP surface, so
 their recorded answer is informational and does not make `--check`
 permanently red. `--show` names the actual MCP file whenever one exists.

@@ -1118,11 +1118,6 @@ export function providerFiles(
       setting: "Bedrock AWS region and profile",
       file: join(harnessDir, "config.toml"),
     });
-  } else if (harness === "kiro") {
-    files.push({
-      setting: "AWS MCP region endpoint and metadata",
-      file: join(harnessDir, "settings", "mcp.json"),
-    });
   } else if (harness === "opencode" && record.opencodeDefault) {
     files.push({
       setting: "amazon-bedrock provider options",
@@ -1388,6 +1383,10 @@ const SHIPPED_MCP_SERVERS_KIRO = [
   "context7",
 ] as const;
 
+// Only Claude and Kiro ship a registry. Cursor reaches the `defaults` drift check
+// too when a user-owned `.cursor/mcp.json` exists, and it has been measured against
+// Claude's list since before this split — a pre-existing mismatch this change
+// neither introduces nor fixes, left alone rather than silently widened here.
 function shippedMcpServers(harness: ModelHarness): readonly string[] {
   return harness === "kiro" ? SHIPPED_MCP_SERVERS_KIRO : SHIPPED_MCP_SERVERS_CLAUDE;
 }
@@ -1561,15 +1560,10 @@ function providerValueIssues(
       ) {
         mismatch("provider-codex", path, "Codex Bedrock settings do not reflect the recorded region/profile");
       }
-    } else if (harness === "kiro") {
-      const path = join(projectDir, harnessDir, "settings", "mcp.json");
-      const text = readFileSync(path, "utf-8");
-      if (
-        !text.includes(`https://aws-mcp.${record.region}.api.aws/mcp`) ||
-        !text.includes(`AWS_REGION=${record.region}`)
-      ) {
-        mismatch("provider-kiro", path, "Kiro AWS MCP settings do not reflect the recorded region");
-      }
+    // Kiro has no region-bearing provider file to check. Its registry ships two
+    // keyless HTTP entries and no `aws-mcp` launcher, so there is no URL or
+    // `AWS_REGION=` metadata a recorded region could be reflected in — a check
+    // against them could never pass, and would report `provider-kiro` forever.
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;

@@ -431,11 +431,12 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** One `kiro` projection serves Kiro IDE and Kiro CLI; its folder-drop
-> includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
-> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
-> so run one of the explicit composer commands above. Neither projection emits the
+> **Kiro note.** One `kiro` projection serves both surfaces, and its folder-drop
+> includes one v2 `.kiro/hooks/aidlc-<plugin>-compose.json` manifest carrying BOTH
+> triggers — `SessionStart` for the IDE and `AgentSpawn` for the CLI — each running
+> the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from the workspace
+> root. Registering both is what lets one file serve a surface that fires only one of
+> them. The explicit composer commands above remain available. The projection emits no
 > retired `.kiro.hook` plugin registration.
 
 ### Trust

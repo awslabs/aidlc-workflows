@@ -389,6 +389,19 @@ describe("t294 provider diagnostics", () => {
       readFileSync(join(DIST, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
     );
     expect(kiroMcp).not.toContain("aws-mcp");
+    // Regression: the value check used to require this registry to contain
+    // `https://aws-mcp.<region>.api.aws/mcp` and `AWS_REGION=<region>`. With no
+    // `aws-mcp` entry that can never be satisfied, so a completed Bedrock record
+    // reported `provider-kiro` on every doctor run, forever, with a remediation
+    // pointing at a file that has nothing to fix.
+    expect(
+      providerIssues(kiro, ".kiro", "kiro", record).map((issue) => issue.id),
+      "a completed Kiro provider record must raise nothing",
+    ).toEqual([]);
+    expect(
+      providerFiles(kiro, ".kiro", "kiro", record).map((entry) => entry.file),
+      "and no Kiro provider file is offered for a region it cannot carry",
+    ).toEqual([]);
 
     const opencode = temp("aidlc-t294-provider-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });

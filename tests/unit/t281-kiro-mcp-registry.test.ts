@@ -1,6 +1,6 @@
 // covers: file:settings/mcp.json, file:agents/aidlc.json, file:agents/aidlc-architect-agent.json, file:agents/aidlc-architecture-reviewer-agent.json, file:agents/aidlc-aws-platform-agent.json, file:agents/aidlc-compliance-agent.json, file:agents/aidlc-composer-agent.json, file:agents/aidlc-delivery-agent.json, file:agents/aidlc-design-agent.json, file:agents/aidlc-developer-agent.json, file:agents/aidlc-devsecops-agent.json, file:agents/aidlc-operations-agent.json, file:agents/aidlc-pipeline-deploy-agent.json, file:agents/aidlc-product-agent.json, file:agents/aidlc-product-lead-agent.json, file:agents/aidlc-quality-agent.json
 //
-// t281 - Kiro CLI MCP registry integrity + the includeMcpJson/@server grant
+// t281 - Kiro MCP registry integrity + the includeMcpJson/@server grant
 // model. Pure structural coverage over the shipped dist/kiro bytes: no process
 // boundary, no LLM, zero tokens. Agent discovery is dynamic so a future persona
 // cannot be added without inheriting these invariants.
@@ -92,7 +92,7 @@ function stringTools(values: unknown[] | undefined): string[] {
   return (values ?? []).filter((value): value is string => typeof value === "string");
 }
 
-describe("t281 Kiro CLI MCP registry integrity", () => {
+describe("t281 Kiro MCP registry integrity", () => {
   test("registry exists and parses as an mcpServers-only document", () => {
     expect(existsSync(MCP_JSON)).toBe(true);
     const { doc, servers } = loadRegistry(MCP_JSON);
@@ -159,7 +159,7 @@ describe("t281 Kiro CLI MCP registry integrity", () => {
   });
 });
 
-describe("t281 Kiro CLI dynamic agent grant model", () => {
+describe("t281 Kiro dynamic agent grant model", () => {
   test("all 14 personas opt in with exactly the two grants; conductor gets none", () => {
     const agents = loadAgents();
     const conductor = agents.find(({ doc }) => doc.name === "aidlc");
