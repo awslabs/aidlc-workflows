@@ -114,6 +114,29 @@ describe("t338 atomic per-intent settings", () => {
     expect(rows(proj)).toHaveLength(1);
   });
 
+  test("ceremony audit records the saved value rather than an environment-disabled effective value", () => {
+    const { proj, state } = project();
+    for (const [key, flag, field, env] of [
+      ["sensors", "--sensors", "Sensors", "AIDLC_DISABLE_SENSORS"],
+      ["learnings", "--learnings", "Learnings", "AIDLC_DISABLE_LEARNINGS"],
+      ["summary_confirmation", "--summary-confirmation", "Summary Confirmation", "AIDLC_DISABLE_SUMMARY_CONFIRMATION"],
+    ]) {
+      const enabled = run(UTILITY, ["config-change", flag, "on"], proj);
+      expect(enabled.status, enabled.stderr).toBe(0);
+      expect(getField(readFileSync(state, "utf-8"), field)).toBe("on (set by you)");
+      const before = rows(proj);
+      const disabled = run(UTILITY, ["config-change", flag, "off"], proj, { [env]: "1" });
+      expect(disabled.status, disabled.stderr).toBe(0);
+      const audit = rows(proj).slice(before.length);
+      expect(audit).toHaveLength(1);
+      expect(auditBlockField(audit[0].block, "Key")).toBe(key);
+      expect(auditBlockField(audit[0].block, "Old")).toBe("on");
+      expect(auditBlockField(audit[0].block, "New")).toBe("off");
+      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+      expect(getField(readFileSync(state, "utf-8"), field)).toBe("off (set by you)");
+    }
+  });
+
   test("one config-change updates all seven settings in canonical audit order and repeats without a write", () => {
     const { proj, state } = project();
     const timestamp = "2000-01-01T00:00:00Z";
@@ -314,6 +337,23 @@ describe("t338 atomic per-intent settings", () => {
     const explicit = run(UTILITY, ["scope-change", "--scope", "classic", "--summary-confirmation", "on"], proj);
     expect(explicit.status, explicit.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by you)");
+  });
+
+  test("scope-change summary reflects retained overrides and environment-disabled ceremonies", () => {
+    const { proj, state } = project();
+    const enabled = run(UTILITY, ["config-change", "--learnings", "on"], proj);
+    expect(enabled.status, enabled.stderr).toBe(0);
+    const express = run(UTILITY, ["scope-change", "--scope", "express"], proj, { AIDLC_DISABLE_SENSORS: "1" });
+    expect(express.status, express.stderr).toBe(0);
+    const expressSummary = express.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
+    expect(expressSummary?.split("; no ")[1]).toBe("reviewers or sensors");
+
+    // Only classic defaults learnings off; returning to it must retain the human override.
+    const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
+    expect(classic.status, classic.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by you)");
+    const classicSummary = classic.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
+    expect(classicSummary?.split("; no ")[1]).toBe("reviewers, sensors, or summary confirmation");
   });
 
   test("environment disable wins in status and config reads without replacing the saved choice", () => {

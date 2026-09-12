@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 977,
+    "total": 978,
     "enumeratedByClass": {
-      "function": 668,
+      "function": 669,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 399,
+      "function": 400,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -1741,6 +1741,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ceremonyOffList",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

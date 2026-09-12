@@ -154,7 +154,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs all 33 stages with 29 gates and five design stages that fan out per Unit of Work in Construction. The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
 
-The confirmation also lists what the scope turns off. Classic adds `; no reviewers, sensors, learnings ritual, or summary confirmation`; scopes with every ceremony enabled omit that clause.
+The confirmation also lists what the effective policy turns off, including creation flags and environment kill switches. Classic defaults add `; no reviewers, sensors, learnings ritual, or summary confirmation`; opting all three ceremonies in leaves only `; no reviewers`. Scopes with every ceremony enabled and no review cap omit that clause.
 
 > **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json`. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 

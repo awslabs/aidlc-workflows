@@ -27354,16 +27354,27 @@ export function gridCostSummary(
   return { total, execute, skip: total - execute, gates, perUnitStages, off: [] };
 }
 
+/** Labels of ceremonies the effective policy turns off, plus reviewers when
+ * the scope caps reviews at none. Pure: scope metadata and supplied policy only. */
+export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[] {
+  const off: string[] = [];
+  if (loadScopeMetadata()[scope]?.reviewCap === "none") off.push("reviewers");
+  if (policy.sensors === "off") off.push("sensors");
+  if (policy.learnings === "off") off.push("learnings ritual");
+  if (policy.summary_confirmation === "off") off.push("summary confirmation");
+  return off;
+}
+
 // Cost of a named scope's grid. Returns null for an unknown scope.
 export function scopeCostSummary(scope: string): ScopeCostSummary | null {
   const def = loadScopeMapping()[scope];
   if (!def) return null;
   const summary = gridCostSummary(def.stages);
-  const metadata = loadScopeMetadata()[scope];
-  if (metadata?.reviewCap === "none") summary.off.push("reviewers");
-  if (def.ceremony?.sensors === "off") summary.off.push("sensors");
-  if (def.ceremony?.learnings === "off") summary.off.push("learnings ritual");
-  if (def.ceremony?.summary_confirmation === "off") summary.off.push("summary confirmation");
+  summary.off = ceremonyOffList(scope, {
+    sensors: def.ceremony?.sensors ?? "on",
+    learnings: def.ceremony?.learnings ?? "on",
+    summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
+  });
   return summary;
 }
 

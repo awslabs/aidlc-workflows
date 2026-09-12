@@ -87,12 +87,13 @@ import {
   type CeremonyPolicy,
   type CeremonySetting,
   ceremonyOffClause,
+  ceremonyOffList,
+  ceremonyPolicyValues,
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
   resolveCeremony,
   scopeCeremonyDefault,
-  scopeCostSummary,
   type ChangeControlMemoryDeclaration,
   changeControlMemoryStrictRefusal,
   formatChangeControl,
@@ -7883,8 +7884,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         }
       }
     }
-    // Apply against the original scope so old effective values and sources
-    // in the audit still describe the state before this transaction.
+    // Apply against the original scope so previous settings and effective
+    // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, { intent, space });
     let content = update.content;
     const auditEntries = update.audit;
@@ -7986,7 +7987,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
       const summary = {
         ...gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">),
-        off: scopeCostSummary(newScope)?.off ?? [],
+        off: ceremonyOffList(newScope, ceremonyPolicyValues(newScope, content)),
       };
       const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
@@ -8420,9 +8421,9 @@ function applyIntentSettings(
       ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
       : `Review override is already ${display}`);
   }
-  // A memory-owned policy remains untouched on an implicit scope switch.
-  // Explicit strict is still recordable; explicit relaxed was refused above.
-  if (ccRequest !== undefined && changeControl !== null && (ccRequest.source === "you" || cc.memoryStrict === null)) {
+  // Persist scope-owned updates even while memory controls the effective value.
+  // Explicit strict is also recordable; explicit relaxed was refused above.
+  if (ccRequest !== undefined && changeControl !== null) {
     const previous = getField(content, CHANGE_CONTROL_FIELD);
     const line = formatChangeControl(changeControl, ccRequest.source);
     if (previous === line) {
@@ -8440,7 +8441,7 @@ function applyIntentSettings(
         if (content === beforeInsert) content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
       }
       content = setField(content, CHANGE_CONTROL_FIELD, line);
-      const oldValue = cc.intent === null && cc.rawStateValue !== null ? cc.rawStateValue : cc.value;
+      const oldValue = cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
       audit.push({
         eventType: "CHANGE_CONTROL_SET",
         fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
@@ -8463,8 +8464,7 @@ function applyIntentSettings(
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
     content = setCeremonyField(content, key, value, source);
-    const oldValue = resolution.intent === null && resolution.rawStateValue !== null
-      ? resolution.rawStateValue : resolution.value;
+    const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
     audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);

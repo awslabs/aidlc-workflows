@@ -2377,6 +2377,7 @@ function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
   const parentPath = join(rec, "construction", stage, "memory.md");
   const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
   const entries = parseMemoryEntries(unitContent);
+  if (entries.length === 0 && !existsSync(parentPath)) return 0;
 
   let parentContent = existsSync(parentPath)
     ? readFileSync(parentPath, "utf-8")

@@ -427,7 +427,7 @@ legacy Unit-less rows retain stage-global behavior.
 | `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — requires the exact stage/Unit pair currently routed by the engine, a safe Unit identifier from the authoritative DAG (including safe legacy spellings), and no other open Unit |
 | `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume |
 | `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only the currently-paused unit can resume |
-| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies new Unit diary entries into the parent diary with deterministic markers, binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
+| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies any new Unit diary entries into the parent diary with deterministic markers (leaving an absent parent diary absent when there are no new entries), binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
 | `UNIT_MERGED` | `tools/aidlc-state.ts` | Main landed the pinned candidate content, received the team's audit shard, and folded this Unit's derived row. Fields bind the row to Unit, owner, pinned candidate OID, merge commit OID, and attempt generation. |
 
 Team-owned unit-major runs add a derived `## Unit Progress` table to state. The
@@ -451,9 +451,9 @@ column.
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock) |
-| `CHANGE_CONTROL_SET` | `tools/aidlc-utility.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --change-control <strict\|relaxed>` or a changed scope-owned default in `scope-change`; lib's `appendChangeControlSetRow` records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`) |
+| `CHANGE_CONTROL_SET` | `tools/aidlc-utility.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --change-control <strict\|relaxed>` or a changed scope-owned default in `scope-change`; lib's `appendChangeControlSetRow` records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
 | `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
-| `CEREMONY_SET` | `tools/aidlc-utility.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
+| `CEREMONY_SET` | `tools/aidlc-utility.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
 All seven intent settings share `config-change`: `depth`, `test-strategy`,
 `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`, in
@@ -477,9 +477,9 @@ when read; a governed check that meets no input change reads nothing.
 An explicit `--change-control relaxed` under a memory layer's `Mode: strict`
 refuses the entire command, including other setting flags and any scope
 change, and names the memory file. Explicit strict and unrelated settings
-remain allowed. An implicit scope change under that policy preserves the
-stored Change Control line and emits no Change Control setting row. Otherwise
-scope-owned Change Control and ceremony values follow the new scope with
+remain allowed. Scope-owned Change Control and ceremony values follow the new
+scope even under that memory policy, which still controls effective Change Control.
+Changed stored values or sources are audited with
 scope provenance; explicit human overrides and absent legacy rows are
 preserved. Explicit Change Control and ceremony flags store `<value> (set by
 you)`. A same-value source change still counts as a change; `review adversarial`

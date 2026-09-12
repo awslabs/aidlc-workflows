@@ -512,6 +512,34 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(changeControlRows(kept.proj)).toHaveLength(0);
   });
 
+  test("a scope-owned Change Control value follows the new scope under memory strict", () => {
+    const { proj, state } = project("classic");
+    expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "relaxed (from scope classic)",
+    );
+    const memory = memoryFile(proj, "project");
+    const beforeMemory = readFileSync(memory, "utf-8");
+    declareMemoryMode(proj, "project", "strict");
+    const changed = run(UTILITY, ["scope-change", "--scope", "enterprise"], proj);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "strict (from scope enterprise)",
+    );
+    const governed = resolveChangeControl(proj);
+    expect(governed.value).toBe("strict");
+    expect(governed.source).toBe("project.md");
+    const rows = changeControlRows(proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope enterprise");
+
+    writeFileSync(memory, beforeMemory);
+    const ungoverned = resolveChangeControl(proj);
+    expect(ungoverned.value).toBe("strict");
+    expect(ungoverned.source).toBe("scope enterprise");
+  });
+
   test("a scope change commits its state and audit rows together", () => {
     const moved = project("enterprise");
     const beforeFault = readFileSync(moved.state, "utf-8");
@@ -645,7 +673,7 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "SCOPE_CHANGED")).toHaveLength(0);
   });
 
-  test("a selected scope change stays memory-strict and writes no Change Control row", () => {
+  test("a selected scope change audits its stored default while remaining memory-strict", () => {
     const selected = selectedProject();
     declareAltMemoryStrict(selected.proj);
 
@@ -656,10 +684,19 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
     );
 
     expect(changed.status, changed.stderr).toBe(0);
-    expect(resolveChangeControl(selected.proj, null, {
+    const resolution = resolveChangeControl(selected.proj, null, {
       selection: { intent: selected.targetIntent, space: "alt" },
-    }).value).toBe("strict");
-    expect(selectedRows(selected.proj, selected.targetIntent, "alt", "CHANGE_CONTROL_SET")).toHaveLength(0);
+    });
+    expect(resolution.value).toBe("strict");
+    expect(resolution.source).toBe("project.md");
+    expect(getField(readFileSync(selected.targetState, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "relaxed (from scope classic)",
+    );
+    const rows = selectedRows(selected.proj, selected.targetIntent, "alt", "CHANGE_CONTROL_SET");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
     expect(selectedRows(selected.proj, selected.targetIntent, "alt", "SCOPE_CHANGED")).toHaveLength(1);
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "SCOPE_CHANGED")).toHaveLength(0);
   });

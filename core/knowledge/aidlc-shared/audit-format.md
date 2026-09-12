@@ -100,7 +100,7 @@ Change Control is one per-intent setting, `strict` or `relaxed`, that decides wh
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `CHANGE_CONTROL_SET` | `config-change --change-control <strict\|relaxed>` rewrites the state line, `scope-change` carries a scope-supplied value or explicit setting, or a governed checkpoint observes a memory edit changing the effective value | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`) | `tools/aidlc-utility.ts` batches configuration changes; `tools/aidlc-lib.ts` (`governedChangeControl` through `appendChangeControlSetRow`) records checkpoint observations |
+| `CHANGE_CONTROL_SET` | `config-change --change-control <strict\|relaxed>` rewrites the state line, `scope-change` carries a scope-supplied value or explicit setting, or a governed checkpoint observes a memory edit changing the effective value | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`). Configuration and scope changes record the previously persisted intent value in Old Value (raw text if invalid; `strict` when no line existed), not the memory-effective value. Checkpoint observations retain effective old/new values. | `tools/aidlc-utility.ts` batches configuration changes; `tools/aidlc-lib.ts` (`governedChangeControl` through `appendChangeControlSetRow`) records checkpoint observations |
 | `CHANGE_ACCEPTED` | A governed checkpoint found that an input changed after a human approval or confirmation and, under `relaxed`, recorded the change and continued instead of refusing. Written once per distinct change: the same Recorded and Current values for the same Checkpoint, Stage, and Unit never produce a second row | Timestamp, Stage, optional Unit, Checkpoint (`plan-approval`, `review-receipt`, `summary-confirmation`), Changed (a bounded path list or `(paths unavailable)`), Recorded, Current, Details (the one line the human hears) | `tools/aidlc-lib.ts` (`recordAcceptedChanges`, called by the checkpoint owners: `aidlc-log.ts decision` / `answer` / `review`, `aidlc-testing-posture.ts begin`, `aidlc-state.ts` gate and completion checks, the plan-approval guard hook) |
 
 ### Ceremony Events (1 event)
@@ -109,7 +109,7 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `CEREMONY_SET` | `config-change --sensors\|--learnings\|--summary-confirmation <on\|off>` sets an intent override, or `scope-change` carries a scope-supplied setting to the new scope's default | Timestamp, Key (`sensors`, `learnings`, or `summary_confirmation`), Old, New, Source (`you` or `scope <name>`) | `tools/aidlc-utility.ts` shared settings applier via `tools/aidlc-audit.ts appendAuditEntries` |
+| `CEREMONY_SET` | `config-change --sensors\|--learnings\|--summary-confirmation <on\|off>` sets an intent override, or `scope-change` carries a scope-supplied setting to the new scope's default | Timestamp, Key (`sensors`, `learnings`, or `summary_confirmation`), Old, New, Source (`you` or `scope <name>`). Old is the previously persisted intent value (raw text if invalid; scope default when no line existed), not the environment-effective value. | `tools/aidlc-utility.ts` shared settings applier via `tools/aidlc-audit.ts appendAuditEntries` |
 
 ### Interaction Events (11 events)
 
