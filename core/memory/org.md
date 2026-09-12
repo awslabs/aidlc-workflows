@@ -36,8 +36,8 @@ later Units even if stage-major was selected. Verify it with the project's real
 end-to-end check, then require the human's skeleton checkpoint approval. A first
 design-stage review does not demonstrate a working skeleton.
 
-For `skeleton: off`, skip that bootstrap checkpoint and offer the explicit
-Construction choice at entry. For skeleton-on, offer it after the verified,
+For `skeleton: off`, skip the skeleton ceremony: no bootstrap checkpoint; offer
+the explicit Construction choice at entry. For skeleton-on, offer it after the verified,
 human-approved skeleton. Follow `construction_policy.offer_autonomy`; never
 repeat a recorded choice. **Continue automatically** records `autonomous`;
 **Review each checkpoint** records `gated`. On-demand requests can grant or
