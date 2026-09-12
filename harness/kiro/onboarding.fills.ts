@@ -26,7 +26,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     structure_extra: "",
 
-    guide_pointer: `The Kiro-specific guide (install, what differs, the live journey test) is \`docs/guide/harnesses/kiro.md\`.`,
+    guide_pointer: `The Kiro-specific guide (install, what differs, the live journey test) is \`docs/guide/harnesses/kiro.md\`. This install ships the workspace shell only and carries no \`docs/\` tree: every \`docs/…\` path cited here, and in the shipped skills, protocols, and tools, names a file in the AI-DLC Workflows repository rather than one beside you.`,
 
     sections_before_resumption: `## What's different on this harness
 

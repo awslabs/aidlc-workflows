@@ -28,6 +28,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -146,6 +147,23 @@ function dropLines(dir: string): string[] {
   const path = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf-8").split("\n").filter((l) => l.trim().length > 0);
+}
+
+// The core hooks resolve their own health directory from the docs root, which
+// moves with the space and the intent - and before an intent exists it is not
+// under a record at all. So find the file rather than deriving its path.
+function freezeDropFiles(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      if (entry.name === ".kiro" || entry.name === "node_modules") continue;
+      const full = join(at, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === "review-freeze.drops") found.push(full);
+    }
+  };
+  walk(dir);
+  return found;
 }
 
 function appendInteractionEvent(
@@ -1278,6 +1296,120 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.code, "identity unresolved: fail open").toBe(0);
       expect(dropLines(dir)).toHaveLength(1);
       expect(dropLines(dir)[0]).toContain("is not among them");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g4: a reviewer's directory walk and filename search reach the guard", () => {
+    // Regression: canonicalTool() translated only write, read and shell names, so
+    // list_directory/file_search/grep_search fell through to the reviewer-scope
+    // branch's `else { return 0 }`. Core carries purpose-built LS/Glob/Grep logic
+    // for exactly those shapes and nothing on this row ever fed it, so the read
+    // half of the §12a bound was unreachable. The standalone manifest this row
+    // ships has to match the names too, or the hook is never invoked at all.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-architecture-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+
+      const sibling = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "list_directory",
+        tool_input: { path: "construction/sibling-unit", depth: 3 },
+      });
+      expect(sibling.code, "walking a sibling unit is the violation this guard is for").toBe(2);
+
+      const own = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "list_directory",
+        tool_input: { path: "construction/todo-core", depth: 1 },
+      });
+      expect(own.code, "the reviewed unit's own directory stays available").toBe(0);
+
+      // file_search carries the needle as `query` and no search root at all, so it
+      // lands on the core rule for a pathless glob that does not limit itself to
+      // the reviewed unit. grep_search reaches the pathless-Grep rule the same way;
+      // its content regex deliberately does not travel, because matching content is
+      // not a file access.
+      const search = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "file_search",
+        tool_input: { query: "design", excludePattern: null, includeIgnoredFiles: null },
+      });
+      expect(search.code, "a rootless repo-wide filename search is not scoped").toBe(2);
+
+      // grep_search carries no path at all: its only scope is `includePattern`,
+      // and that field is frequently null (both shapes are in the capture archive).
+      const scoped = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "grep_search",
+        tool_input: {
+          query: "mentions construction/sibling-unit",
+          caseSensitive: null,
+          excludePattern: null,
+          includePattern: "construction/todo-core/**",
+        },
+      });
+      expect(
+        scoped.code,
+        "a search confined to the reviewed unit is allowed, and its content regex is not scanned",
+      ).toBe(0);
+
+      const unscoped = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "grep_search",
+        tool_input: {
+          query: "design",
+          caseSensitive: null,
+          excludePattern: null,
+          includePattern: null,
+        },
+      });
+      expect(
+        unscoped.code,
+        "a content search that expresses no scope reaches the pathless-Grep rule",
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g5: review-freeze stays quiet before a workflow record exists", () => {
+    // Regression, measured on a live run: the pre-merge row registered this hook
+    // inside the reviewer agents' own configs, so it could not fire before a
+    // dispatch. One standalone manifest serving both surfaces also sees the
+    // conductor's own writes - including the ones that create the record - and core
+    // reaches "nothing to protect" by reading the state file and failing open on
+    // the throw, which records a drop. A non-empty .drops file is a release signal
+    // in this repo, so "the workflow has not started" must not produce one.
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(dir, "review-freeze", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "fs_write",
+        tool_input: { path: "aidlc/spaces/default/intents/todo/ideation/intent.md" },
+      });
+      expect(r.code, "no record yet: nothing to freeze").toBe(0);
+      expect(
+        freezeDropFiles(dir),
+        "no record yet is not a swallowed failure",
+      ).toHaveLength(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

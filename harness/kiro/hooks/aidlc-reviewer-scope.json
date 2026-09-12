@@ -4,8 +4,8 @@
     {
       "name": "aidlc-reviewer-scope",
       "trigger": "PreToolUse",
-      "matcher": "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|read|fs_read|read_file|read_files|execute_bash|execute_pwsh|shell)$",
-      "description": "Keeps a dispatched reviewer inside the artifact it was asked to review. PreToolUse because it must refuse, and reads are matched too because reading outside the scope is the violation this guard exists for.",
+      "matcher": "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|read|fs_read|read_file|read_files|list_directory|file_search|grep_search|grep|execute_bash|execute_pwsh|shell)$",
+      "description": "Keeps a dispatched reviewer inside the artifact it was asked to review. PreToolUse because it must refuse, and reads are matched too because reading outside the scope is the violation this guard exists for. Search and listing are matched for the same reason: a pathless glob or a directory walk reaches outside the reviewed artifact just as a sibling read does, and the core hook carries purpose-built logic for exactly those shapes.",
       "action": {
         "type": "command",
         "command": "{{INVOKE}} engine adapter kiro reviewer-scope"

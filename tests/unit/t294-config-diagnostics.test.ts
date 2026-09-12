@@ -398,10 +398,14 @@ describe("t294 provider diagnostics", () => {
       providerIssues(kiro, ".kiro", "kiro", record).map((issue) => issue.id),
       "a completed Kiro provider record must raise nothing",
     ).toEqual([]);
+    // `providerFiles` always offers the provider answer file — that is where the
+    // record itself lives — so the invariant is that the Bedrock branch adds
+    // NOTHING for this harness: no registry is offered for a region it cannot
+    // carry. Asserting an empty list instead was unsatisfiable by construction.
     expect(
       providerFiles(kiro, ".kiro", "kiro", record).map((entry) => entry.file),
-      "and no Kiro provider file is offered for a region it cannot carry",
-    ).toEqual([]);
+      "only the provider answer file, and no registry offered for a region it cannot carry",
+    ).toEqual([join(kiro, ".kiro", "tools", "data", "harness.json")]);
 
     const opencode = temp("aidlc-t294-provider-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });

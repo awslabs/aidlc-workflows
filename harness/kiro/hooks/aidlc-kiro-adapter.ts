@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-// aidlc-kiro-adapter.ts — the Kiro IDE hook shim (AUTHORED shell file; the
+// aidlc-kiro-adapter.ts — the Kiro hook shim (AUTHORED shell file; the
 // aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared with the
-// Claude Code harness). This is the IDE-specific adapter; the CLI harness ships
-// its own (harness/kiro/) wired to kiro-cli's agent-JSON hook events and their
-// payload shapes. They are deliberately separate files so neither carries a
-// runtime "am I CLI or IDE?" branch.
+// Claude Code harness). One row serves both Kiro surfaces, which run the same
+// unified agent harness, so this is the only adapter. What it branches on is the
+// payload channel it was handed, never a surface name: the IDE and the CLI reach
+// the same targets through the same manifests.
 //
 // Kiro IDE hook context (live-captured on 0.12-main, 1.0.165, and 1.0.242 — see
 // docs/reference/kiro-ide-hook-payload.md). The channel changed across IDE
@@ -66,13 +66,16 @@
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
 // stop emits {"decision":"block","reason":"..."} — passed through verbatim.
 //
-// Usage (registered in .kiro/hooks/aidlc-*.json — the IDE's v2 hook schema,
-// {"version":"v1","hooks":[{name,trigger,matcher,action}]}):
-//   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
-// where <target> ∈ record-human-turn | enforce-approval-gate | session-start |
-//                  audit-and-sensors | rebuild-stage-graph |
-//                  sync-workflow-state | log-subagent | continue-workflow |
-//                  session-end | verb-intercept | terminal-command-guard
+// Usage (registered in .kiro/hooks/aidlc-*.json — the v2 hook schema both
+// surfaces read, {"version":"v1","hooks":[{name,trigger,matcher,action}]}):
+//   {{INVOKE}} engine adapter kiro <target>
+// The live target set is the code, not a list here — the last enumeration went
+// stale in both directions at once. The `target === "..."` checks and the
+// `switch (target)` arms below are what this file dispatches; `.kiro/hooks/
+// aidlc-*.json` is what the harness registers. The two differ on purpose:
+// `session-end` is dispatched but deliberately left unregistered, because Kiro's
+// Stop trigger fires at the end of every turn rather than at conversation close,
+// so there is no genuine session-end moment to hook.
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -1461,6 +1464,14 @@ function canonicalTool(
   }
   if (name === "str_replace" || name === "fs_append") return "Edit";
   if (["read", "fs_read", "read_file", "read_files"].includes(name)) return "Read";
+  // The search and list names, which fell through to the default and were then
+  // discarded by the reviewer-scope branch. Core carries purpose-built logic for
+  // exactly these three shapes — a pathless glob and a pathless content search
+  // are the §12a violations it names — so leaving them untranslated meant the
+  // read half of that bound was unreachable on this row.
+  if (name === "list_directory") return "LS";
+  if (name === "file_search") return "Glob";
+  if (name === "grep_search" || name === "grep") return "Grep";
   // Every terminal spelling, not just the two POSIX ones: a manifest matcher that
   // names execute_pwsh reached this and fell through to the default, so the guard
   // returned 0 and the Windows path had no enforcement at all.
@@ -1661,6 +1672,37 @@ if (target === "reviewer-scope") {
     const paths = inputPaths(ti);
     coreInput.file_path = paths[0] ?? "";
     coreInput.paths = paths;
+  } else if (canonical === "LS") {
+    coreTool = "LS";
+    coreInput.path = inputPaths(ti)[0] ?? "";
+  } else if (canonical === "Glob") {
+    // `file_search` carries the needle as `query` and no search root at all
+    // (measured: {explanation, query, excludePattern, includeIgnoredFiles}).
+    // Core reads a Glob pattern as path-shaped and refuses a pathless one that
+    // does not limit itself to the reviewed unit, which is the intended answer
+    // for a repo-wide filename search inside a review.
+    coreTool = "Glob";
+    coreInput.pattern =
+      (ti.query as string) ?? (ti.pattern as string) ?? (ti.glob as string) ?? "";
+    const root = inputPaths(ti)[0];
+    if (root) coreInput.path = root;
+  } else if (canonical === "Grep") {
+    // Measured shape: {query, caseSensitive, excludePattern, explanation,
+    // includePattern} — no path field at all, and `includePattern` is often null.
+    // So the file-glob filter is the only scope this tool can express, and a
+    // search that expresses none lands on core's pathless-Grep rule, which is the
+    // right answer for a repo-wide content search inside a review. The content
+    // regex deliberately does not travel: core does not scan it, because matching
+    // file content is not a file access, and forwarding it as a path-shaped field
+    // would refuse a legitimate grep of the reviewed unit for text that merely
+    // mentions a sibling.
+    coreTool = "Grep";
+    const root = inputPaths(ti)[0];
+    if (root) coreInput.path = root;
+    const globFilter = ti.glob ?? ti.includePattern ?? ti.include_pattern;
+    if (typeof globFilter === "string" && globFilter.length > 0) {
+      coreInput.glob = globFilter;
+    }
   } else {
     return 0;
   }
@@ -1946,6 +1988,15 @@ if (target === "review-freeze") {
   if (!shell && write === "") return 0;
   const paths = inputPaths(args);
   const pd = process.cwd();
+  // No state file means no workflow record yet, so there is no receipt to protect
+  // and nothing for core to decide. Core arrives at the same answer by reading the
+  // state file and failing open on the throw — but that path records a drop, and a
+  // drop is a release signal, not the right report for "the workflow has not
+  // started". The pre-merge row registered this hook inside the reviewer agents'
+  // own configs, so it could not fire before a dispatch; one standalone manifest
+  // serving both surfaces also sees the conductor's own writes, including the ones
+  // that create the record it is looking for.
+  if (!existsSync(stateFilePath(pd))) return 0;
   const result = runCoreHook("review-freeze", {
     hook_event_name: "PreToolUse",
     tool_name: shell ? "Bash" : write,
