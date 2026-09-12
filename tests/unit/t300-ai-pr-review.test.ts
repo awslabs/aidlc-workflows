@@ -402,7 +402,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).not.toContain("egress-policy:");
     expect(WORKFLOW).toContain('"$codex_bin" exec');
     expect(WORKFLOW).toContain("--sandbox read-only");
-    expect(WORKFLOW).toContain('bash "$REVIEW_CONTROL/scripts/prepare-ai-review-runtime.sh"');
+    expect(WORKFLOW).toContain("bash .github/scripts/prepare-ai-review-runtime.sh");
     expect(WORKFLOW).toContain("sudo -u ai-pr-review");
     expect(RUNTIME_SETUP).toContain("kernel.unprivileged_userns_clone=1");
     expect(RUNTIME_SETUP).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
@@ -411,11 +411,16 @@ describe("t300 adversarial AI PR review", () => {
     expect(RUNTIME_SETUP).toContain("Defaults:runner env_keep");
     expect(RUNTIME_SETUP).toContain("AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN");
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
-    expect(WORKFLOW).toContain(`ref: \${{ github.event.pull_request.head.sha || github.sha }}`);
-    expect(WORKFLOW).toContain("Stage review control files");
-    expect(WORKFLOW).toContain('echo "REVIEW_CONTROL=$control" >> "$GITHUB_ENV"');
-    expect(WORKFLOW).toContain('bun "$REVIEW_CONTROL/scripts/ai-pr-review.ts" build-context');
-    expect(WORKFLOW).toContain('bun "$REVIEW_CONTROL/scripts/ai-pr-review.ts" validate');
+    expect(WORKFLOW).toContain(`ref: \${{ github.event.repository.default_branch }}`);
+    expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
+    expect(WORKFLOW).toContain("This PR changes AI reviewer controls; self-review is skipped");
+    expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
+    expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
+    expect(WORKFLOW).toContain('if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]');
+    expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
+    expect(WORKFLOW).toContain("timeout-minutes: 60");
+    expect(WORKFLOW).toContain("              15m \\");
+    expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
     expect(WORKFLOW).toContain("      - main");
     expect(WORKFLOW).toContain("already_reviewed");
@@ -461,7 +466,7 @@ describe("t300 adversarial AI PR review", () => {
         join(REPO_ROOT, ".github", "prompts", `ai-pr-review-${lens}.md`),
         "utf8",
       );
-      expect(WORKFLOW).toContain(`$REVIEW_CONTROL/prompts/ai-pr-review-${lens}.md`);
+      expect(WORKFLOW).toContain(`.github/prompts/ai-pr-review-${lens}.md`);
       expect(prompt.length).toBeGreaterThan(400);
     }
     expect(WORKFLOW).not.toContain("ai-pr-review-correctness.md");
