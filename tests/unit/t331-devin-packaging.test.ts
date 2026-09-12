@@ -225,6 +225,48 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(srv.command).toBe("uvx");
       expect(Array.isArray(srv.args)).toBe(true);
     }
+    for (const [name, server] of Object.entries(mcp.mcpServers)) {
+      expect(server.disabled, `${name} disabled`).toBe(true);
+      expect(Object.keys(server).at(-1), `${name} key order`).toBe("disabled");
+    }
+  });
+
+  test("5b: MCP defaults survive copy and release packaging and match Kiro", () => {
+    type McpConfig = { mcpServers: Record<string, Record<string, unknown>> };
+    const paths = [
+      join(REPO_ROOT, "harness", "devin", "mcp_config.json"),
+      join(ENGINE, "mcp_config.json"),
+      join(REPO_ROOT, "dist-release", "devin", ".devin", "mcp_config.json"),
+    ];
+    const configs = paths.map((path) => {
+      expect(existsSync(path), path).toBe(true);
+      const config = JSON.parse(readFileSync(path, "utf-8")) as McpConfig;
+      expect(Object.keys(config.mcpServers).sort(), path).toEqual(
+        ["aws-iac", "aws-mcp", "aws-pricing", "aws-serverless", "context7"],
+      );
+      for (const [name, server] of Object.entries(config.mcpServers)) {
+        expect(server.disabled, `${path}: ${name} disabled`).toBe(true);
+        expect(Object.keys(server).at(-1), `${path}: ${name} key order`).toBe("disabled");
+      }
+      return config;
+    });
+    const [authored, copy, release] = configs;
+    expect(copy).toEqual(authored);
+    expect(release).toEqual(authored);
+    const kiro = JSON.parse(readFileSync(
+      join(REPO_ROOT, "harness", "kiro", "settings", "mcp.json"), "utf-8",
+    )) as McpConfig;
+    for (const name of ["aws-mcp", "aws-pricing", "aws-iac", "aws-serverless"]) {
+      const server = authored.mcpServers[name];
+      expect(server, name).toEqual(kiro.mcpServers[name]);
+      expect((server.args as string[])[0], `${name} launcher`).toEndWith("@latest");
+    }
+    const context7 = authored.mcpServers.context7;
+    expect(context7.url).toBe(kiro.mcpServers.context7.url);
+    expect(context7.disabled).toBe(kiro.mcpServers.context7.disabled);
+    expect(context7.headers).toEqual({ CONTEXT7_API_KEY: "${CONTEXT7_API_KEY}" });
+    expect("type" in context7).toBe(false);
+    expect("command" in context7).toBe(false);
   });
 
   test("6: rules/aidlc.md — no @-import, mentions the memory dir, has always_on trigger", () => {
@@ -276,6 +318,14 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     // space-specific). This phrase was removed in S11.
     const agents = readFileSync(join(DEVIN_ROOT, "AGENTS.md"), "utf-8");
     expect(agents).not.toMatch(/identical on every harness/i);
+  });
+
+  test("7e: MCP onboarding explains default-off and per-server activation", () => {
+    for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
+      const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
+      expect(agents).toContain("All five MCP servers are disabled by default.");
+      expect(agents).toContain("enable selected entries with `disabled: false`");
+    }
   });
 
   test("8: harness.json identity — name === devin, harnessDir === .devin", () => {

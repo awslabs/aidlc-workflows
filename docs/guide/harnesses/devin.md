@@ -21,10 +21,11 @@ every distribution — only the shell differs. The tree is **generated** from
 - **Model & environment (user-level)** — model/env/effort are user-level on
   Devin, NOT in the project config. Set your model in
   `~/.config/devin/config.json` (or `%APPDATA%\devin\config.json` on Windows).
-- **MCP servers (optional)** — `.devin/mcp_config.json` declares context7
-  (HTTP, needs `CONTEXT7_API_KEY`) and four AWS servers (uvx, standard AWS
-  credential chain). Servers you have no credentials for are simply unavailable
-  and never block a workflow.
+- **MCP servers (optional)** — `.devin/mcp_config.json` bundles the same five
+  servers as Kiro: `context7`, `aws-mcp`, `aws-pricing`, `aws-iac`, and
+  `aws-serverless`. All five MCP servers are disabled by default. Disabled
+  registrations provide no tools to the session and do not start server
+  processes. MCP availability is not a prerequisite for an AIDLC workflow.
 
 ## Install
 
@@ -65,6 +66,55 @@ Devin prompts to approve project hooks on first run. Run `/hooks`, approve the
 AI-DLC hooks, then **fully restart Devin CLI** (`/clear` is not enough —
 unapproved hooks silently no-op). This is the one manual step; the doctor
 surfaces an advisory if hooks are unapproved.
+
+## Optional MCP setup
+
+Review the server you want to use and supply its prerequisites before enabling
+it. In `.devin/mcp_config.json`, change only that entry's `"disabled": true` to
+`"disabled": false`. Leave unused servers disabled; the registry already ships
+with the installation, so there is no separate example file to copy.
+
+Alternatively, use the native project-scoped commands:
+
+```bash
+devin mcp enable -s project context7
+devin mcp disable -s project context7
+devin mcp list
+```
+
+The enable and disable commands are alternatives for the desired state, not
+steps to run together. `/mcp` shows MCP status. After changing settings, restart
+the session if needed before verifying the selected server. Live MCP
+verification is optional and does not gate an AIDLC workflow.
+
+- **Context7** — the existing HTTP header uses the literal placeholder
+  `${CONTEXT7_API_KEY}`. When opting in, supply `CONTEXT7_API_KEY` securely
+  through the environment or private local configuration. Never commit a
+  literal key or put it in shell history.
+- **AWS servers** — install `uvx` and the chosen package's supported Python
+  runtime, and supply appropriate AWS credentials and permissions when enabled.
+  The shipped AWS proxy endpoint and metadata retain `us-east-1`; review them
+  for your account. Missing credentials are not a substitute for `disabled: true`.
+- **Package versions** — the four `@latest` launchers are retained to match
+  Kiro. Enabling a server can resolve a changing third-party package version;
+  default-off behavior is not dependency pinning or a supply-chain lock. You
+  may pin your own enabled configuration to reviewed versions.
+- **Permissions** — review the existing broad `mcp__*` grant in
+  `.devin/config.json` before enabling external tools. These defaults do not
+  change the permission policy.
+
+The project registry `.devin/mcp_config.json` is shared with the team. Keep
+personal MCP settings and credentials in `.devin/mcp_config.local.json` and
+keep that file gitignored. User-wide MCP configuration lives in
+`~/.config/devin/mcp_config.json` (`%APPDATA%\devin\mcp_config.json` on Windows).
+Use personal settings for individual choices without changing shared defaults;
+inspect local and user configurations when checking the effective server state.
+
+**Existing installs:** these flags apply to the shipped defaults, not an
+automatic migration. Before replacing or merging configuration, preserve custom
+server entries and deliberate enablement choices. To adopt default-off behavior
+in an existing install, explicitly set `disabled: true` on the relevant entries
+and inspect local/user overrides. Do not delete your configurations.
 
 ## Use
 
@@ -108,8 +158,11 @@ cursors and machine-local runtime.
 
 ## Doctor
 
-Run `/aidlc --doctor` after install. It checks the adapter, the four wiring
-files, the Devin CLI version, and surfaces the hook-approval advisory.
+Run `/aidlc --doctor` after install. It checks the adapter and the four wiring
+files (`hooks.v1.json`, `config.json`, `mcp_config.json`, and `rules/aidlc.md`),
+checks the Devin CLI version, and surfaces the hook-approval advisory. The MCP
+check verifies registry presence, not live MCP availability; disabled servers do
+not fail it.
 
 `devin doctor --json` emits CFG005 warnings for `display_name`, `examples`,
 `disallowedTools`, and `maxTurns` on `.devin/agents/*.md` when those fields are
