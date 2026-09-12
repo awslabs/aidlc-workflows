@@ -61,6 +61,7 @@ import {
   worktreeStateFilePath,
   writeFileAtomic,
 } from "./aidlc-lib.js";
+import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
 // hyphens. Mirrors stage-schema.ts:95+:101 — the codebase already duplicates
@@ -2919,12 +2920,21 @@ function handleDiscard(args: string[]): void {
     return;
   }
 
+  const discardedApproval = dirExists &&
+    relativeRecordDir(pd, flags.intent, flags.space) === relativeRecordDir(pd)
+    ? (() => {
+        const identity = currentSwarmWorktreeIdentity(pd, slug);
+        return identity?.stage === "code-generation"
+          ? captureCodeGenerationDiscardApproval(pd, wtPath, identity.unit) : null;
+      })()
+    : null;
   let auditTs: string;
   try {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
       "Worktree path": auditWorktreePath(pd, wtPath),
       Reason: "agent-discard",
+      ...discardedApproval,
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);

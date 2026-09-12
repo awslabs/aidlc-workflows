@@ -32,7 +32,7 @@
     },
     "coveredByClass": {
       "function": 396,
-      "audit": 56,
+      "audit": 57,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -1125,8 +1125,13 @@
       "unitClass": "audit",
       "unitId": "WORKTREE_DISCARDED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -9297,6 +9302,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
           "mechanism": "cli"
         }
@@ -11819,6 +11828,10 @@
         },
         {
           "file": "tests/e2e/t12-bolt-runtime-graph-fork.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
       ],

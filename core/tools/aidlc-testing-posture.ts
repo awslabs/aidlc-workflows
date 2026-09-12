@@ -88,6 +88,7 @@ import {
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
+  type AuditShardEvent,
   type PlanApprovalOverrideRequest,
   type PlanApprovalReceiptKey,
   type PlanApprovalBatchMember,
@@ -2785,12 +2786,177 @@ function parentWorktreeApproval(parentDir: string, unit: string) {
   return { evidence, receipt };
 }
 
+/**
+ * Capture optional recovery evidence before native discard removes the child.
+ * A missing/invalid approval never prevents the human from discarding work.
+ */
+export function captureCodeGenerationDiscardApproval(
+  parentDir: string, childDir: string, unit: string,
+): Record<string, string> | null {
+  try {
+    const authority = resolveCodeGenerationAuthority(childDir, { unit });
+    const approval = evaluateCodeGenerationApproval(childDir, { unit });
+    if (!approval.ok || !approval.approvalFingerprint) return null;
+    const receipt = readPlanApprovalReceipt(childDir, {
+      targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: approval.approvalFingerprint,
+    });
+    const origin = receipt?.delegation;
+    if (!receipt || !origin?.baselineCommit || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(origin.baselineCommit)) return null;
+    const validatedParent = validateWorktreeDelegation(childDir, authority, receipt);
+    if (approvalPathKey(validatedParent) !== approvalPathKey(parentDir)) return null;
+    const provenance = approvalWorktreeProvenance(parentDir, childDir, unit);
+    const baseline = readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, origin.baselineSha256);
+    const committed = gitCommitSourceListing(provenance.repo.cwd, origin.baselineCommit, provenance.repo.repo === null);
+    if (!baseline || !committed ||
+      serializeSourceListing(baseline) !== serializeSourceListing(committed) ||
+      `sha256:${sourceListingSha256(serializeSourceListing(committed))}` !== origin.baselineSha256) return null;
+    return {
+      "Approval Source Commit": origin.baselineCommit,
+      "Approval Source Listing": origin.baselineSha256,
+      "Approval Parent Receipt": origin.parentReceiptSha256,
+      "Approval Creation": origin.provenanceSha256,
+    };
+  } catch {
+    return null;
+  }
+}
+
+interface DiscardedWorktreeApproval {
+  commit: string;
+  listingSha256: string;
+  expectedBytes: string;
+  parentReceiptSha256: string;
+  discardSha256: string;
+}
+
+function discardedWorktreeApproval(
+  parentDir: string, unit: string, repoCwd: string, repoName: string | null, discardSha256: string,
+): DiscardedWorktreeApproval | null {
+  try {
+    if (!/^[0-9a-f]{64}$/.test(discardSha256) || validateUnitName(unit)) return null;
+    const parent = realpathSync(parentDir);
+    const repo = resolveConstructionRepo(parent, repoName ?? undefined);
+    if (repo.repo !== repoName || approvalPathKey(repo.cwd) !== approvalPathKey(repoCwd)) return null;
+    const slug = boltSlugForUnit(unit);
+    const slot = worktreePath(parent, slug);
+    assertNoSymlinkInChainOrThrow(parent, relative(parent, slot));
+    // Discard has removed the final path component. Resolve the existing
+    // parent and reject symlink chains instead of realpath-ing the absent slot.
+    const pathKey = (path: string): string => {
+      const key = resolve(path).replaceAll("\\", "/");
+      return process.platform === "win32" ? key.toLowerCase() : key;
+    };
+    const namesSlot = (row: AuditShardEvent): boolean => {
+      const recorded = auditBlockField(row.block, "Worktree path");
+      if (!recorded) return false;
+      const resolved = resolveAuditWorktreePath(parent, recorded);
+      assertNoSymlinkInChainOrThrow(parent, relative(parent, resolved));
+      return pathKey(resolved) === pathKey(slot);
+    };
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(parent, undefined, undefined, unreadable);
+    if (unreadable.length) return null;
+    const discards = rows.filter((row) => row.event === "WORKTREE_DISCARDED" &&
+      auditBlockField(row.block, "Bolt slug") === slug);
+    const matches = discards.filter((row) =>
+      createHash("sha256").update(row.block, "utf-8").digest("hex") === discardSha256);
+    const latestDiscards = maximalAttemptEvents(discards);
+    if (matches.length !== 1 || latestDiscards.length !== 1 || latestDiscards[0] !== matches[0]) return null;
+    const discard = matches[0];
+    if (!namesSlot(discard) || auditBlockField(discard.block, "Reason") !== "agent-discard") return null;
+    const approved = parentWorktreeApproval(parent, unit);
+    if (approved.receipt.status !== "generation") return null;
+    const dag = resolveBoltDag(parent);
+    const intentRecord = relativeRecordDir(parent);
+    const floor = latestMainWorkflowStageRunFloorForProject(parent, CODE_GENERATION_STAGE);
+    if (dag.state !== "ok" || !intentRecord || floor.startsWith("AMBIGUOUS:")) return null;
+    const matchesCreation = (row: AuditShardEvent): boolean => {
+      const batch = auditBlockField(row.block, "Swarm Batch");
+      return namesSlot(row) &&
+        auditBlockField(row.block, "Branch name") === `bolt-${slug}` &&
+        auditBlockField(row.block, "Intent record") === intentRecord &&
+        auditBlockField(row.block, "Repo") === (repoName ?? "-") &&
+        auditBlockField(row.block, "Swarm Unit") === unit &&
+        auditBlockField(row.block, "Swarm Stage") === CODE_GENERATION_STAGE &&
+        auditBlockField(row.block, "Swarm Run floor") === floor &&
+        batch !== null && /^[1-9][0-9]*$/.test(batch) && !!dag.batches[Number(batch) - 1]?.includes(unit) &&
+        /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(auditBlockField(row.block, "Base commit") ?? "") &&
+        /^sha256:[0-9a-f]{64}$/.test(auditBlockField(row.block, "Base Source Listing") ?? "");
+    };
+    const creations = rows.filter((row) => row.event === "WORKTREE_CREATED" &&
+      auditBlockField(row.block, "Bolt slug") === slug);
+    const beforeDiscard = maximalAttemptEvents(creations.filter((row) => attemptEventDefinitelyBefore(row, discard)));
+    if (beforeDiscard.length !== 1 || !matchesCreation(beforeDiscard[0])) return null;
+    const original = beforeDiscard[0];
+    // Audit is emitted before teardown. A cleanup retry may follow successful
+    // directory removal and therefore have no approval fields to capture. Keep
+    // the selected discard as the physical boundary, and obtain its source
+    // witness only within this same creation's discard interval.
+    const approvalFields = [
+      "Approval Source Commit", "Approval Source Listing", "Approval Parent Receipt", "Approval Creation",
+    ];
+    const witnesses = maximalAttemptEvents(discards.filter((row) =>
+      attemptEventDefinitelyBefore(original, row) &&
+      (row === discard || attemptEventDefinitelyBefore(row, discard)) &&
+      namesSlot(row) && auditBlockField(row.block, "Reason") === "agent-discard" &&
+      approvalFields.some((field) => auditBlockField(row.block, field) !== null)));
+    if (witnesses.length !== 1) return null;
+    const witness = witnesses[0];
+    const commit = auditBlockField(witness.block, "Approval Source Commit");
+    const listingSha256 = auditBlockField(witness.block, "Approval Source Listing");
+    const parentReceiptSha256 = auditBlockField(witness.block, "Approval Parent Receipt");
+    if (!commit || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit) ||
+      !listingSha256 || !/^sha256:[0-9a-f]{64}$/.test(listingSha256) ||
+      auditBlockField(witness.block, "Approval Creation") !== hashObject(original.block) ||
+      !parentReceiptSha256 || parentReceiptSha256 !== hashObject(approved.receipt)) return null;
+    const subsequent = creations.filter((row) => !attemptEventDefinitelyBefore(row, discard));
+    const latestCreations = maximalAttemptEvents(creations);
+    if (latestCreations.length !== 1) return null;
+    if (!existsSync(slot)) {
+      // Preflight may use only the creation actually ended by this discard.
+      if (subsequent.length !== 0 || latestCreations[0] !== original) return null;
+    } else {
+      // Bind may see exactly one new native creation. An old discard cannot
+      // certify another later recreation, even if its source happens to match.
+      if (subsequent.length !== 1 || latestCreations[0] !== subsequent[0] ||
+        !attemptEventDefinitelyBefore(discard, subsequent[0]) || !matchesCreation(subsequent[0]) ||
+        auditBlockField(subsequent[0].block, "Swarm Batch") !== auditBlockField(original.block, "Swarm Batch") ||
+        auditBlockField(subsequent[0].block, "Base commit") !== commit ||
+        auditBlockField(subsequent[0].block, "Base Source Listing") !== listingSha256) return null;
+      const current = approvalWorktreeProvenance(parent, slot, unit);
+      if (current.hash !== hashObject(subsequent[0].block) || current.repo.repo !== repoName ||
+        approvalPathKey(current.repo.cwd) !== approvalPathKey(repoCwd)) return null;
+    }
+    const committed = gitCommitSourceListing(repo.cwd, commit, repo.repo === null);
+    if (!committed) return null;
+    const expectedBytes = serializeSourceListing(committed);
+    if (`sha256:${sourceListingSha256(expectedBytes)}` !== listingSha256) return null;
+    return { commit, listingSha256, expectedBytes, parentReceiptSha256, discardSha256 };
+  } catch {
+    return null;
+  }
+}
+
+/** Read-only, optional immutable base for a verified explicit-discard recovery. */
+export function codeGenerationDiscardedBase(
+  parentDir: string, unit: string, repoCwd: string, repoName: string | null, discardSha256: string,
+): string | null {
+  return discardedWorktreeApproval(parentDir, unit, repoCwd, repoName, discardSha256)?.commit ?? null;
+}
+
 function approvedWorktreeSource(
   parent: string,
   approved: ReturnType<typeof parentWorktreeApproval>,
   repo: ReturnType<typeof resolveConstructionRepo>,
+  discarded: DiscardedWorktreeApproval | null = null,
 ) {
   const parentSource = workspaceSourceState(parent);
+  if (discarded) {
+    if (!parentSource || hashObject(approved.receipt) !== discarded.parentReceiptSha256) {
+      throw new Error("Discarded worktree Plan Approval changed or current parent source cannot be bound.");
+    }
+    return { parentSource, expectedBytes: discarded.expectedBytes };
+  }
   if (!parentSource || parentSource.fingerprint !== approved.receipt.certifiedSourceSha256) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
@@ -2808,6 +2974,7 @@ function approvedWorktreeSource(
  */
 export function validateCodeGenerationForkApproval(
   parentDir: string, unit: string, repoCwd: string, repoName: string | null, baseCommit: string,
+  discardedSha256?: string,
 ): void {
   const parent = realpathSync(parentDir);
   const approved = parentWorktreeApproval(parent, unit);
@@ -2815,7 +2982,16 @@ export function validateCodeGenerationForkApproval(
   if (repo.repo !== repoName || approvalPathKey(repo.cwd) !== approvalPathKey(repoCwd)) {
     throw new Error("Selected worktree repository does not match the parent approval source.");
   }
-  const { expectedBytes } = approvedWorktreeSource(parent, approved, repo);
+  const discarded = discardedSha256 === undefined
+    ? null : discardedWorktreeApproval(parent, unit, repoCwd, repoName, discardedSha256);
+  const { expectedBytes } = approvedWorktreeSource(parent, approved, repo, discarded);
+  if (discarded) {
+    const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
+    if (base !== discarded.commit) {
+      throw new Error("Discard recovery must fork from the recorded Approval Source Commit.");
+    }
+    return;
+  }
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const committed = gitCommitSourceListing(repo.cwd, parentHead, repo.repo === null);
   if (!committed || serializeSourceListing(committed) !== expectedBytes) {
@@ -2832,14 +3008,20 @@ export function validateCodeGenerationForkApproval(
   }
 }
 
-function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: string) {
+function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: string, discardedSha256?: string) {
   const provenance = approvalWorktreeProvenance(parentDir, childDir, unit);
   const approved = parentWorktreeApproval(provenance.parent, unit);
-  const { parentSource, expectedBytes } = approvedWorktreeSource(provenance.parent, approved, provenance.repo);
+  const discarded = discardedSha256 === undefined ? null : discardedWorktreeApproval(
+    provenance.parent, unit, provenance.repo.cwd, provenance.repo.repo, discardedSha256,
+  );
+  const { parentSource, expectedBytes } = approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
   const childSource = workspaceSourceState(provenance.child);
   if (!childSource) throw new Error("Worktree source cannot be bound. Repair its source boundary before retrying.");
   let syncCommit: string | null = null;
   if (serializeSourceListing(childSource.listing) !== expectedBytes) {
+    if (discarded) {
+      throw new Error("Recreated worktree source differs from the discarded approval's immutable baseline. Nothing was changed.");
+    }
     const childHead = worktreeApprovalGit(provenance.child, ["rev-parse", "HEAD"]);
     const base = gitCommitSourceListing(provenance.child, childHead, provenance.repo.repo === null);
     if (!base || serializeSourceListing(base) !== serializeSourceListing(childSource.listing)) {
@@ -2865,34 +3047,46 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     if (existsSync(to)) readRegularFileNoFollowOrThrow(to, "preserved plan record");
     return { from, to, name, bytes: readRegularFileNoFollowOrThrow(from, "approved parent plan record") };
   });
-  return { ...provenance, ...approved, parentSource, childSource, expectedBytes, syncCommit, files };
+  return { ...provenance, ...approved, parentSource, childSource, expectedBytes, syncCommit, files, discarded };
 }
 
 /** Read-only preflight, including dirty-source refusal before any re-fork. */
-export function validateCodeGenerationWorktreeApproval(parentDir: string, childDir: string, unit: string): void {
-  worktreeApprovalTransfer(parentDir, childDir, unit);
+export function validateCodeGenerationWorktreeApproval(
+  parentDir: string, childDir: string, unit: string, discardedSha256?: string,
+): void {
+  worktreeApprovalTransfer(parentDir, childDir, unit, discardedSha256);
 }
 
 /**
  * Delegate the already-started parent receipt without changing its human,
  * intent, attempt, fingerprint, or group binding. Publication is the last write.
  */
-export function bindCodeGenerationWorktreeApproval(parentDir: string, childDir: string, unit: string): void {
-  const before = worktreeApprovalTransfer(parentDir, childDir, unit);
+export function bindCodeGenerationWorktreeApproval(
+  parentDir: string, childDir: string, unit: string, discardedSha256?: string,
+): void {
+  const before = worktreeApprovalTransfer(parentDir, childDir, unit, discardedSha256);
   if (before.syncCommit) {
     // Git refuses diverged histories and overlapping local changes. No reset,
     // stash, clean, new commit, or force option is used.
     worktreeApprovalGit(before.child, ["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", before.syncCommit]);
   }
   withAuditLock(before.parent, () => withAuditLock(before.child, () => {
-    const current = worktreeApprovalTransfer(before.parent, before.child, unit);
+    const current = worktreeApprovalTransfer(before.parent, before.child, unit, discardedSha256);
     if (current.syncCommit || current.hash !== before.hash ||
       hashObject(current.receipt) !== hashObject(before.receipt) ||
       current.expectedBytes !== before.expectedBytes ||
+      hashObject(current.discarded) !== hashObject(before.discarded) ||
       current.receipt.status !== "generation" ||
       activeIntentUuid(current.child) !== current.evidence.authority.intentId) {
       throw new Error("Worktree approval context changed during transfer; no execution receipt was published.");
     }
+    const childHead = worktreeApprovalGit(current.child, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const committed = gitCommitSourceListing(current.child, childHead, current.repo.repo === null);
+    // Some preserved, approved source is dirty relative to the child's HEAD.
+    // Such a delegation remains valid but cannot furnish an immutable discard
+    // recovery base; capture will simply return no optional approval fields.
+    const baselineCommit = committed && serializeSourceListing(committed) === current.expectedBytes
+      ? childHead : undefined;
     const archive = join(recordDir(current.child)!, ".aidlc-plan-transfers", randomUUID());
     mkdirSync(archive, { recursive: true });
     for (const file of current.files) {
@@ -2915,6 +3109,8 @@ export function bindCodeGenerationWorktreeApproval(parentDir: string, childDir: 
       copied.recordedFingerprint !== current.receipt.fingerprint ||
       hashObject(finalParent.receipt) !== hashObject(current.receipt) ||
       current.files.some((file) => !readRegularFileNoFollowOrThrow(file.from, "approved parent plan record").equals(file.bytes)) ||
+      (baselineCommit !== undefined &&
+        worktreeApprovalGit(current.child, ["rev-parse", "--verify", "HEAD^{commit}"]) !== baselineCommit) ||
       workspaceSourceFingerprint(current.parent) !== current.parentSource.fingerprint ||
       workspaceSourceFingerprint(current.child) !== current.childSource.fingerprint) {
       throw new Error("Worktree source or attempt changed before approval publication; retry from current Plan Approval.");
@@ -2924,6 +3120,7 @@ export function bindCodeGenerationWorktreeApproval(parentDir: string, childDir: 
       delegation: {
         version: 1, parentProjectDir: current.parent, worktreeDir: current.child, unit,
         provenanceSha256: current.hash, parentReceiptSha256: hashObject(current.receipt), baselineSha256,
+        ...(baselineCommit === undefined ? {} : { baselineCommit }),
       },
     });
   }));
@@ -2934,6 +3131,8 @@ function validateWorktreeDelegation(
 ): string {
   const origin = receipt.delegation!;
   if (origin.version !== 1 || origin.unit !== authority.unit ||
+    (origin.baselineCommit !== undefined &&
+      (typeof origin.baselineCommit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(origin.baselineCommit))) ||
     approvalPathKey(origin.worktreeDir) !== approvalPathKey(childDir)) {
     throw new Error("Worktree approval delegation has a different execution target.");
   }

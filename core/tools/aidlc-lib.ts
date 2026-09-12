@@ -3100,6 +3100,8 @@ export interface PlanApprovalWorktreeDelegation {
   provenanceSha256: string;
   parentReceiptSha256: string;
   baselineSha256: string;
+  /** Present only when this immutable commit reproduces the delegated baseline. */
+  baselineCommit?: string;
 }
 
 export interface PlanApprovalReceiptOverride {

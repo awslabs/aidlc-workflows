@@ -1182,6 +1182,11 @@ after a checkpoint revision has been prepared. An interrupted revision setup
 can retry with its existing current approval; successful preparation removes
 the revision-preparation signal from subsequent `next` directives. Substantive
 plan or attempt changes still require the reported approval repair.
+When a human Retry explicitly discards a worker, its native discard can retain
+the committed approved baseline for recreation. The replacement can keep the
+same approval while other batch members continue or have already landed.
+Missing directories and unrelated old discard records do not authorize this
+recovery.
 Legacy protected-choice mediation, overrides, and unsupported harnesses use the
 single-Unit flow; per-Unit approval remains mandatory in either presentation.
 See [Construction Execution](../reference/03-orchestrator.md#construction-execution).

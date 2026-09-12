@@ -146,6 +146,7 @@ import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
+  codeGenerationDiscardedBase,
   evaluateCodeGenerationApproval,
   readCodeGenerationWorktreeSourceBaseline,
   validateCodeGenerationWorktreeApproval,
@@ -292,6 +293,13 @@ interface Verdict {
   confineError?: string;
 }
 
+function requiresCodeGenerationApproval(state: string): boolean {
+  return getField(state, "Current Stage")?.trim().toLowerCase().replace(/\s+/g, "-") === "code-generation" &&
+    (getField(state, "Construction Autonomy Mode")?.trim() === "autonomous" ||
+      getField(state, "Construction Checkpoints")?.trim() === "enabled" ||
+      getField(state, "Construction Execution")?.trim() === "swarm");
+}
+
 // Compute a unit's stateless verdict from on-disk state alone. Re-derives the
 // worktree path from (projectDir, unit) — no stored handle — so check and
 // finalize agree without sharing state.
@@ -304,6 +312,24 @@ function verdictFor(
   const wt = worktreePath(projectDir, swarmBoltSlug(unit));
   if (!existsSync(wt)) {
     return { exists: false, converged: false, tampered: false };
+  }
+  // A project check is executable code. Verify the prepared worker's approval
+  // before running it, then retain the later post-check footprint validation.
+  let parentState = "";
+  let childState = "";
+  try { parentState = readStateFile(projectDir); } catch { /* Legacy stateless checks have no workflow. */ }
+  try { childState = readStateFile(wt); } catch { /* Missing authority is refused below for protected work. */ }
+  if (requiresCodeGenerationApproval(parentState) || requiresCodeGenerationApproval(childState)) {
+    try {
+      if (readCodeGenerationWorktreeSourceBaseline(wt, unit) === null) {
+        throw new Error("the worker has no current delegated Plan Approval");
+      }
+    } catch (error) {
+      return {
+        exists: true, converged: false, tampered: false,
+        confineError: `Worktree Plan Approval is required before running the check: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
   const converged = checkConverged(wt, checkCmd);
   let tampered = false;
@@ -1697,6 +1723,8 @@ interface SwarmResume {
   recreate: boolean;
   recovering: boolean;
   creation: string;
+  discardedSha256?: string;
+  approvedBaseCommit?: string;
 }
 
 function resumeJournalPath(pd: string, revision: string, unit: string): string {
@@ -1706,7 +1734,7 @@ function resumeJournalPath(pd: string, revision: string, unit: string): string {
 }
 
 function readResumeJournal(pd: string, revision: string, unit: string): {
-  revision: string; approvalFingerprint: string; creation: string;
+  revision: string; approvalFingerprint: string; creation: string; discardedSha256?: string;
 } | null {
   const path = resumeJournalPath(pd, revision, unit);
   assertNoSymlinkInChainOrThrow(realpathSync(pd), relative(pd, path));
@@ -1722,6 +1750,7 @@ function writeResumeJournal(pd: string, resume: SwarmResume): void {
     revision: resume.revision,
     approvalFingerprint: resume.approvalFingerprint,
     creation: resume.creation,
+    ...(resume.discardedSha256 ? { discardedSha256: resume.discardedSha256 } : {}),
   })));
 }
 
@@ -1768,6 +1797,61 @@ function resumeGit(cwd: string, args: string[]): string {
 function resumePathKey(path: string): string {
   const canonical = realpathSync(path).replaceAll("\\", "/");
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+function resumeMissingPathKey(path: string): string {
+  let existing = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) throw new Error("Cannot resolve missing worktree location.");
+    suffix.unshift(basename(existing));
+    existing = parent;
+  }
+  const canonical = resolve(realpathSync(existing), ...suffix).replaceAll("\\", "/");
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+function resumeCreationMatches(
+  pd: string, row: AuditShardEvent, batch: string, unit: string,
+  attempt: SwarmAttemptStamp, repoName: string | null,
+): boolean {
+  const path = auditBlockField(row.block, "Worktree path");
+  const recordPrefix = relativeRecordDir(pd);
+  const slug = swarmBoltSlug(unit);
+  return recordPrefix !== null && row.event === "WORKTREE_CREATED" &&
+    auditBlockField(row.block, "Bolt slug") === slug &&
+    auditBlockField(row.block, "Branch name") === `bolt-${slug}` &&
+    auditBlockField(row.block, "Intent record") === recordPrefix &&
+    auditBlockField(row.block, "Repo") === (repoName ?? "-") &&
+    auditBlockField(row.block, "Swarm Unit") === unit &&
+    auditBlockField(row.block, "Swarm Batch") === batch &&
+    auditBlockField(row.block, "Swarm Stage") === attempt.stage &&
+    auditBlockField(row.block, "Swarm Run floor") === attempt.floor &&
+    path !== null &&
+    resumeMissingPathKey(resolveAuditWorktreePath(pd, path)) === resumeMissingPathKey(worktreePath(pd, slug));
+}
+
+function currentDiscardedSwarmSlot(
+  pd: string, batch: string, unit: string, attempt: SwarmAttemptStamp,
+  repoName: string | null, rows: AuditShardEvent[],
+): AuditShardEvent | null {
+  const slug = swarmBoltSlug(unit);
+  if (existsSync(worktreePath(pd, slug))) return null;
+  const creation = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_CREATED" &&
+    auditBlockField(row.block, "Bolt slug") === slug));
+  const discard = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_DISCARDED" &&
+    auditBlockField(row.block, "Bolt slug") === slug));
+  const started = latestResumeRow(rows.filter((row) => row.event === "BOLT_STARTED" &&
+    auditBlockField(row.block, "Bolt slug") === slug));
+  const path = discard && auditBlockField(discard.block, "Worktree path");
+  return creation && discard && path &&
+    resumeCreationMatches(pd, creation, batch, unit, attempt, repoName) &&
+    auditBlockField(discard.block, "Reason") === "agent-discard" &&
+    resumeMissingPathKey(resolveAuditWorktreePath(pd, path)) === resumeMissingPathKey(worktreePath(pd, slug)) &&
+    attemptEventDefinitelyBefore(creation, discard) &&
+    (started === null || attemptEventDefinitelyBefore(started, discard))
+    ? discard : null;
 }
 
 function validateSwarmResume(
@@ -1822,19 +1906,47 @@ function validateSwarmResume(
       auditBlockField(row.block, "Stage") === attempt.stage &&
       auditBlockField(row.block, "Run floor") === attempt.floor &&
       auditBlockField(row.block, "Repo") === (repoName ?? "-")));
-    const converged = latestResumeRow(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
-      auditBlockField(row.block, "Unit name") === unit));
-    if (!creation || !merged || !converged ||
-      !attemptEventDefinitelyBefore(creation, converged) ||
+    const converged = merged && latestResumeRow(rows.filter((row) =>
+      row.event === "SWARM_UNIT_CONVERGED" &&
+      auditBlockField(row.block, "Unit name") === unit &&
+      auditBlockField(row.block, "Batch number") === batch &&
+      auditBlockField(row.block, "Stage") === attempt.stage &&
+      auditBlockField(row.block, "Run floor") === attempt.floor &&
+      auditBlockField(row.block, "Source Commit") === auditBlockField(merged.block, "Source Commit") &&
+      attemptEventDefinitelyBefore(row, merged)));
+    const matchingCreation = (row: AuditShardEvent): boolean =>
+      resumeCreationMatches(pd, row, batch, unit, attempt, repoName);
+    const landedCreation = converged && latestResumeRow(rows.filter((row) =>
+      matchingCreation(row) && attemptEventDefinitelyBefore(row, converged)));
+    if (!creation || !matchingCreation(creation) || !merged || !converged || !landedCreation ||
       !attemptEventDefinitelyBefore(converged, merged) ||
       !attemptEventDefinitelyBefore(merged, rejection) ||
-      auditBlockField(merged.block, "Source Commit") !== auditBlockField(converged.block, "Source Commit") ||
-      parseRefsList(getField(state, "Bolt Refs") ?? "").includes(slug)) {
+      auditBlockField(merged.block, "Source Commit") !== auditBlockField(converged.block, "Source Commit")) {
       throw new Error(`${unit}: missing worktree has no completed native source landing for this checkpoint revision.`);
+    }
+    const latestStart = latestResumeRow(rows.filter((row) =>
+      row.event === "BOLT_STARTED" && auditBlockField(row.block, "Bolt slug") === slug));
+    const needsDiscard = creation.block !== landedCreation.block ||
+      (latestStart !== null && !attemptEventDefinitelyBefore(latestStart, rejection));
+    let discardedSha256: string | undefined;
+    let approvedBaseCommit: string | undefined;
+    if (needsDiscard) {
+      // The old landing remains the source anchor, but it cannot by itself
+      // authorize replacing a subsequently created/prepared worker.
+      const discard = currentDiscardedSwarmSlot(pd, batch, unit, attempt, repoName, rows);
+      if (!discard || !attemptEventDefinitelyBefore(rejection, discard)) {
+        throw new Error(`${unit}: a missing prepared revision requires a matching native discard after its latest creation and start; preserve remaining work and finish the documented abort/discard before retrying.`);
+      }
+      discardedSha256 = checkpointRevision(discard);
+      approvedBaseCommit = codeGenerationDiscardedBase(pd, unit, repoCwd, repoName, discardedSha256) ?? undefined;
+    } else if (parseRefsList(getField(state, "Bolt Refs") ?? "").includes(slug)) {
+      throw new Error(`${unit}: missing worktree still has an active Bolt registration without a current native discard.`);
     }
     return {
       unit, worktree, recordPrefix, revision, approvalFingerprint: approval.approvalFingerprint,
       alreadyResumed: false, recreate: true, recovering: false, creation: checkpointRevision(creation),
+      ...(discardedSha256 ? { discardedSha256 } : {}),
+      ...(approvedBaseCommit ? { approvedBaseCommit } : {}),
     };
   }
   if (!matchingJournal && relativeRecordDir(worktree) !== recordPrefix) {
@@ -1885,7 +1997,8 @@ function validateSwarmResume(
     resumedRevision(swarmStart, unit) === revision &&
     auditBlockField(swarmStart.block, "Run floor") === attempt.floor;
   const recovering = !alreadyResumed && matchingJournal &&
-    (!swarmStart || attemptEventDefinitelyBefore(swarmStart, rejection));
+    (!swarmStart || attemptEventDefinitelyBefore(swarmStart, rejection) ||
+      attemptEventDefinitelyBefore(swarmStart, creation));
   if (!alreadyResumed && !recovering) {
     const converged = latestResumeRow(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
       auditBlockField(row.block, "Unit name") === unit));
@@ -1905,10 +2018,12 @@ function validateSwarmResume(
   if (alreadyResumed && resumedRevision(swarmStart!, unit, "Resume approvals") !== approval.approvalFingerprint) {
     throw new Error(`${unit}: this revision was already resumed under a different plan; preserve the active work and request a new checkpoint revision.`);
   }
-  if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit);
+  const discardedSha256 = matchingJournal ? journal?.discardedSha256 : undefined;
+  if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit, discardedSha256);
   return {
     unit, worktree, recordPrefix, revision, alreadyResumed, recovering, recreate: false,
     creation: checkpointRevision(creation), approvalFingerprint: approval.approvalFingerprint,
+    ...(discardedSha256 ? { discardedSha256 } : {}),
   };
 }
 
@@ -1989,13 +2104,10 @@ function handlePrepare(rest: string[]): void {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-");
-  const autonomy = (getField(state, "Construction Autonomy Mode") ?? "").trim();
   // Human lines for source drift accepted under Change Control `relaxed` when
   // protected Code Generation authority started for the batch's units.
   const swarmChangeNotices: string[] = [];
-  const requiresPlanApproval =
-    stage === "code-generation" &&
-    (autonomy === "autonomous" || getField(state, "Construction Checkpoints") === "enabled");
+  const requiresPlanApproval = requiresCodeGenerationApproval(state);
   if (requiresPlanApproval) {
     const invalid = units
       .map((unit) => evaluateCodeGenerationApproval(projectDir, { unit }))
@@ -2064,6 +2176,7 @@ function handlePrepare(rest: string[]): void {
     );
   }
   const resumes = new Map<string, SwarmResume>();
+  const discardedPreparations = new Map<string, { discardedSha256: string; approvedBaseCommit?: string }>();
   const selected = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   if (resumeExisting) {
     if (!selected.intent || relativeRecordDir(projectDir, selected.intent, selected.space) !== relativeRecordDir(projectDir)) {
@@ -2085,13 +2198,33 @@ function handlePrepare(rest: string[]): void {
       fail("This batch has a checkpoint revision. Re-run prepare with --resume-existing after fresh Plan Approval.");
     }
   }
+  if (!resumeExisting && requiresPlanApproval) {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+    if (unreadable.length) fail("prepare cannot recover discarded workers from unreadable audit evidence");
+    for (const unit of units) {
+      const discard = currentDiscardedSwarmSlot(projectDir, flags.batch, unit, attempt, repoName, rows);
+      if (!discard) continue;
+      const discardedSha256 = checkpointRevision(discard);
+      const approvedBaseCommit = codeGenerationDiscardedBase(
+        projectDir, unit, repoCwd, repoName, discardedSha256,
+      ) ?? undefined;
+      discardedPreparations.set(unit, {
+        discardedSha256, ...(approvedBaseCommit ? { approvedBaseCommit } : {}),
+      });
+    }
+  }
   if (requiresPlanApproval) {
     try {
       // Validate the entire batch before the first fork or generation receipt.
       // An approved dirty parent is not a reproducible worktree base.
       for (const unit of units) {
         if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
-          validateCodeGenerationForkApproval(projectDir, unit, repoCwd, repoName, base);
+          const resume = resumes.get(unit) ?? discardedPreparations.get(unit);
+          validateCodeGenerationForkApproval(
+            projectDir, unit, repoCwd, repoName,
+            resume?.approvedBaseCommit ?? base, resume?.discardedSha256,
+          );
         }
       }
     } catch (error) {
@@ -2136,6 +2269,7 @@ function handlePrepare(rest: string[]): void {
   for (const unit of units) {
     const boltSlug = swarmBoltSlug(unit);
     const resume = resumes.get(unit);
+    const discarded = resume ?? discardedPreparations.get(unit);
     if (resume && !resume.recreate) {
       let archive: string | undefined;
       try {
@@ -2151,7 +2285,7 @@ function handlePrepare(rest: string[]): void {
             ...repoArgs, ...resumeSelectors,
           ], projectDir);
           if (!started.ok) throw new Error(`resume Bolt start failed: ${started.stderr.trim() || started.stdout.trim()}`);
-          bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit);
+          bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, checked.discardedSha256);
           const approval = evaluateCodeGenerationApproval(projectDir, { unit });
           if (!approval.ok) throw new Error(`${unit}: Plan Approval changed during resume: ${approval.reason}`);
         }
@@ -2168,6 +2302,39 @@ function handlePrepare(rest: string[]): void {
       }
       continue;
     }
+    const discardedSha256 = discarded?.discardedSha256;
+    if (discardedSha256) {
+      try {
+        withAuditLock(projectDir, () => {
+          if (resume) {
+            const checked = validateSwarmResume(projectDir, flags.batch, unit, attempt, repoCwd, repoName);
+            if (!checked.recreate || checked.discardedSha256 !== discardedSha256 ||
+              checked.approvedBaseCommit !== discarded?.approvedBaseCommit) {
+              throw new Error(`${unit}: discarded revision authority changed before recreation`);
+            }
+          } else {
+            const rows = readAuditShardEvents(projectDir);
+            const checked = currentDiscardedSwarmSlot(projectDir, flags.batch, unit, attempt, repoName, rows);
+            if (!checked || checkpointRevision(checked) !== discardedSha256 ||
+              currentCheckpointRejection(rows, flags.batch, unit, attempt.floor) ||
+              (codeGenerationDiscardedBase(projectDir, unit, repoCwd, repoName, discardedSha256) ?? undefined) !== discarded?.approvedBaseCommit) {
+              throw new Error(`${unit}: discarded worker authority changed before recreation`);
+            }
+          }
+          // The native discard is already the audit authority for releasing
+          // this missing slot. Reconcile only its stale projection; peers and
+          // all source remain unchanged. No partial child state is merged.
+          const current = readStateFile(projectDir);
+          const refs = getField(current, "Bolt Refs") ?? "";
+          if (parseRefsList(refs).includes(boltSlug)) {
+            writeStateFile(projectDir, setFieldStrict(current, "Bolt Refs", removeSlug(refs, boltSlug)));
+          }
+        });
+      } catch (error) {
+        prepared.push({ unit, ok: false, error: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
+    }
     const created = runTool(
       "aidlc-worktree.ts",
       [
@@ -2175,7 +2342,7 @@ function handlePrepare(rest: string[]): void {
         "--slug",
         boltSlug,
         "--base",
-        base,
+        discarded?.approvedBaseCommit ?? base,
         "--swarm-unit",
         unit,
         "--swarm-batch",
@@ -2234,7 +2401,7 @@ function handlePrepare(rest: string[]): void {
     }
     if (requiresPlanApproval) {
       try {
-        bindCodeGenerationWorktreeApproval(projectDir, worktreeDir, unit);
+        bindCodeGenerationWorktreeApproval(projectDir, worktreeDir, unit, discarded?.discardedSha256);
       } catch (error) {
         if (!resume) releasePreparationRegistration(projectDir, unit);
         prepared.push({

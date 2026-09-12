@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  artifactFilename, auditBlockField, clearPlanApprovalReceipt, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents, readPlanApprovalReceipt, readUnitSourceManifest, reviewArtifactFingerprint,
   serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
@@ -103,7 +103,7 @@ function approve(pd: string, grouped = true): void {
   }
 }
 
-function fixture(options: { dirty?: boolean; legacy?: boolean } = {}): string {
+function fixture(options: { dirty?: boolean; legacy?: boolean; grouped?: boolean } = {}): string {
   const pd = setupIntegrationProject();
   projects.push(pd);
   writeFileSync(seededStateFile(pd), `# State
@@ -151,7 +151,7 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
   if (options.legacy) appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
   appendAuditEntry("SESSION_STARTED", { Session: SESSION, Source: "t340 fixture" }, pd);
   publish(pd, "invoke-swarm");
-  approve(pd, !options.legacy);
+  approve(pd, options.grouped ?? !options.legacy);
   return pd;
 }
 
@@ -219,6 +219,137 @@ function gates(pd: string): number {
 }
 
 describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
+  test("approved native and installed unified swarm commands pass PreToolUse and reach native authority checks", () => {
+    const pd = fixture();
+    const receipts = UNITS.map((unit) => {
+      const authority = resolveCodeGenerationAuthority(pd, { unit });
+      const approval = evaluateCodeGenerationApproval(pd, { unit });
+      expect(approval.ok, approval.reason).toBe(true);
+      if (!approval.approvalFingerprint) throw new Error("Fixture lacks approved grouped authority");
+      const key = { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: approval.approvalFingerprint };
+      return { key, receipt: readPlanApprovalReceipt(pd, key) };
+    });
+    const worktrees = git(pd, ["worktree", "list", "--porcelain"]);
+    const source = workspaceSourceFingerprint(pd);
+    for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+      for (const route of [
+        "prepare --batch 1 --units alpha,beta --base main",
+        'check alpha --check-cmd "git diff --check"',
+        'finalize --batch 1 --units alpha,beta --claimed alpha,beta --check-cmd "git diff --check"',
+        'finalize --batch 1 --units alpha,beta --claimed "" --check-cmd "git diff --check"',
+      ]) {
+        const command = `${entry} engine swarm ${route} --project-dir "${pd}"`;
+        const result = guard(pd, command);
+        expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(0);
+      }
+    }
+    // Passing the hook does not grant a source baseline or a prepared child.
+    // Exercise the installed entry point's own deterministic refusals.
+    const invokeInstalled = (args: string[]) => {
+      const result = Bun.spawnSync([
+        process.execPath, join(pd, ".claude/tools/aidlc.ts"), "engine", "swarm", ...args, "--project-dir", pd,
+      ], {
+        cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
+        stdout: "pipe", stderr: "pipe",
+      });
+      return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
+    };
+    const invalidBase = invokeInstalled([
+      "prepare", "--batch", "1", "--units", "alpha,beta", "--base", "missing-approved-source-base",
+    ]);
+    expect(invalidBase.code, `${invalidBase.out}\n${invalidBase.err}`).not.toBe(0);
+    expect(`${invalidBase.out}\n${invalidBase.err}`).toContain("prepare source preflight failed before creating worktrees");
+    const unprepared = invokeInstalled(["check", "alpha", "--check-cmd", "git diff --check"]);
+    expect(unprepared.code, `${unprepared.out}\n${unprepared.err}`).not.toBe(0);
+    expect(`${unprepared.out}\n${unprepared.err}`).toContain("no worktree for unit");
+    expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
+    expect(workspaceSourceFingerprint(pd)).toBe(source);
+    for (const saved of receipts) expect(readPlanApprovalReceipt(pd, saved.key)).toEqual(saved.receipt);
+    expect(readAuditShardEvents(pd).filter((row) =>
+      row.event === "WORKTREE_CREATED" || row.event === "BOLT_STARTED")).toHaveLength(0);
+  }, 60_000);
+
+  test("swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms", () => {
+    for (const condition of ["missing all", "missing beta", "foreign Unit", "foreign project"]) {
+      // Independent approvals leave alpha valid when beta's receipt is absent,
+      // so prepare/finalize must inspect every named member.
+      const pd = fixture({ grouped: condition !== "missing beta" });
+      if (condition === "missing all" || condition === "missing beta") {
+        const targets = condition === "missing all" ? UNITS : ["beta"];
+        const keys = targets.map((unit) => {
+          const authority = resolveCodeGenerationAuthority(pd, { unit });
+          const fingerprint = evaluateCodeGenerationApproval(pd, { unit }).approvalFingerprint;
+          if (!fingerprint) throw new Error("Fixture lacks an approval fingerprint");
+          return { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint };
+        });
+        for (const key of keys) clearPlanApprovalReceipt(pd, key);
+        if (condition === "missing beta") {
+          expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(true);
+        }
+        expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
+      }
+      if (condition === "missing all") {
+        for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+          const abort = guard(pd,
+            `${entry} engine bolt abort --name alpha --slug alpha --reason "Human Retry" --discard --project-dir "${pd}"`);
+          expect(abort.code, `${entry}: cancellation\n${abort.out}\n${abort.err}`).toBe(0);
+          const start = guard(pd,
+            `${entry} engine bolt start --name alpha --slug alpha --batch 1 --worktree --project-dir "${pd}"`);
+          expect(start.code, `${entry}: generation start\n${start.out}\n${start.err}`).toBe(2);
+          for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
+        }
+      }
+      const targetProject = condition === "foreign project" ? fixture() : pd;
+      const units = condition === "foreign Unit" ? "alpha,gamma" : "alpha,beta";
+      const checkedUnit = condition === "foreign Unit" ? "gamma" : condition === "missing beta" ? "beta" : "alpha";
+      const worktrees = git(pd, ["worktree", "list", "--porcelain"]);
+      for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+        for (const route of [
+          `prepare --batch 1 --units ${units} --base main`,
+          `check ${checkedUnit} --check-cmd "git diff --check"`,
+          `finalize --batch 1 --units ${units} --claimed ${units} --check-cmd "git diff --check"`,
+        ]) {
+          const command = `${entry} engine swarm ${route} --project-dir "${targetProject}"`;
+          const result = guard(pd, command);
+          expect(result.code, `${condition}: ${command}\n${result.out}\n${result.err}`).toBe(2);
+        }
+      }
+      expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
+    }
+  }, 90_000);
+
+  test("approved swarm admission excludes compound commands, redirections, preloads and project environment prefixes", () => {
+    const pd = fixture();
+    const foreign = join(pd, "foreign-project");
+    const route = `engine swarm prepare --batch 1 --units alpha,beta --base main --project-dir "${pd}"`;
+    const commands: string[] = [];
+    for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+      const command = `${entry} ${route}`;
+      commands.push(
+        `${command} && printf done`,
+        `${command}; printf done`,
+        `${command} | cat`,
+        `${command} > swarm-output.txt`,
+        `${command} 2> swarm-error.txt`,
+        `AIDLC_PROJECT_DIR="${foreign}" ${command}`,
+        `CLAUDE_PROJECT_DIR="${foreign}" ${command}`,
+        `env AIDLC_PROJECT_DIR="${foreign}" ${command}`,
+      );
+    }
+    commands.push(
+      `bun --preload .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
+      `bun -r .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
+    );
+    for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
+    const worktrees = git(pd, ["worktree", "list", "--porcelain"]);
+    for (const command of commands) {
+      const result = guard(pd, command);
+      expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(2);
+    }
+    expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
+    for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
+  }, 60_000);
+
   test("real checkpoint next and completion next preserve every grouped receipt and keep the review routes reachable", () => {
     const pd = fixture();
     for (const unit of UNITS) beginCodeGeneration(pd, { unit });

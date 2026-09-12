@@ -5338,6 +5338,12 @@ function swarmRevisionNeedsPreparation(
       names(row, "Unit names").includes(unit)));
     if (starts.length !== 1 || swarms.length !== 1) return true;
     const swarm = swarms[0];
+    const discards = maximalAttemptEvents(rows.filter((row) =>
+      row.event === "WORKTREE_DISCARDED" &&
+      auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit)));
+    if (discards.some((discard) =>
+      !attemptEventDefinitelyBefore(discard, starts[0]) ||
+      !attemptEventDefinitelyBefore(discard, swarm))) return true;
     // A rejection requests preparation once. Its exact native preparation
     // boundary then routes the preserved worker to continuation, including
     // after a peer lands. An interrupted or newer fork still needs recovery.
