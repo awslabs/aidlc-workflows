@@ -738,6 +738,8 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
      disclosure)
    - States each screen must handle (loading, empty, error, success, partial)
    - Alignment with existing design system / component library
+   - Existing brand assets, design system, or aesthetic references, and the
+     audience (the inputs to the design read)
    - Accessibility requirements (WCAG level)
    - Responsive breakpoints needed
    - For APIs: developer experience requirements
@@ -766,7 +768,7 @@ All artifacts written to `<record>/inception/refined-mockups/`:
 |---------------------------------|-------------------------------------------------------------|
 | `mockups.md`                    | Mid-to-high fidelity mockups per user story/screen          |
 | `interaction-spec.md`           | Interaction patterns, state management, transitions          |
-| `design-system-mapping.md`      | Component mapping to design system / component library       |
+| `design-system-mapping.md`      | Design read, foundation token table, component mapping to design system / component library |
 | `accessibility-checklist.md`    | WCAG compliance checklist and requirements                   |
 | `refined-mockups-questions.md`  | Clarifying questions with `[Answer]:` tags (input artifact)  |
 

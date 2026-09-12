@@ -59,6 +59,7 @@ Path: `.claude/knowledge/aidlc-design-agent/`
 | component-spec-template.md | Template for documenting component specifications (states, props, behaviour) |
 | interaction-design-patterns.md | Interaction patterns for navigation, forms, feedback, state transitions |
 | ux-guide.md | UX design methodology and principles |
+| visual-design-foundations.md | Design read, foundation token table (type, colour, space, shape, depth, motion, icons), and defaults to reach past |
 | wireframing-guide.md | Wireframing techniques for low and high fidelity |
 
 ### Team (Tier 2)
