@@ -495,7 +495,7 @@ or a ladder answer through `aidlc engine bolt set-autonomy --mode autonomous|gat
 which writes `Construction Autonomy Mode` and emits `AUTONOMY_MODE_SET`. Escalation
 requires a fresh human turn; revocation to `gated` does not. An existing choice
 is honoured on resume and is not repeated at the ladder. See the
-[command reference](../guide/12-cli-commands.md#aidlc-engine-bolt-set-autonomy---change-construction-approvals)
+[command reference](../guide/12-cli-commands.md#aidlc-engine-bolt-set-autonomy-change-construction-approvals)
 for invocation examples.
 
 On the default stage-major walk, `autonomous` skips subsequent eligible
