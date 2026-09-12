@@ -371,6 +371,12 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("Before every dispatch, not only the first");
       expect(labelled).toContain("returns `requestId` and `reviewFile`");
       expect(labelled).toContain("aidlc-review-brief.ts context");
+      // The reviewer half of the bookkeeping rule lives in the dispatch list, the
+      // only text a dispatched reviewer receives. Every shipped copy must carry it.
+      expect(labelled).toContain("The review-content boundary: tell the reviewer");
+      expect(labelled).toContain(
+        "a tag naming this stage's own finding is bookkeeping",
+      );
       expect(labelled).toContain(
         "durable human dispositions from the audit ledger",
       );
