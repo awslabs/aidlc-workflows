@@ -20,6 +20,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  ceremonyOffClause,
   gridCostSummary,
   scopeCostSummary,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -80,7 +81,7 @@ describe("t213 scopeCostSummary matches an independent grid+graph derivation", (
     test(`${name}: helper equals derived cost`, () => {
       const got = scopeCostSummary(name);
       expect(got).not.toBeNull();
-      expect(got).toEqual(derive(GRID[name].stages));
+      expect(got).toMatchObject(derive(GRID[name].stages));
     });
   }
 });
@@ -143,6 +144,22 @@ describe("t213 edge cases", () => {
       skip: 0,
       gates: 0,
       perUnitStages: 0,
+      off: [],
     });
+  });
+});
+
+describe("t213 scope policy cost clauses", () => {
+  test("classic previews every omitted ceremony without hiding stage approvals", () => {
+    const summary = scopeCostSummary("classic")!;
+    expect(summary.gates).toBeGreaterThan(0);
+    expect(ceremonyOffClause(summary)).toBe(
+      "; no reviewers, sensors, learnings ritual, or summary confirmation",
+    );
+  });
+
+  test("express omits reviewers, while feature omits no ceremonies", () => {
+    expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe("; no reviewers");
+    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("");
   });
 });

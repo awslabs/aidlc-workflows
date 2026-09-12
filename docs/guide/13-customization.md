@@ -40,7 +40,24 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 ## Agent Models and Effort (Tiers)
 
-Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, while balanced and templated agents both pin a mid-size model at `medium` effort on Claude Code, Codex, and opencode. Those two tiers currently project identically but remain distinct so either can be retuned independently. On Kiro, Cursor, and Copilot all tiers inherit the session model. See [Agent System](../reference/05-agent-system.md) for the full projection table.
+Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys. With no recorded model policy, judgment and templated agents inherit your session's model and effort; only the balanced reviewer tier pins a mid-size model at `medium` effort on Claude Code, Codex, and opencode. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. See [Agent System](../reference/05-agent-system.md) for the full shipped projection table.
+
+The first-run wizard defaults to the `balanced` **preset**, which is distinct
+from the reviewer **tier**: it records medium effort for all three groups.
+Select a preset with `aidlc config models --preset balanced --project --yes`:
+
+| Preset | Deciding | Reviewing | Writing up |
+|--------|----------|-----------|------------|
+| `thorough` | session effort | `xhigh` | session effort |
+| `balanced` | `medium` | `medium` | `medium` |
+| `minimal` | `medium` | `medium` | `low` |
+
+Presets set effort only, never model IDs. Per-agent exceptions override group
+dials, which override shipped tier defaults. Kiro CLI/IDE, Cursor, and Copilot
+cannot express these group effort dials; the policy is recorded and reported
+as unexpressed rather than written as inert keys. See
+[Model Policy](18-install-and-lifecycle.md#model-policy) for profiles, overrides,
+and the upgrade path.
 
 To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until `aidlc config` refreshes that framework-owned file or you manually replace it from the same versioned `runtime/<harness>/` release payload. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
@@ -60,21 +77,20 @@ When every workflow in a project should start at the same scope, set `AWS_AIDLC_
 
 > The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.). Those are listed separately — the example above only shows the scope key for clarity.
 
-With this set, bare `/aidlc` invocations use `feature` as the default scope. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
+With this set, implicit scope resolution uses `feature`. Alternatively, record a project default with `aidlc config flags --default-scope feature --project --yes` (or `--local` for this checkout). The real `AWS_AIDLC_DEFAULT_SCOPE` environment variable wins over the recorded flag; the shipped settings env entry therefore remains authoritative until you change or remove that entry. Once the intent's `aidlc-state.md` exists (under its record dir), its scope is authoritative and changes to the implicit default do not alter an in-flight workflow.
 
 **Precedence (highest to lowest):**
 
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
 2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
-3. `AWS_AIDLC_DEFAULT_SCOPE` env var from `.claude/settings.json`.
-4. Hard-coded fallback: `classic` — the single framework default, used by
-   unmatched-freeform resolution, `/aidlc-init`, and a direct low-level
-   `intent-create` call without `--scope`. Nothing else controls the implicit
-   default.
+3. The real `AWS_AIDLC_DEFAULT_SCOPE` environment variable, including the value supplied by `.claude/settings.json`.
+4. The recorded `aidlc config flags --default-scope` value (local settings override shared project settings).
+5. `classic` — the framework fallback used by unmatched-freeform resolution,
+   `/aidlc-init`, and direct `intent-create` calls without `--scope`.
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
-**Verifying the config:** run `/aidlc --doctor` to confirm the env var is set and valid:
+**Verifying the config:** run `/aidlc --doctor` to confirm the configured default scope is valid (environment and recorded defaults share this check):
 
 ```
 ✓  AWS_AIDLC_DEFAULT_SCOPE=classic (valid)
@@ -112,7 +128,89 @@ You can override scope at any time during a workflow:
 
 ---
 
-## Change Control
+## Intent Configuration
+
+The seven intent settings are `depth`, `test-strategy`, `review`,
+`change-control`, `sensors`, `learnings`, and `summary-confirmation`, in that
+order. They all use one atomic setter, `config-change`; the slash flags and
+`config set` routes are front ends to that same operation. Mix settings in one
+command rather than chaining separate updates:
+
+```
+/aidlc --depth standard --test-strategy minimal --review advisory --change-control relaxed --sensors off --learnings on --summary-confirmation off
+/aidlc config set change-control strict --sensors on --learnings on
+/aidlc --scope bugfix --review none --change-control relaxed --sensors off
+```
+
+The native equivalent is `aidlc engine config set <key> <value>` followed by
+the remaining `--key value` flags. `config get <key>` accepts all seven keys,
+and `config list` (optionally `--json`) returns all seven, including effective
+values and sources for Change Control and ceremonies:
+
+```
+/aidlc config get change-control
+/aidlc config get summary-confirmation
+/aidlc config list --json
+```
+
+`config-change` accepts only those setting flags and `--intent`, `--space`,
+`--project-dir` selectors, with at least one setting required. For example:
+
+```bash
+bun .claude/tools/aidlc-utility.ts config-change --change-control relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
+```
+
+Selectors target the same intent for state, memory policy, and audit without
+switching the active cursors. All supplied values are validated before mutation;
+invalid values or unknown flags refuse the whole update, naming the offending
+flag. A memory-enforced strict policy refuses an explicit relaxed Change Control
+setting together with every companion setting and scope change. Explicit strict
+and unrelated settings remain allowed. One lock covers the state read, shared
+applier, complete audit batch, and single state write; an audit failure leaves
+state untouched. `Last Updated` changes only for a real stored change, including
+a provenance change. Repeating the same stored choice is a no-op.
+
+Scope changes accept the same seven flags and use the same applier. A
+same-as-current scope still applies supplied settings. Scope-owned Change
+Control and ceremony rows track new scope defaults, while explicit human
+overrides and absent legacy rows are preserved. Under strict memory policy,
+an implicit scope change preserves the stored Change Control line instead of
+rewriting it. Explicit flags take precedence over scope defaults and record
+human provenance. `review adversarial` clears the `Review Override` field to an
+empty string, so stage declarations and scope review caps still apply.
+
+### Ceremony Switches
+
+Scopes own three independent ceremony defaults. Each accepts `on` or `off`;
+an omitted scope key means `on`. Classic sets all three to `off`.
+
+| Scope key | Per-intent flag | Global kill switch | What off removes |
+|-----------|-----------------|--------------------|------------------|
+| `sensors` | `/aidlc --sensors on\|off` | `AIDLC_DISABLE_SENSORS=1` | Sensor runs and their gate checks |
+| `learnings` | `/aidlc --learnings on\|off` | `AIDLC_DISABLE_LEARNINGS=1` | Stage learnings read/write ritual |
+| `summary_confirmation` | `/aidlc --summary-confirmation on\|off` | `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` | The separate pre-output summary-confirmation checkpoint |
+
+Precedence is global kill switch (`1`) → valid intent field → scope default →
+`on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
+New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
+`Change Control` in `aidlc-state.md`, each with a source label such as
+`off (from scope classic)`. A flag changes the label to `set by you` and
+records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
+Changing scope updates scope-sourced settings while keeping your overrides;
+an absent or malformed field falls back to the scope instead of blocking the run.
+
+These switches do not remove approval gates, Plan Approval, human-turn
+authority, audit, or team cross-unit write protection. Classic also turns off
+walking-skeleton ceremony and gated-flow reviewers; explicit autonomy retains
+the single pre-merge review.
+
+An isolated `--single` attempt uses its selected scope's policy rather than
+the main intent's ceremony overrides. That scope is recorded on the synthetic
+stage-start event and remains fixed through completion; resume with a different
+scope is refused. Legacy isolated starts without a recorded scope retain
+summary confirmation and do not enforce this scope comparison.
+
+### Change Control
 
 Change Control is one setting with two values, `strict` and `relaxed`. It decides what happens when something you already approved or confirmed turns out to have changed underneath: the source files moved after you approved a code plan, a reviewed document was edited after its review, or an output was saved without the current summary confirmation.
 
@@ -121,7 +219,7 @@ Change Control is one setting with two values, `strict` and `relaxed`. It decide
 
 Neither value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under both values. Change Control only decides the consequence of an input change, not whether the framework notices it.
 
-### Defaults per scope
+#### Defaults per scope
 
 | Scope | Default |
 |-------|---------|
@@ -130,13 +228,13 @@ Neither value removes a gate. Every approval question is still asked, a reviewer
 
 A composed scope carries the value the composer proposed and you approved at its gate; a matched stock scope carries that scope's default.
 
-### The three places to set it
+#### The three places to set it
 
 1. **The scope file.** `change_control: strict | relaxed` in `scopes/aidlc-<name>.md` is the value every new intent on that scope starts with (absent means strict).
-2. **Memory.** A `## Change Control` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and over any per-intent flip, which is then refused with a sentence naming the file. `Mode: relaxed` or an empty section changes nothing; any other value is a validation error naming the file and the two allowed values.
-3. **The intent.** `/aidlc --change-control strict|relaxed`, or a plain-chat request such as "stop asking me to re-approve when files change", sets the value for the running piece of work (`/aidlc --status` shows it as `Change Control: relaxed (set by you)`).
+2. **Memory.** A `## Change Control` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and per-intent values. An explicit `--change-control relaxed` is refused with a sentence naming the file, and none of the command's companion settings or scope change is applied. `Mode: relaxed` or an empty section changes nothing; any other value is a validation error naming the file and the two allowed values.
+3. **The intent.** `/aidlc --change-control strict|relaxed`, `/aidlc config set change-control <value>`, or a plain-chat request such as "stop asking me to re-approve when files change" uses the shared `config-change` setter for the running piece of work (`/aidlc --status` shows it as `Change Control: relaxed (set by you)`). It can be combined with the other setting flags in the same transaction.
 
-### Where the value lives
+#### Where the value lives
 
 The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Change Control**: <value> (from scope <name>)`, rewritten by the flag or the chat request, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `CHANGE_CONTROL_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it; an invalid field is unavailable until `/aidlc --change-control strict|relaxed` repairs it. The next intent starts from its scope's default again.
 

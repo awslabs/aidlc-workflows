@@ -46,6 +46,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
+  cleanupTestProject,
   createTestProject,
   seedAuditFile,
   seedBoltDagBatches,
@@ -230,17 +231,17 @@ function runState(proj: string, args: string[]) {
 // state-mid-inception.md: Scope bugfix (review_cap advisory), Current Stage
 // requirements-analysis (declared advisory anyway). For adversarial cases we
 // flip the scope field to `feature` (uncapped).
-function seedProject(scope: "bugfix" | "feature"): string {
+function seedProject(scope: "bugfix" | "feature" | "classic"): string {
   const proj = createTestProject();
   seedStateFile(proj, "state-mid-inception.md");
   seedAuditFile(proj);
-  if (scope === "feature") {
+  if (scope !== "bugfix") {
     const sf = seededStateFile(proj);
     writeFileSync(
       sf,
       readFileSync(sf, "utf8").replace(
         "- **Scope**: bugfix",
-        "- **Scope**: feature"
+        `- **Scope**: ${scope}`
       ).replace(
         "- [S] units-generation — SKIP (bugfix scope)",
         "- [ ] units-generation — EXECUTE",
@@ -646,6 +647,43 @@ describe("t271 review iteration ceiling", () => {
     ]);
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain("allows 0 review passes");
+  });
+
+  test("a resumed classic intent retains its autonomous pre-merge reviewer", () => {
+    const proj = seedProject("classic");
+    try {
+      const request = [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "unit-alpha",
+        "--iteration", "1",
+      ];
+      const gated = runReview(proj, request);
+      expect(gated.status).not.toBe(0);
+      expect(gated.stderr).toContain("allows 0 review passes");
+
+      const sf = seededStateFile(proj);
+      writeFileSync(
+        sf,
+        `${readFileSync(sf, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+      );
+      appendAuditEntry("BOLT_STARTED", {
+        "Bolt names": "unit-alpha",
+        "Batch number": "1",
+        "Walking skeleton": "false",
+        "Bolt slug": "unit-alpha",
+      }, proj);
+      writeSourceManifest(proj, "unit-alpha");
+      const resumed = runReview(proj, request);
+      expect(resumed.status, resumed.stderr).toBe(0);
+      const completed = runReview(proj, [...request, "--verdict", "READY"]);
+      expect(completed.status, completed.stderr).toBe(0);
+      const audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Event**: REVIEW_REQUESTED");
+      expect(audit).toContain("**Event**: REVIEW_COMPLETED");
+    } finally {
+      cleanupTestProject(proj);
+    }
   });
 
   test("inline per-unit reviews remain subject to scope caps", () => {

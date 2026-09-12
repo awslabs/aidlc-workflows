@@ -189,6 +189,13 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(expected.perUnitStages).toBeGreaterThan(0);
       expect(String(d.message)).toContain(costClause(expected));
       expect(String(d.message)).toContain("per unit of work");
+      if (scope === "classic") {
+        expect(String(d.message)).toContain(
+          "; no reviewers, sensors, learnings ritual, or summary confirmation",
+        );
+      } else {
+        expect(String(d.message)).not.toContain("; no ");
+      }
     });
   }
 });
