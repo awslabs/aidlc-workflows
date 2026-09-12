@@ -448,6 +448,46 @@ describe("t271 review iteration ceiling", () => {
     expect(rows.length).toBe(1);
   });
 
+  test("a gate rejection resets the ordinal, so a stale --iteration is corrected rather than refused as over budget", () => {
+    // Regression: the budget was measured against the CALLER's `--iteration` as
+    // well as against the engine's own `expected`. A gate rejection is an attempt
+    // boundary, so after one the next request is ordinal 1 again - but a conductor
+    // that kept counting asks for 2, and on an advisory stage (budget 1) that
+    // claim alone produced REVIEW_BUDGET_EXHAUSTED. Its guidance sends the
+    // conductor to the gate, which then refuses for REVIEW_EVIDENCE_MISSING
+    // because the revision path needs the very receipt the refusal forbade, and
+    // the only remedy left discards the attempt. Measured on a live run.
+    const proj = seedProject("feature"); // requirements-analysis declares advisory
+    const base = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status,
+    ).toBe(0);
+
+    // Timestamps are second-precision, and a rejection sharing a second with the
+    // review it invalidates is the tie the attempt reducer warns about. Wait it out
+    // so this case pins the ordinal reset, not the tiebreak.
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "requirements-analysis",
+      Feedback: "add the missing section",
+    }, proj);
+
+    const stale = runReview(proj, [...base, "--iteration", "2"]);
+    expect(stale.status).not.toBe(0);
+    // The refusal names the ordinal to retry with, and does NOT claim the budget
+    // is spent - the caller's arithmetic was wrong, the budget was not.
+    expect(stale.stderr).toContain("the next iteration is 1");
+    expect(stale.stderr).not.toContain("allows 1 review pass");
+
+    // And the corrected ordinal is accepted, which is what the revision path needs.
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+  });
+
   test("advisory stale receipt gets one recovery request at the next ordinal", () => {
     const proj = seedProject("feature");
     writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
@@ -619,6 +659,16 @@ describe("t271 review iteration ceiling", () => {
 
   test("scope review_cap lowers an adversarial budget to 1 (bugfix)", () => {
     const proj = seedProject("bugfix");
+    // Spend the one pass the cap allows FIRST. Without it the attempt's next
+    // ordinal is still 1, so asking for 2 is a wrong ordinal rather than an
+    // exhausted budget - and this case is about the cap, not about arithmetic.
+    expect(
+      runReview(proj, [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--iteration", "1",
+      ]).status,
+    ).toBe(0);
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -670,6 +720,17 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    // The Bolt boundary opens a fresh attempt, so the pass above no longer counts
+    // against this one. Spend this attempt's single pass before asking for a
+    // second, or the refusal would be about the ordinal rather than the cap.
+    expect(
+      runReview(proj, [
+        "--stage", "functional-design",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "unit-alpha",
+        "--iteration", "1",
+      ]).status,
+    ).toBe(0);
     const over = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
