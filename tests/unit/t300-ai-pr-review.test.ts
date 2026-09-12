@@ -378,7 +378,6 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).toContain("AI review is disabled for forks");
     expect(WORKFLOW).not.toContain("github.event.workflow_run");
     expect(WORKFLOW).toContain("permissions: {}");
-    expect(WORKFLOW).toContain("checks: read");
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");
@@ -406,44 +405,42 @@ describe("t300 adversarial AI PR review", () => {
     expect(RUNTIME_SETUP).toContain("Defaults:runner env_keep");
     expect(RUNTIME_SETUP).toContain("AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN");
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
-    expect(WORKFLOW).toContain("current_head");
     expect(WORKFLOW).toContain("      - edited");
     expect(WORKFLOW).toContain("      - main");
     expect(WORKFLOW).toContain("already_reviewed");
-    expect(WORKFLOW).toContain("existing_check");
-    expect(WORKFLOW).toContain('.conclusion == \\"success\\" or .conclusion == \\"failure\\"');
     expect(WORKFLOW).not.toContain("[0:20000]");
     expect(WORKFLOW).toContain('body: (.body // "")');
-    expect(WORKFLOW).toContain('status: "in_progress"');
     expect(WORKFLOW).toContain("existing_state");
     expect(WORKFLOW).toContain("is a draft; AI review waits for ready_for_review");
-    expect(WORKFLOW).not.toContain("  invalidate:");
-    expect(WORKFLOW.indexOf("  start:")).toBeLessThan(WORKFLOW.indexOf("  lenses:"));
-    expect(WORKFLOW).toContain("check_run_id");
-    expect(WORKFLOW).toContain('--method PATCH "repos/$REPO/check-runs/$CHECK_RUN_ID"');
-    expect(WORKFLOW).toContain("  finalize:");
-    expect(WORKFLOW).toContain('conclusion: "neutral"');
     expect(WORKFLOW).toContain("cmp -s .ai-review-context/pr.json");
-    expect(WORKFLOW).toContain("check-runs");
     expect(WORKFLOW).toContain("dismissals");
     expect(WORKFLOW).not.toContain("gh pr merge");
     expect(WORKFLOW).not.toContain("gh pr review --approve");
+    expect(WORKFLOW).not.toContain("actions/upload-artifact");
+    expect(WORKFLOW).not.toContain("actions/download-artifact");
+    expect(WORKFLOW).not.toContain("matrix:");
+    const jobs = WORKFLOW.slice(WORKFLOW.indexOf("\njobs:\n"));
+    expect(jobs.match(/^  [a-z_]+:$/gm)).toEqual(["  review:"]);
+    expect(WORKFLOW).toContain("> /dev/null 2>&1");
+    expect(WORKFLOW).toContain("model transcript was suppressed");
 
-    const lensJobs = WORKFLOW.slice(WORKFLOW.indexOf("  lenses:"), WORKFLOW.indexOf("  publish:"));
-    expect(lensJobs).not.toContain("GH_TOKEN:");
-    const publishJob = WORKFLOW.slice(WORKFLOW.indexOf("  publish:"));
-    expect(publishJob).not.toContain("id-token: write");
-    expect(publishJob).not.toContain("configure-aws-credentials");
-    expect(publishJob.indexOf("published=\"$(gh api --method POST")).toBeLessThan(
-      publishJob.indexOf("mapfile -t stale_reviews"),
+    const modelStep = WORKFLOW.slice(
+      WORKFLOW.indexOf("      - name: Run review passes sequentially"),
+      WORKFLOW.indexOf("      - name: Publish SHA-bound review"),
     );
-
-    const aidlcReviewJob = WORKFLOW.slice(
-      WORKFLOW.indexOf("  aidlc_review:"),
-      WORKFLOW.indexOf("  publish:"),
+    expect(modelStep).not.toContain("GH_TOKEN:");
+    expect(modelStep.indexOf('"Prompt-injection review"')).toBeLessThan(
+      modelStep.indexOf('"Security review"'),
     );
-    expect(aidlcReviewJob.indexOf("Prepare and verify unprivileged Codex sandbox")).toBeLessThan(
-      aidlcReviewJob.indexOf("configure-aws-credentials"),
+    expect(modelStep.indexOf('"Security review"')).toBeLessThan(
+      modelStep.indexOf('"AIDLC review"'),
+    );
+    expect(WORKFLOW.indexOf("Prepare and verify unprivileged Codex sandbox")).toBeLessThan(
+      WORKFLOW.indexOf("configure-aws-credentials"),
+    );
+    const publishStep = WORKFLOW.slice(WORKFLOW.indexOf("      - name: Publish SHA-bound review"));
+    expect(publishStep.indexOf("published=\"$(gh api --method POST")).toBeLessThan(
+      publishStep.indexOf("mapfile -t stale_reviews"),
     );
   });
 
@@ -453,10 +450,10 @@ describe("t300 adversarial AI PR review", () => {
         join(REPO_ROOT, ".github", "prompts", `ai-pr-review-${lens}.md`),
         "utf8",
       );
-      expect(WORKFLOW).toContain(`          - ${lens}`);
+      expect(WORKFLOW).toContain(`.github/prompts/ai-pr-review-${lens}.md`);
       expect(prompt.length).toBeGreaterThan(400);
     }
-    expect(WORKFLOW).not.toContain("          - correctness");
+    expect(WORKFLOW).not.toContain("ai-pr-review-correctness.md");
     expect(
       existsSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-correctness.md")),
     ).toBe(false);
@@ -498,7 +495,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain('"source": "DIFF"');
     expect(aidlc).toContain('"source":"DIFF_FILE"');
     expect(aidlc).toContain('"source":"PR_BODY"');
-    expect(WORKFLOW).toContain("  aidlc_review:");
-    expect(WORKFLOW).toContain("Review current head and produce publishable result");
+    expect(WORKFLOW).toContain('"AIDLC review"');
+    expect(WORKFLOW).toContain("Run review passes sequentially");
   });
 });
