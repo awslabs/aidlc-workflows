@@ -394,10 +394,14 @@ describe("t294 provider diagnostics", () => {
     // `aws-mcp` entry that can never be satisfied, so a completed Bedrock record
     // reported `provider-kiro` on every doctor run, forever, with a remediation
     // pointing at a file that has nothing to fix.
+    // The invariant is the absence of THAT id, not an empty list: `providerIssues`
+    // also reports environment facts this case says nothing about — a machine with
+    // no discoverable AWS credentials raises `provider-credentials-missing`, which
+    // is how this passed locally and failed on CI when it demanded emptiness.
     expect(
       providerIssues(kiro, ".kiro", "kiro", record).map((issue) => issue.id),
-      "a completed Kiro provider record must raise nothing",
-    ).toEqual([]);
+      "a completed Kiro provider record raises no provider-kiro",
+    ).not.toContain("provider-kiro");
     // `providerFiles` always offers the provider answer file — that is where the
     // record itself lives — so the invariant is that the Bedrock branch adds
     // NOTHING for this harness: no registry is offered for a region it cannot

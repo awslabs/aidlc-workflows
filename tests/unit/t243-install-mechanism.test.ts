@@ -3781,6 +3781,7 @@ describe("t243 projection channel", () => {
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
           "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
           "sha256:a505f2396863edc957b18779baa32e9c44a10d62c2472c3a309fec78c3cae3f4",
+          "sha256:77eccbf8a91947e4a8c625382a90d7648944aa97db56a2302441992b93ed547c",
         ],
       },
       kiro: {
@@ -3800,6 +3801,7 @@ describe("t243 projection channel", () => {
           // carrying any earlier variant must still be recognized as ours.
           "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
           "sha256:1989d45c43801ae58a6f0c9830d593a8ab17f5ada4cfa2cf03891b307a9d7634",
+          "sha256:2f71266e84b8adca3c5dbfb848915cefaa483db5d48c02a31794de2a5c7ee52f",
         ],
       },
     };

@@ -156,6 +156,9 @@ const manifest: HarnessManifest = {
           // user-owned content.
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
           "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
+          // The variant shipped before this branch rewrote the shared onboarding
+          // skeleton; an install from that release must still be recognised.
+          "sha256:1989d45c43801ae58a6f0c9830d593a8ab17f5ada4cfa2cf03891b307a9d7634",
         ],
       },
     },

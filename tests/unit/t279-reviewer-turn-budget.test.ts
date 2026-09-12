@@ -340,7 +340,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     ]) {
       const body = readFileSync(path, "utf-8");
       expect(body).toContain(
-        "(Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today)",
+        "(Claude Code, Kiro, Codex CLI, opencode, Cursor, and GitHub Copilot today)",
       );
     }
   });
