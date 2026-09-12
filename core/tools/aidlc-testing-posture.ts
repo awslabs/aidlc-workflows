@@ -7,19 +7,26 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AcceptedChange,
   activeIntentUuid,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  boltSlugForUnit,
   collectStalePlanApprovalReceipts,
+  commitPlanApprovalBatch,
+  planApprovalBatchCommitted,
   contentBeforeTerminalReviewAppendix,
   docsRoot,
   getField,
+  gitCommitSourceListing,
   isoTimestamp,
   latestMainWorkflowStageRunFloorForProject,
+  maximalAttemptEvents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
   clearPlanApprovalLegacyOffer,
@@ -27,22 +34,33 @@ import {
   clearPlanApprovalReceipt,
   readActiveDirectiveMarker,
   readAuditShardEvents,
+  readBaselineSourceSnapshot,
   readPlanApprovalChallenge,
   readPlanApprovalLegacyOffer,
+  readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
   readPlanApprovalOverrideRequest,
   readPlanApprovalReceipt,
   readPlanApprovalResponse,
   readPlanApprovalViolation,
+  readRegularFileNoFollowOrThrow,
+  recordDir,
+  relativeRecordDir,
   recordAcceptedChanges,
   renderChangedPaths,
   governedChangeControl,
   resolveBoltDag,
+  resolveAuditWorktreePath,
+  resolveConstructionRepo,
   resolveChangeControl,
   resolveProjectDir,
   stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
   stateFilePath,
+  stateDigest,
+  serializeSourceListing,
+  sourceListingSha256,
+  parseSourceListing,
   structuredField,
   toPosix,
   stripRecommendedDecorator,
@@ -55,6 +73,10 @@ import {
   workspaceSourceFailureSuffix,
   workspaceSourceFingerprint,
   workspaceSourceState,
+  worktreePath,
+  writeActiveDirectiveMarker,
+  writeBaselineSourceSnapshot,
+  writeBufferAtomic,
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
@@ -64,11 +86,14 @@ import {
   type GuardRemedyOp,
   type PlanApprovalOverrideRequest,
   type PlanApprovalReceiptKey,
+  type PlanApprovalBatchMember,
+  type PlanApprovalRuntimeBatch,
   type PlanApprovalRuntimeChallenge,
   type PlanApprovalRuntimeIdentity,
   type PlanApprovalRuntimeProvenance,
   type PlanApprovalRuntimeReceipt,
   type WorkspaceSourceState,
+  type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
@@ -1435,7 +1460,8 @@ export function resolveCodeGenerationAuthority(
   const runFloor = latestMainWorkflowStageRunFloorForProject(
     projectDir,
     "code-generation",
-    getField(state, "Construction Iteration")?.trim() === "unit-major",
+    getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(state, "Construction Checkpoints") === "enabled",
     target.unit ?? undefined,
   );
   const directiveEpoch = hashObject({
@@ -1479,6 +1505,7 @@ export function codeGenerationRecordDir(
 function codeGenerationApprovalArtifacts(
   projectDir: string,
   authority: CodeGenerationAuthority,
+  contractProjectDir = projectDir,
 ): {
   plan: string;
   instructions: string;
@@ -1506,7 +1533,7 @@ function codeGenerationApprovalArtifacts(
   const instructionsExist = instructions.trim().length > 0;
   const approvedAnswer = questionsFileApproved(questions);
   const embedded = planExists ? parseTestingContract(plan) : null;
-  const current = planExists ? resolveTestingPosture(projectDir) : null;
+  const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
   const contractValid =
     embedded !== null &&
@@ -1748,6 +1775,207 @@ function runtimeIdentityMatches(
   );
 }
 
+export const PLAN_APPROVAL_BATCH_FALLBACK =
+  "Use decision/answer --stage code-generation --checkpoint plan-approval " +
+  "--unit <unit> --questions-file <path> --session <id> separately for each unit.";
+
+interface PlanApprovalBatchSelection {
+  batch: string;
+  units: Array<{ unit: string; questionsFile: string }>;
+}
+
+function planApprovalBatchSelection(projectDir: string, file: string): PlanApprovalBatchSelection {
+  const value: unknown = JSON.parse(
+    readRegularFileNoFollowOrThrow(resolve(projectDir, file), "Plan Approval batch manifest").toString("utf-8"),
+  );
+  if (
+    !value || typeof value !== "object" ||
+    !("batch" in value) || typeof value.batch !== "string" ||
+    !value.batch.trim() || value.batch !== value.batch.trim() || /[\r\n]/.test(value.batch) ||
+    !("units" in value) || !Array.isArray(value.units) || value.units.length === 0
+  ) {
+    throw new Error('Plan Approval batch manifest requires {"batch":"<name>","units":[{"unit":"<slug>","questionsFile":"<path>"}]}');
+  }
+  const units = value.units.map((entry: unknown) => {
+    if (
+      !entry || typeof entry !== "object" ||
+      !("unit" in entry) || typeof entry.unit !== "string" ||
+      entry.unit !== entry.unit.trim() || validateUnitName(entry.unit) ||
+      !("questionsFile" in entry) || typeof entry.questionsFile !== "string" || !entry.questionsFile.trim()
+    ) throw new Error("Plan Approval batch members require a valid unit and questionsFile");
+    return { unit: entry.unit, questionsFile: entry.questionsFile };
+  }).sort((a, b) => a.unit < b.unit ? -1 : a.unit > b.unit ? 1 : 0);
+  if (new Set(units.map((entry) => entry.unit)).size !== units.length) {
+    throw new Error("Plan Approval batch contains duplicate units");
+  }
+  return { batch: value.batch, units };
+}
+
+function assertLivePlanApprovalBatch(projectDir: string, units: string[]): void {
+  const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  if (
+    marker?.version !== 2 || marker.stage !== "code-generation" ||
+    marker.kind !== "invoke-swarm" || !marker.units?.length ||
+    new Set(marker.units).size !== marker.units.length ||
+    units.length !== marker.units.length || new Set(units).size !== units.length ||
+    !units.every((unit) => marker.units!.includes(unit))
+  ) {
+    throw new Error(`Plan Approval batch must contain exactly the live emitted Code Generation swarm units. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+  }
+  // This also proves each emitted unit still belongs to the authoritative DAG.
+  for (const unit of units) resolveCodeGenerationAuthority(projectDir, { unit });
+}
+
+function planApprovalBatchMember(
+  evidence: PlanApprovalQuestionEvidence,
+): PlanApprovalBatchMember {
+  const digest = (name: string): string => createHash("sha256")
+    .update(readRegularFileNoFollowOrThrow(join(evidence.authority.stageDir, name), "Plan Approval batch artifact"))
+    .digest("hex");
+  return {
+    ...runtimeIdentity(evidence),
+    unit: evidence.authority.unit!,
+    // Group review binds even edits projected out of the per-unit fingerprint.
+    planSha256: digest("code-generation-plan.md"),
+    instructionsSha256: digest("unit-test-instructions.md"),
+  };
+}
+
+function planApprovalBatchEvidence(
+  projectDir: string,
+  selection: PlanApprovalBatchSelection,
+  choice: "" | "Approve Plan" | "Request Changes",
+): { batch: PlanApprovalRuntimeBatch; evidence: PlanApprovalQuestionEvidence[] } {
+  assertLivePlanApprovalBatch(projectDir, selection.units.map((entry) => entry.unit));
+  const evidence = selection.units.map((entry) =>
+    codeGenerationPlanApprovalQuestionEvidence(
+      projectDir, { unit: entry.unit }, entry.questionsFile, choice, { batch: true },
+    )
+  );
+  const members = evidence.map(planApprovalBatchMember);
+  return {
+    batch: { name: selection.batch, members, bindingSha256: hashObject({ name: selection.batch, members }) },
+    evidence,
+  };
+}
+
+function assertBatchSession(projectDir: string, session: string): void {
+  if (!session.trim()) throw new Error("Plan Approval batch requires a nonblank session");
+  if (
+    readPlanApprovalLegacyOffer(projectDir, session) ||
+    readPlanApprovalLegacyWindow(projectDir, session) ||
+    readPlanApprovalChallenge(projectDir, session)?.hashedOptionLabels
+  ) {
+    throw new Error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+  }
+}
+
+export function recordPlanApprovalBatchChallenge(
+  projectDir: string,
+  batchFile: string,
+  session: string,
+  record: (batch: PlanApprovalRuntimeBatch, evidence: PlanApprovalQuestionEvidence[]) => void,
+): PlanApprovalRuntimeChallenge {
+  return withActiveDirectiveLock(projectDir, () => {
+    assertBatchSession(projectDir, session);
+    const { batch, evidence } = planApprovalBatchEvidence(
+      projectDir, planApprovalBatchSelection(projectDir, batchFile), "",
+    );
+    const options: [string, string] = ["Approve Plans", "Request Changes"];
+    const challenge: PlanApprovalRuntimeChallenge = {
+      version: 1,
+      ...runtimeIdentity(evidence[0]),
+      ...runtimeProvenance(evidence[0]),
+      session,
+      batch,
+      challengeId: hashObject({ batch: batch.bindingSha256, session, options }),
+      options,
+      requireExactOptionLabels: true,
+      hashedOptionLabels: false,
+    };
+    record(batch, evidence);
+    // A repeated presentation of the exact reviewed set keeps the hook's
+    // response, like its stable identity. A changed member rotates the id.
+    if (readPlanApprovalChallenge(projectDir, session)?.challengeId !== challenge.challengeId) {
+      writePlanApprovalChallenge(projectDir, challenge);
+    }
+    return challenge;
+  });
+}
+
+export function recordPlanApprovalBatchReceipts(
+  projectDir: string,
+  batchFile: string,
+  session: string,
+  choice: "Approve Plan" | "Request Changes",
+  record: (batch: PlanApprovalRuntimeBatch, evidence: PlanApprovalQuestionEvidence[]) => void,
+): PlanApprovalRuntimeReceipt[] {
+  return withActiveDirectiveLock(projectDir, () => {
+    assertBatchSession(projectDir, session);
+    const selection = planApprovalBatchSelection(projectDir, batchFile);
+    const { batch, evidence } = planApprovalBatchEvidence(projectDir, selection, choice);
+    const challenge = readPlanApprovalChallenge(projectDir, session);
+    const response = readPlanApprovalResponse(projectDir, session);
+    if (
+      !challenge?.batch || challenge.batch.bindingSha256 !== batch.bindingSha256 ||
+      !response || response.challengeId !== challenge.challengeId || response.choice !== choice
+    ) {
+      throw new Error("Plan Approval batch requires the actual offered choice from this prompt and session for exactly these plans");
+    }
+    const source = workspaceSourceState(projectDir);
+    if (source === null) throw new PlanApprovalUnbindableError("recorded");
+    if (evidence.some((entry) => entry.plannedSourceSha256 !== source.fingerprint)) {
+      throw new Error("Plan Approval batch source changed; re-fingerprint and re-present every plan");
+    }
+    keepWorkspaceSourceSnapshot(projectDir, source);
+    // Read every plan and the live set again before minting any authority.
+    const verified = planApprovalBatchEvidence(projectDir, selection, choice);
+    if (
+      verified.batch.bindingSha256 !== batch.bindingSha256 ||
+      workspaceSourceFingerprint(projectDir) !== source.fingerprint
+    ) throw new Error("Plan Approval batch changed during certification; re-present every plan");
+    const receipts: PlanApprovalRuntimeReceipt[] = choice === "Request Changes" ? [] : evidence.map((entry) => ({
+      version: 1,
+      ...runtimeIdentity(entry),
+      ...runtimeProvenance(entry),
+      session,
+      batch,
+      challengeId: challenge.challengeId,
+      choice: "Approve Plan",
+      questionsSha256: entry.questionsSha256,
+      certifiedSourceSha256: source.fingerprint,
+      status: "approved",
+    }));
+    commitPlanApprovalBatch(projectDir, challenge, receipts, () => record(batch, evidence));
+    return receipts;
+  });
+}
+
+function assertPlanApprovalBatchCurrent(projectDir: string, receipt: PlanApprovalRuntimeReceipt): void {
+  const batch = receipt.batch!;
+  if (!planApprovalBatchCommitted(projectDir, receipt)) {
+    throw new Error("Plan Approval batch receipt transaction is not committed; re-present every plan");
+  }
+  assertLivePlanApprovalBatch(projectDir, batch.members.map((member) => member.unit));
+  const members = batch.members.map((member) => {
+    const evidence = codeGenerationPlanApprovalQuestionEvidence(
+      projectDir, { unit: member.unit }, member.questionsFile, "Approve Plan", { breakGlass: true },
+    );
+    const current = planApprovalBatchMember(evidence);
+    const peer = readPlanApprovalReceipt(projectDir, current);
+    if (
+      !peer || !runtimeIdentityMatches(peer, current) ||
+      peer.batch?.bindingSha256 !== batch.bindingSha256 ||
+      peer.challengeId !== receipt.challengeId || peer.session !== receipt.session ||
+      peer.choice !== "Approve Plan"
+    ) throw new Error("Plan Approval batch has no complete set of matching protected receipts; re-present every plan");
+    return current;
+  });
+  if (hashObject({ name: batch.name, members }) !== batch.bindingSha256) {
+    throw new Error("A reviewed Plan Approval batch member changed; re-present every plan");
+  }
+}
+
 export function recordPlanApprovalChallenge(
   projectDir: string,
   evidence: PlanApprovalQuestionEvidence,
@@ -1971,6 +2199,7 @@ function certifyPlanApprovalReceipt(
   const response = readPlanApprovalResponse(projectDir, session);
   if (
     !challenge ||
+    challenge.batch !== undefined ||
     !response ||
     challenge.challengeId !== response.challengeId ||
     response.choice !== choice ||
@@ -2188,6 +2417,8 @@ export interface PlanApprovalEvidenceOptions {
    * instructions, Testing Contract, fingerprint, `[Answer]`) still applies.
    */
   breakGlass?: boolean;
+  /** Group validation must not re-baseline one member before validating others. */
+  batch?: boolean;
 }
 
 export function codeGenerationPlanApprovalQuestionEvidence(
@@ -2260,6 +2491,9 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   let boundSource = plannedSource;
   const changeNotices: string[] = [];
   if (!options.breakGlass && currentSource !== plannedSource) {
+    if (options.batch) {
+      throw new Error(`Plan Approval batch source changed; re-fingerprint and re-present every plan. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+    }
     const judged = judgePlanSourceDrift(projectDir, authority.unit, plannedSource, currentState, true);
     if ("refusal" in judged) throw judged.refusal;
     // The row is written BEFORE anything is re-baselined: a ledger that cannot
@@ -2299,6 +2533,243 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   };
 }
 
+function worktreeApprovalGit(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000 });
+  if (result.status !== 0) {
+    throw new Error(`Worktree approval Git operation refused: ${result.stderr.trim() || args.join(" ")}`);
+  }
+  return result.stdout.trim();
+}
+
+function approvalPathKey(path: string): string {
+  const canonical = realpathSync(path).replaceAll("\\", "/");
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: string) {
+  const parent = realpathSync(parentDir);
+  const child = realpathSync(childDir);
+  const slug = boltSlugForUnit(unit);
+  if (parent === child || approvalPathKey(worktreePath(parent, slug)) !== approvalPathKey(child)) {
+    throw new Error("Approval delegation requires the parent's canonical Unit worktree.");
+  }
+  assertNoSymlinkInChainOrThrow(parent, relative(parent, childDir));
+  const metaPath = join(child, ".aidlc", "worktree-meta.json");
+  assertNoSymlinkInChainOrThrow(child, relative(child, metaPath));
+  const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree approval provenance").toString("utf-8"));
+  if (!meta || typeof meta !== "object" || meta.version !== 1 ||
+    meta.boltSlug !== slug || meta.swarmUnit !== unit || meta.swarmStage !== CODE_GENERATION_STAGE ||
+    typeof meta.baseCommit !== "string" || !/^[0-9a-f]{40,64}$/.test(meta.baseCommit) ||
+    typeof meta.swarmBatch !== "string" || !/^[1-9][0-9]*$/.test(meta.swarmBatch) ||
+    meta.intentRecord !== relativeRecordDir(parent) ||
+    (meta.repoSelector !== null && typeof meta.repoSelector !== "string")) {
+    throw new Error("Worktree approval provenance does not match the parent intent and Unit.");
+  }
+  const dag = resolveBoltDag(parent);
+  if (dag.state !== "ok" || !dag.batches[Number(meta.swarmBatch) - 1]?.includes(unit)) {
+    throw new Error("Worktree approval batch does not match the authoritative Unit DAG.");
+  }
+  const repo = resolveConstructionRepo(parent, meta.repoSelector ?? undefined);
+  const unreadable: string[] = [];
+  const creations = maximalAttemptEvents(readAuditShardEvents(parent, undefined, undefined, unreadable).filter(
+    (row) => row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === slug,
+  ));
+  const creation = creations.length === 1 ? creations[0] : null;
+  if (unreadable.length || !creation) throw new Error("Worktree creation authority is unavailable or ambiguous.");
+  const common = approvalPathKey(resolve(repo.cwd, worktreeApprovalGit(repo.cwd, ["rev-parse", "--git-common-dir"])));
+  const childCommon = approvalPathKey(resolve(child, worktreeApprovalGit(child, ["rev-parse", "--git-common-dir"])));
+  const commonHash = createHash("sha256").update(common).digest("hex");
+  const recordedPath = auditBlockField(creation.block, "Worktree path");
+  const floor = latestMainWorkflowStageRunFloorForProject(parent, CODE_GENERATION_STAGE);
+  if (!recordedPath || approvalPathKey(resolveAuditWorktreePath(parent, recordedPath)) !== approvalPathKey(child) ||
+    approvalPathKey(worktreeApprovalGit(child, ["rev-parse", "--show-toplevel"])) !== approvalPathKey(child) ||
+    worktreeApprovalGit(child, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/bolt-${slug}` ||
+    common !== childCommon || repo.repo !== meta.repoSelector ||
+    (meta.gitCommonDirHash !== commonHash &&
+      (typeof meta.gitCommonDir !== "string" || approvalPathKey(meta.gitCommonDir) !== common)) ||
+    meta.swarmFloor !== floor ||
+    auditBlockField(creation.block, "Branch name") !== `bolt-${slug}` ||
+    auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
+    auditBlockField(creation.block, "Repo") !== (repo.repo ?? "-") ||
+    auditBlockField(creation.block, "Swarm Unit") !== unit ||
+    auditBlockField(creation.block, "Swarm Batch") !== meta.swarmBatch ||
+    auditBlockField(creation.block, "Swarm Stage") !== meta.swarmStage ||
+    auditBlockField(creation.block, "Swarm Run floor") !== meta.swarmFloor ||
+    auditBlockField(creation.block, "Base commit") !== meta.baseCommit ||
+    auditBlockField(creation.block, "Base Source Listing") !== meta.baseSourceListing) {
+    throw new Error("Worktree approval delegation does not match immutable creation authority or the current attempt.");
+  }
+  const basePath = join(child, ".aidlc", "base-source-listing.tsv");
+  assertNoSymlinkInChainOrThrow(child, relative(child, basePath));
+  const base = readRegularFileNoFollowOrThrow(basePath, "worktree base source listing").toString("utf-8");
+  if (`sha256:${sourceListingSha256(base)}` !== meta.baseSourceListing || parseSourceListing(base) === null) {
+    throw new Error("Worktree immutable base source listing is invalid.");
+  }
+  worktreeApprovalGit(child, ["cat-file", "-e", `${meta.baseCommit}^{commit}`]);
+  return { parent, child, repo, hash: hashObject(creation.block) };
+}
+
+function parentWorktreeApproval(parentDir: string, unit: string) {
+  const evidence = codeGenerationPlanApprovalQuestionEvidence(
+    parentDir, { unit }, join(codeGenerationRecordDir(parentDir, unit), "code-generation-questions.md"),
+    "Approve Plan", { breakGlass: true },
+  );
+  const receipt = readPlanApprovalReceipt(parentDir, runtimeIdentity(evidence));
+  if (!receipt || receipt.delegation || receipt.override) {
+    throw new Error("Worktree execution requires an ordinary protected parent Plan Approval; chained delegation and overrides cannot certify its source.");
+  }
+  const approval = evaluateCodeGenerationApproval(parentDir, { unit });
+  if (!approval.ok) throw new Error(`Parent Plan Approval is not current: ${approval.reason}`);
+  return { evidence, receipt };
+}
+
+function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: string) {
+  const provenance = approvalWorktreeProvenance(parentDir, childDir, unit);
+  const approved = parentWorktreeApproval(provenance.parent, unit);
+  const parentSource = workspaceSourceState(provenance.parent);
+  const childSource = workspaceSourceState(provenance.child);
+  if (!parentSource || parentSource.fingerprint !== approved.receipt.certifiedSourceSha256 || !childSource) {
+    throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
+  }
+  const prefix = `${provenance.repo.repo ?? ""}\0`;
+  const expected = new Map([...parentSource.listing]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([key, value]) => [key.slice(prefix.length - 1), value]));
+  const expectedBytes = serializeSourceListing(expected);
+  let syncCommit: string | null = null;
+  if (serializeSourceListing(childSource.listing) !== expectedBytes) {
+    const childHead = worktreeApprovalGit(provenance.child, ["rev-parse", "HEAD"]);
+    const base = gitCommitSourceListing(provenance.child, childHead, provenance.repo.repo === null);
+    if (!base || serializeSourceListing(base) !== serializeSourceListing(childSource.listing)) {
+      throw new Error("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.");
+    }
+    const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
+    const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
+    if (!committed || serializeSourceListing(committed) !== expectedBytes) {
+      throw new Error("Clean worktree needs approved parent source that is not committed. Commit the already-approved parent source, then retry; the worktree was preserved.");
+    }
+    try {
+      worktreeApprovalGit(provenance.child, ["merge-base", "--is-ancestor", childHead, parentHead]);
+    } catch {
+      throw new Error("Preserved worktree history cannot fast-forward to the approved parent source. Reconcile its branch without discarding work, then retry.");
+    }
+    syncCommit = parentHead;
+  }
+  const files = ["code-generation-plan.md", "unit-test-instructions.md", "code-generation-questions.md"].map((name) => {
+    const from = join(approved.evidence.authority.stageDir, name);
+    const to = join(provenance.child, dirname(approved.evidence.questionsRelativePath), name);
+    assertNoSymlinkInChainOrThrow(provenance.parent, relative(provenance.parent, from));
+    assertNoSymlinkInChainOrThrow(provenance.child, relative(provenance.child, to));
+    if (existsSync(to)) readRegularFileNoFollowOrThrow(to, "preserved plan record");
+    return { from, to, name, bytes: readRegularFileNoFollowOrThrow(from, "approved parent plan record") };
+  });
+  return { ...provenance, ...approved, parentSource, childSource, expectedBytes, syncCommit, files };
+}
+
+/** Read-only preflight, including dirty-source refusal before any re-fork. */
+export function validateCodeGenerationWorktreeApproval(parentDir: string, childDir: string, unit: string): void {
+  worktreeApprovalTransfer(parentDir, childDir, unit);
+}
+
+/**
+ * Delegate the already-started parent receipt without changing its human,
+ * intent, attempt, fingerprint, or group binding. Publication is the last write.
+ */
+export function bindCodeGenerationWorktreeApproval(parentDir: string, childDir: string, unit: string): void {
+  const before = worktreeApprovalTransfer(parentDir, childDir, unit);
+  if (before.syncCommit) {
+    // Git refuses diverged histories and overlapping local changes. No reset,
+    // stash, clean, new commit, or force option is used.
+    worktreeApprovalGit(before.child, ["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", before.syncCommit]);
+  }
+  withAuditLock(before.parent, () => withAuditLock(before.child, () => {
+    const current = worktreeApprovalTransfer(before.parent, before.child, unit);
+    if (current.syncCommit || current.hash !== before.hash ||
+      hashObject(current.receipt) !== hashObject(before.receipt) ||
+      current.expectedBytes !== before.expectedBytes ||
+      current.receipt.status !== "generation" ||
+      activeIntentUuid(current.child) !== current.evidence.authority.intentId) {
+      throw new Error("Worktree approval context changed during transfer; no execution receipt was published.");
+    }
+    const archive = join(recordDir(current.child)!, ".aidlc-plan-transfers", randomUUID());
+    mkdirSync(archive, { recursive: true });
+    for (const file of current.files) {
+      if (existsSync(file.to)) {
+        writeBufferAtomic(join(archive, file.name), readRegularFileNoFollowOrThrow(file.to, "preserved plan record"));
+      }
+      mkdirSync(dirname(file.to), { recursive: true });
+      writeBufferAtomic(file.to, file.bytes);
+    }
+    const baselineSha256 = writeBaselineSourceSnapshot(current.child, CODE_GENERATION_STAGE, current.childSource.listing);
+    const state = readFileSync(stateFilePath(current.child), "utf-8");
+    writeActiveDirectiveMarker(current.child, {
+      kind: "run-stage", stage: CODE_GENERATION_STAGE, unit, state_sha256: stateDigest(state),
+    });
+    const childAuthority = resolveCodeGenerationAuthority(current.child, { unit });
+    const copied = codeGenerationApprovalArtifacts(current.child, childAuthority, current.parent);
+    const finalParent = parentWorktreeApproval(current.parent, unit);
+    if (childAuthority.intentId !== current.receipt.intentId || childAuthority.runFloor !== current.receipt.runFloor ||
+      copied.expectedFingerprint !== current.receipt.fingerprint || !copied.approvedAnswer ||
+      copied.recordedFingerprint !== current.receipt.fingerprint ||
+      hashObject(finalParent.receipt) !== hashObject(current.receipt) ||
+      current.files.some((file) => !readRegularFileNoFollowOrThrow(file.from, "approved parent plan record").equals(file.bytes)) ||
+      workspaceSourceFingerprint(current.parent) !== current.parentSource.fingerprint ||
+      workspaceSourceFingerprint(current.child) !== current.childSource.fingerprint) {
+      throw new Error("Worktree source or attempt changed before approval publication; retry from current Plan Approval.");
+    }
+    writePlanApprovalReceipt(current.child, {
+      ...current.receipt,
+      delegation: {
+        version: 1, parentProjectDir: current.parent, worktreeDir: current.child, unit,
+        provenanceSha256: current.hash, parentReceiptSha256: hashObject(current.receipt), baselineSha256,
+      },
+    });
+  }));
+}
+
+function validateWorktreeDelegation(
+  childDir: string, authority: CodeGenerationAuthority, receipt: PlanApprovalRuntimeReceipt,
+): string {
+  const origin = receipt.delegation!;
+  if (origin.version !== 1 || origin.unit !== authority.unit ||
+    approvalPathKey(origin.worktreeDir) !== approvalPathKey(childDir)) {
+    throw new Error("Worktree approval delegation has a different execution target.");
+  }
+  const provenance = approvalWorktreeProvenance(origin.parentProjectDir, childDir, origin.unit);
+  const parent = parentWorktreeApproval(provenance.parent, origin.unit);
+  const { delegation: _delegation, ...copiedReceipt } = receipt;
+  if (provenance.hash !== origin.provenanceSha256 ||
+    hashObject(parent.receipt) !== origin.parentReceiptSha256 ||
+    hashObject(copiedReceipt) !== hashObject(parent.receipt) ||
+    parent.receipt.status !== "generation" || receipt.status !== "generation" ||
+    !readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, origin.baselineSha256)) {
+    throw new Error("Protected parent Plan Approval or the delegated worktree baseline is no longer current.");
+  }
+  return provenance.parent;
+}
+
+/** Exact source present at delegation; later worker changes are measured against it. */
+export function readCodeGenerationWorktreeSourceBaseline(childDir: string, unit: string): WorkspaceSourceListing | null {
+  const path = join(codeGenerationRecordDir(childDir, unit), "code-generation-questions.md");
+  if (!existsSync(path) || !existsSync(stateFilePath(childDir))) return null;
+  const state = readFileSync(stateFilePath(childDir), "utf-8");
+  const questions = readFileSync(path, "utf-8");
+  const fingerprint = questionsFileApprovalFingerprint(questions);
+  if (!fingerprint) return null;
+  const runFloor = latestMainWorkflowStageRunFloorForProject(
+    childDir, CODE_GENERATION_STAGE,
+    getField(state, "Construction Iteration") === "unit-major" || getField(state, "Construction Checkpoints") === "enabled",
+    unit,
+  );
+  const receipt = readPlanApprovalReceipt(childDir, { targetId: codeGenerationTargetId({ unit }), runFloor, fingerprint });
+  if (!receipt?.delegation) return null;
+  const approval = evaluateCodeGenerationApproval(childDir, { unit });
+  if (!approval.ok) throw new Error(`Delegated plan is not current: ${approval.reason}`);
+  const authority = resolveCodeGenerationAuthority(childDir, { unit });
+  validateWorktreeDelegation(childDir, authority, receipt);
+  return readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, receipt.delegation.baselineSha256);
+}
+
 export function evaluateCodeGenerationApproval(
   projectDir: string,
   target: CodeGenerationTarget,
@@ -2324,7 +2795,17 @@ export function evaluateCodeGenerationApproval(
     empty.unit = normalizedUnit;
     const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget);
     empty.directiveEpoch = authority.directiveEpoch;
-    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
+    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+    const recordedFingerprint = existsSync(questionsPath)
+      ? questionsFileApprovalFingerprint(readFileSync(questionsPath, "utf-8")) : null;
+    const candidate = recordedFingerprint
+      ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint })
+      : null;
+    // A worker executes the parent's approved contract, including for a sibling
+    // repository that does not carry the workspace's methodology files.
+    const contractProject = candidate?.delegation
+      ? validateWorktreeDelegation(projectDir, authority, candidate) : projectDir;
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
     empty.planExists = artifacts.planExists;
     empty.instructionsExist = artifacts.instructionsExist;
     empty.approved = artifacts.approvedAnswer;
@@ -2392,6 +2873,9 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     const receipt = readPlanApprovalReceipt(projectDir, identity);
+    if (receipt?.delegation) {
+      if (hashObject(receipt) !== hashObject(candidate)) throw new Error("Worktree approval changed while reading.");
+    } else if (receipt?.batch) assertPlanApprovalBatchCurrent(projectDir, receipt);
     // Source that moved after the receipt certified it is the governed drift:
     // strict retires the approval until the human approves again; relaxed keeps
     // it current (generation start records the change and re-baselines the

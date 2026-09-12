@@ -177,6 +177,31 @@ You can force that path with:
 /aidlc compose "harden the deployment pipeline and add observability"
 ```
 
+## Construction approvals and execution
+
+New workflows default to building one Unit at a time, serially, with completion
+checkpoints enabled. These checkpoints apply to solo workflows that actually
+have a non-empty Unit dependency graph. Profiles such as Express that skip Unit
+decomposition retain their ordinary single-stage path; team-owned Unit gates
+keep their separate policy.
+
+With skeleton-on, the first Unit is planned as the smallest working integrated
+slice. Its applicable design work and Code Generation finish, a real integrated
+check passes, and you approve the skeleton before later Units start. A first
+design document is not a working skeleton. Skeleton-off offers **Continue
+automatically** / **Review each checkpoint** at Construction entry; skeleton-on
+offers it after the skeleton checkpoint. A recorded choice is not repeated,
+and you can explicitly grant or revoke autonomy during Construction.
+
+Approval policy and execution are separate. To fan out eligible Code Generation
+batches, explicitly choose stage-major order and swarm execution; guided and
+automatic batch completion are both supported. Unit-major stays serial.
+Plan Approval for every Unit and pre-generation summary confirmation still need
+your answer; eligible swarm plans can share one **Approve Plans** presentation
+with individual receipts. Failures still halt. Existing workflows retain their
+recorded iteration and legacy behavior when the new checkpoint/execution fields
+are absent. See [Construction commands](12-cli-commands.md#construction-order-and-execution).
+
 ## Related controls
 
 The workflow profile chooses the route and defaults. You can independently tune:

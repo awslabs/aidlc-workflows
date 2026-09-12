@@ -1021,28 +1021,128 @@ public route. Prefer `aidlc` whenever a route is documented below.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
-During Construction, ask in a typed message to "run the rest autonomously" or
-"gate every stage from here". Both requests work with skeleton-on or
-`skeleton: off`; skeleton-off has no automatic ladder prompt. The conductor
-records the explicit choice through:
+During Construction, explicitly ask to continue automatically or review each
+checkpoint. The conductor records **Continue automatically** as `autonomous`
+and **Review each checkpoint** as `gated`:
 
 ```bash
 aidlc engine bolt set-autonomy --mode autonomous
 aidlc engine bolt set-autonomy --mode gated
 ```
 
-Both commands update `Construction Autonomy Mode` in `aidlc-state.md` and emit
-`AUTONOMY_MODE_SET`. Granting `autonomous` requires a fresh human turn; switching
-back to `gated` restores subsequent human approvals without requiring a fresh
-turn.
+Both update `Construction Autonomy Mode` and emit `AUTONOMY_MODE_SET`. Granting
+autonomy requires a fresh human turn; revocation does not. New checkpoint
+workflows offer the choice at Construction entry with skeleton-off, or after
+the first working integrated Unit has passed its skeleton checkpoint with
+skeleton-on. A known choice is not asked again; on-demand changes remain valid.
 
-On the default stage-major walk, autonomy skips later eligible Construction
-completion approvals. The first in-scope Construction stage still requires its
-own human approval, even if autonomy was granted earlier, and each Unit's Code
-Generation Plan Approval remains mandatory. Existing unit-major execution stays
-serial, suppresses swarm, and retains human stage gates for per-unit stages.
-See [Construction Execution](../reference/03-orchestrator.md#construction-execution)
-for the ladder and failure-handling rules.
+Autonomy controls ordinary completion approvals. Every Unit still needs Plan
+Approval, pre-generation summary confirmation still needs the human, and a
+skeleton checkpoint always needs human approval. Failures halt. Existing
+workflows without `Construction Checkpoints` retain their legacy first-stage
+and late stage approvals; team-owned Unit gates retain their own policy.
+
+### Construction order and execution
+
+New Unit workflows with an included source-producing stage record
+`Construction Checkpoints: enabled`, `Construction
+Iteration: unit-major`, and `Construction Execution: serial`. One Unit runs
+through its applicable design stages and Code Generation before the next.
+To choose swarm execution explicitly, select stage-major first:
+
+```bash
+aidlc engine state set-construction-iteration stage-major
+aidlc engine state set-construction-execution swarm
+```
+
+To opt an existing workflow into verified checkpoints, preferably before Unit
+work begins, use `aidlc engine state set-construction-checkpoints enabled`.
+`disabled` retains the legacy checkpoint flow. These typed setters update
+runtime preferences; generic `state set` remains engine-owned.
+During Construction, changing these preferences requires a fresh human request;
+an unattended run cannot disable checkpoints to get past a refusal.
+
+Execution is separate from approval: swarm works with guided (`gated`) or
+automatic (`autonomous`) completion. Unit-major stays serial and refuses a
+contradictory swarm setting; run `aidlc engine state set-construction-execution serial` before
+returning to unit-major. Preserve existing explicit choices. Workflows without
+the execution field retain legacy autonomy-based swarm routing.
+
+For checkpoint-enabled solo work with a real non-empty Unit DAG, skeleton-on
+always builds the first DAG Unit as the smallest working integrated slice
+before later Units, even with stage-major selected. A first design-stage
+review alone does not prove a working skeleton. Already approved inline Units
+are excluded from later swarm batches.
+
+### `aidlc engine bolt checkpoint` - verify and approve a completed Unit
+
+The engine names the Unit and checkpoint kind (`unit` or `skeleton`). The body,
+reviews, and receipts already exist; follow the checkpoint instead of rebuilding:
+
+```bash
+aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
+aidlc engine bolt checkpoint --action verify --unit "<Unit>" --kind <unit|skeleton> --check-cmd '<real project check>'
+aidlc engine bolt checkpoint --action approve --unit "<Unit>" --kind <unit|skeleton> --user-input 'Approve'
+aidlc engine bolt checkpoint --action reject --unit "<Unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+Verification runs an actual project check and stores proof bound to current
+artifacts, source, and attempt. For a skeleton, prove the integrated slice end
+to end; for an ordinary Unit, check that Unit's result. Approval requires a
+current verified proof. Supply `--user-input` only for the real human's answer;
+a verified ordinary Unit with `human_required: false` is approved without it.
+A skeleton always requires the human. Missing or stale evidence is explained
+in `errors`: repair the named review/receipt or take human Request Changes,
+without inventing verification. Re-run `next` after each action, never report
+one Unit's checkpoint as approval of the whole Code Generation stage.
+
+### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
+
+After a swarm batch settles, the engine may return `swarm_checkpoint` before
+another batch starts. Use exactly its batch number and Unit list:
+
+```bash
+aidlc engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-separated Units>"
+aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --user-input 'Approve'
+aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+Guided completion waits for the human; automatic completion omits `--user-input`
+when `human_required: false`. Readiness comes from the completed batch's current
+evidence. Resolve `errors` rather than rebuilding the whole batch or inventing
+a pass. Re-run `next` after the action; a batch approval is not whole-stage
+approval. Later completion-only stage directives settle bookkeeping without
+another body, reviewer, or human learnings/approval question.
+
+After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
+uses `aidlc engine swarm prepare --resume-existing` with the same batch and
+exact Unit set, after fresh Plan Approval. The prior worktree and revision
+records are preserved. Source that does not match the reviewed starting point
+must be reconciled and approved before the tool can resume it.
+
+### Grouped Code Generation Plan Approval
+
+For the exact live swarm Unit set, a single **Approve Plans** answer can record
+separate Plan Approval receipts for every named Unit. Prepare every plan and
+questions file, then create the batch manifest:
+
+```json
+{"batch":"<review name>","units":[{"unit":"<Unit>","questionsFile":"<project-relative questions path>"}]}
+```
+
+```bash
+aidlc engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
+aidlc engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --details "Approve Plans"
+```
+
+The decision precedes the prompt. Only after the actual **Approve Plans** answer,
+write `[Answer]: Approve Plan` into each named questions file and call `answer`.
+For **Request Changes**, record that choice in the files and use
+`--details "Request Changes"`, then revise and re-present. The batch binds the
+exact live Units, plan/questions fingerprints, and unchanged planned source.
+Legacy protected-choice mediation, overrides, and unsupported harnesses use the
+single-Unit flow; per-Unit approval remains mandatory in either presentation.
+See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
 
 ### `aidlc engine workspace codekb` - resolve the code knowledge directory
 

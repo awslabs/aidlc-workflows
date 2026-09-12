@@ -3033,6 +3033,18 @@ export interface PlanApprovalRuntimeProvenance {
   plannedSourceSha256: string;
 }
 
+export interface PlanApprovalBatchMember extends PlanApprovalRuntimeIdentity {
+  unit: string;
+  planSha256: string;
+  instructionsSha256: string;
+}
+
+export interface PlanApprovalRuntimeBatch {
+  name: string;
+  members: PlanApprovalBatchMember[];
+  bindingSha256: string;
+}
+
 export interface PlanApprovalRuntimeChallenge
   extends PlanApprovalRuntimeIdentity, PlanApprovalRuntimeProvenance {
   version: 1;
@@ -3041,6 +3053,7 @@ export interface PlanApprovalRuntimeChallenge
   options: [string, string];
   requireExactOptionLabels: boolean;
   hashedOptionLabels: boolean;
+  batch?: PlanApprovalRuntimeBatch;
 }
 
 export interface PlanApprovalRuntimeResponse {
@@ -3066,6 +3079,9 @@ export interface PlanApprovalRuntimeReceipt
   questionsSha256: string;
   certifiedSourceSha256: string;
   status: "approved" | "generation";
+  batch?: PlanApprovalRuntimeBatch;
+  /** Execution in a verified Unit worktree retains its protected parent authority. */
+  delegation?: PlanApprovalWorktreeDelegation;
   /**
    * Present only on a break-glass receipt: the human typed the override phrase
    * and the conductor ran `answer --override` with that reason. Such a receipt
@@ -3074,6 +3090,16 @@ export interface PlanApprovalRuntimeReceipt
    * refused are kept beside the reason so the record says what was overridden.
    */
   override?: PlanApprovalReceiptOverride;
+}
+
+export interface PlanApprovalWorktreeDelegation {
+  version: 1;
+  parentProjectDir: string;
+  worktreeDir: string;
+  unit: string;
+  provenanceSha256: string;
+  parentReceiptSha256: string;
+  baselineSha256: string;
 }
 
 export interface PlanApprovalReceiptOverride {
@@ -3354,6 +3380,107 @@ export function clearPlanApprovalReceipt(
     unlinkSync(planApprovalReceiptPath(projectDir, identity));
   } catch {
     // Missing runtime authority is already clear.
+  }
+}
+
+function planApprovalBatchCommitPath(
+  projectDir: string,
+  batch: PlanApprovalRuntimeBatch,
+  session: string,
+): string {
+  const key = createHash("sha256").update(`${session}\n${batch.bindingSha256}`, "utf-8").digest("hex");
+  return join(planApprovalRuntimeDir(projectDir), `batch-commit-${key}.json`);
+}
+
+export function planApprovalBatchCommitted(
+  projectDir: string,
+  receipt: PlanApprovalRuntimeReceipt,
+): boolean {
+  if (!receipt.batch) return false;
+  const commit = readPlanApprovalRuntimeJson<{ challengeId: string; bindingSha256: string }>(
+    planApprovalBatchCommitPath(projectDir, receipt.batch, receipt.session), "Plan Approval batch commit",
+  );
+  return commit?.challengeId === receipt.challengeId &&
+    commit.bindingSha256 === receipt.batch.bindingSha256;
+}
+
+// Caller holds the directive lock. Snapshot every destination before writing,
+// including the one-shot human response, so a failed member/audit write leaves
+// the previous authority intact and the human's response available for retry.
+// Publish the shared commit marker LAST: even a complete intermediate receipt
+// set cannot authorize generation before all writes succeed.
+export function commitPlanApprovalBatch(
+  projectDir: string,
+  challenge: PlanApprovalRuntimeChallenge,
+  receipts: PlanApprovalRuntimeReceipt[],
+  record: () => void,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const { session, batch } = challenge;
+  if (!batch) throw new Error("Plan Approval batch transaction requires a batch challenge");
+  const { members } = batch;
+  const commitPath = planApprovalBatchCommitPath(projectDir, batch, session);
+  const paths = [
+    commitPath,
+    ...members.map((member) => planApprovalReceiptPath(projectDir, member)),
+    planApprovalChallengePath(projectDir, session),
+    planApprovalResponsePath(projectDir, session),
+    planApprovalOverridePath(projectDir, session),
+  ];
+  const previous = new Map<string, string | null>();
+  for (const path of paths) {
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, path));
+    try {
+      previous.set(path, readAtomicReplacedFileNoFollowOrThrow(path, "Plan Approval batch record").toString("utf-8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      previous.set(path, null);
+    }
+  }
+  const touched = new Set<string>();
+  const remove = (path: string): void => {
+    touched.add(path);
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  };
+  try {
+    // Withdraw old publication while replacing receipts. On rollback this is
+    // restored last, after every member and the hook response are restored.
+    remove(commitPath);
+    if (receipts.length > 0) {
+      for (const receipt of receipts) {
+        touched.add(planApprovalReceiptPath(projectDir, receipt));
+        writePlanApprovalReceipt(projectDir, receipt);
+      }
+    } else {
+      for (const member of members) remove(planApprovalReceiptPath(projectDir, member));
+    }
+    record();
+    for (const path of paths.slice(members.length + 1)) remove(path);
+    if (receipts.length > 0) {
+      writeFileAtomic(commitPath, `${JSON.stringify({
+        challengeId: challenge.challengeId,
+        bindingSha256: batch.bindingSha256,
+      })}\n`);
+    }
+  } catch (error) {
+    const failures: unknown[] = [error];
+    for (const path of [...touched].reverse()) {
+      try {
+        const content = previous.get(path);
+        if (content === null) remove(path);
+        else if (content !== undefined) writeFileAtomic(path, content);
+      } catch (restoreError) {
+        failures.push(restoreError);
+      }
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Plan Approval batch write and rollback failed; re-present every unit plan.");
+    }
+    throw error;
   }
 }
 
@@ -7657,7 +7784,45 @@ function firstConstructionApprovalStage(
 export function isAutonomousConstructionGate(
   stateContent: string | null,
   stage: { slug: string; phase: string; for_each?: string },
+  projectDir?: string,
 ): boolean {
+  const checkpoints = stateContent !== null && constructionCheckpointsApply(stateContent);
+  if (checkpoints && stage.phase === "construction" && projectDir) {
+    if (
+      stage.slug === "code-generation" &&
+      isConstructionSwarmEnabled(stateContent) &&
+      getField(stateContent!, "Construction Iteration") !== "unit-major"
+    ) {
+      const dag = resolveBoltDag(projectDir);
+      if (dag.state !== "ok" || dag.units.length === 0) return false;
+      const inline = approvedConstructionUnits(projectDir, stateContent!);
+      const { resolveSwarmCheckpoint } = require("./aidlc-swarm-checkpoints.ts") as
+        typeof import("./aidlc-swarm-checkpoints.ts");
+      return dag.batches.every((batch, index) => {
+        const units = batch.filter((unit) => !inline.has(unit));
+        return units.length === 0 ||
+          resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent!).approved;
+      });
+    }
+    if (
+      stage.for_each === "unit-of-work" &&
+      getField(stateContent!, "Construction Iteration") === "unit-major"
+    ) {
+      const dag = resolveBoltDag(projectDir);
+      const approved = approvedConstructionUnits(projectDir, stateContent!);
+      return dag.state === "ok" && dag.units.length > 0 &&
+        dag.units.every((unit) => approved.has(unit));
+    }
+    if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
+    if (constructionSkeletonOn(stateContent!)) {
+      const dag = resolveBoltDag(projectDir);
+      return dag.state === "ok" && dag.units.length > 0 &&
+        approvedConstructionUnits(projectDir, stateContent!).has(dag.batches.flat()[0]);
+    }
+    // The grant governs ordinary completion gates; Plan Approval retains its
+    // own authority and is never inferred from this setting.
+    return getField(stateContent!, "Skeleton Stance") !== null;
+  }
   if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
   const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
   if (!scope) return false;
@@ -7667,6 +7832,58 @@ export function isAutonomousConstructionGate(
     getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&
     stage.for_each === "unit-of-work"
   );
+}
+
+export function constructionSkeletonOn(stateContent: string): boolean {
+  const stance = getField(stateContent, "Skeleton Stance");
+  if (stance === "on") return true;
+  if (stance !== "scope-dependent") return false;
+  return loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
+}
+
+export function constructionCheckpointsApply(stateContent: string): boolean {
+  if (
+    getField(stateContent, "Construction Checkpoints") !== "enabled" ||
+    isTeamUnitOwnership(stateContent)
+  ) return false;
+  const scope = getField(stateContent, "Scope") ?? "";
+  return unitMajorConstructionStageSlugs(scope, stateContent, true)
+    .some((slug) => findStageBySlug(slug)?.workspace_requires === true);
+}
+
+export function isConstructionSwarmEnabled(stateContent: string | null): boolean {
+  if (!stateContent) return false;
+  if (constructionCheckpointsApply(stateContent)) {
+    return getField(stateContent, "Construction Execution") === "swarm";
+  }
+  return isAutonomousMode(stateContent);
+}
+
+// An approved skeleton Unit was deliberately built before a stage-major swarm.
+// Its per-Unit source binding survives unrelated Units changing the workspace.
+export function approvedConstructionUnits(
+  projectDir: string,
+  stateContent: string,
+): Set<string> {
+  const approved = new Set<string>();
+  if (!constructionCheckpointsApply(stateContent)) return approved;
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok") return approved;
+  const { resolveConstructionCheckpoint } = require("./aidlc-construction-checkpoints.ts") as
+    typeof import("./aidlc-construction-checkpoints.ts");
+  for (const unit of dag.units) {
+    const kind = constructionSkeletonOn(stateContent) && unit === dag.batches.flat()[0]
+      ? "skeleton"
+      : "unit";
+    try {
+      if (resolveConstructionCheckpoint(projectDir, unit, kind, stateContent).approved) {
+        approved.add(unit);
+      }
+    } catch {
+      // Missing, stale or malformed evidence is unfinished work.
+    }
+  }
+  return approved;
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
@@ -8784,8 +9001,10 @@ export function checkSummaryConfirmationEvidence(
   const workflow = options.workflow;
   const unitMajor =
     isPerUnitStage(stage) &&
-    getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
-      "unit-major";
+    (
+      getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
+      getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
+    );
   const floors = summaryAttemptFloors(events, stage.slug, workflow, unitMajor);
   const afterFloor = (entry: AuditShardEvent): true | false | null => {
     if (floors.length === 0) return true;
@@ -12040,8 +12259,10 @@ export function reviewAttemptWindow(
     );
   const unitMajor =
     artifactPerUnit &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership = artifactPerUnit && isTeamUnitOwnership(stateContent);
+    (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
+  const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled");
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -12342,10 +12563,12 @@ export function reviewAttemptAccounting(
 
   const unitMajor =
     stage.for_each === "unit-of-work" &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership =
     stage.for_each === "unit-of-work" &&
-    isTeamUnitOwnership(stateContent);
+    (isTeamUnitOwnership(stateContent) ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -13064,8 +13287,10 @@ export function freshReviewReceipts(
       stateContent,
     );
   const unitMajor =
-    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership = perUnit && isTeamUnitOwnership(stateContent);
+    perUnit && (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
+  const teamOwnership = perUnit && (isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled");
   const attemptWindow =
     options.attemptWindow ??
     reviewAttemptWindow(projectDir, stateContent, stage);
@@ -20734,12 +20959,20 @@ export function isAutonomousSwarmStage(
 ): boolean {
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
-  if (!isAutonomousMode(stateContent)) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
-  if (first !== null && first.slug === stage.slug) return false;
+  const checkpoints = getField(stateContent!, "Construction Checkpoints") === "enabled";
+  if (first !== null && first.slug === stage.slug && !checkpoints) return false;
+  if (checkpoints && constructionSkeletonOn(stateContent!)) {
+    const dag = resolveBoltDag(projectDir);
+    if (
+      dag.state !== "ok" || dag.units.length === 0 ||
+      !approvedConstructionUnits(projectDir, stateContent!).has(dag.batches.flat()[0])
+    ) return false;
+  }
   const resolution = resolveBoltDag(projectDir);
   return resolution.state === "ok" && resolution.units.length > 0;
 }
@@ -25054,6 +25287,15 @@ export function swarmConvergedUnits(
     const latestTimestamp = rows.at(-1)?.timestamp;
     if (!latestTimestamp) continue;
     const latest = rows.filter((row) => row.timestamp === latestTimestamp);
+    // A Unit-level batch revision reopens only that Unit. A later native
+    // convergence receipt may settle it again; an older or unordered receipt
+    // cannot erase the human's Request Changes.
+    const reopened = auditRows.some((row) =>
+      row.event === "GATE_REJECTED" &&
+      gateRejectionMatchesAttempt(row.block, slug, unit) &&
+      latest.some((convergence) => !attemptEventDefinitelyBefore(row, convergence))
+    );
+    if (reopened) continue;
     const identities = new Set(
       latest.map((row) =>
         [
@@ -25077,6 +25319,16 @@ export function swarmConvergedUnits(
       (sourceChain.state !== "ready" || !sourceChain.units.has(unit))
     ) continue;
     converged.add(unit);
+  }
+  if (slug === "code-generation") {
+    try {
+      const state = readStateFile(projectDir);
+      for (const unit of approvedConstructionUnits(projectDir, state)) {
+        converged.add(unit);
+      }
+    } catch {
+      // Unreadable checkpoint evidence cannot stand in for convergence.
+    }
   }
   return converged;
 }
@@ -25270,7 +25522,8 @@ export function currentSwarmSourceOpeningFingerprint(
   const baseline = currentStageSourceBaseline(
     projectDir,
     slug,
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major",
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled",
     intent,
     space,
   );
@@ -25504,24 +25757,24 @@ function currentUnitLifecycleRows(
         })
         .at(-1)?.timestamp ?? ""
     : latestMainWorkflowStageStarted(audit, slug);
-  let teamOwnership = false;
+  let unitScoped = false;
   try {
-    teamOwnership = isTeamUnitOwnership(
-      stateContent ?? readStateFile(projectDir),
-    );
+    const state = stateContent ?? readStateFile(projectDir);
+    unitScoped = isTeamUnitOwnership(state) ||
+      getField(state, "Construction Checkpoints") === "enabled";
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
   const floorByUnit = new Map<string, string>();
   const floorFor = (unit: string): string => {
-    const key = teamOwnership ? unit : "";
+    const key = unitScoped ? unit : "";
     const existing = floorByUnit.get(key);
     if (existing) return existing;
     const floor = latestMainWorkflowStageRunFloorForProject(
       projectDir,
       slug,
       unitMajor,
-      teamOwnership ? unit : undefined,
+      unitScoped ? unit : undefined,
       sourceRows,
     );
     floorByUnit.set(key, floor);
@@ -25606,9 +25859,10 @@ function currentUnitLifecycleRows(
 
 function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
+    const state = readStateFile(projectDir);
     return (
-      getField(readStateFile(projectDir), "Construction Iteration")?.trim() ===
-      "unit-major"
+      getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(state, "Construction Checkpoints") === "enabled"
     );
   } catch {
     return false;
@@ -25640,7 +25894,8 @@ export function unitLifecycleSnapshot(
   } = {},
 ): UnitLifecycleSnapshot {
   const unitMajor =
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
   const rows = currentUnitLifecycleRows(
     projectDir,
     "",
