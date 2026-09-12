@@ -1469,6 +1469,43 @@ describe("t230 dispatcher global flag translation", () => {
   });
 });
 
+const UNEXERCISED_DELEGATES: Partial<Record<string, string>> = {
+  "aidlc-doctor.ts": "The only route has networkPolicy 'interactive-bounded'.",
+  "aidlc-init.ts": "The only route has networkPolicy 'explicit-only'.",
+  "aidlc-workspace-sync.ts": "The only route has networkPolicy 'required'.",
+};
+
+// Generalize the former four-case list: #1070's review-brief was routed and tested
+// directly, yet unreachable through the compiled dispatcher. Per-command lists
+// only guard what someone remembered to list.
+function compiledParityCases(): Array<{ tool: string; routeId: string; argv: string[] }> {
+  const cases: Array<{ tool: string; routeId: string; argv: string[] }> = [];
+  tools: for (const tool of Object.values(TOOLS)) {
+    for (const route of ROUTES) {
+      if (
+        (route.tool !== tool && route.kind !== "custom") ||
+        route.networkPolicy !== "forbidden"
+      ) continue;
+
+      const nsPrefix = route.namespace === "public" ? [] : [route.namespace];
+      const top = route.kind === "top-passthrough" ||
+        route.kind === "top-prefix" || route.kind === "top-help";
+      for (const verb of route.verbs) {
+        const argv = [
+          ...nsPrefix,
+          ...(top ? [] : [route.group]),
+          ...(verb.startsWith("<") ? [] : verb.split(" ")),
+        ];
+        const action = resolveAction(argv);
+        if (action.type !== "delegate" || action.tool !== tool) continue;
+        cases.push({ tool, routeId: route.id, argv });
+        continue tools;
+      }
+    }
+  }
+  return cases;
+}
+
 describe("t230 dispatcher dev and compiled in-process modes", () => {
   test("compiled URL detection recognizes Bun virtual roots on Unix and Windows", () => {
     expect(isCompiledModuleUrl("file:///$bunfs/root/aidlc.ts")).toBe(true);
@@ -1477,19 +1514,33 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(isCompiledModuleUrl("file:///workspace/core/tools/aidlc.ts")).toBe(false);
   });
 
-  const cases = [
-    { name: "version", args: ["version"] },
-    { name: "graph artifacts", args: ["engine", "graph", "artifacts", "--help"] },
-    { name: "sensor list", args: ["engine", "sensor", "list"] },
-    { name: "state get", args: ["engine", "state", "get"] },
-  ];
+  const cases = compiledParityCases();
 
-  for (const item of cases) {
-    test(`${item.name} imported compiled main matches spawned dev dispatcher`, () => {
+  test("every delegate is exercised or explicitly excused", () => {
+    expect(new Set([
+      ...cases.map((item) => item.tool),
+      ...Object.keys(UNEXERCISED_DELEGATES),
+    ])).toEqual(new Set(Object.values(TOOLS)));
+    expect(cases.filter((item) => UNEXERCISED_DELEGATES[item.tool])).toEqual([]);
+  });
+
+  for (const { tool, routeId, argv } of cases) {
+    const title = `${tool} via ${routeId}: imported compiled main matches spawned dev dispatcher`;
+    test(title, () => {
+      expect(resolveAction(argv)).toMatchObject({ type: "delegate", tool });
       const projectDir = makeProject();
-      const dev = viaDispatcher(item.args, projectDir, { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR });
-      const compiled = viaImportedCompiledMain(item.args, projectDir);
-      expectSameRun(compiled, dev, item.name);
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t230-compiled-sandbox-"));
+      tempProjects.add(root);
+      const env = {
+        AIDLC_INSTALL_ROOT: join(root, "install"),
+        AIDLC_BIN_DIR: join(root, "bin"),
+        AIDLC_OFFLINE: "1",
+      };
+      const dev = viaDispatcher(argv, projectDir, { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR, ...env });
+      const compiled = viaImportedCompiledMain(argv, projectDir, env);
+      expect(compiled.stderr.toString()).not.toContain("has no in-process delegate");
+      expect(compiled.stderr.toString()).not.toContain("does not export main");
+      expectSameRun(compiled, dev, title);
     });
   }
 
