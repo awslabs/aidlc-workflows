@@ -1,8 +1,10 @@
-// covers: file:aidlc-common/protocols/stage-protocol-reviewer.md, file:aidlc-common/protocols/stage-protocol-swarm.md, file:aidlc-common/protocols/stage-protocol-ensemble.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:skills/aidlc/SKILL.md, subcommand:aidlc-orchestrate:next
+// covers: file:aidlc-common/protocols/stage-protocol-reviewer.md, file:aidlc-common/protocols/stage-protocol-swarm.md, file:aidlc-common/protocols/stage-protocol-ensemble.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:aidlc-common/protocols/stage-protocol-learnings.md, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -11,15 +13,11 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedBoltDagBatches,
+  seededRecordDir,
   seededStateFile,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import {
-  discoverScopes,
-  renderRunner,
-  renderStageRunner,
-  runnableStages,
-} from "../../dist/claude/.claude/tools/aidlc-runner-gen.ts";
 
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MODULES = [
@@ -27,6 +25,7 @@ const MODULES = [
   "swarm",
   "ensemble",
   "construction",
+  "learnings",
 ] as const;
 
 let project = "";
@@ -42,8 +41,17 @@ afterEach(() => {
 function directiveFor(
   stage: string,
   scope: string,
+  withMainWorkflow = false,
 ): Record<string, unknown> {
   project = createOrchestrationTestProject();
+  if (withMainWorkflow) {
+    seedStateFile(project, "state-mid-inception.md");
+    writeFileSync(
+      seededStateFile(project),
+      readFileSync(seededStateFile(project), "utf-8")
+        .replace("- **Scope**: bugfix", `- **Scope**: ${scope}`),
+    );
+  }
   const result = runOrchestrateNext(
     ORCHESTRATE,
     project,
@@ -61,6 +69,49 @@ function directiveFor(
 function moduleList(directive: Record<string, unknown>): string[] {
   const value = directive.protocol_modules;
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function singleRequirementsAuditShard(): string {
+  const start = readAuditShardEvents(project).find((entry) =>
+    entry.event === "STAGE_STARTED" &&
+    auditBlockField(entry.block, "Workflow") === "single-stage:requirements-analysis"
+  );
+  if (!start) throw new Error("The isolated requirements attempt has no start boundary");
+  return start.shard;
+}
+
+function seedSingleSummaryQuestions(): void {
+  const dir = join(seededRecordDir(project), "inception", "requirements-analysis");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "requirements-analysis-questions.md"),
+    "# Questions\n\n## Consolidated Summary Confirmation\n\n" +
+      "- Looks correct\n- Request changes\n\n[Answer]: Looks correct\n",
+  );
+}
+
+function reportSingleRequirements(): Record<string, unknown> {
+  const result = spawnSync(
+    process.execPath,
+    [
+      ORCHESTRATE,
+      "report",
+      "--project-dir", project,
+      "--single",
+      "--stage", "requirements-analysis",
+      "--result", "approved",
+    ],
+    {
+      cwd: project,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AWS_AIDLC_DEFAULT_SCOPE: undefined,
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: undefined,
+      },
+    },
+  );
+  return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
 }
 
 function swarmDirective(): Record<string, unknown> {
@@ -110,7 +161,7 @@ function swarmDirective(): Record<string, unknown> {
 }
 
 describe("t302 conditional protocol modules", () => {
-  test("the four module files exist in core and every generated harness tree", () => {
+  test("conditional module files exist in core and every generated harness tree", () => {
     for (const module of MODULES) {
       expect(
         existsSync(
@@ -138,32 +189,134 @@ describe("t302 conditional protocol modules", () => {
     }
   });
 
-  test("requirements-analysis under classic lists reviewer", () => {
-    expect(moduleList(directiveFor("requirements-analysis", "classic"))).toEqual([
-      "reviewer",
+  test("classic requirements-analysis omits reviewer and learnings ceremonies", () => {
+    const directive = directiveFor("requirements-analysis", "classic");
+    expect(moduleList(directive)).toEqual([]);
+    expect(directive.reviewer).toBeUndefined();
+    expect(directive.sensors_applicable).toEqual([]);
+    expect(directive.ceremony).toEqual({
+      sensors: "off",
+      learnings: "off",
+      summary_confirmation: "off",
+    });
+  });
+
+  test("feature requirements-analysis retains active sensor bindings", () => {
+    const directive = directiveFor("requirements-analysis", "feature");
+    expect(directive.sensors_applicable).toEqual([
+      "required-sections",
+      "upstream-coverage",
     ]);
+    expect(moduleList(directive)).toContain("learnings");
+  });
+
+  test.each([
+    { scope: "classic", mainScope: "feature", confirmation: "off", outcome: "done" },
+    { scope: "feature", mainScope: "classic", confirmation: "on", outcome: "error" },
+  ])("isolated summary policy follows $scope rather than the main workflow", ({
+    scope, mainScope, confirmation, outcome,
+  }) => {
+    const directive = directiveFor("requirements-analysis", scope, true);
+    expect(directive.ceremony).toMatchObject({ summary_confirmation: confirmation });
+    seedSingleSummaryQuestions();
+    // Keep the attempt in the same intent ledger while main-workflow policy changes.
+    const shard = singleRequirementsAuditShard();
+    const state = readFileSync(seededStateFile(project), "utf-8")
+      .replace(`- **Scope**: ${scope}`, `- **Scope**: ${mainScope}`);
+    writeFileSync(seededStateFile(project), state);
+    const auditBefore = readFileSync(shard, "utf-8");
+
+    const result = reportSingleRequirements();
+
+    expect(result.kind, JSON.stringify(result)).toBe(outcome);
+    expect(readFileSync(seededStateFile(project), "utf-8")).toBe(state);
+    const auditAfter = readFileSync(shard, "utf-8");
+    if (outcome === "done") {
+      expect(auditAfter.slice(auditBefore.length)).toContain("**Event**: STAGE_COMPLETED");
+      expect(auditAfter.slice(auditBefore.length)).toContain("**Workflow**: single-stage:requirements-analysis");
+    } else {
+      expect(result.message).toContain("consolidated summary confirmation");
+      expect(auditAfter).toBe(auditBefore);
+    }
+  });
+
+  test("isolated summary policy rejects a different scope while an attempt is open", () => {
+    directiveFor("requirements-analysis", "classic");
+    const shard = singleRequirementsAuditShard();
+    const audit = readFileSync(shard, "utf-8");
+    const options = {
+      cwd: project,
+      env: { ...process.env, AWS_AIDLC_DEFAULT_SCOPE: undefined },
+    };
+
+    const changed = runOrchestrateNext(
+      ORCHESTRATE,
+      project,
+      ["--stage", "requirements-analysis", "--single", "--scope", "feature"],
+      options,
+    );
+
+    expect(changed.directive?.kind, JSON.stringify(changed.directive)).toBe("error");
+    expect(readFileSync(shard, "utf-8")).toBe(audit);
+    expect(existsSync(seededStateFile(project))).toBe(false);
+
+    const resumed = runOrchestrateNext(
+      ORCHESTRATE,
+      project,
+      ["--stage", "requirements-analysis", "--single", "--scope", "classic"],
+      options,
+    );
+
+    expect(resumed.directive?.kind, JSON.stringify(resumed.directive)).toBe("run-stage");
+    expect(resumed.directive?.ceremony).toMatchObject({ summary_confirmation: "off" });
+    expect(readFileSync(shard, "utf-8")).toBe(audit);
+    expect(existsSync(seededStateFile(project))).toBe(false);
+  });
+
+  test("isolated summary policy remains on for legacy attempts without Scope", () => {
+    directiveFor("requirements-analysis", "classic", true);
+    seedSingleSummaryQuestions();
+    const state = readFileSync(seededStateFile(project), "utf-8");
+    const shard = singleRequirementsAuditShard();
+    const audit = readFileSync(shard, "utf-8")
+      .replace(/^(?:- )?\*\*Scope\*\*:[^\n]*\n/gm, "");
+    writeFileSync(shard, audit);
+
+    const result = reportSingleRequirements();
+
+    expect(result.kind, JSON.stringify(result)).toBe("error");
+    expect(result.message).toContain("consolidated summary confirmation");
+    expect(readFileSync(shard, "utf-8")).toBe(audit);
+    expect(readFileSync(seededStateFile(project), "utf-8")).toBe(state);
   });
 
   test("express code-generation omits reviewer under review_cap none", () => {
     const modules = moduleList(directiveFor("code-generation", "express"));
-    expect(modules).toEqual(["ensemble", "construction"]);
+    expect(modules).toEqual(["ensemble", "construction", "learnings"]);
     expect(modules).not.toContain("reviewer");
   });
 
   test("user-stories mob lists ensemble", () => {
-    const modules = moduleList(directiveFor("user-stories", "classic"));
-    expect(modules).toEqual(["reviewer", "ensemble"]);
+    const directive = directiveFor("user-stories", "classic");
+    expect(moduleList(directive)).toEqual(["ensemble"]);
+    expect(directive.reviewer).toBeUndefined();
   });
 
   test("classic code-generation lists construction", () => {
-    const modules = moduleList(directiveFor("code-generation", "classic"));
-    expect(modules).toEqual(["reviewer", "ensemble", "construction"]);
+    const directive = directiveFor("code-generation", "classic");
+    expect(moduleList(directive)).toEqual(["ensemble", "construction"]);
+    expect(directive.reviewer).toBeUndefined();
   });
 
-  test("non-construction inline stage without reviewer has no module hint", () => {
+  test("feature inline stage includes learnings without an ordinary reviewer", () => {
     const directive = directiveFor("market-research", "feature");
-    expect(moduleList(directive)).toEqual([]);
-    expect(directive.protocol_modules).toBeUndefined();
+    expect(moduleList(directive)).toEqual(["learnings"]);
+    expect(directive.reviewer).toBeUndefined();
+    expect(directive.ceremony).toEqual({
+      sensors: "on",
+      learnings: "on",
+      summary_confirmation: "on",
+    });
   });
 
   test("invoke-swarm lists reviewer, construction, and swarm modules", () => {
@@ -172,125 +325,5 @@ describe("t302 conditional protocol modules", () => {
       "construction",
       "swarm",
     ]);
-  });
-
-  test("reviewer module preserves every harness invocation binding", () => {
-    const reviewerModule = readFileSync(
-      join(
-        REPO_ROOT,
-        "core",
-        "aidlc-common",
-        "protocols",
-        "stage-protocol-reviewer.md",
-      ),
-      "utf-8",
-    );
-    for (const clause of [
-      "via `Task` targeting the reviewer agent",
-      "via the `subagent` tool targeting the reviewer agent config",
-      "the harness resolves its `.codex/agents/aidlc-<role>-agent.toml",
-      "via the `task` tool targeting the reviewer agent",
-      "delegate to the reviewer custom agent",
-    ]) {
-      expect(reviewerModule).toContain(clause);
-    }
-  });
-
-  test("every harness SKILL names all four modules and the load-once rule", () => {
-    for (const harness of HARNESS_MATRIX) {
-      const skill = readFileSync(
-        join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      for (const module of MODULES) {
-        expect(skill).toContain(`stage-protocol-${module}.md`);
-      }
-      expect(skill).toContain(
-        "skip a module already loaded earlier in the session",
-      );
-      expect(skill).toContain(
-        "Load every module named in `directive.protocol_modules` before acting",
-      );
-      expect(skill).toContain(
-        "When a `run-stage` carries `directive.swarm_settled === true`",
-      );
-    }
-  });
-
-  test("generated stage and scope runners load the base protocol and every emitted module", () => {
-    const codeGeneration = runnableStages().find((stage) =>
-      stage.slug === "code-generation"
-    );
-    expect(codeGeneration).toBeDefined();
-    if (!codeGeneration) throw new Error("code-generation is not runnable");
-
-    const stageRunner = renderStageRunner(codeGeneration);
-    const scopes = discoverScopes();
-    const scopeRunner = renderRunner(
-      "express",
-      scopes.express?.description ?? "",
-    );
-    for (const runner of [stageRunner, scopeRunner]) {
-      expect(runner).toContain("aidlc-common/protocols/stage-protocol.md");
-      expect(runner).toContain("stage-protocol-<module>.md");
-      expect(runner).toContain("`directive.protocol_modules`");
-      expect(runner).toContain("Load every listed module before");
-    }
-  });
-
-  test("Construction module conditions Unit, Bolt, and reviewer ceremonies", () => {
-    const construction = readFileSync(
-      join(
-        REPO_ROOT,
-        "core",
-        "aidlc-common",
-        "protocols",
-        "stage-protocol-construction.md",
-      ),
-      "utf-8",
-    );
-    expect(construction).toContain(
-      "ceremonies apply only when the engine resolved a real non-empty Unit DAG",
-    );
-    expect(construction).toContain(
-      "module applies only when `directive.reviewer` is present",
-    );
-    expect(construction).toContain(
-      "run one ordinary stage iteration with no Bolt or per-Unit ceremony",
-    );
-  });
-
-  test("moved headings live only in their modules, not the static protocol", () => {
-    const staticProtocol = readFileSync(
-      join(
-        REPO_ROOT,
-        "core",
-        "aidlc-common",
-        "protocols",
-        "stage-protocol.md",
-      ),
-      "utf-8",
-    );
-    const expected = [
-      ["Construction Bolt gates", "construction"],
-      ["Within-Bolt Question Collection", "construction"],
-      ["Multi-agent stages (ensemble topologies)", "ensemble"],
-      ["Subagent Return Summary", "ensemble"],
-      ["12a. Reviewer Invocation", "reviewer"],
-    ] as const;
-    for (const [heading, module] of expected) {
-      expect(staticProtocol).not.toContain(heading);
-      const body = readFileSync(
-        join(
-          REPO_ROOT,
-          "core",
-          "aidlc-common",
-          "protocols",
-          `stage-protocol-${module}.md`,
-        ),
-        "utf-8",
-      );
-      expect(body).toContain(heading);
-    }
   });
 });

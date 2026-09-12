@@ -334,14 +334,17 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     const recorded = run(STATE_TOOL, ["gate-start", STAGE], proj);
     expect(recorded.status, recorded.stderr).toBe(0);
     expect(acceptedRows(proj)).toHaveLength(1);
-    // The verb and the memory-edit observation fail closed the same way.
-    const verb = run(join(TOOLS, "aidlc-utility.ts"), ["change-control", "strict"], proj, {
+    // The config setter fails closed on the same ledger fault.
+    const beforeConfig = readFileSync(seededStateFile(proj), "utf-8");
+    const beforeConfigRows = readAuditShardEvents(proj).filter((row) => row.event === "CHANGE_CONTROL_SET");
+    const changed = run(join(TOOLS, "aidlc-utility.ts"), ["config-change", "--change-control", "strict"], proj, {
       ...TEST_ENV,
       AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t335",
     });
-    expect(verb.status).not.toBe(0);
-    expect(verb.stderr).toContain("Cannot record the Change Control change (relaxed to strict, source you)");
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Change Control**: relaxed (set by you)");
+    expect(changed.status).not.toBe(0);
+    expect(changed.stderr).toContain("injected ledger fault: t335");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeConfig);
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "CHANGE_CONTROL_SET")).toEqual(beforeConfigRows);
   });
 });
 

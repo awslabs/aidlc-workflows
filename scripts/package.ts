@@ -1178,16 +1178,15 @@ function rewriteNativeInvocations(
       (_match, verb: string) =>
         `${trustedCommand("workspace")} ${verb === "codekb-path" ? "codekb" : verb}`,
     );
-    // The per-intent Change Control flip lives under the `config` noun in the
-    // native dispatcher (`config set change-control <value>`), so its direct
-    // utility invocation is rewritten verb-aware for the same reason.
-    const changeControlUtilityPattern = new RegExp(
-      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+change-control\b`,
+    // Settings share one utility transaction; project its first setting onto
+    // the dispatcher's config noun and preserve all trailing flags/selectors.
+    const configUtilityPattern = new RegExp(
+      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+config-change\s+--(depth|test-strategy|review|change-control|sensors|learnings|summary-confirmation)\b`,
       "gi",
     );
     value = value.replace(
-      changeControlUtilityPattern,
-      () => trustedCommand("config set change-control"),
+      configUtilityPattern,
+      (_match, key: string) => trustedCommand(`config set ${key}`),
     );
     value = value.replace(toolPattern, (_match, delegate: string | undefined) =>
       delegate ? trustedCommand(delegate) : TRUSTED_COMMAND_PREFIX

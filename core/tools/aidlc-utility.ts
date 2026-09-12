@@ -80,23 +80,36 @@ import {
   assertChangeControlLedgerWritable,
   CHANGE_CONTROL_FIELD,
   CHANGE_CONTROL_VALUES,
+  CEREMONY_FIELDS,
+  CEREMONY_FLAGS,
+  CEREMONY_KEYS,
+  type CeremonyKey,
+  type CeremonyPolicy,
+  type CeremonySetting,
+  ceremonyOffClause,
+  formatCeremony,
+  parseCeremonySetting,
+  parseCeremonyStateLine,
+  resolveCeremony,
+  scopeCeremonyDefault,
+  scopeCostSummary,
   type ChangeControlMemoryDeclaration,
   changeControlMemoryStrictRefusal,
   formatChangeControl,
   memoryChangeControlDeclarations,
   parseChangeControl,
-  recordChangeControlSet,
+  parseChangeControlStateLine,
   resolveChangeControl,
   createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
-  DEFAULT_SCOPE,
+  defaultScope,
+  defaultScopeResolution,
   DEFAULT_SPACE,
   detectLeakedLocks,
   documentInputRequestFilePath,
   DOCUMENT_INPUT_REQUEST_FILE,
   docsDir,
-  envDefaultScope,
   knowledgeDir,
   agentsDir,
   emitError,
@@ -181,9 +194,6 @@ import {
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
-  resolveProjectFlag,
-  selectionAwareDefaultScope,
-  resolveDefaultScope,
   projectDescriptionFilePath,
   PROJECT_DESCRIPTION_FILE,
   scalarField,
@@ -269,7 +279,9 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const CONFIG_KEYS = ["depth", "test-strategy", "review"] as const;
+const CONFIG_KEYS = ["depth", "test-strategy", "review", "change-control", "sensors", "learnings", "summary-confirmation"] as const;
+type ConfigKey = (typeof CONFIG_KEYS)[number];
+type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 type ReviewOverride = "adversarial" | "advisory" | "none";
 
 function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
@@ -323,6 +335,72 @@ function applyReviewOverride(
   return { content, oldReview, storedReview, changed };
 }
 
+function parseCeremonyOverrides(flags: Record<string, string>): Partial<CeremonyPolicy> {
+  const overrides: Partial<CeremonyPolicy> = {};
+  for (const key of CEREMONY_KEYS) {
+    const raw = flags[CEREMONY_FLAGS[key].slice(2)];
+    if (raw === undefined) continue;
+    const value = parseCeremonySetting(raw);
+    if (value === null) die(`${CEREMONY_FLAGS[key]} requires <on|off>; received "${raw}".`);
+    overrides[key] = value;
+  }
+  return overrides;
+}
+
+function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySetting, source: string): string {
+  const field = CEREMONY_FIELDS[key];
+  if (getField(content, field) === null) {
+    const beforeInsert = content;
+    const previousFields = CEREMONY_KEYS.slice(0, CEREMONY_KEYS.indexOf(key))
+      .reverse().map((previous) => CEREMONY_FIELDS[previous]);
+    for (const anchor of [...previousFields, "Change Control", "Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${field}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${field}**:\n`;
+  }
+  return setField(content, field, formatCeremony(value, source));
+}
+
+function intentSettingsFromFlags(flags: Record<string, string>): IntentSettingsRequest {
+  const requested: IntentSettingsRequest = {};
+  for (const key of CONFIG_KEYS) {
+    if (flags[key] !== undefined) requested[key] = { value: flags[key], source: "you" };
+  }
+  return requested;
+}
+
+function validateIntentSettingsArgs(
+  command: "config-change" | "scope-change",
+  rawArgs: string[],
+  positional: string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const allowed = new Set<string>([...CONFIG_KEYS, "intent", "space", "project-dir"]);
+  if (command === "scope-change") allowed.add("scope");
+  // Inspect option names before the parser's object assignment as well, so
+  // even an unknown property-like name cannot disappear from validation.
+  for (const arg of rawArgs) {
+    if (arg === "--") break;
+    if (!arg.startsWith("--")) continue;
+    const name = arg.slice(2).split("=", 1)[0];
+    if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
+  }
+  for (const name of allowed) {
+    if (missingValueFlags.has(name) || (flags[name] !== undefined && flags[name].trim().length === 0)) {
+      die(`${command} --${name} requires a nonblank value.`);
+    }
+  }
+  if (positional.length !== 1) die(`${command} does not accept positional argument "${positional[1]}".`);
+  if (command === "config-change" && !CONFIG_KEYS.some((key) => flags[key] !== undefined)) {
+    die(`config-change requires at least one setting: ${CONFIG_KEYS.map((key) => `--${key}`).join(", ")}.`);
+  }
+}
+
 // These workspace transactions can legitimately queue behind a full plugin
 // compose (compile + runner regeneration), so they share its ~60s lock budget.
 const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
@@ -334,6 +412,9 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "test-strategy",
   "review",
   "change-control",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
   "repos",
   "space",
   "project-dir",
@@ -466,8 +547,8 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review)
-  config set <key> <value>  Change active workflow config (depth, test-strategy, review)
+  config get <key>  Show active workflow config (depth, test-strategy, review, change-control, sensors, learnings, summary-confirmation)
+  config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
@@ -490,6 +571,9 @@ Utilities:
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
   --change-control <value>  Set what an input change after an approval does for this piece of work (strict, relaxed)
+  --sensors <on|off>  Enable or disable stage sensors for this intent
+  --learnings <on|off>  Enable or disable the learnings ritual for this intent
+  --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
   --version         Show the framework version
   --help            Show this help message
 
@@ -501,7 +585,7 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show depth, test strategy, and review override
+  /aidlc config list                         Show all seven workflow settings
   /aidlc plugin list                         Show installed plugin selection
   /aidlc plugin validate                     Validate the plugin in the current directory
   /aidlc plugin build claude                 Build its Claude projection
@@ -517,8 +601,8 @@ Examples:
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
   const mapping = loadScopeMapping();
-  const defaultResolution = selectionAwareDefaultScope();
-  const defaultScope = defaultResolution.error ? "" : defaultResolution.scope;
+  const defaultResolution = defaultScopeResolution();
+  const effectiveDefaultScope = defaultResolution.error ? "" : defaultResolution.scope;
   const scopeLines = [...validScopes()].map((name) => {
     const def = mapping[name];
     const execute = Object.values(def.stages).filter((v) => v === "EXECUTE")
@@ -529,7 +613,7 @@ export function renderHelpText(): string {
       ? `, ${def.testStrategy.toLowerCase()} test strategy`
       : "";
     const desc = def.description ? ` - ${def.description}` : "";
-    const defaultMarker = name === defaultScope ? " (default)" : "";
+    const defaultMarker = name === effectiveDefaultScope ? " (default)" : "";
     const countStr =
       execute === total ? `All ${total} stages` : `${execute} of ${total} stages`;
     return `  ${name.padEnd(18)}${countStr}, ${depth} depth${ts}${defaultMarker}${desc}`;
@@ -1594,6 +1678,10 @@ To get started:
   } catch (error) {
     changeControlDisplay = `unavailable (${errorMessage(error)})`;
   }
+  const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
+    const resolution = resolveCeremony(key, scope, content);
+    return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, resolution.source)}`;
+  }).join("\n");
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
@@ -1753,6 +1841,7 @@ Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
 Change Control: ${changeControlDisplay}
+${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
 Phase Progress:
@@ -3224,17 +3313,16 @@ export async function collectDoctorReport(
     });
   }
 
-  // 4a. AWS_AIDLC_DEFAULT_SCOPE env var — project-default scope from settings.json env.
-  // Only observable inside a Claude Code session (where settings.json env is exposed
-  // to Bash invocations). When doctor is invoked directly via bun, the env is unset
-  // and we report "unset — no project default" as a pass.
-  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
-  if (envScope === "") {
+  // 4a. Project-default scope — real env overrides the recorded project flag.
+  // The framework fallback is not a configured project default.
+  const defaultResolution = defaultScopeResolution();
+  const envScope = defaultResolution.scope;
+  if (defaultResolution.source !== "env") {
     results.push({
       pass: true,
       label: "AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)",
     });
-  } else if (validScopes().has(envScope)) {
+  } else if (!defaultResolution.error && validScopes().has(envScope)) {
     results.push({
       pass: true,
       label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)`,
@@ -5850,13 +5938,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
 
-  // Default when --scope is omitted: AWS_AIDLC_DEFAULT_SCOPE overrides, then
-  // the framework's single hard-coded fallback (DEFAULT_SCOPE, "classic");
-  // selection-aware so a plugin-only install (where the core default is
-  // deselected) resolves to its nominated freeform default instead of
-  // crashing with "Unknown scope".
-  const scope = flags.scope || envDefaultScope() ||
-    resolveDefaultScope(DEFAULT_SCOPE);
+  // Explicit --scope wins over the centrally resolved project default.
+  const scope = flags.scope || defaultScope();
   if (!validScopes().has(scope)) {
     die(
       `Unknown scope: "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
@@ -5898,6 +5981,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       `Unknown Change Control value: "${flags["change-control"]}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
     );
   }
+  const requestedCeremony = parseCeremonyOverrides(flags);
   // The creation target. An explicit --space is the one selector creation takes:
   // the intent is created under that space, that space's memory layers govern
   // its Change Control, and the refusal rows land under that space (main seeds
@@ -6180,6 +6264,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       created.dirName,
       created.space,
       effectiveChangeControl,
+      requestedCeremony,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -6197,6 +6282,7 @@ function handleIntentCreateStateBuild(
   createdDir: string,
   createdSpace: string,
   effectiveChangeControl: string,
+  requestedCeremony: Partial<CeremonyPolicy>,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -6410,6 +6496,7 @@ function handleIntentCreateStateBuild(
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 - **Change Control**: ${effectiveChangeControl}
+${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
 
 ## Workspace State
 - **Project Root**: .
@@ -7758,264 +7845,183 @@ function determineFirstPostInitStage(
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
-
-  const depthOverride = flags.depth;
-  if (depthOverride && !VALID_DEPTHS[depthOverride.toLowerCase()]) {
-    die(`Unknown depth: "${depthOverride}". Valid depths: minimal, standard, comprehensive.`);
-  }
-
-  const testStrategyOverride = flags["test-strategy"];
-  if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
-    die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
-  }
-  const reviewOverride = parseReviewOverride(flags.review);
-
-  const selection = resolveWorkflowSelection(projectDir, {
-    intent: flags.intent,
-    space: flags.space,
-  });
+  const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  const sp = stateFilePath(projectDir, intent, space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
-
-  const scopeMapping = loadScopeMapping();
-  const newScopeDef = scopeMapping[newScope];
-  if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
-
-  const contentBefore = readStateFile(projectDir, intent, space);
-  const before = resolveChangeControl(projectDir, contentBefore, {
-    selection: { intent, space },
-  });
-  let content = contentBefore;
-  // AUTONOMY GUARD (the recompose guard's twin, same rationale): scope-change
-  // flips stage EXECUTE/SKIP suffixes exactly like recompose does, so an
-  // unattended autonomous Construction run must not have its plan re-shaped
-  // through this verb either - there is no human at the gate to approve the
-  // new shape. Guard placed before the same-scope early exit (fail-fast, the
-  // recompose posture): under autonomy even a no-op call is refused, so the
-  // conductor learns the rule on first contact rather than on the first
-  // differing scope. Uses the exported isAutonomousMode predicate per its
-  // contract (new gate sites use the helper; only pre-existing open-coded
-  // sites are grandfathered), so this site cannot drift from the others.
-  if (isAutonomousMode(content)) {
-    die(
-      "Cannot change scope while Construction is running unattended (Construction Autonomy Mode " +
-        "is autonomous). Changing the plan needs someone to approve it, and nobody is being asked " +
-        "right now. Either switch back to stopping for approval at each Bolt " +
-        "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then change scope.",
-    );
-  }
-  const oldScope = getField(content, "Scope");
-  if (!oldScope) die("Cannot read current Scope from state file.");
-
-  if (oldScope === newScope) {
-    if (depthOverride || testStrategyOverride || reviewOverride !== undefined) {
-      handleConfigChange(projectDir, flags);
-      return;
-    }
-    process.stdout.write(`Scope is already ${newScope}\n`);
-    return;
-  }
-
-  const graph = loadStageGraph();
-  const projectType = getField(content, "Project Type") || "Greenfield";
-
-  // Compute adjusted mapping (greenfield reverse-engineering adjustment)
-  const adjustedMapping = { ...newScopeDef.stages };
-  if (projectType.toLowerCase() === "greenfield") {
-    if (adjustedMapping["reverse-engineering"] === "EXECUTE") {
-      adjustedMapping["reverse-engineering"] = "SKIP";
-    }
-  }
-
-  // Compute new execute/skip lists
-  const executeStages: string[] = [];
-  const skipStages: string[] = [];
-  for (const stage of graph) {
-    const action = adjustedMapping[stage.slug] || "SKIP";
-    if (action === "EXECUTE") {
-      executeStages.push(stage.number);
-    } else {
-      let reason = stage.slug;
-      if (stage.slug === "reverse-engineering" && projectType.toLowerCase() === "greenfield" &&
-          newScopeDef.stages["reverse-engineering"] === "EXECUTE") {
-        reason += " — greenfield";
-      }
-      skipStages.push(`${stage.number} (${reason})`);
-    }
-  }
-
-  // Parse existing checkboxes to preserve states
-  const existingCheckboxes = parseCheckboxes(content);
-  const existingMap = new Map(existingCheckboxes.map(c => [c.slug, c]));
-
-  // Rebuild Stage Progress section
-  const phaseMap: Record<string, typeof graph> = {};
-  for (const stage of graph) {
-    if (!phaseMap[stage.phase]) phaseMap[stage.phase] = [];
-    phaseMap[stage.phase].push(stage);
-  }
-
-  const phaseHeaders: Record<string, string> = {
-    initialization: "INITIALIZATION PHASE",
-    ideation: "IDEATION PHASE",
-    inception: "INCEPTION PHASE",
-    construction: "CONSTRUCTION PHASE",
-    operation: "OPERATION PHASE",
-  };
-
-  let newStageProgress = "";
-  for (const phase of PHASES) {
-    const stages = phaseMap[phase] || [];
-    newStageProgress += `\n### ${phaseHeaders[phase]}\n`;
-    if (phase === "construction") {
-      // Preserve existing "Per unit:" line
-      const perUnitMatch = content.match(/^Per unit:.*$/m);
-      if (perUnitMatch) {
-        newStageProgress += `${perUnitMatch[0]}\n`;
-      }
-    }
-    for (const stage of stages) {
-      const action = adjustedMapping[stage.slug] || "SKIP";
-      const existing = existingMap.get(stage.slug);
-      // Preserve existing checkbox state, default to [ ] if not found
-      const marker = existing
-        ? `[${existing.state === "completed" ? "x" : existing.state === "in-progress" ? "-" : existing.state === "skipped" ? "S" : " "}]`
-        : "[ ]";
-      const suffix = action === "EXECUTE" ? "EXECUTE" : "SKIP";
-      newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
-    }
-  }
-
-  // Replace Stage Progress section in content
-  const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
-  const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [x] completed, [S] skipped via --stage/--phase jump -->\n";
-  content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
-
-  // Update fields
-  content = setField(content, "Scope", newScope);
-  content = setField(content, "Stages to Execute", executeStages.join(", "));
-  content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
-  const effectiveDepth = depthOverride
-    ? VALID_DEPTHS[depthOverride.toLowerCase()]
-    : newScopeDef.depth;
-  content = setField(content, "Depth", effectiveDepth);
-  const effectiveTestStrategy = testStrategyOverride
-    ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
-    : (newScopeDef.testStrategy ?? effectiveDepth);
-  content = setField(content, "Test Strategy", effectiveTestStrategy);
-  // A Change Control line the scope supplied follows the new scope; a value
-  // the human set, a legacy intent with no line, or a memory override stays.
-  const scopeSuppliedChangeControl = before.intent?.source.startsWith("scope ") === true;
-  const scopeChangeControl = newScopeDef.changeControl ?? "strict";
-  if (scopeSuppliedChangeControl) {
-    content = setField(
-      content,
-      CHANGE_CONTROL_FIELD,
-      formatChangeControl(scopeChangeControl, `scope ${newScope}`),
-    );
-  }
-  const reviewUpdate = applyReviewOverride(content, reviewOverride);
-  content = reviewUpdate.content;
-  content = setField(content, "Total Stages", String(executeStages.length));
-
-  // Recount completed based on actual [x] count of in-scope EXECUTE stages
-  const updatedCheckboxes = parseCheckboxes(content);
-  const executeSlugs = new Set(
-    graph.filter(s => (adjustedMapping[s.slug] || "SKIP") === "EXECUTE").map(s => s.slug)
-  );
-  const completedCount = updatedCheckboxes.filter(
-    c => c.state === "completed" && executeSlugs.has(c.slug)
-  ).length;
-  content = setField(content, "Completed", String(completedCount));
-
-  // Re-derive the not-yet-reached Phase Progress rows against the new plan:
-  // a phase the new scope leaves without EXECUTE stages reads Skipped, one it
-  // (re-)includes reads Pending. Verified/Active rows record history the
-  // scope change does not rewrite (checkbox states are preserved above for
-  // the same reason), so they are left untouched.
-  for (const phase of PHASES) {
-    const label = phase.charAt(0).toUpperCase() + phase.slice(1);
-    const row = getField(content, label);
-    if (row !== "Pending" && row !== "Skipped") continue;
-    const hasExecute = graph.some(
-      (s) => s.phase === phase && (adjustedMapping[s.slug] || "SKIP") === "EXECUTE"
-    );
-    content = setPhaseProgress(content, phase, hasExecute ? "Pending" : "Skipped");
-  }
-
-  // Update Last Updated timestamp
-  content = setField(content, "Last Updated", isoTimestamp());
-
-  const after = resolveChangeControl(projectDir, content, {
-    selection: { intent, space },
-  });
-  // Build every audit row before mutation. The batch lands in one append
-  // before the state write under the same lock, so append failure leaves both untouched.
-  const oldScopeDef = scopeMapping[oldScope];
-  const oldExecuteCount = oldScopeDef
-    ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
-    : 0;
-  const stageDelta = executeStages.length - oldExecuteCount;
-  const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
-
-  // Ceremony preview for the switch: gate count from the effective grid (the
-  // reverse-engineering greenfield adjustment already applied) so the same
-  // disclosure exists on a scope switch as on the cold-start confirm.
-  const gates = gridCostSummary(
-    adjustedMapping as Record<string, "EXECUTE" | "SKIP">,
-  ).gates;
-  const auditEntries: AuditEntryInput[] = [{
-    eventType: "SCOPE_CHANGED",
-    fields: {
-      "Old Scope": oldScope,
-      "New Scope": newScope,
-      "Stage Count Delta": deltaStr,
-      "Stages in Scope": String(executeStages.length),
-      "Approval Gates": String(gates),
-      Depth: effectiveDepth,
-    },
-  }];
-  if (reviewUpdate.changed) {
-    auditEntries.push({
-      eventType: "REVIEW_CLASS_CHANGED",
-      fields: {
-        "Old Override": reviewUpdate.oldReview || "none set",
-        "New Override": reviewUpdate.storedReview || "cleared (stage defaults apply)",
-      },
-    });
-  }
-  if (before.value !== after.value) {
-    auditEntries.push({
-      eventType: "CHANGE_CONTROL_SET",
-      fields: {
-        "Old Value": before.value,
-        "New Value": after.value,
-        Source: `scope ${newScope}`,
-      },
-    });
-  }
   withAuditLock(projectDir, () => {
-    try {
-      if (before.value !== after.value) assertChangeControlLedgerWritable();
-      appendAuditEntries(auditEntries, projectDir, intent, space);
-    } catch (error) {
-      throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
+    const contentBefore = readConfigState(projectDir, { intent, space });
+    const scopeMapping = loadScopeMapping();
+    const newScopeDef = scopeMapping[newScope];
+    if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
+    // Like recompose, reshaping an unattended Construction plan requires a
+    // human. Keep this guard ahead of the same-scope path, including no-ops.
+    if (isAutonomousMode(contentBefore)) {
+      die(
+        "Cannot change scope while Construction is running unattended (Construction Autonomy Mode " +
+          "is autonomous). Changing the plan needs someone to approve it, and nobody is being asked " +
+          "right now. Either switch back to stopping for approval at each Bolt " +
+          "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then change scope.",
+      );
     }
-    writeStateFile(projectDir, content, intent, space);
-  }, intent, space);
+    const oldScope = getField(contentBefore, "Scope");
+    if (!oldScope) die("Cannot read current Scope from state file.");
+    const requested = intentSettingsFromFlags(flags);
+    if (oldScope !== newScope) {
+      const source = `scope ${newScope}`;
+      requested.depth ??= { value: newScopeDef.depth, source };
+      requested["test-strategy"] ??= { value: newScopeDef.testStrategy ?? requested.depth.value, source };
+      // Only scope-owned policy fields follow defaults. Human overrides and
+      // absent legacy fields remain untouched unless explicitly requested.
+      const previousCC = parseChangeControlStateLine(getField(contentBefore, CHANGE_CONTROL_FIELD));
+      if (previousCC?.source.startsWith("scope ")) {
+        requested["change-control"] ??= { value: newScopeDef.changeControl ?? "strict", source };
+      }
+      for (const key of CEREMONY_KEYS) {
+        const previous = parseCeremonyStateLine(getField(contentBefore, CEREMONY_FIELDS[key]));
+        if (previous?.source.startsWith("scope ")) {
+          requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey] ??= { value: scopeCeremonyDefault(key, newScope), source };
+        }
+      }
+    }
+    // Apply against the original scope so old effective values and sources
+    // in the audit still describe the state before this transaction.
+    const update = applyIntentSettings(projectDir, contentBefore, requested, { intent, space });
+    let content = update.content;
+    const auditEntries = update.audit;
+    let outputLines = update.lines;
+    if (oldScope === newScope) {
+      if (outputLines.length === 0) outputLines = [`Scope is already ${newScope}`];
+    } else {
+      const graph = loadStageGraph();
+      const projectType = getField(content, "Project Type") || "Greenfield";
 
-  process.stdout.write(
-    `Scope changed: ${oldScope} -> ${newScope}
-Stages in scope: ${executeStages.length} (${deltaStr})
-Approval gates: ${gates}
-Depth: ${effectiveDepth}
-${reviewOverride === undefined
-      ? ""
-      : `Review override: ${reviewUpdate.storedReview || "adversarial (stage defaults)"}\n`}Completed: ${completedCount}/${executeStages.length}
-`
-  );
+      // Compute adjusted mapping (greenfield reverse-engineering adjustment).
+      const adjustedMapping = { ...newScopeDef.stages };
+      if (projectType.toLowerCase() === "greenfield" && adjustedMapping["reverse-engineering"] === "EXECUTE") {
+        adjustedMapping["reverse-engineering"] = "SKIP";
+      }
+
+      const executeStages: string[] = [];
+      const skipStages: string[] = [];
+      for (const stage of graph) {
+        const action = adjustedMapping[stage.slug] || "SKIP";
+        if (action === "EXECUTE") {
+          executeStages.push(stage.number);
+        } else {
+          let reason = stage.slug;
+          if (stage.slug === "reverse-engineering" && projectType.toLowerCase() === "greenfield" &&
+              newScopeDef.stages["reverse-engineering"] === "EXECUTE") {
+            reason += " — greenfield";
+          }
+          skipStages.push(`${stage.number} (${reason})`);
+        }
+      }
+
+      // Preserve checkbox history while rebuilding scope-owned plan suffixes.
+      const existingCheckboxes = parseCheckboxes(content);
+      const existingMap = new Map(existingCheckboxes.map(c => [c.slug, c]));
+      const phaseMap: Record<string, typeof graph> = {};
+      for (const stage of graph) {
+        if (!phaseMap[stage.phase]) phaseMap[stage.phase] = [];
+        phaseMap[stage.phase].push(stage);
+      }
+      const phaseHeaders: Record<string, string> = {
+        initialization: "INITIALIZATION PHASE",
+        ideation: "IDEATION PHASE",
+        inception: "INCEPTION PHASE",
+        construction: "CONSTRUCTION PHASE",
+        operation: "OPERATION PHASE",
+      };
+      let newStageProgress = "";
+      for (const phase of PHASES) {
+        const stages = phaseMap[phase] || [];
+        newStageProgress += `\n### ${phaseHeaders[phase]}\n`;
+        if (phase === "construction") {
+          const perUnitMatch = content.match(/^Per unit:.*$/m);
+          if (perUnitMatch) newStageProgress += `${perUnitMatch[0]}\n`;
+        }
+        for (const stage of stages) {
+          const action = adjustedMapping[stage.slug] || "SKIP";
+          const existing = existingMap.get(stage.slug);
+          const marker = existing
+            ? `[${existing.state === "completed" ? "x" : existing.state === "in-progress" ? "-" : existing.state === "skipped" ? "S" : " "}]`
+            : "[ ]";
+          const suffix = action === "EXECUTE" ? "EXECUTE" : "SKIP";
+          newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
+        }
+      }
+      const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
+      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [x] completed, [S] skipped via --stage/--phase jump -->\n";
+      content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
+      content = setField(content, "Scope", newScope);
+      content = setField(content, "Stages to Execute", executeStages.join(", "));
+      content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
+      content = setField(content, "Total Stages", String(executeStages.length));
+
+      const updatedCheckboxes = parseCheckboxes(content);
+      const executeSlugs = new Set(
+        graph.filter(s => (adjustedMapping[s.slug] || "SKIP") === "EXECUTE").map(s => s.slug)
+      );
+      const completedCount = updatedCheckboxes.filter(
+        c => c.state === "completed" && executeSlugs.has(c.slug)
+      ).length;
+      content = setField(content, "Completed", String(completedCount));
+
+      // Re-derive only not-yet-reached phases; Active/Verified rows are history.
+      for (const phase of PHASES) {
+        const label = phase.charAt(0).toUpperCase() + phase.slice(1);
+        const row = getField(content, label);
+        if (row !== "Pending" && row !== "Skipped") continue;
+        const hasExecute = graph.some(
+          (s) => s.phase === phase && (adjustedMapping[s.slug] || "SKIP") === "EXECUTE"
+        );
+        content = setPhaseProgress(content, phase, hasExecute ? "Pending" : "Skipped");
+      }
+
+      const oldScopeDef = scopeMapping[oldScope];
+      const oldExecuteCount = oldScopeDef
+        ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
+        : 0;
+      const stageDelta = executeStages.length - oldExecuteCount;
+      const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
+      const summary = {
+        ...gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">),
+        off: scopeCostSummary(newScope)?.off ?? [],
+      };
+      const gates = summary.gates;
+      const effectiveDepth = getField(content, "Depth") || "unknown";
+      auditEntries.unshift({
+        eventType: "SCOPE_CHANGED",
+        fields: {
+          "Old Scope": oldScope,
+          "New Scope": newScope,
+          "Stage Count Delta": deltaStr,
+          "Stages in Scope": String(executeStages.length),
+          "Approval Gates": String(gates),
+          Depth: effectiveDepth,
+        },
+      });
+      outputLines = [
+        `Scope changed: ${oldScope} -> ${newScope}`,
+        `Stages in scope: ${executeStages.length} (${deltaStr})`,
+        `Approval gates: ${gates}${ceremonyOffClause(summary)}`,
+        `Depth: ${effectiveDepth}`,
+        ...(flags.review === undefined ? [] : [`Review override: ${getField(content, "Review Override") || "adversarial (stage defaults)"}`]),
+        `Completed: ${completedCount}/${executeStages.length}`,
+        ...update.lines,
+      ];
+    }
+    if (content !== contentBefore) {
+      try {
+        if (auditEntries.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
+        appendAuditEntries(auditEntries, projectDir, intent, space);
+      } catch (error) {
+        throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
+      }
+      writeStateFile(projectDir, setField(content, "Last Updated", isoTimestamp()), intent, space);
+    }
+    process.stdout.write(`${outputLines.join("\n")}\n`);
+  }, intent, space);
 }
 
 // ---------------------------------------------------------------------------
@@ -8272,17 +8278,36 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 // config get/list/set - read or update active workflow config
 // ---------------------------------------------------------------------------
 
-function configFieldForKey(key: string): "Depth" | "Test Strategy" | "Review Override" | null {
+function configFieldForKey(key: string): string | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
-  return null;
+  if (key === "change-control") return CHANGE_CONTROL_FIELD;
+  const ceremonyKey = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
+  return ceremonyKey === undefined ? null : CEREMONY_FIELDS[ceremonyKey];
 }
 
-function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy" | "Review Override"): string {
+function readConfigState(projectDir: string, flags: { intent?: string; space?: string }): string {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
-  const content = readStateFile(projectDir, flags.intent, flags.space);
+  return readStateFile(projectDir, flags.intent, flags.space);
+}
+
+function readConfigField(
+  projectDir: string,
+  content: string,
+  field: string,
+  selection: { intent?: string; space?: string },
+): string {
+  if (field === CHANGE_CONTROL_FIELD) {
+    const resolution = resolveChangeControl(projectDir, content, { selection });
+    return formatChangeControl(resolution.value, resolution.source);
+  }
+  const ceremonyKey = CEREMONY_KEYS.find((key) => CEREMONY_FIELDS[key] === field);
+  if (ceremonyKey !== undefined) {
+    const resolution = resolveCeremony(ceremonyKey, getField(content, "Scope"), content);
+    return formatCeremony(resolution.value, resolution.source);
+  }
   return getField(content, field) || "";
 }
 
@@ -8290,188 +8315,180 @@ function handleConfigGet(projectDir: string, positional: string[], flags: Record
   const key = positional[1] ?? "";
   const field = configFieldForKey(key);
   if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_KEYS.join(", ")}.`);
-  process.stdout.write(`${readConfigField(projectDir, flags, field)}\n`);
+  process.stdout.write(`${readConfigField(projectDir, readConfigState(projectDir, flags), field, flags)}\n`);
 }
 
 function handleConfigList(projectDir: string, flags: Record<string, string>): void {
-  const depth = readConfigField(projectDir, flags, "Depth");
-  const testStrategy = readConfigField(projectDir, flags, "Test Strategy");
-  const review = readConfigField(projectDir, flags, "Review Override");
+  const content = readConfigState(projectDir, flags);
+  const values = Object.fromEntries(CONFIG_KEYS.map((key) => [key, readConfigField(projectDir, content, configFieldForKey(key)!, flags)]));
   if (flags.json === "true") {
-    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy, review })}\n`);
+    process.stdout.write(`${JSON.stringify(values)}\n`);
     return;
   }
-  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\nreview: ${review}\n`);
+  process.stdout.write(`${Object.entries(values).map(([key, value]) => `${key}: ${value}`).join("\n")}\n`);
+}
+
+// Pure state transformation plus audit/output preparation. Both mutation verbs
+// call this under their intent lock and commit its entire audit before state.
+function applyIntentSettings(
+  projectDir: string,
+  content: string,
+  requested: IntentSettingsRequest,
+  selection: { intent?: string; space?: string },
+): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+  const rawDepth = requested.depth?.value;
+  const rawStrategy = requested["test-strategy"]?.value;
+  const rawReview = requested.review?.value;
+  const rawChangeControl = requested["change-control"]?.value;
+  let depth: string | undefined;
+  if (rawDepth !== undefined) {
+    const key = rawDepth.toLowerCase();
+    if (!Object.hasOwn(VALID_DEPTHS, key)) die(`Unknown depth: "${rawDepth}". Valid depths: minimal, standard, comprehensive.`);
+    depth = VALID_DEPTHS[key];
+  }
+  let strategy: string | undefined;
+  if (rawStrategy !== undefined) {
+    const key = rawStrategy.toLowerCase();
+    if (!Object.hasOwn(VALID_TEST_STRATEGIES, key)) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
+    strategy = VALID_TEST_STRATEGIES[key];
+  }
+  const review = parseReviewOverride(rawReview);
+  if (rawReview !== undefined && review === undefined) {
+    die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
+  }
+  const changeControl = parseChangeControl(rawChangeControl);
+  if (rawChangeControl !== undefined && changeControl === null) {
+    die(`Unknown Change Control value: "${rawChangeControl}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`);
+  }
+  const ceremonies: Partial<CeremonyPolicy> = {};
+  for (const key of CEREMONY_KEYS) {
+    const raw = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.value;
+    if (raw === undefined) continue;
+    const value = parseCeremonySetting(raw);
+    if (value === null) die(`${CEREMONY_FLAGS[key]} requires <on|off>; received "${raw}".`);
+    ceremonies[key] = value;
+  }
+
+  // Validate every requested value before policy can reject the transaction.
+  // Explicit CC requests can repair a malformed saved line; other updates may
+  // not quietly carry an invalid line into a new scope or configuration.
+  const ccRequest = requested["change-control"];
+  const cc = resolveChangeControl(projectDir, content, {
+    tolerateInvalidState: ccRequest?.source === "you",
+    selection,
+  });
+  if (ccRequest?.source === "you" && changeControl === "relaxed" && cc.memoryStrict !== null) {
+    die(changeControlMemoryStrictRefusal(cc.memoryStrict));
+  }
+
+  const audit: AuditEntryInput[] = [];
+  const lines: string[] = [];
+  if (depth !== undefined) {
+    const previous = getField(content, "Depth");
+    const updated = previous === depth ? content : setField(content, "Depth", depth);
+    const changed = updated !== content;
+    if (changed) {
+      content = updated;
+      audit.push({ eventType: "DEPTH_CHANGED", fields: { "Old Depth": previous || "unknown", "New Depth": depth } });
+    }
+    lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
+  }
+  if (strategy !== undefined) {
+    const previous = getField(content, "Test Strategy");
+    const updated = previous === strategy ? content : setField(content, "Test Strategy", strategy);
+    const changed = updated !== content;
+    if (changed) {
+      content = updated;
+      audit.push({ eventType: "TEST_STRATEGY_CHANGED", fields: { "Old Strategy": previous || "unknown", "New Strategy": strategy } });
+    }
+    lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
+  }
+  if (review !== undefined) {
+    const update = applyReviewOverride(content, review);
+    content = update.content;
+    if (update.changed) {
+      audit.push({
+        eventType: "REVIEW_CLASS_CHANGED",
+        fields: {
+          "Old Override": update.oldReview || "none set",
+          "New Override": update.storedReview || "cleared (stage defaults apply)",
+        },
+      });
+    }
+    const display = update.storedReview === "" ? "adversarial (stage defaults)" : update.storedReview;
+    lines.push(update.changed
+      ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
+      : `Review override is already ${display}`);
+  }
+  // A memory-owned policy remains untouched on an implicit scope switch.
+  // Explicit strict is still recordable; explicit relaxed was refused above.
+  if (ccRequest !== undefined && changeControl !== null && (ccRequest.source === "you" || cc.memoryStrict === null)) {
+    const previous = getField(content, CHANGE_CONTROL_FIELD);
+    const line = formatChangeControl(changeControl, ccRequest.source);
+    if (previous === line) {
+      lines.push(`Change Control is already ${line}`);
+    } else {
+      if (previous === null) {
+        const beforeInsert = content;
+        for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
+          content = content.replace(
+            new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+            `$1\n- **${CHANGE_CONTROL_FIELD}**:`,
+          );
+          if (content !== beforeInsert) break;
+        }
+        if (content === beforeInsert) content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
+      }
+      content = setField(content, CHANGE_CONTROL_FIELD, line);
+      const oldValue = cc.intent === null && cc.rawStateValue !== null ? cc.rawStateValue : cc.value;
+      audit.push({
+        eventType: "CHANGE_CONTROL_SET",
+        fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
+      });
+      const oldDisplay = cc.intent === null && cc.rawStateValue !== null
+        ? cc.rawStateValue : formatChangeControl(cc.value, cc.source);
+      lines.push(`Change Control changed: ${oldDisplay} to ${line}`);
+    }
+  }
+  for (const key of CEREMONY_KEYS) {
+    const value = ceremonies[key];
+    if (value === undefined) continue;
+    const source = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    const field = CEREMONY_FIELDS[key];
+    const previous = getField(content, field);
+    const line = formatCeremony(value, source);
+    if (previous === line) {
+      lines.push(`${field} is already ${line}`);
+      continue;
+    }
+    const resolution = resolveCeremony(key, getField(content, "Scope"), content);
+    content = setCeremonyField(content, key, value, source);
+    const oldValue = resolution.intent === null && resolution.rawStateValue !== null
+      ? resolution.rawStateValue : resolution.value;
+    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
+      ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
+    lines.push(`${field} changed: ${oldDisplay} to ${line}`);
+  }
+  return { content, audit, lines };
 }
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
-  const rawDepth = flags.depth;
-  const rawStrategy = flags["test-strategy"];
-  const rawReview = flags.review;
-
-  if (!rawDepth && !rawStrategy && !rawReview) {
-    die("config-change requires --depth, --test-strategy, and/or --review");
-  }
-
-  let newDepth: string | undefined;
-  if (rawDepth) {
-    newDepth = VALID_DEPTHS[rawDepth.toLowerCase()];
-    if (!newDepth) die(`Unknown depth: "${rawDepth}". Valid depths: minimal, standard, comprehensive.`);
-  }
-
-  let newStrategy: string | undefined;
-  if (rawStrategy) {
-    newStrategy = VALID_TEST_STRATEGIES[rawStrategy.toLowerCase()];
-    if (!newStrategy) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
-  }
-
-  // --review sets the per-run Review Override (a CEILING on the effective
-  // review class, low-wins against stage declaration and scope review_cap).
-  const newReview = parseReviewOverride(rawReview);
-
-  const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
-
-  let content = readStateFile(projectDir, flags.intent, flags.space);
-  const oldDepth = getField(content, "Depth");
-  const oldStrategy = getField(content, "Test Strategy");
-
-  // Inline existence checks (instead of caching to a boolean) so TS narrows
-  // newDepth / newStrategy at each use site — avoids non-null assertions.
-  if (newDepth !== undefined && newDepth !== oldDepth) {
-    content = setField(content, "Depth", newDepth);
-  }
-  if (newStrategy !== undefined && newStrategy !== oldStrategy) {
-    content = setField(content, "Test Strategy", newStrategy);
-  }
-  const reviewUpdate = applyReviewOverride(content, newReview);
-  content = reviewUpdate.content;
-  const { oldReview, storedReview } = reviewUpdate;
-  const depthChanging = newDepth !== undefined && newDepth !== oldDepth;
-  const strategyChanging =
-    newStrategy !== undefined && newStrategy !== oldStrategy;
-  const reviewChanging = reviewUpdate.changed;
-  if (depthChanging || strategyChanging || reviewChanging) {
-    content = setField(content, "Last Updated", isoTimestamp());
-    writeStateFile(projectDir, content, flags.intent, flags.space);
-  }
-
-  if (newDepth !== undefined && newDepth !== oldDepth) {
-    appendAuditEvent(projectDir, "DEPTH_CHANGED", {
-      "Old Depth": oldDepth || "unknown",
-      "New Depth": newDepth,
-    });
-  }
-  if (newStrategy !== undefined && newStrategy !== oldStrategy) {
-    appendAuditEvent(projectDir, "TEST_STRATEGY_CHANGED", {
-      "Old Strategy": oldStrategy || "unknown",
-      "New Strategy": newStrategy,
-    });
-  }
-  if (reviewChanging) {
-    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
-      "Old Override": oldReview || "none set",
-      "New Override": storedReview || "cleared (stage defaults apply)",
-    });
-  }
-
-  if (newDepth !== undefined) {
-    process.stdout.write(
-      depthChanging
-        ? `Depth changed: ${oldDepth} -> ${newDepth}\n`
-        : `Depth is already ${newDepth}\n`
-    );
-  }
-  if (newStrategy !== undefined) {
-    process.stdout.write(
-      strategyChanging
-        ? `Test strategy changed: ${oldStrategy} -> ${newStrategy}\n`
-        : `Test strategy is already ${newStrategy}\n`
-    );
-  }
-  if (newReview !== undefined) {
-    const display = storedReview === "" ? "adversarial (stage defaults)" : storedReview;
-    process.stdout.write(
-      reviewChanging
-        ? `Review override changed: ${oldReview || "none"} -> ${display}\n`
-        : `Review override is already ${display}\n`
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// change-control <strict|relaxed> - rewrite the intent's Change Control line
-// ---------------------------------------------------------------------------
-//
-// The one write path for the per-intent value: the `/aidlc --change-control`
-// flag and the plain-chat request both land here. A memory layer that declares
-// strict refuses the flip and names its file; the value is then not the
-// human's to change from chat. The rewritten line carries `(set by you)` so
-// `--status` can say where the value came from; the ledger gets one
-// CHANGE_CONTROL_SET row per real change.
-
-function handleChangeControl(
-  projectDir: string,
-  positional: string[],
-  flags: Record<string, string>,
-): void {
-  const raw = positional[1];
-  const requested = parseChangeControl(raw);
-  if (raw === undefined || requested === null) {
-    die(
-      `change-control requires exactly one of: ${CHANGE_CONTROL_VALUES.join(", ")}` +
-        (raw === undefined ? "." : ` (received "${raw}").`),
-    );
-  }
-  const selection = resolveWorkflowSelection(projectDir, {
-    intent: flags.intent,
-    space: flags.space,
-  });
+  const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  const sp = stateFilePath(projectDir, intent, space);
-  if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
-  let content = readStateFile(projectDir, intent, space);
-  const resolution = resolveChangeControl(projectDir, content, {
-    tolerateInvalidState: true,
-    selection: { intent, space },
-  });
-  if (resolution.memoryStrict !== null && requested !== "strict") {
-    die(changeControlMemoryStrictRefusal(resolution.memoryStrict));
-  }
-  const previous = getField(content, CHANGE_CONTROL_FIELD);
-  const line = formatChangeControl(requested, "you");
-  if (previous === line) {
-    process.stdout.write(`Change Control is already ${line}\n`);
-    return;
-  }
-  if (previous === null) {
-    const beforeInsert = content;
-    for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
-      content = content.replace(
-        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
-        `$1\n- **${CHANGE_CONTROL_FIELD}**:`,
-      );
-      if (content !== beforeInsert) break;
+  withAuditLock(projectDir, () => {
+    const content = readConfigState(projectDir, { intent, space });
+    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), { intent, space });
+    if (update.content !== content) {
+      if (update.audit.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
+      appendAuditEntries(update.audit, projectDir, intent, space);
+      writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
-    }
-  }
-  content = setField(content, CHANGE_CONTROL_FIELD, line);
-  content = setField(content, "Last Updated", isoTimestamp());
-  // Audit first, then the state write, like every other state-mutating verb:
-  // a ledger that cannot take the row leaves the line untouched.
-  const oldAuditValue = resolution.intent === null && resolution.rawStateValue !== null
-    ? resolution.rawStateValue
-    : resolution.value;
-  recordChangeControlSet(projectDir, oldAuditValue, requested, "you", { intent, space });
-  writeStateFile(projectDir, content, intent, space);
-  const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
-    ? resolution.rawStateValue
-    : formatChangeControl(resolution.value, resolution.source);
-  process.stdout.write(`Change Control changed: ${oldDisplay} to ${line}\n`);
+    process.stdout.write(`${update.lines.join("\n")}\n`);
+  }, intent, space);
 }
+
 
 // ---------------------------------------------------------------------------
 // set-status — atomically update statusline fields at stage start
@@ -8549,7 +8566,7 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 // alphabetical iteration over scopes (so first-match-wins is
 // deterministic), and a ">5 word" heuristic that requires an affirmative
 // high-specificity keyword. Generic or negated mentions in long descriptions
-// fall back to the selection-aware default scope.
+// fall back to the effective project default scope.
 //
 // Exported for t67 unit tests; not a stable public API.
 
@@ -8623,7 +8640,7 @@ export function inferScopeFromText(input: string): InferResult {
   // No matches at all → default (freeform).
   if (allMatches.length === 0) {
     return {
-      scope: selectionAwareDefaultScope().scope,
+      scope: defaultScope(),
       source: "freeform",
       matches: allMatches,
     };
@@ -8632,7 +8649,7 @@ export function inferScopeFromText(input: string): InferResult {
   // Long descriptions need an affirmative high-specificity match.
   if (wordCount > 5 && specificMatch === undefined) {
     return {
-      scope: selectionAwareDefaultScope().scope,
+      scope: defaultScope(),
       source: "freeform",
       matches: allMatches,
     };
@@ -8896,8 +8913,8 @@ function handleDetectScope(
   // --input requirement differs by mode:
   //   --scope mode: --input is required (audit event needs original text).
   //   --from-text mode: --input may be empty string — inferScopeFromText
-  //     returns `feature` as the documented default. Missing --input
-  //     entirely is still an error; an empty string is fine.
+  //     returns the effective project default. Missing --input entirely is
+  //     still an error; an empty string is fine.
   const input = flags.input;
   if (input === undefined) {
     die("Missing --input <original-text>");
@@ -8952,13 +8969,13 @@ function handleDetectScope(
 }
 
 // ---------------------------------------------------------------------------
-// resolve-env-scope — validate AWS_AIDLC_DEFAULT_SCOPE and emit its value
+// resolve-env-scope — validate AWS_AIDLC_DEFAULT_SCOPE and emit its resolved value
 //
-// The orchestrator's step 0 in SKILL.md calls this to resolve the env default
-// deterministically. Behavior:
-//   - Env unset or empty: exit 0, no output. The orchestrator takes the
-//     non-env path (CLI flag, keyword detection, or hard-coded fallback).
-//   - Env set to a valid scope: exit 0, print `scope=<value>` to stdout.
+// The orchestrator's step 0 in SKILL.md calls this to resolve the configured
+// default deterministically. Real env overrides the recorded project flag.
+//   - No configured default: exit 0, no output. The orchestrator takes the
+//     non-env path (CLI flag, keyword detection, or framework fallback).
+//   - Configured default resolves to a valid scope: print `scope=<value>`.
 //     The orchestrator synthesizes `--scope <value>` into $ARGUMENTS.
 //   - Env names an installed but disabled scope: resolve the selection-aware
 //     default. This preserves plugin-only installs whose existing config names
@@ -8972,31 +8989,16 @@ function handleDetectScope(
 // ---------------------------------------------------------------------------
 
 function handleResolveEnvScope(): void {
-  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
-  if (envScope === "") {
+  const resolution = defaultScopeResolution();
+  if (resolution.source !== "env") {
     return; // unset — no output, exit 0
   }
-  if (!validScopes().has(envScope)) {
-    if (loadScopeMetadataAll()[envScope] === undefined) {
-      die(
-        `Invalid AWS_AIDLC_DEFAULT_SCOPE "${envScope}". Valid scopes: ${[...validScopes()].join(", ")}.`
-      );
-    }
-    const fallback = selectionAwareDefaultScope(envScope);
-    if (!fallback.error && validScopes().has(fallback.scope)) {
-      if (fallback.note) {
-        process.stderr.write(
-          `AWS_AIDLC_DEFAULT_SCOPE="${envScope}" is not an enabled scope; using ${fallback.scope} (sole enabled plugin's first scope)\n`,
-        );
-      }
-      process.stdout.write(`scope=${fallback.scope}\n`);
-      return;
-    }
+  if (resolution.error || !validScopes().has(resolution.scope)) {
     die(
-      `Invalid AWS_AIDLC_DEFAULT_SCOPE "${envScope}". Valid scopes: ${[...validScopes()].join(", ")}.`
+      `Invalid AWS_AIDLC_DEFAULT_SCOPE "${resolution.scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
     );
   }
-  process.stdout.write(`scope=${envScope}\n`);
+  process.stdout.write(`scope=${resolution.scope}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -9015,7 +9017,8 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] " +
+        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
     return;
@@ -9034,6 +9037,9 @@ export async function main(argv: string[]): Promise<void> {
   };
   if (isIntentCreate) {
     validateIntentCreateFlagValues(flags, missingValueFlags);
+  }
+  if (subcommand === "config-change" || subcommand === "scope-change") {
+    validateIntentSettingsArgs(subcommand, rawArgs, positional, flags, missingValueFlags);
   }
   const projectDir = resolveProjectDir(flags["project-dir"]);
 
@@ -9167,9 +9173,6 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "detect-scope":
       handleDetectScope(projectDir, flags);
-      break;
-    case "change-control":
-      handleChangeControl(projectDir, positional, flags);
       break;
     case "resolve-env-scope":
       handleResolveEnvScope();

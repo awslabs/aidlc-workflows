@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (98 events, 24 categories)
+## Event Registry (99 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -48,7 +48,7 @@ deduplicate timestamp fields produced by older versions.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `STAGE_STARTED` | Stage enters `[-]` Active | Timestamp, Stage, Agent; optional Source Baseline when the entered stage declares `workspace_requires` | `tools/aidlc-state.ts advance`, `tools/aidlc-utility.ts intent-create` (init stages) |
+| ✓ `STAGE_STARTED` | Stage enters `[-]` Active, or an isolated attempt opens | Timestamp, Stage, Agent; optional Source Baseline when the entered stage declares `workspace_requires`; isolated rows include Workflow (`single-stage:<slug>`) and Scope to bind completion to the selected ceremony policy | `tools/aidlc-state.ts advance`, `tools/aidlc-utility.ts intent-create` (init stages), `tools/aidlc-orchestrate.ts next --single` (isolated attempts) |
 | `STAGE_AWAITING_APPROVAL` | Stage enters `[?]` (gate open) | Timestamp, Stage, Artifacts, optional `Recovered=true` (backfilled gate row) or `Revalidated=true` (an already-open gate consumed a blocking-sensor override); a blocking-sensor override also carries Blocking Sensor Override, Blocking Sensor IDs, optional Blocking Sensor Detail Paths, and Blocking Sensor Reasons. Its authorization is the preceding exact `DECISION_RECORDED` → `HUMAN_TURN` → `QUESTION_ANSWERED` pair. | `tools/aidlc-state.ts gate-start` (organic, `--recovered` backfill, or override revalidation), `tools/aidlc-state.ts revise` (gate re-entry), `tools/aidlc-state.ts approve` (backstop re-entry after its opening guards pass) |
 | `STAGE_REVISING` | Stage enters `[R]` (user rejected gate) | Timestamp, Stage, Revision count, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts intent-create` (init stages) |
@@ -96,12 +96,20 @@ operational evidence, not a tamper-proof human-authorship boundary.
 
 ### Change Control Events (2 events)
 
-Change Control is one per-intent setting, `strict` or `relaxed`, that decides what a governed checkpoint does when an input changed after the human approved or confirmed something. Both rows are provenance emitted through the library by their owners; the public audit CLI refuses them.
+Change Control is one per-intent setting, `strict` or `relaxed`, that decides what a governed checkpoint does when an input changed after the human approved or confirmed something. Configuration transactions and governed checkpoints emit provenance through the audit library; the public audit CLI refuses both rows.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `CHANGE_CONTROL_SET` | The intent's Change Control value moved: the `change-control <strict\|relaxed>` verb (from the `--change-control` flag or a plain-chat request) rewrote the state line, a `scope-change` carried a scope-supplied value to the new scope's default, or a governed checkpoint observed that a memory layer edit changed the effective value for this running intent | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`) | `tools/aidlc-lib.ts` (`recordChangeControlSet` for the verb and `scope-change`, `governedChangeControl` for the checkpoints) |
+| `CHANGE_CONTROL_SET` | `config-change --change-control <strict\|relaxed>` rewrites the state line, `scope-change` carries a scope-supplied value or explicit setting, or a governed checkpoint observes a memory edit changing the effective value | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`) | `tools/aidlc-utility.ts` batches configuration changes; `tools/aidlc-lib.ts` (`governedChangeControl` through `appendChangeControlSetRow`) records checkpoint observations |
 | `CHANGE_ACCEPTED` | A governed checkpoint found that an input changed after a human approval or confirmation and, under `relaxed`, recorded the change and continued instead of refusing. Written once per distinct change: the same Recorded and Current values for the same Checkpoint, Stage, and Unit never produce a second row | Timestamp, Stage, optional Unit, Checkpoint (`plan-approval`, `review-receipt`, `summary-confirmation`), Changed (a bounded path list or `(paths unavailable)`), Recorded, Current, Details (the one line the human hears) | `tools/aidlc-lib.ts` (`recordAcceptedChanges`, called by the checkpoint owners: `aidlc-log.ts decision` / `answer` / `review`, `aidlc-testing-posture.ts begin`, `aidlc-state.ts` gate and completion checks, the plan-approval guard hook) |
+
+### Ceremony Events (1 event)
+
+Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`off` settings. The shared configuration applier batches their provenance with other requested settings through `tools/aidlc-audit.ts appendAuditEntries`; the public audit CLI refuses this event. Environment kill switches affect resolution without rewriting the intent's saved value.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `CEREMONY_SET` | `config-change --sensors\|--learnings\|--summary-confirmation <on\|off>` sets an intent override, or `scope-change` carries a scope-supplied setting to the new scope's default | Timestamp, Key (`sensors`, `learnings`, or `summary_confirmation`), Old, New, Source (`you` or `scope <name>`) | `tools/aidlc-utility.ts` shared settings applier via `tools/aidlc-audit.ts appendAuditEntries` |
 
 ### Interaction Events (11 events)
 
