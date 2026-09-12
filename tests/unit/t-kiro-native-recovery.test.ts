@@ -58,11 +58,11 @@ afterAll(() => {
 
 function fixture(): string {
   const project = mkdtempSync(join(scratch, "project-"));
-  cpSync(join(runtimeRoot, "kiro-ide", ".kiro"), join(project, ".kiro"), {
+  cpSync(join(runtimeRoot, "kiro", ".kiro"), join(project, ".kiro"), {
     recursive: true,
   });
   cpSync(
-    join(runtimeRoot, "kiro-ide", ".kiro", "tools", "data", "memory-seed"),
+    join(runtimeRoot, "kiro", ".kiro", "tools", "data", "memory-seed"),
     join(project, "aidlc", "spaces", DEFAULT_SPACE, "memory"),
     { recursive: true },
   );
@@ -125,7 +125,7 @@ function run(project: string, args: string[], payload?: object, legacy = false) 
       CLAUDE_PROJECT_DIR: project,
       AIDLC_RUNTIME_ROOT: runtimeRoot,
       AIDLC_HARNESS_DIR: ".kiro",
-      AIDLC_HARNESS_NAME: "kiro-ide",
+      AIDLC_HARNESS_NAME: "kiro",
       VSCODE_PID: "native-recovery-test",
       USER_PROMPT: payload && legacy ? JSON.stringify(payload) : "",
     },
@@ -138,7 +138,7 @@ function run(project: string, args: string[], payload?: object, legacy = false) 
 }
 
 function guard(project: string, tool: string, input: object) {
-  return run(project, ["engine", "adapter", "kiro-ide", "plan-approval-guard"], {
+  return run(project, ["engine", "adapter", "kiro", "plan-approval-guard"], {
     hook_event_name: "PreToolUse",
     session_id: "native-recovery-test",
     cwd: project,
@@ -214,7 +214,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const project = fixture();
     const recovered = run(
       project,
-      ["engine", "adapter", "kiro-ide", "plan-approval-guard"],
+      ["engine", "adapter", "kiro", "plan-approval-guard"],
       { toolName: "execute_pwsh", toolArgs: {} },
       true,
     );
@@ -237,7 +237,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       "## Plan Approval\n\n- Approve Plan\n- Request Changes\n[Answer]:\n");
     const mediateQuestions = () => run(
       project,
-      ["engine", "adapter", "kiro-ide", "audit-and-sensors"],
+      ["engine", "adapter", "kiro", "audit-and-sensors"],
       {
         toolName: "fs_write",
         toolArgs: {},
@@ -258,7 +258,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     });
     expect(sourceWrite().code).toBe(2);
     // Only the fixture's exact offered human choice may authorize this plan.
-    const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
+    const human = run(project, ["engine", "adapter", "kiro", "record-human-turn"],
       { prompt: approveChoice }, true);
     expect(human.code, human.stderr).toBe(0);
     writeFileSync(questions, readFileSync(questions, "utf-8")
@@ -276,7 +276,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
   test("a recorded recovery choice clears an interrupted native planning write", () => {
     const project = fixture();
     const legacy = (target: string, payload: object) =>
-      run(project, ["engine", "adapter", "kiro-ide", target], payload, true);
+      run(project, ["engine", "adapter", "kiro", target], payload, true);
     const shell = () => legacy("plan-approval-guard", {
       toolName: "execute_pwsh", toolArgs: {},
     });

@@ -9913,7 +9913,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t-kiro-ide-native-recovery.test.ts",
+          "file": "tests/unit/t-kiro-native-recovery.test.ts",
           "mechanism": "cli"
         },
         {

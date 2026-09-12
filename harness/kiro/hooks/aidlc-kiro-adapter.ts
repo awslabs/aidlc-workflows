@@ -354,13 +354,28 @@ function upsertTestingContract(plan: string, rendered: string): string {
   return `${plan.trimEnd()}\n\n${rendered}`;
 }
 
+// A compiled install has no `.ts` on disk to hand an interpreter, and its
+// `process.execPath` IS the aidlc binary — so passing a tool path as the first
+// argument makes it report `unknown command <path>` and the legacy recovery fails
+// closed. Route through the binary's own `engine <tool>` subcommand there, and
+// keep the interpreter + source path for a source checkout.
+function legacyToolCommand(
+  tool: "aidlc-log.ts" | "aidlc-orchestrate.ts",
+  args: string[],
+): string[] {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  return executable
+    ? [executable, "engine", tool.replace(/^aidlc-|\.ts$/g, ""), ...args]
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args];
+}
+
 function runLegacyPlanTool(
   projectDir: string,
   tool: "aidlc-log.ts",
   args: string[],
 ): { code: number; stdout: string; stderr: string } {
   const result = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args],
+    legacyToolCommand(tool, args),
     {
       cwd: projectDir,
       stdout: "pipe",
@@ -432,11 +447,7 @@ function runLegacyRecoveryNext(
   let args = ["next", "--project-dir", projectDir];
   for (let step = 0; step < 64; step++) {
     const result = Bun.spawnSync(
-      [
-        process.execPath,
-        join(HOOKS_DIR, "..", "tools", "aidlc-orchestrate.ts"),
-        ...args,
-      ],
+      legacyToolCommand("aidlc-orchestrate.ts", args),
       {
         cwd: projectDir,
         stdout: "pipe",
