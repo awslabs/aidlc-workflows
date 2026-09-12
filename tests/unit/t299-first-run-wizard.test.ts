@@ -9,12 +9,13 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { binRoot } from "../../core/tools/aidlc-install-paths.ts";
@@ -123,6 +124,30 @@ function isolatedMachineEnv(): NodeJS.ProcessEnv {
   };
 }
 
+// Run the real CLI with an isolated filesystem mock. The trace proves that a
+// failure reached linkSync, rather than stopping at a missing runtime or stdin.
+function hardLinkFailurePreload(): { preload: string; trace: string } {
+  const directory = temp("aidlc-t299-filesystem-mock-");
+  const preload = join(directory, "reject-hard-links.ts");
+  const trace = join(directory, "links.ndjson");
+  writeFileSync(preload, `
+    import { mock } from "bun:test";
+    const actual = { ...await import("node:fs") };
+    mock.module("node:fs", () => ({
+      ...actual,
+      linkSync(source, destination) {
+        actual.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ source, destination }) + "\\n");
+        throw Object.assign(new Error("simulated hard-link failure"), { code: "EMLINK" });
+      },
+    }));
+  `);
+  return { preload, trace };
+}
+
+function linkTrace(trace: string): Array<{ source: string; destination: string }> {
+  return readFileSync(trace, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+}
+
 function runWizard(
   input: string,
   options: {
@@ -131,6 +156,8 @@ function runWizard(
     runtimeIssue?: boolean;
     env?: NodeJS.ProcessEnv;
     prepare?: (project: string) => void;
+    preload?: string;
+    configArgs?: string[];
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
   const project = temp("aidlc-t299-project-");
@@ -149,7 +176,14 @@ function runWizard(
   options.prepare?.(project);
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project],
+    [
+      ...(options.preload ? ["--preload", options.preload] : []),
+      INIT,
+      "config",
+      "--project-dir",
+      project,
+      ...(options.configArgs ?? []),
+    ],
     {
       cwd: project,
       env: {
@@ -297,6 +331,120 @@ describe("t299 first-run setup wizard", () => {
       opencodeDefault: true,
     }));
   }, 60_000);
+
+  test("a preexisting settings conflict renders the child's message and fix without its JSON plan", () => {
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      prepare: (project) => {
+        mkdirSync(join(project, ".claude"));
+        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+        writeFileSync(join(project, ".gitignore"), "# keep my ignores\nnode_modules/\n");
+        before = treeSnapshot(project);
+      },
+    });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("Setup stopped:");
+    expect(output).toContain("config conflict(s)");
+    expect(output).toContain(".claude/settings.json");
+    expect(output).toContain("locally modified or unowned");
+    expect(output).toMatch(/fix:/i);
+    expect(output).toContain("--dry-run --verbose");
+    expect(output).not.toContain('"schemaVersion"');
+    expect(output).not.toContain('"actions"');
+    expect(treeSnapshot(result.project)).toEqual(before);
+  }, 60_000);
+
+  for (const [label, harnesses] of [
+    ["one detected CLI", { claude: { found: true } }],
+    ["multiple detected CLIs", { claude: { found: true }, codex: { found: true } }],
+    ["no detected CLI", { claude: { found: false } }],
+  ] as const) {
+    test(`filesystem rejection stops the wizard before selection with ${label}`, () => {
+      const { preload, trace } = hardLinkFailurePreload();
+      let before: Record<string, string> = {};
+      // Empty stdin cannot answer either the harness picker or the setup gate.
+      const result = runWizard("", {
+        preload,
+        harnesses,
+        prepare: (project) => {
+          writeFileSync(join(project, "README.md"), "existing project\n");
+          before = treeSnapshot(project);
+        },
+      });
+      const output = result.stdout + result.stderr;
+      expect(result.status, output).toBe(1);
+      expect(output).toContain("Setup stopped:");
+      expect(output).toContain("Cannot create an AI-DLC transaction lock in");
+      expect(output).toContain("(EMLINK)");
+      expect(output).toMatch(/fix:/i);
+      expect(output).toMatch(/hard[- ]links?/i);
+      expect(output).toMatch(/S3|FUSE/i);
+      expect(output).toContain("Nothing written.");
+      expect(output).not.toContain("Choose the harness for this project first.");
+      expect(output).not.toContain("Choose one to configure:");
+      expect(output).not.toContain("Set up AI-DLC for");
+      expect(output).not.toContain("Customize setup");
+      expect(output).not.toContain('"schemaVersion"');
+      expect(output).not.toContain('"actions"');
+      expect(output).not.toContain("<valid-release-data>");
+      const links = linkTrace(trace);
+      expect(links).toHaveLength(1);
+      expect(basename(dirname(links[0].source))).toMatch(/^\.aidlc-lock-probe-/);
+      expect(dirname(links[0].source)).toBe(dirname(links[0].destination));
+      expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
+      expect(treeSnapshot(result.project)).toEqual(before);
+    }, 60_000);
+  }
+
+  for (const mode of ["json", "quiet", "human"] as const) {
+    test(`noninteractive ${mode} config preserves filesystem remediation on apply failure`, () => {
+      const { preload, trace } = hardLinkFailurePreload();
+      let before: Record<string, string> = {};
+      const result = runWizard("", {
+        preload,
+        configArgs: [
+          "--from", join(RUNTIME, "claude"),
+          "--harness", "claude",
+          "--mcp", "none",
+          "--yes",
+          ...(mode === "human" ? [] : [`--${mode}`]),
+        ],
+        env: { AIDLC_TEST_CONFIG_TTY: undefined, NO_COLOR: "1" },
+        prepare: (project) => {
+          writeFileSync(join(project, "README.md"), "existing project\n");
+          writeFileSync(join(project, ".gitignore"), "# user-owned\n");
+          before = treeSnapshot(project);
+        },
+      });
+      const output = result.stdout + result.stderr;
+      expect(result.status, output).toBeGreaterThan(0);
+      expect(output).not.toContain("<valid-release-data>");
+      if (mode === "json") {
+        const error = JSON.parse(result.stdout);
+        expect(error.ok).toBe(false);
+        expect(error.code).toBe(result.status);
+        expect(error.message).toContain("Cannot create an AI-DLC transaction lock in");
+        expect(error.message).toContain("(EMLINK)");
+        expect(error.remediation).toMatch(/hard[- ]links?/i);
+        expect(error.remediation).toMatch(/S3|FUSE/i);
+      } else {
+        expect(output).toMatch(/hard[- ]links?/i);
+        expect(output).toMatch(/S3|FUSE/i);
+        expect(output).not.toContain('"schemaVersion"');
+        expect(output).not.toContain('"actions"');
+        if (mode === "human") {
+          expect(output).toContain("Cannot create an AI-DLC transaction lock in");
+          expect(output).toContain("(EMLINK)");
+          expect(output).toMatch(/fix:/i);
+        }
+      }
+      expect(linkTrace(trace)).toEqual([expect.objectContaining({
+        destination: join(realpathSync(result.project), ".aidlc-transaction.lock"),
+      })]);
+      expect(treeSnapshot(result.project)).toEqual(before);
+    }, 60_000);
+  }
 
   test("late first-run failure restores every wizard-owned path", () => {
     const result = runWizard("\n", {

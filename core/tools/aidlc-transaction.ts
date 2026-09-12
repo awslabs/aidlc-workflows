@@ -9,6 +9,7 @@ import {
   lstatSync,
   linkSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -378,6 +379,75 @@ type HeldLock = {
   identity: string;
 };
 
+export class TransactionLockError extends Error {
+  readonly remediation =
+    "Use a filesystem that supports hard links, such as local ext4 or XFS storage on EC2/EBS, then rerun the command. " +
+    "For an S3-backed workspace, use a project directory outside that mount.";
+
+  constructor(
+    readonly root: string,
+    readonly code: string,
+    cause: unknown,
+  ) {
+    super(
+      `Cannot create an AI-DLC transaction lock in ${root}: the filesystem rejected hard-link creation (${code}).`,
+      { cause },
+    );
+    this.name = "TransactionLockError";
+  }
+}
+
+function linkTransactionLock(root: string, candidate: string, lockPath: string): void {
+  try {
+    linkSync(candidate, lockPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code && ["EMLINK", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(code)) {
+      throw new TransactionLockError(root, code, error);
+    }
+    throw error;
+  }
+}
+
+// Probe the operation on the destination filesystem without publishing a real
+// transaction lock or creating a missing project. A successful probe is only
+// an early diagnostic: acquisition and plan validation still run at apply time.
+export function assertTransactionFilesystem(path: string): void {
+  const root = canonicalRoot(path);
+  const probe = mkdtempSync(join(nearestExisting(root), ".aidlc-lock-probe-"));
+  const candidate = join(probe, "candidate");
+  let descriptor: number | null = null;
+  let failure: unknown;
+  try {
+    descriptor = openSync(candidate, "wx", 0o600);
+    writeSync(descriptor, "AI-DLC transaction lock capability check\n");
+    fsyncSync(descriptor);
+    linkTransactionLock(root, candidate, join(probe, "lock"));
+  } catch (error) {
+    failure = error;
+  }
+  // A close error must not skip removal or hide the original lock diagnostic.
+  let closeError: unknown;
+  try {
+    if (descriptor !== null) closeSync(descriptor);
+  } catch (error) {
+    closeError = error;
+  }
+  try {
+    rmSync(probe, { recursive: true, force: true });
+  } catch (cleanupError) {
+    const primary = failure instanceof Error ? `${failure.message} ` : "";
+    throw new AggregateError(
+      [failure, closeError, cleanupError].filter((error) => error !== undefined),
+      `${primary}Could not remove temporary transaction lock probe ${probe}: ${
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+      }`,
+    );
+  }
+  if (failure !== undefined) throw failure;
+  if (closeError !== undefined) throw closeError;
+}
+
 function acquireLock(root: string, lockPath: string, staging: string): HeldLock {
   for (let attempt = 0; attempt < 2; attempt++) {
     const candidate = join(root, `.aidlc-lock-${randomUUID()}`);
@@ -387,7 +457,7 @@ function acquireLock(root: string, lockPath: string, staging: string): HeldLock 
       const identity = `${JSON.stringify({ pid: process.pid, staging: basename(staging) })}\n`;
       writeSync(descriptor, identity);
       fsyncSync(descriptor);
-      linkSync(candidate, lockPath);
+      linkTransactionLock(root, candidate, lockPath);
       rmSync(candidate, { force: true });
       return { descriptor, identity };
     } catch (error) {
