@@ -843,7 +843,9 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--change-control`, `--sensors`, `--learnings`, and `--summary-confirmation`; the scope and all supplied settings are applied in one transaction. Scope-sourced Change Control and ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. When memory enforces strict, an implicit scope change preserves the stored Change Control line instead of rewriting it. Explicit flags in the same command take precedence over scope defaults and retain human provenance. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an explicit `--change-control relaxed` refused by strict memory policy, refuse the whole update.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--change-control`, `--sensors`, `--learnings`, and `--summary-confirmation`; the scope and all supplied settings are applied in one transaction. Scope-sourced Change Control and ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. This also updates the scope-sourced Change Control line when memory enforces strict; memory still controls the effective value. Explicit flags in the same command take precedence over scope defaults and retain human provenance. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an explicit `--change-control relaxed` refused by strict memory policy, refuse the whole update.
+
+The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
 Refused under autonomous Construction (`Construction Autonomy Mode: autonomous`), the same rule as `recompose`: re-shaping the plan needs a human at the gate, and an unattended run has none. Switch to gated Construction first (`aidlc-bolt set-autonomy --mode gated`) or let the swarm finish.
 
@@ -1051,6 +1053,10 @@ line in `aidlc-state.md` as `<value> (set by you)` and adds a
 with the intent, survives sessions, and is visible to teammates. The same
 setter repairs an invalid line and records the old text. A plain-chat request
 ("stop asking me to re-approve when files change") uses the same route.
+For configuration and scope changes, the row's `Old Value` is the previously
+saved intent value (raw text if invalid; `strict` when no line existed), not
+the memory-effective value. Governed-checkpoint observations still record
+effective old/new values.
 An older intent without the line stays strict until it is set; a new intent
 starts from its scope's default. When a memory layer's `## Change Control`
 section says `Mode: strict`, an explicit relaxed override refuses the whole
@@ -1107,6 +1113,8 @@ and do not enforce this scope comparison.
 An explicit ceremony setting writes `<value> (set by you)` to the corresponding
 state line and adds a `CEREMONY_SET` row to the shared audit batch with `Key`,
 `Old`, `New`, and `Source`.
+`Old` is the previously saved value (raw text if invalid; the scope default
+when no line existed), not a value forced off by an environment kill switch.
 The audit keys are `sensors`, `learnings`, and `summary_confirmation`; an explicit
 setter records `Source: you`. The saved override is committed with the intent
 and survives sessions. An environment kill switch takes precedence without

@@ -27,7 +27,7 @@ When this module is listed, trigger after Step N-1 (completion message rendered)
 
 ### The ritual
 
-1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive). Treat this path as an output-only target: the orchestrator never reads, probes, creates, or initializes it, and follows the active harness's diary-write discipline when inserting entries. Use four standard H2 headings:
+1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive, only when the learnings ritual is on). Treat this path as an output-only target: the orchestrator never reads, probes, creates, or initializes it, and follows the active harness's diary-write discipline when inserting entries. Use four standard H2 headings:
    - **Interpretations** — choices made where the stage prose was ambiguous
    - **Deviations** — places where you intentionally departed from the stage prose, and why
    - **Tradeoffs** — alternatives considered and why you picked what you did

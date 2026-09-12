@@ -59,7 +59,7 @@ stage that does not apply reports
 Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
 directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
 
-1. The engine creates `memory.md` from
+1. When the learnings ritual is on, the engine creates `memory.md` from
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
    directive. NEVER probe for `memory.md`, or any other maybe-absent file, with a
    read tool: reading an absent path is a failed tool call. In the rare case an

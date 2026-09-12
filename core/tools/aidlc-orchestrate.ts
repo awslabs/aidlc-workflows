@@ -120,6 +120,7 @@ import {
   CEREMONY_KEYS,
   type CeremonyPolicy,
   ceremonyOffClause,
+  ceremonyOffList,
   ceremonyPolicyValues,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
@@ -193,6 +194,7 @@ import {
   relativeSpaceRecordPrefix,
   resolveBoltDag,
   type BoltDagResolution,
+  resolveCeremony,
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
@@ -1450,28 +1452,38 @@ function detectedProjectType(projectDir: string): string | null {
   return projectType;
 }
 
-function effectiveScopeCostSummary(scope: string, projectDir: string) {
+function effectiveScopeCostSummary(
+  scope: string,
+  projectDir: string,
+  overrides?: Partial<CeremonyPolicy>,
+) {
   const nominal = scopeCostSummary(scope);
   if (!nominal) return null;
+  const policy = {} as CeremonyPolicy;
+  for (const key of CEREMONY_KEYS) {
+    const base = resolveCeremony(key, scope, null);
+    policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
+  }
+  const off = ceremonyOffList(scope, policy);
   const definition = loadScopeMapping()[scope];
   if (
     definition?.stages["reverse-engineering"] !== "EXECUTE" ||
     detectedProjectType(projectDir) !== "greenfield"
   ) {
-    return nominal;
+    return { ...nominal, off };
   }
   const adjusted = { ...definition.stages, "reverse-engineering": "SKIP" as const };
-  return { ...gridCostSummary(adjusted), off: nominal.off };
+  return { ...gridCostSummary(adjusted), off };
 }
 
-// The one-line ceremony preview for a scope, deterministic from the effective
-// compiled grid: "N of T stages, G approval gates" plus a per-unit clause when
-// Construction stages fan out per Unit of Work. Greenfield previews apply the
-// same reverse-engineering adjustment intent creation writes into state.
+// The one-line ceremony preview uses effective policy and the compiled grid:
+// "N of T stages, G approval gates" plus a per-unit clause when Construction
+// stages fan out per Unit of Work. Greenfield previews apply the same
+// reverse-engineering adjustment intent creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
-function costClause(scope: string, projectDir: string): string {
-  const c = effectiveScopeCostSummary(scope, projectDir);
+function costClause(scope: string, projectDir: string, overrides?: Partial<CeremonyPolicy>): string {
+  const c = effectiveScopeCostSummary(scope, projectDir, overrides);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
@@ -1803,7 +1815,7 @@ function createPrintDirective(
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir);
+  const clause = costClause(scope, projectDir, flags.ceremony);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -2078,9 +2090,9 @@ function resolveScope(
   return defaultScopeResolution();
 }
 
-// Derive the memory diary path for a stage (SKILL.md: every stage keeps a
-// <record>/<phase>/<stage>/memory.md diary). `recordPrefix` is the RELATIVE
-// per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
+// Derive the memory diary path for a stage. When the learnings ritual is on,
+// each stage keeps a <record>/<phase>/<stage>/memory.md diary. `recordPrefix` is
+// the RELATIVE per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
 // threads in from the active intent (relativeRecordDir), or null → the bare space
 // record prefix (relativeSpaceRecordPrefix - a pre-creation shell with no intent
 // yet). These are agent-consumed RELATIVE paths the conductor resolves against
@@ -2103,10 +2115,10 @@ function unitMemoryPathFor(
   return `${prefix}/construction/${unit}/${slug}/memory.md`;
 }
 
-// Create the stage diary at the deterministic directive-emission boundary so
-// the conductor never has to probe a maybe-absent path. This is advisory: a
-// missing install template, unresolved placeholder, or filesystem failure must
-// not prevent the run-stage directive from being emitted.
+// Callers create the stage diary at the deterministic directive-emission boundary
+// only when the learnings ritual is on, so the conductor need not probe for it.
+// This is advisory: a missing install template, unresolved placeholder, or
+// filesystem failure must not prevent the run-stage directive from being emitted.
 export function bootstrapDirectiveMemory(
   memoryPath: string,
   codekbCtx?: { projectDir: string },
@@ -3488,7 +3500,9 @@ function buildRunStageDirective(
       forcePersona,
     });
   }
-  bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
+  if (ceremony.learnings === "on") {
+    bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
+  }
   return directive;
 }
 
@@ -4739,7 +4753,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       // Preview the ceremony the user is confirming: stage/gate counts from the
       // compiled grid (never estimates). Drop the clause if the scope does not
       // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope, pd);
+      const clause = costClause(inferred.scope, pd, flags.ceremony);
       const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
         `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
@@ -5686,8 +5700,10 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
-  for (const entry of entries) {
-    bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+  if (directive.ceremony.learnings === "on") {
+    for (const entry of entries) {
+      bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+    }
   }
   return null;
 }

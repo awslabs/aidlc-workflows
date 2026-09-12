@@ -1,4 +1,4 @@
-// covers: function:gridCostSummary, function:scopeCostSummary, function:validateGrid, function:renderScopeTable
+// covers: function:gridCostSummary, function:scopeCostSummary, function:ceremonyOffList, function:validateGrid, function:renderScopeTable
 //
 // t213 - the scope-cost summary helper (issue: preview the cost at scope
 // confirmation). The confirm string, the creation print, the scope-change output,
@@ -21,6 +21,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ceremonyOffClause,
+  ceremonyOffList,
   gridCostSummary,
   scopeCostSummary,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -150,6 +151,18 @@ describe("t213 edge cases", () => {
 });
 
 describe("t213 scope policy cost clauses", () => {
+  test("effective ceremony labels respect supplied policy without changing scope defaults", () => {
+    expect(ceremonyOffList("classic", {
+      sensors: "on", learnings: "on", summary_confirmation: "on",
+    })).toEqual(["reviewers"]);
+    expect(ceremonyOffList("feature", {
+      sensors: "off", learnings: "on", summary_confirmation: "off",
+    })).toEqual(["sensors", "summary confirmation"]);
+    expect(scopeCostSummary("classic")?.off).toEqual([
+      "reviewers", "sensors", "learnings ritual", "summary confirmation",
+    ]);
+  });
+
   test("classic previews every omitted ceremony without hiding stage approvals", () => {
     const summary = scopeCostSummary("classic")!;
     expect(summary.gates).toBeGreaterThan(0);

@@ -174,8 +174,8 @@ Scope changes accept the same seven flags and use the same applier. A
 same-as-current scope still applies supplied settings. Scope-owned Change
 Control and ceremony rows track new scope defaults, while explicit human
 overrides and absent legacy rows are preserved. Under strict memory policy,
-an implicit scope change preserves the stored Change Control line instead of
-rewriting it. Explicit flags take precedence over scope defaults and record
+an implicit scope change still updates the scope-owned Change Control line;
+memory continues to control the effective value. Explicit flags take precedence over scope defaults and record
 human provenance. `review adversarial` clears the `Review Override` field to an
 empty string, so stage declarations and scope review caps still apply.
 

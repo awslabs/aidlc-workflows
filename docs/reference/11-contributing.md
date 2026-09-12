@@ -205,8 +205,8 @@ single state write. If Change Control changes, call
 `assertChangeControlLedgerWritable` before any write. A memory layer's
 `Mode: strict` refuses an explicit `--change-control relaxed` for the entire
 command, including companion settings and scope changes. Under that memory
-policy, an implicit scope change preserves the stored Change Control line;
-it does not bypass memory policy or block unrelated settings.
+policy, an implicit scope change still updates the scope-owned Change Control
+line and records the change; memory continues to control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
 `Review Override`; explicit Change Control and ceremony values use
