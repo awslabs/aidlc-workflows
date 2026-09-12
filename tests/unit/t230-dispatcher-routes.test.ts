@@ -60,6 +60,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const CORE_TOOLS_DIR = join(REPO_ROOT, "core", "tools");
 const DIST_TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
+const RELEASE_TOOLS_DIR = join(REPO_ROOT, "dist-release", "claude", ".claude", "tools");
 const DISPATCHER = join(CORE_TOOLS_DIR, "aidlc.ts");
 
 type RunResult = {
@@ -1613,11 +1614,12 @@ describe("t230 native review-brief dispatch", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-t230-native-"));
     tempProjects.add(root);
     executable = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
-    // Compile the actual dispatcher once; the $bunfs import fixture above
-    // cannot establish that the native executable reaches its bundled delegate.
+    // Compile the release projection that build-binaries.ts ships once; the
+    // $bunfs import fixture above cannot establish that the native executable
+    // reaches its bundled delegate.
     const built = spawnSync(
       BUN,
-      ["build", "--compile", join(DIST_TOOLS_DIR, "aidlc.ts"), "--outfile", executable],
+      ["build", "--compile", join(RELEASE_TOOLS_DIR, "aidlc.ts"), "--outfile", executable],
       { cwd: REPO_ROOT, encoding: "utf-8", timeout: 60_000 },
     );
     if (built.error) throw built.error;
