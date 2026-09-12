@@ -141,7 +141,7 @@ Switching from an inline skeleton to swarm therefore includes an explicit,
 authorized commit of the approved skeleton source before preparing the parallel
 batch. A successful native merge may remove its child; `--resume-existing`
 preserves the rejection revision, not an unconditional promise that the original
-child directory exists. See the [prepare and resume commands](../guide/12-cli-commands.md#aidlc-engine-swarm-prepare---prepare-a-reproducible-batch).
+child directory exists. See the [prepare and resume commands](../guide/12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
 These seven `SWARM_*` events are part of the 98-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 

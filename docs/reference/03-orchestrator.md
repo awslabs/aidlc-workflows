@@ -501,7 +501,7 @@ regenerates a finished Unit because the directive says `run-stage`. Checkpoint
 actions return to `next`, not whole-stage report-approval. Missing/stale evidence
 is repaired through its owning review/receipt procedure or human Request Changes;
 verification must never be invented. The
-[checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint---verify-and-approve-a-completed-unit)
+[checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
 show the exact action forms.
 
 A normal `run-stage` may also carry `construction_policy` with `iteration`,
