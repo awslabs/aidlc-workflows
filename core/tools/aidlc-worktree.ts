@@ -1925,6 +1925,8 @@ function mergedSwarmCleanupAuthority(
     // an old landing must never reset or remove the next child bearing them.
     const creations = maximalAttemptEvents(audit.rows.filter((candidate) =>
       candidate.event === "WORKTREE_CREATED" &&
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent &&
       auditBlockField(candidate.block, "Bolt slug") === slug &&
       auditBlockField(candidate.block, "Repo") === repoField &&
       (() => {
