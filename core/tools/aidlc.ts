@@ -854,7 +854,7 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "set sensors", "set learnings", "set summary-confirmation", "get", "list"],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
@@ -862,7 +862,10 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
-      "set change-control": "change-control",
+      "set change-control": "config-change",
+      "set sensors": "config-change",
+      "set learnings": "config-change",
+      "set summary-confirmation": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -871,7 +874,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -1541,27 +1544,11 @@ function handleConfig(route: Route, argv: string[]): Action {
 
   const key = argv[2];
   const value = argv[3];
-  if (key === "depth") {
-    const missing = requireValue("config", "set depth", value);
+  const target = route.targets?.[`set ${key}`];
+  if (target) {
+    const missing = requireValue("config", `set ${key}`, value);
     if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--depth", value, ...argv.slice(4)] };
-  }
-  if (key === "test-strategy") {
-    const missing = requireValue("config", "set test-strategy", value);
-    if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--test-strategy", value, ...argv.slice(4)] };
-  }
-  if (key === "review") {
-    const missing = requireValue("config", "set review", value);
-    if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
-  }
-  if (key === "change-control") {
-    // The per-intent Change Control flip is its own utility verb (it rewrites
-    // the state line and logs CHANGE_CONTROL_SET), not a config-change field.
-    const missing = requireValue("config", "set change-control", value);
-    if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["change-control", value, ...argv.slice(4)] };
+    return { type: "delegate", tool: TOOLS.utility, args: [target, `--${key}`, value, ...argv.slice(4)] };
   }
   return nounError("config", key ? `set ${key}` : "set");
 }

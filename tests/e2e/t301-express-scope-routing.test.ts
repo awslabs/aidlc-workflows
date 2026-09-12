@@ -183,7 +183,7 @@ function runThroughBuild(p: string): void {
   expect(code.unit).toBeUndefined();
   expect(code.reviewer).toBeUndefined();
   expect(code.swarm_settled).toBeUndefined();
-  expect(code.protocol_modules).toEqual(["ensemble", "construction"]);
+  expect(code.protocol_modules).toEqual(["ensemble", "construction", "learnings"]);
   expect(stateField(p, "Lifecycle Phase")).toBe("CONSTRUCTION");
   expect((code.produces as string[]).every((path) =>
     path.includes("/construction/code-generation/") &&

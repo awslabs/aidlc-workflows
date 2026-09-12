@@ -499,10 +499,31 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
-      name: "config change-control maps to the change-control verb",
+      name: "config change-control maps to config-change",
       routerArgs: ["engine", "config", "set", "change-control", "relaxed"],
       tool: "aidlc-utility.ts",
-      toolArgs: ["change-control", "relaxed"],
+      toolArgs: ["config-change", "--change-control", "relaxed"],
+      fixture: true,
+    },
+    {
+      name: "config sensors maps to config-change",
+      routerArgs: ["engine", "config", "set", "sensors", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--sensors", "off"],
+      fixture: true,
+    },
+    {
+      name: "config learnings maps to config-change",
+      routerArgs: ["engine", "config", "set", "learnings", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--learnings", "off"],
+      fixture: true,
+    },
+    {
+      name: "config summary confirmation maps to config-change",
+      routerArgs: ["engine", "config", "set", "summary-confirmation", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--summary-confirmation", "off"],
       fixture: true,
     },
     {
@@ -631,6 +652,94 @@ describe("t230 dispatcher route parity", () => {
     expect(entriesUnder(join(routedProject, "aidlc", "spaces", "router-space"))).toEqual(
       entriesUnder(join(directProject, "aidlc", "spaces", "router-space")),
     );
+  });
+
+  test("config set forwards all settings and selectors without mutating unselected workflows", () => {
+    const projectDir = makeProject();
+    writeMinimalState(projectDir);
+    const currentState = readFileSync(seededStateFile(projectDir), "utf-8") +
+      "- **Review Override**: none\n" +
+      "- **Change Control**: strict (set by you)\n" +
+      "- **Sensors**: on (set by you)\n" +
+      "- **Learnings**: on (set by you)\n" +
+      "- **Summary Confirmation**: on (set by you)\n";
+    writeFileSync(seededStateFile(projectDir), currentState);
+    const selectedSpace = "ceremony-space";
+    const selectedIntent = "selected-8000000000000002";
+    const selectedSpaceDir = join(projectDir, "aidlc", "spaces", selectedSpace);
+    cpSync(join(projectDir, "aidlc", "spaces", "default"), selectedSpaceDir, { recursive: true });
+    const selectedRecord = join(selectedSpaceDir, "intents", selectedIntent);
+    cpSync(seededRecordDir(projectDir), selectedRecord, { recursive: true });
+
+    const changed = viaDispatcher([
+      "engine", "config", "set", "depth", "minimal",
+      "--test-strategy", "comprehensive", "--review", "advisory",
+      "--change-control", "relaxed", "--sensors", "off", "--learnings", "off",
+      "--summary-confirmation", "off", "--intent", selectedIntent, "--space", selectedSpace,
+    ], projectDir);
+    expect(changed.exitCode, changed.stderr.toString()).toBe(0);
+    const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
+    for (const [field, value] of [
+      ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
+      ["Change Control", "relaxed (set by you)"], ["Sensors", "off (set by you)"],
+      ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
+    ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
+    const settingsAudit = readdirSync(join(selectedRecord, "audit"))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => readFileSync(join(selectedRecord, "audit", name), "utf-8"))
+      .join("\n");
+    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|CHANGE_CONTROL_SET|CEREMONY_SET)\n/g)]
+      .map((match) => match[1]).sort()).toEqual([
+        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET", "CHANGE_CONTROL_SET",
+        "DEPTH_CHANGED", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
+      ]);
+
+    for (const [cliKey, field, auditKey] of [
+      ["sensors", "Sensors", "sensors"],
+      ["learnings", "Learnings", "learnings"],
+      ["summary-confirmation", "Summary Confirmation", "summary_confirmation"],
+    ]) {
+      const result = viaDispatcher([
+        "engine", "config", "set", cliKey, "off",
+        "--intent", selectedIntent, "--space", selectedSpace,
+      ], projectDir);
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8"))
+        .toContain(`- **${field}**: off (set by you)`);
+      const auditDir = join(selectedRecord, "audit");
+      const audit = readdirSync(auditDir)
+        .filter((name) => name.endsWith(".md"))
+        .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+        .join("\n");
+      const rows = audit.split("\n---\n").filter((row) =>
+        row.includes("**Event**: CEREMONY_SET\n") && row.includes(`**Key**: ${auditKey}\n`)
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toContain("**Old**: on\n");
+      expect(rows[0]).toContain("**New**: off\n");
+      expect(rows[0]).toContain("**Source**: you\n");
+    }
+    expect(readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8")).toBe(selectedState);
+    expect(readFileSync(seededStateFile(projectDir), "utf-8")).toBe(currentState);
+    expect(readFileSync(seededStateFile(projectDir, selectedSpace), "utf-8"))
+      .toBe(currentState);
+  });
+
+  test("public audit routes refuse forged ceremony settings", () => {
+    const projectDir = makeProject();
+    const recordBefore = entriesUnder(seededRecordDir(projectDir));
+    for (const args of [
+      ["append", "CEREMONY_SET", "--field", "Key=sensors", "--field", "New=off"],
+      ["append-batch", JSON.stringify([{ eventType: "CEREMONY_SET", fields: { Key: "sensors", New: "off" } }])],
+      ["append-raw", "Ceremony Set", "**Event**: CEREMONY_SET\n**Key**: sensors\n**New**: off"],
+    ]) {
+      const result = viaDispatcher(["engine", "audit", ...args], projectDir, {
+        AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "0",
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain("CEREMONY_SET");
+      expect(entriesUnder(seededRecordDir(projectDir))).toEqual(recordBefore);
+    }
   });
 
   test("legacy top-level engine forms are rejected", () => {
