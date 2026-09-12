@@ -4,12 +4,12 @@ Load this module when a directive names a reviewer with an effective review clas
 
 ## 12a. Reviewer Invocation
 
-If the `run-stage` directive includes a `reviewer` field (non-null), the orchestrator MUST invoke the reviewer as a **separate sub-agent** after the stage body produces its artifacts and before the §13 learnings ritual.
+If the `run-stage` directive includes a `reviewer` field (non-null), the orchestrator MUST invoke the reviewer as a **separate sub-agent** after the stage body produces its artifacts and before the §13 learnings ritual when the directive lists the `learnings` protocol module, otherwise before the approval gate.
 
 The directive's `review_class` field tells you HOW the review runs - the engine has already resolved it (stage declaration, lowered by the scope's `review_cap` and any per-run `--review` override; a `none` resolution omits the reviewer block entirely, so a directive that carries a reviewer always carries a class):
 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
-- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13, and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
 
 ### What the user hears from this section
 
@@ -242,7 +242,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    the Review brief with `Why now: Re-check after the artifact changed.`
 
    **On an `adversarial` review**, branch on the verdict:
-   - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual, then present the approval gate using the required Review brief above
+   - **READY** → the receipt is terminal (above); run the §13 learnings ritual only when `directive.protocol_modules` lists `learnings`, then present the approval gate using the required Review brief above
    - **NOT-READY** and `reviewIterations < reviewer_max_iterations` (default 2):
      - Increment review iteration counter
      - Re-invoke the stage's lead agent ALONE, dispatched per `directive.mode` (inline in your context, or as a subagent on the dispatched modes). On an ensemble stage (pipeline/mob) the room or chain is NOT re-convened - review findings are artifact defects and the lead owns the artifacts; the repair loop is lead-reviewer ping-pong (`stage-protocol-ensemble.md` §5). The builder addresses the findings and updates the artifact.

@@ -1056,7 +1056,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
        settlement-aware route per the construction protocol module
        (`aidlc-common/protocols/stage-protocol-construction.md`),
        "Build-and-Test failure loop-back". The failed run's gate is not
-       presented; its learnings ritual defers to the eventual passing run.
+       presented; its enabled learnings ritual defers to the eventual passing run. When the `learnings` module is absent, no diary or ritual runs.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
        identifiable fix: log the failure and present the halt-and-ask
        question from the construction protocol module

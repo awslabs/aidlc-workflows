@@ -131,7 +131,7 @@ Before and during EVERY stage, verify:
 2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
-5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
+5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
 
 ---
@@ -242,15 +242,15 @@ Every stage ends with this 5-part structure:
 
 ### Part 0: Enter the approval gate (mandatory: the held gate is recorded before the human answers it)
 Entering the gate:
-1. Render Parts 1-2 (announcement, summary), then run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
-2. After the learnings answer is logged: `{{INVOKE}} engine orchestrate report --stage <slug> --result awaiting-approval` marks `[-]` -> `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate. These are internal bookkeeping steps: run them, never narrate them. This step is bookkeeping the user has no stake in: **SAY:** nothing for it, not that a gate is being opened, not that anything is being recorded. Go from the learnings answer straight into the question below.
-   - If the report instead refuses because a blocking gate sensor found issues or could not produce a verified pass, the approval gate is NOT open. In interactive mode, run `{{INVOKE}} engine log decision --stage <slug> --decision "Blocking gate sensor failure" --options "Fix findings,Override blocking sensors"` and present those two options as a separate structured question. END YOUR TURN.
+1. Render Parts 1-2 (announcement, summary), then, only when the directive lists the `learnings` protocol module, run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
+2. After the learnings answer is logged, or directly after Parts 1-2 when the `learnings` module is absent: `{{INVOKE}} engine orchestrate report --stage <slug> --result awaiting-approval` marks `[-]` -> `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate. These are internal bookkeeping steps: run them, never narrate them. This step is bookkeeping the user has no stake in: **SAY:** nothing for it, not that a gate is being opened, not that anything is being recorded. Go from that answer (or the completion summary when the module is absent) straight into the question below.
+   - When `directive.ceremony.sensors === "on"`, if the report instead refuses because a blocking gate sensor found issues or could not produce a verified pass, the approval gate is NOT open. In interactive mode, run `{{INVOKE}} engine log decision --stage <slug> --decision "Blocking gate sensor failure" --options "Fix findings,Override blocking sensors"` and present those two options as a separate structured question. END YOUR TURN.
    - **Fix findings**: after the human selects it, record `aidlc-log.ts answer --stage <slug> --details "Fix findings"`, fix the named findings or evaluation failure, then retry the ordinary report with no override.
    - **Override blocking sensors**: after the human selects it, record `aidlc-log.ts answer --stage <slug> --details "Override blocking sensors"`, then retry the same report with `--override-blocking-sensors --user-input "Override blocking sensors"`. The state tool requires the exact offered option, a `HUMAN_TURN`, and the matching decision/answer receipt; a bare flag fails. Never offer or attempt this option under `Construction Autonomy Mode: autonomous` — unattended runs halt loudly.
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
    - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"`. The selected decision and its feedback are separate fields; never put feedback in `--user-input`. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each finding the human explicitly rejects as inapplicable; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"`. The selected decision and its feedback are separate fields; never put feedback in `--user-input`. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each finding the human explicitly rejects as inapplicable; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include the exact offered label `--user-input "Accept as-is"`.
 
 **Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. The developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. A rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery.
@@ -394,7 +394,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 - Log each batch to `<record>/audit/<host>-<clone>.md` using the Question interaction log format. Generate a fresh ISO timestamp for each batch entry.
   CRITICAL: Each batch entry requires its own `date -u` Bash call. Do NOT reuse the timestamp from the mode choice or prior batch.
 - Continue until all questions are answered
-- **Consolidated summary before generation**: After all questions have been
+- **Consolidated summary before generation**: The checkpoint below applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
   answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). Then run
   `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
   add `--unit "<directive.unit>"` on a per-unit stage. Print its compact
@@ -468,8 +468,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 - Do NOT read the file or proceed until the user sends a completion signal
 - After the completion signal, read the answers, present their consolidated
   summary, and run the same persisted **Looks correct / Request changes**
-  checkpoint from Step 3a. Editing the source file does not waive the separate
-  pre-generation confirmation.
+  checkpoint from Step 3a only when `directive.ceremony.summary_confirmation === "on"`. Editing the source file does not waive an enabled checkpoint; when it is `"off"`, generate directly with no checkpoint or receipt.
 
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic
@@ -477,7 +476,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 - Extract decisions and answers from the conversation as they emerge
 - To end the conversation, tell the user: "When you're ready to proceed, say **done** and I'll summarize our decisions."
 - After the conversation reaches natural resolution, write all extracted answers back to the questions file (update each `[Answer]:` tag with the decided value, timestamp, and `**Mode:** chat`)
-- Present a summary of extracted decisions, then persist and use the same **Looks correct / Request changes** structured confirmation from Step 3a before proceeding
+- Present a summary of extracted decisions, then, only when `directive.ceremony.summary_confirmation === "on"`, persist and use the same **Looks correct / Request changes** structured confirmation from Step 3a before proceeding; when it is `"off"`, generate directly with no checkpoint or receipt
 - Best for: exploratory stages, brainstorming, when questions need discussion before answering
 
 Users can switch modes mid-stage. For example, start with "Guide Me" for the first few questions, then say "let me just chat about the rest."
@@ -1045,7 +1044,7 @@ Subagent return summaries, contribution files, context budgets, and failure reco
 Load it when `directive.mode` is `subagent`, `pipeline`, or `mob`, or when the stage declares support agents (the engine lists it in `directive.protocol_modules`).
 ## 12. Phase Boundary Verification
 
-> See `stage-protocol-governance.md` §13 — load at phase transitions to run traceability verification. Capturing corrections as durable rules is the §13 Learnings Ritual below, not a separate guardrail flow.
+> See `stage-protocol-governance.md` §13 — load at phase transitions to run traceability verification. Capturing corrections as durable rules uses the conditional `learnings` protocol module (§13), not a separate guardrail flow. When that module is absent, no learning persistence runs.
 
 ### Conditional reviewer protocol
 
@@ -1054,96 +1053,7 @@ Reviewer dispatch, receipts, read scope, terminal ordering, and the NOT-READY lo
 Load it when the directive names a reviewer with an effective review class other than `none` (the engine lists it in `directive.protocol_modules`).
 ## 13. Learnings Ritual
 
-MANDATORY: Every stage that reaches a human approval gate runs the learnings-capture step **between the completion message (§2) and the approval gate (§1)**. The auto-proceeding bootstrap initialization stages and isolated `single: true` runs have no workflow approval gate and bypass this ritual; unfinished per-unit iterations defer it until the stage's one final gate. Per Fowler's harness model: "when issues recur, feedforward and feedback controls should be improved." This ritual is the human learning loop — surface what's worth remembering, write it into the harness where the next runner will pick it up automatically.
-
-The ritual is **tool-as-actor**: a deterministic tool (`aidlc-learnings.ts`) detects, surfaces, routes, and writes; the orchestrator-LLM renders the structured question and runs the admission conflict-check; the user decides keep / heading / scope. Detection, surfacing, routing, and writing are all deterministic; judgement is the user's.
-
-### What changes vs what doesn't
-
-**Stage files are immutable framework artefacts.** The ritual NEVER edits a stage file's `## Steps`, `## Sensors`, or `## Learn` content. Stage files ship with framework releases; user-tier customisation lives in the harness. The one carve-out is the frontmatter `sensors:` import list — a sensor-binding addition appends a new id there (the pull-authoring two-write install). That is the import list, not body content; the stage's immutable shape is unchanged. Stage files are framework-and-loop-edited, not framework-only — but only that one frontmatter list grows.
-
-**The harness IS mutable.** A confirmed learning IS a practice — it writes to one of two surfaces:
-
-- `aidlc/spaces/<space>/memory/project.md` (default) or `aidlc/spaces/<space>/memory/team.md` — appended as a practice line under the fitting topical heading (e.g. `## Corrections`, `## Testing Posture`, `## Forbidden`), one click to widen a candidate from project to team. These are the SAME method files the resolver reads; there is no parallel `*-learnings.md` surface, no fractional override tier, and no org tier (no widen-to-org path). History of what was learned lives in the audit shards + the per-stage diary, not a rolling dated file.
-- `{{HARNESS_DIR}}/sensors/aidlc-<id>.md` — for verification checks. A project-tier manifest with a `matches:` capability glob, bound to the originating stage by appending its id to that stage's `sensors:` frontmatter list.
-
-Next time the stage runs, the resolved rules and the bound sensor load automatically at compile — the stage runs better without anyone having edited the stage file's body.
-
-### When to run
-
-Trigger after Step N-1 (completion message rendered) and before Step N (approval gate), only when the engine emits the stage's actual human gate. A `gate: false` iteration does not run the ritual.
-
-### The ritual
-
-1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive). Treat this path as an output-only target: the orchestrator never reads, probes, creates, or initializes it, and follows the active harness's diary-write discipline when inserting entries. Use four standard H2 headings:
-   - **Interpretations** — choices made where the stage prose was ambiguous
-   - **Deviations** — places where you intentionally departed from the stage prose, and why
-   - **Tradeoffs** — alternatives considered and why you picked what you did
-   - **Open questions** — anything to confirm before next run, or uncertain context worth flagging
-
-   Each entry is a bullet under the appropriate heading with an ISO 8601 timestamp prefix:
-   ```markdown
-   - 2026-05-20T10:14:32Z — <one-line summary>; <2-3 sentences of context>
-   ```
-
-   The memory file persists across sessions — a stage that halts and resumes keeps its log intact. On stage approval, the memory file stays in the artefact directory as part of the stage's permanent record (committed alongside other artefacts).
-
-2. **Surface candidates (the tool reads memory.md).** Run:
-   ```bash
-   {{INVOKE}} engine learnings surface --slug <stage-slug>
-   ```
-   The tool parses memory.md and emits structured JSON: one candidate per non-blank entry under **Interpretations / Deviations / Tradeoffs** (surfaced verbatim — no paraphrase, no "interesting" filtering), plus a read-only `parked_open_questions[]` list. Open questions are research items, not learnings to install — they never become candidates. Most runs surface nothing worth keeping; that's the most common outcome. The output also carries `space` and `intent` — the workspace's active space/intent resolved AT THIS MOMENT, not re-derived later. Carry both verbatim into the selections file in step 5; `persist` uses these, never the live active-intent cursor, so a later intent switch before persisting can't misattribute the write. Multiple intent records with no valid active-intent cursor is a hard failure here, not a silent `intent: null`.
-
-3. **Render the structured question + free-text channel.** For each candidate, render one option whose `label` is the candidate `summary` (verbatim) and whose `description` names the routed destination (e.g. `→ project.md ## Corrections`) plus a "promote to team?" affordance. After `multiSelect` returns, correlate each kept label back to its candidate `id` + `source_heading`. Then **always** ask the human "Anything to add for next time?" with at least two explicit choices: **Nothing to add** and **Add a note**. This question is mandatory even when `surface` returned zero candidates: do not infer or self-select **Nothing to add**, and END YOUR TURN at the question — the approval gate is a separate, later turn, never rendered in the same message. This is a structured question, so the §3 logging pair applies to it like any other: `aidlc-log.ts decision` before presenting it, `aidlc-log.ts answer` with the human's exact choice after — the resulting `QUESTION_ANSWERED` row preceding the gate's `STAGE_AWAITING_APPROVAL` is the auditable proof the ritual ran as its own human interaction. `Add a note` opens a free-text follow-up; a harness-provided Other/notes escape remains a direct free-text path. Never emit a one-option structured question — Claude Code and Codex reject it. For any non-empty response, ask the user to pick one of the four diary headings (Interpretation / Deviation / Tradeoff / Open question). **The diary-heading pick is the only classification asked of the user.** From it, the orchestrator routes the learning to the fitting practice heading in the method file (KNOWLEDGE): a testing learning → `## Testing Posture`, a prohibition → `## Forbidden`, anything general → `## Corrections` (the default). The user never picks the destination heading directly — the orchestrator routes by fit, and the tool ensure-exists the heading before it writes.
-
-4. **Admission conflict-check (before any write).** For each kept learning candidate, compare the proposed practice line against `org.md`'s matching `## <section>` (matched by the routed heading — the single-line variant of the §5 admission gate). This comparison is a section-level LLM check (knowledge → orchestrator-LLM). If the practice contradicts an org guardrail, surface the conflicting org sentence inline; the user **revises, skips this candidate, or escalates** (judgement → user; there is no user-override path). Only conflict-clear or user-escalated selections proceed to the write. Sensor manifests have no org-section analogue and skip this check.
-
-5. **Persist (the tool writes + emits audit).** Build the selections file — `{ stage_slug, space, intent, selections[] }`, where `space`/`intent` are carried verbatim from step 2's surface output — and call:
-   ```bash
-   {{INVOKE}} engine learnings persist --slug <stage-slug> --selections-json <path>
-   ```
-   The tool rejects a `--slug` that differs from the selections file's `stage_slug`, then verifies inside one `withAuditLock` transaction that the pinned space and non-null intent record still exist. It deduplicates against both the fresh audit snapshot and hashes emitted earlier in the same batch, using a `<!-- cid:<intent-slug>:<stage-slug>:<content-hash> -->` marker whose content hash is the full SHA-256 digest of the learning text. A crashed run therefore recovers without double-appending, while distinct learning text cannot share a truncated persisted identity:
-   - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
-   - **Sensor** → scaffolds a project-tier `<project>/{{HARNESS_DIR}}/sensors/aidlc-<id>.md` manifest (with the user-supplied `matches:` glob) AND appends the new id to the originating stage's `sensors:` frontmatter list — both writes inside the same lock. Emits `SENSOR_PROPOSED`. The sensor binds and fires from the next workflow's compile.
-
-   The orchestrator never `Edit`s a rule or sensor file directly — every learning write goes through the tool under the lock, so the `RULE_LEARNED` / `SENSOR_PROPOSED` audit row is the replayable source of truth for what was learned. The selections file is the replay artefact: a crashed persist replays the same selections-json without re-prompting the human.
-
-6. **Proceed to approval gate.** The ritual is advisory and additive — it never blocks the gate after the human responds. If the user skipped all candidates and explicitly chose **Nothing to add**, proceed directly; zero surfaced candidates alone is not permission to skip the mandatory question in step 3.
-
-### Routing decision tree
-
-```
-Is the entry an Interpretation / Deviation / Tradeoff?
-└── Learning → a practice line under the routed heading in <scope>.md
-    Heading routed by fit (testing → ## Testing Posture, prohibition →
-      ## Forbidden, general → ## Corrections); ensure-exists before write.
-    Scope derived from the user's keep + optional promote:
-    ├── default                       — project.md
-    └── promote scope (project→team)  — team.md   (no org tier)
-
-Is the entry an Open question?
-└── Parked — research item, never installed.
-
-Is the improvement a verification check?
-└── Sensor (two-write install): scaffold a project-tier manifest at
-    {{HARNESS_DIR}}/sensors/aidlc-<id>.md with a matches: glob, AND append its id to
-    the originating stage's sensors: frontmatter list (one locked transaction).
-    The matches: glob is a capability filter — stages: [<id>] is the binding.
-```
-
-### What goes where — quick reference
-
-| Entry shape | Destination |
-|---|---|
-| Interpretation: "Reused the auth module rather than rewriting it" | `project.md ## Corrections` (practice line, `(learned YYYY-MM-DD)`) |
-| Deviation: "Used Given/When/Then for AC despite freeform prose" | `project.md ## Testing Posture` (practice line); promote to `team.md` if team-wide |
-| Tradeoff: "Picked TDD over BDD for the new generators this run" | `project.md ## Testing Posture` (practice line) |
-| Open question: "Confirm whether story splitting is by persona or journey" | Parked — never installed |
-| Check: "ADRs should carry Security and Compliance headings" | Sensor manifest `aidlc-<id>.md` (`matches:` glob) bound to the stage via its `sensors:` frontmatter |
-
-### Why stage files stay immutable
-
-Two reasons: (1) framework upgrades to a stage file would conflict with workflow-time edits; (2) the same stage runs in many projects, so stage-file body mutations would mean every workflow drifts the framework's methodology in incompatible directions. The harness layer (rules, learnings, sensors) is designed to compose — many small additions accumulate without conflicts. Stage-file bodies are not. The sensor-binding frontmatter edit is the one sanctioned exception: it grows the `sensors:` import list (immutable in shape, not in contents), never the `## Steps` / `## Sensors` / `## Learn` body.
+Loaded as the `learnings` protocol module when the directive lists it. When the directive's `ceremony.learnings` is `off` the module is absent: keep no diary, run no surfacing, ask no question — go from the §2 completion message straight to the §1 approval gate.
 
 ---
 
@@ -1214,6 +1124,8 @@ gate. The human already gave the confirming decision by choosing "Retry with
 fix"; this is not a second, silent autonomy inference.
 
 ## 14. Sensor Imports
+
+The instructions in this section apply only when `directive.ceremony.sensors === "on"`. When it is `"off"`, `sensors_applicable` is empty: no sensor correction, rerun, gate-blocking, or sensor-override instructions apply. Ordinary artifact verification and approval gates remain required.
 
 A stage's `sensors:` frontmatter list is its complete set of imported checks.
 Each named manifest defines its file match, command, time budget, `fire_on`

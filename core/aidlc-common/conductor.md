@@ -56,8 +56,8 @@ stage that does not apply reports
 
 ## Keeping the diary (memory.md)
 
-Every stage keeps an observation diary at the `memory_path` the `run-stage`
-directive carries (`<record>/<phase>/<stage>/memory.md`):
+Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
+directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
 
 1. The engine creates `memory.md` from
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
@@ -68,7 +68,7 @@ directive carries (`<record>/<phase>/<stage>/memory.md`):
    Never overwrite; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
-   question. This is your diary-keeping (see `stage-protocol.md` §13); the four
+   question. This is your diary-keeping (see `stage-protocol-learnings.md` §13); the four
    headings already exist in the template.
 3. On approval, leave `memory.md` in place — it is the stage's permanent
    record. The §13 gate reads it; do not delete or move it.
@@ -84,7 +84,7 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
 
 - **Follow-up questions** and **contradiction resolution** — iterate with the
   user until the stage's answers are coherent.
-- **The §13 conflict-check** — before a learning reaches disk, compare it
+- **The §13 conflict-check** — only when the `learnings` module is listed, before a learning reaches disk, compare it
   section-by-section against
   `aidlc/spaces/<active-space>/memory/org.md`; a narrower rule that contradicts
   broader policy is rejected at the memory gate.
