@@ -327,10 +327,9 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(skill).toContain("Harness notes (Devin CLI)");
   });
 
-  // S04: Devin persona frontmatter projection — strip display_name, examples,
-  // disallowedTools, maxTurns from Devin agent .md files. Other harnesses keep
-  // these fields. The authored core/agents/*.md files are unchanged.
-  test("11: Devin agents strip unsupported frontmatter fields (display_name, examples, disallowedTools, maxTurns)", () => {
+  // Devin retains the authored persona frontmatter fields, matching core and
+  // Claude modulo tier/model projection. Native CFG005 warnings are expected.
+  test("11: Devin agents retain authored frontmatter fields (display_name, examples, disallowedTools, maxTurns)", () => {
     const agentsDir = join(ENGINE, "agents");
     expect(existsSync(agentsDir)).toBe(true);
     const agentFiles = readdirSync(agentsDir).filter(
@@ -342,11 +341,20 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       const m = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
       expect(m, `${f}: no frontmatter block`).not.toBeNull();
       const fm = m![1];
-      // Stripped fields must be absent from the frontmatter block.
-      expect(fm, `${f}: display_name still in Devin frontmatter`).not.toMatch(/^display_name:/m);
-      expect(fm, `${f}: examples still in Devin frontmatter`).not.toMatch(/^examples:/m);
-      expect(fm, `${f}: disallowedTools still in Devin frontmatter`).not.toMatch(/^disallowedTools:/m);
-      expect(fm, `${f}: maxTurns still in Devin frontmatter`).not.toMatch(/^maxTurns:/m);
+      const core = readFileSync(join(REPO_ROOT, "core", "agents", f), "utf-8");
+      const coreFm = core.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+      const claude = readFileSync(join(CLAUDE_SRC, "agents", f), "utf-8");
+      const claudeFm = claude.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+      const withoutTierProjection = (frontmatter: string) => frontmatter
+        .split(/\r?\n/)
+        .filter((line) => !/^(?:tier|model|effort|variant):/.test(line))
+        .join("\n");
+      for (const field of ["display_name", "examples", "disallowedTools", "maxTurns"]) {
+        const key = new RegExp(`^${field}:`, "m");
+        expect(key.test(fm), `${f}: ${field} differs from core`).toBe(key.test(coreFm));
+      }
+      expect(withoutTierProjection(fm), `${f}: frontmatter differs from core`).toBe(withoutTierProjection(coreFm));
+      expect(withoutTierProjection(fm), `${f}: frontmatter differs from Claude`).toBe(withoutTierProjection(claudeFm));
       // Preserved fields must remain.
       expect(fm, `${f}: name stripped`).toMatch(/^name:\s*aidlc-/m);
       expect(fm, `${f}: description stripped`).toMatch(/^description:/m);
@@ -369,18 +377,13 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(reviewerFm).toMatch(/^maxTurns:\s*60/m);
   });
 
-  test("13: Devin agent body content unchanged by projection (examples text in body survives)", () => {
-    // The developer agent body mentions "error-handling" (an examples entry)
-    // in prose — the strip only removes the frontmatter examples: block, not
-    // body prose. Verify body content is intact.
+  test("13: Devin developer agent retains frontmatter examples and body content", () => {
+    // Both the frontmatter examples list and persona body remain intact.
     const dev = readFileSync(join(ENGINE, "agents", "aidlc-developer-agent.md"), "utf-8");
     // The body should still contain the persona heading and core responsibilities.
     expect(dev).toContain("# Developer Agent");
-    // The frontmatter examples list (db-conventions.md, error-handling.md) is
-    // stripped from frontmatter but those words may appear in body prose.
-    // The key invariant: no examples: KEY in frontmatter.
     const fm = dev.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
-    expect(fm).not.toMatch(/^examples:/m);
+    expect(fm).toMatch(/^examples:/m);
   });
 
   // S03: invocation and rule activation — generated runners carry triggers: [user],

@@ -112,6 +112,12 @@ cursors and machine-local runtime.
 Run `/aidlc --doctor` after install. It checks the adapter, the four wiring
 files, the Devin CLI version, and surfaces the hook-approval advisory.
 
+`devin doctor --json` emits CFG005 warnings for `display_name`, `examples`,
+`disallowedTools`, and `maxTurns` on `.devin/agents/*.md` when those fields are
+present. This is expected and does not indicate a broken install — those
+fields are authored once in `core/agents/` for the harnesses that consume them,
+and Devin's native agent loader simply ignores them.
+
 ## Regenerating
 
 ```bash

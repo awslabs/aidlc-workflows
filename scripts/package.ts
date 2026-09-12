@@ -78,7 +78,6 @@ import {
   readMemoryCap,
   type Tier,
 } from "../core/tools/aidlc-tiers.ts";
-import { stripDevinUnsupportedProfileFields } from "../core/tools/aidlc-devin-profile.ts";
 import {
   agentTiersFromAuthoredDirectory,
   modelAgentName,
@@ -344,17 +343,6 @@ function transform(
     // posixPath: the POSIX-normalized path (srcPath carries the platform
     // separator on Windows) used by the per-harness agent projections below.
     const posixPath = srcPath.split(sep).join("/");
-    // Devin: strip frontmatter fields its native agent loader ignores
-    // (display_name, examples, disallowedTools, maxTurns) to produce clean
-    // `devin doctor` output. Runs after tier projection so the projected
-    // model/effort keys are preserved. Only applies to agent .md files.
-    if (
-      harness === "devin" &&
-      posixPath.includes("/agents/") &&
-      posixPath.endsWith("-agent.md")
-    ) {
-      s = stripDevinUnsupportedProfileFields(s, srcPath);
-    }
     // Cursor, opencode, and Copilot persona bodies are mutable active-space
     // pointers. Ship their memory references on the default seed so the first
     // startup's repointHarnessIncludes(project, "default") is byte-identical;

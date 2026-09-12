@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] - 2026-09-12
+
+Restores the shared persona frontmatter contract for Devin CLI, including plugin agents. **Upgrade:** `aidlc update`, or `install.sh --version 2.9.1` / `install.ps1 -Version 2.9.1`, to replace previously stripped agent files. No workflow-record migration is required.
+
+* Devin agent files now retain `display_name`, `examples`, `disallowedTools`, and `maxTurns` wherever authored; Devin's native loader ignores these fields.
+* `devin doctor --json` may report CFG005 warnings for the retained fields. These warnings are expected and do not indicate a broken install.
+* AI-DLC requires `display_name` in agent metadata on every harness, including Devin; custom agents missing it must add it before running `/aidlc --doctor`.
+
 ## [2.9.0] - 2026-09-09
 
 Fixes a Plan Approval session mismatch on the Devin CLI harness. The orchestrator read the binding file (`aidlc/.aidlc-sessions/<devin-session>`) which contains the intent UUID, and passed that as `--session` to `aidlc-log decision`/`answer`. The challenge was written as `challenge-<intent-uuid>.json`, but the `record-human-turn` hook receives the Devin session name and wrote no response (it looked for `challenge-<devin-session>.json` and found nothing). The `answer` command then failed with "Plan Approval requires the actual offered choice from this prompt and session." Both `recordPlanApprovalHumanResponse` and `certifyPlanApprovalReceipt` now fall back to `.current-session` when the challenge/response isn't found under the given session, so the response is written and certified under the Devin session name regardless of which identifier the orchestrator passed. **Upgrade:** `aidlc update`, or `install.sh --version 2.9.0` / `install.ps1 -Version 2.9.0`. No migration; existing workflow records resume normally.
