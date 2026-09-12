@@ -250,10 +250,10 @@ describe("t302 conditional protocol modules", () => {
       "utf-8",
     );
     expect(construction).toContain(
-      "ceremonies apply only when the engine resolved a real non-empty Unit DAG",
+      "apply to solo work with a real, non-empty Unit DAG",
     );
     expect(construction).toContain(
-      "module applies only when `directive.reviewer` is present",
+      "only when `directive.reviewer` is present, follow stage-protocol-reviewer.md",
     );
     expect(construction).toContain(
       "run one ordinary stage iteration with no Bolt or per-Unit ceremony",
@@ -272,7 +272,7 @@ describe("t302 conditional protocol modules", () => {
       "utf-8",
     );
     const expected = [
-      ["Construction Bolt gates", "construction"],
+      ["Construction directive routing", "construction"],
       ["Within-Bolt Question Collection", "construction"],
       ["Multi-agent stages (ensemble topologies)", "ensemble"],
       ["Subagent Return Summary", "ensemble"],

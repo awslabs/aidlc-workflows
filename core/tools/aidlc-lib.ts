@@ -3033,6 +3033,18 @@ export interface PlanApprovalRuntimeProvenance {
   plannedSourceSha256: string;
 }
 
+export interface PlanApprovalBatchMember extends PlanApprovalRuntimeIdentity {
+  unit: string;
+  planSha256: string;
+  instructionsSha256: string;
+}
+
+export interface PlanApprovalRuntimeBatch {
+  name: string;
+  members: PlanApprovalBatchMember[];
+  bindingSha256: string;
+}
+
 export interface PlanApprovalRuntimeChallenge
   extends PlanApprovalRuntimeIdentity, PlanApprovalRuntimeProvenance {
   version: 1;
@@ -3041,6 +3053,7 @@ export interface PlanApprovalRuntimeChallenge
   options: [string, string];
   requireExactOptionLabels: boolean;
   hashedOptionLabels: boolean;
+  batch?: PlanApprovalRuntimeBatch;
 }
 
 export interface PlanApprovalRuntimeResponse {
@@ -3066,6 +3079,9 @@ export interface PlanApprovalRuntimeReceipt
   questionsSha256: string;
   certifiedSourceSha256: string;
   status: "approved" | "generation";
+  batch?: PlanApprovalRuntimeBatch;
+  /** Execution in a verified Unit worktree retains its protected parent authority. */
+  delegation?: PlanApprovalWorktreeDelegation;
   /**
    * Present only on a break-glass receipt: the human typed the override phrase
    * and the conductor ran `answer --override` with that reason. Such a receipt
@@ -3074,6 +3090,18 @@ export interface PlanApprovalRuntimeReceipt
    * refused are kept beside the reason so the record says what was overridden.
    */
   override?: PlanApprovalReceiptOverride;
+}
+
+export interface PlanApprovalWorktreeDelegation {
+  version: 1;
+  parentProjectDir: string;
+  worktreeDir: string;
+  unit: string;
+  provenanceSha256: string;
+  parentReceiptSha256: string;
+  baselineSha256: string;
+  /** Present only when this immutable commit reproduces the delegated baseline. */
+  baselineCommit?: string;
 }
 
 export interface PlanApprovalReceiptOverride {
@@ -3150,6 +3178,8 @@ export interface KiroIdeLegacyPlanApprovalHost {
 }
 
 function planApprovalRuntimeDir(projectDir: string): string {
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated) return join(projectDir, delegated.intentRecord, ".aidlc-plan-approval");
   return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
 }
 
@@ -3354,6 +3384,107 @@ export function clearPlanApprovalReceipt(
     unlinkSync(planApprovalReceiptPath(projectDir, identity));
   } catch {
     // Missing runtime authority is already clear.
+  }
+}
+
+function planApprovalBatchCommitPath(
+  projectDir: string,
+  batch: PlanApprovalRuntimeBatch,
+  session: string,
+): string {
+  const key = createHash("sha256").update(`${session}\n${batch.bindingSha256}`, "utf-8").digest("hex");
+  return join(planApprovalRuntimeDir(projectDir), `batch-commit-${key}.json`);
+}
+
+export function planApprovalBatchCommitted(
+  projectDir: string,
+  receipt: PlanApprovalRuntimeReceipt,
+): boolean {
+  if (!receipt.batch) return false;
+  const commit = readPlanApprovalRuntimeJson<{ challengeId: string; bindingSha256: string }>(
+    planApprovalBatchCommitPath(projectDir, receipt.batch, receipt.session), "Plan Approval batch commit",
+  );
+  return commit?.challengeId === receipt.challengeId &&
+    commit.bindingSha256 === receipt.batch.bindingSha256;
+}
+
+// Caller holds the directive lock. Snapshot every destination before writing,
+// including the one-shot human response, so a failed member/audit write leaves
+// the previous authority intact and the human's response available for retry.
+// Publish the shared commit marker LAST: even a complete intermediate receipt
+// set cannot authorize generation before all writes succeed.
+export function commitPlanApprovalBatch(
+  projectDir: string,
+  challenge: PlanApprovalRuntimeChallenge,
+  receipts: PlanApprovalRuntimeReceipt[],
+  record: () => void,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const { session, batch } = challenge;
+  if (!batch) throw new Error("Plan Approval batch transaction requires a batch challenge");
+  const { members } = batch;
+  const commitPath = planApprovalBatchCommitPath(projectDir, batch, session);
+  const paths = [
+    commitPath,
+    ...members.map((member) => planApprovalReceiptPath(projectDir, member)),
+    planApprovalChallengePath(projectDir, session),
+    planApprovalResponsePath(projectDir, session),
+    planApprovalOverridePath(projectDir, session),
+  ];
+  const previous = new Map<string, string | null>();
+  for (const path of paths) {
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, path));
+    try {
+      previous.set(path, readAtomicReplacedFileNoFollowOrThrow(path, "Plan Approval batch record").toString("utf-8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      previous.set(path, null);
+    }
+  }
+  const touched = new Set<string>();
+  const remove = (path: string): void => {
+    touched.add(path);
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  };
+  try {
+    // Withdraw old publication while replacing receipts. On rollback this is
+    // restored last, after every member and the hook response are restored.
+    remove(commitPath);
+    if (receipts.length > 0) {
+      for (const receipt of receipts) {
+        touched.add(planApprovalReceiptPath(projectDir, receipt));
+        writePlanApprovalReceipt(projectDir, receipt);
+      }
+    } else {
+      for (const member of members) remove(planApprovalReceiptPath(projectDir, member));
+    }
+    record();
+    for (const path of paths.slice(members.length + 1)) remove(path);
+    if (receipts.length > 0) {
+      writeFileAtomic(commitPath, `${JSON.stringify({
+        challengeId: challenge.challengeId,
+        bindingSha256: batch.bindingSha256,
+      })}\n`);
+    }
+  } catch (error) {
+    const failures: unknown[] = [error];
+    for (const path of [...touched].reverse()) {
+      try {
+        const content = previous.get(path);
+        if (content === null) remove(path);
+        else if (content !== undefined) writeFileAtomic(path, content);
+      } catch (restoreError) {
+        failures.push(restoreError);
+      }
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Plan Approval batch write and rollback failed; re-present every unit plan.");
+    }
+    throw error;
   }
 }
 
@@ -4246,6 +4377,14 @@ export function resolveWorkflowSelection(
   projectDir: string,
   options: WorkflowSelectionOptions = {},
 ): WorkflowSelection {
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated) {
+    if ((options.space !== undefined && options.space !== delegated.space) ||
+      (options.intent !== undefined && options.intent !== delegated.intent)) {
+      throw new Error("Workflow selection does not match the delegated worktree intent");
+    }
+    return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
+  }
   const explicitSession = validSessionId(options.sessionId);
   let sessionId: string | null;
   if (explicitSession) {
@@ -4482,6 +4621,49 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   if (activeDir === null) return null;
   const match = listIntents(projectDir, sp).find((i) => i.dirName === activeDir);
   return match?.uuid ? match.uuid : null;
+}
+
+/** A sibling-only swarm worker inherits identity from its attested parent record, not a local registry. */
+export function delegatedWorktreeIntent(projectDir: string): {
+  parent: string; space: string; intent: string; intentRecord: string; intentUuid: string;
+} | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  if (activeIntentUuid(projectDir) !== null) return null;
+  assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
+  const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));
+  // Workspace-shell worktrees and non-swarm work retain their existing resolution.
+  if (meta?.repoSelector === null || meta?.swarmUnit === undefined) return null;
+  const record = typeof meta?.intentRecord === "string"
+    ? /^aidlc\/spaces\/([a-z][a-z0-9-]*)\/intents\/([^/]+)$/.exec(meta.intentRecord) : null;
+  if (meta?.version !== 1 || !record || record[2] === "." || record[2] === ".." ||
+    typeof meta.repoSelector !== "string" || !meta.repoSelector ||
+    typeof meta.swarmUnit !== "string" || meta.boltSlug !== boltSlugForUnit(meta.swarmUnit)) {
+    throw new Error("Invalid delegated worktree intent provenance");
+  }
+  const child = canonicalPathKey(projectDir);
+  const parent = dirname(dirname(dirname(child)));
+  if (canonicalPathKey(worktreePath(parent, meta.boltSlug)) !== child ||
+    relativeRecordDir(parent) !== meta.intentRecord) {
+    throw new Error("Delegated worktree does not match the active parent intent record");
+  }
+  assertNoSymlinkInChainOrThrow(parent, relative(parent, projectDir));
+  const [, space, intent] = record;
+  const intentUuid = listIntents(parent, space).find((entry) => entry.dirName === intent)?.uuid;
+  const unreadable: string[] = [];
+  const creations = maximalAttemptEvents(readAuditShardEvents(parent, intent, space, unreadable).filter(
+    (row) => row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === meta.boltSlug,
+  ));
+  const creation = creations.length === 1 ? creations[0] : null;
+  const path = creation && auditBlockField(creation.block, "Worktree path");
+  if (!intentUuid || unreadable.length || !creation || !path ||
+    canonicalPathKey(resolveAuditWorktreePath(parent, path)) !== child ||
+    auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
+    auditBlockField(creation.block, "Repo") !== meta.repoSelector ||
+    auditBlockField(creation.block, "Swarm Unit") !== meta.swarmUnit) {
+    throw new Error("Delegated worktree intent has no matching immutable creation authority");
+  }
+  return { parent, space, intent, intentRecord: meta.intentRecord, intentUuid };
 }
 
 // Resolve an intent UUID to its record across EVERY space (a conversation may
@@ -5303,7 +5485,8 @@ function resolveActiveDirectiveTarget(
   }
   const intentUuid = recordDirName === null
     ? null
-    : listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
+    : delegatedWorktreeIntent(canonicalProjectDir)?.intentUuid ??
+      listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
   const markerPath = join(root, ACTIVE_DIRECTIVE_MARKER);
   return {
     canonicalProjectDir,
@@ -7657,7 +7840,45 @@ function firstConstructionApprovalStage(
 export function isAutonomousConstructionGate(
   stateContent: string | null,
   stage: { slug: string; phase: string; for_each?: string },
+  projectDir?: string,
 ): boolean {
+  const checkpoints = stateContent !== null && constructionCheckpointsApply(stateContent);
+  if (checkpoints && stage.phase === "construction" && projectDir) {
+    if (
+      stage.slug === "code-generation" &&
+      isConstructionSwarmEnabled(stateContent) &&
+      getField(stateContent!, "Construction Iteration") !== "unit-major"
+    ) {
+      const dag = resolveBoltDag(projectDir);
+      if (dag.state !== "ok" || dag.units.length === 0) return false;
+      const inline = approvedConstructionUnits(projectDir, stateContent!);
+      const { resolveSwarmCheckpoint } = require("./aidlc-swarm-checkpoints.ts") as
+        typeof import("./aidlc-swarm-checkpoints.ts");
+      return dag.batches.every((batch, index) => {
+        const units = batch.filter((unit) => !inline.has(unit));
+        return units.length === 0 ||
+          resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent!).approved;
+      });
+    }
+    if (
+      stage.for_each === "unit-of-work" &&
+      getField(stateContent!, "Construction Iteration") === "unit-major"
+    ) {
+      const dag = resolveBoltDag(projectDir);
+      const approved = approvedConstructionUnits(projectDir, stateContent!);
+      return dag.state === "ok" && dag.units.length > 0 &&
+        dag.units.every((unit) => approved.has(unit));
+    }
+    if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
+    if (constructionSkeletonOn(stateContent!)) {
+      const dag = resolveBoltDag(projectDir);
+      return dag.state === "ok" && dag.units.length > 0 &&
+        approvedConstructionUnits(projectDir, stateContent!).has(dag.batches.flat()[0]);
+    }
+    // The grant governs ordinary completion gates; Plan Approval retains its
+    // own authority and is never inferred from this setting.
+    return getField(stateContent!, "Skeleton Stance") !== null;
+  }
   if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
   const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
   if (!scope) return false;
@@ -7667,6 +7888,58 @@ export function isAutonomousConstructionGate(
     getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&
     stage.for_each === "unit-of-work"
   );
+}
+
+export function constructionSkeletonOn(stateContent: string): boolean {
+  const stance = getField(stateContent, "Skeleton Stance");
+  if (stance === "on") return true;
+  if (stance !== "scope-dependent") return false;
+  return loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
+}
+
+export function constructionCheckpointsApply(stateContent: string): boolean {
+  if (
+    getField(stateContent, "Construction Checkpoints") !== "enabled" ||
+    isTeamUnitOwnership(stateContent)
+  ) return false;
+  const scope = getField(stateContent, "Scope") ?? "";
+  return unitMajorConstructionStageSlugs(scope, stateContent, true)
+    .some((slug) => findStageBySlug(slug)?.workspace_requires === true);
+}
+
+export function isConstructionSwarmEnabled(stateContent: string | null): boolean {
+  if (!stateContent) return false;
+  if (constructionCheckpointsApply(stateContent)) {
+    return getField(stateContent, "Construction Execution") === "swarm";
+  }
+  return isAutonomousMode(stateContent);
+}
+
+// An approved skeleton Unit was deliberately built before a stage-major swarm.
+// Its per-Unit source binding survives unrelated Units changing the workspace.
+export function approvedConstructionUnits(
+  projectDir: string,
+  stateContent: string,
+): Set<string> {
+  const approved = new Set<string>();
+  if (!constructionCheckpointsApply(stateContent)) return approved;
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok") return approved;
+  const { resolveConstructionCheckpoint } = require("./aidlc-construction-checkpoints.ts") as
+    typeof import("./aidlc-construction-checkpoints.ts");
+  for (const unit of dag.units) {
+    const kind = constructionSkeletonOn(stateContent) && unit === dag.batches.flat()[0]
+      ? "skeleton"
+      : "unit";
+    try {
+      if (resolveConstructionCheckpoint(projectDir, unit, kind, stateContent).approved) {
+        approved.add(unit);
+      }
+    } catch {
+      // Missing, stale or malformed evidence is unfinished work.
+    }
+  }
+  return approved;
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
@@ -8784,8 +9057,10 @@ export function checkSummaryConfirmationEvidence(
   const workflow = options.workflow;
   const unitMajor =
     isPerUnitStage(stage) &&
-    getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
-      "unit-major";
+    (
+      getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
+      getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
+    );
   const floors = summaryAttemptFloors(events, stage.slug, workflow, unitMajor);
   const afterFloor = (entry: AuditShardEvent): true | false | null => {
     if (floors.length === 0) return true;
@@ -12040,8 +12315,10 @@ export function reviewAttemptWindow(
     );
   const unitMajor =
     artifactPerUnit &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership = artifactPerUnit && isTeamUnitOwnership(stateContent);
+    (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
+  const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled");
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -12342,10 +12619,12 @@ export function reviewAttemptAccounting(
 
   const unitMajor =
     stage.for_each === "unit-of-work" &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership =
     stage.for_each === "unit-of-work" &&
-    isTeamUnitOwnership(stateContent);
+    (isTeamUnitOwnership(stateContent) ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -13064,8 +13343,10 @@ export function freshReviewReceipts(
       stateContent,
     );
   const unitMajor =
-    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership = perUnit && isTeamUnitOwnership(stateContent);
+    perUnit && (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
+  const teamOwnership = perUnit && (isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled");
   const attemptWindow =
     options.attemptWindow ??
     reviewAttemptWindow(projectDir, stateContent, stage);
@@ -17694,12 +17975,23 @@ export function readUnitSourceManifest(
   const manifestPath = join(record, "construction", unit, stageSlug, "source-manifest.json");
 
   let rawBytes: Buffer;
-  let value: unknown;
   try {
     rawBytes = readFileSync(manifestPath);
   } catch (error) {
     return { ok: false, reason: `cannot read source-manifest.json (${errorMessage(error)})` };
   }
+  return validateUnitSourceManifestBytes(projectDir, stageSlug, unit, rawBytes, options);
+}
+
+function validateUnitSourceManifestBytes(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  rawBytes: Buffer,
+  options: ReadUnitSourceManifestOptions,
+  immutableContext?: { carriesWorkspaceShell: boolean },
+): ReadUnitSourceManifestResult {
+  let value: unknown;
   try {
     value = JSON.parse(rawBytes.toString("utf-8")) as unknown;
   } catch (error) {
@@ -17717,11 +18009,11 @@ export function readUnitSourceManifest(
   if (value.version !== 1) return { ok: false, reason: "version must equal 1" };
   if (!Array.isArray(value.writes)) return { ok: false, reason: "writes must be an array" };
 
-  const worktreeContext =
+  const worktreeContext = immutableContext ?? (
     options.worktreeRelative ||
       existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
       ? worktreeSourceExclusionContext(projectDir)
-      : null;
+      : null);
   if (
     (
       options.worktreeRelative ||
@@ -17867,6 +18159,59 @@ export function readUnitSourceManifest(
     for (const index of pathModeIndexes.values()) {
       if (index !== null) rmSync(index.indexFile, { force: true });
     }
+  }
+}
+
+/** Validate transported child bytes against the immutable selected repository.
+ * Repo names remain absent, exactly as reviewed in the child; callers project
+ * the returned claims only after validating the native merge's Repo authority.
+ */
+export function readCommittedUnitSourceManifest(
+  sourceRepoDir: string,
+  commit: string,
+  carriesWorkspaceShell: boolean,
+  stageSlug: string,
+  unit: string,
+  rawBytes: Buffer,
+): { ok: false; reason: string } |
+  (Extract<ReadUnitSourceManifestResult, { ok: true }> & { listing: WorkspaceSourceListing }) {
+  if (!GIT_OBJECT_ID_RE.test(commit) || !/^[a-z][a-z0-9-]*$/.test(stageSlug) ||
+    validateUnitName(unit) !== null) {
+    return { ok: false, reason: "invalid immutable Unit source context" };
+  }
+  const root = join(tmpdir(), `aidlc-commit-manifest-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const checkoutDir = join(root, "checkout");
+  try {
+    // Raw materialization places its batch stream beside the checkout. Keep
+    // both under this invocation's private root, including on failure.
+    mkdirSync(checkoutDir, { recursive: true });
+    const gitDir = gitMetadataDirectory(sourceRepoDir);
+    const common = gitDir && gitCommonDirectory(gitDir);
+    const entries = gitTreeLeafEntries(sourceRepoDir, commit);
+    if (!common || !entries || !materializeRawGitTree(sourceRepoDir, checkoutDir, entries)) {
+      return { ok: false, reason: "immutable reviewed Source Commit is unavailable" };
+    }
+    // A private index/HEAD gives ignore, path-mode and symlink validation the
+    // reviewed tree, without registering a worktree or consulting mutable HEAD.
+    const initialized = spawnSync("git", [
+      "--git-dir", join(checkoutDir, ".git"), "--work-tree", checkoutDir,
+      "init", "-q", "--template=", `--object-format=${commit.length === 64 ? "sha256" : "sha1"}`, checkoutDir,
+    ], { encoding: "utf-8" });
+    if (initialized.status !== 0) return { ok: false, reason: "cannot initialize immutable source context" };
+    writeFileSync(join(checkoutDir, ".git", "objects", "info", "alternates"), `${join(common, "objects")}\n`);
+    writeFileSync(join(checkoutDir, ".git", "HEAD"), `${commit}\n`);
+    const manifest = validateUnitSourceManifestBytes(checkoutDir, stageSlug, unit, rawBytes, {}, { carriesWorkspaceShell });
+    if (!manifest.ok) return manifest;
+    const source = filesystemSourceIdentity(checkoutDir, carriesWorkspaceShell, new Set(), "tree-only", false);
+    if (!source) return { ok: false, reason: "immutable reviewed source cannot be fingerprinted" };
+    return {
+      ...manifest,
+      listing: prefixedSourceListing(source.listing),
+    };
+  } catch (error) {
+    return { ok: false, reason: `cannot validate immutable source manifest (${errorMessage(error)})` };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -20734,12 +21079,20 @@ export function isAutonomousSwarmStage(
 ): boolean {
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
-  if (!isAutonomousMode(stateContent)) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
-  if (first !== null && first.slug === stage.slug) return false;
+  const checkpoints = getField(stateContent!, "Construction Checkpoints") === "enabled";
+  if (first !== null && first.slug === stage.slug && !checkpoints) return false;
+  if (checkpoints && constructionSkeletonOn(stateContent!)) {
+    const dag = resolveBoltDag(projectDir);
+    if (
+      dag.state !== "ok" || dag.units.length === 0 ||
+      !approvedConstructionUnits(projectDir, stateContent!).has(dag.batches.flat()[0])
+    ) return false;
+  }
   const resolution = resolveBoltDag(projectDir);
   return resolution.state === "ok" && resolution.units.length > 0;
 }
@@ -25054,6 +25407,15 @@ export function swarmConvergedUnits(
     const latestTimestamp = rows.at(-1)?.timestamp;
     if (!latestTimestamp) continue;
     const latest = rows.filter((row) => row.timestamp === latestTimestamp);
+    // A Unit-level batch revision reopens only that Unit. A later native
+    // convergence receipt may settle it again; an older or unordered receipt
+    // cannot erase the human's Request Changes.
+    const reopened = auditRows.some((row) =>
+      row.event === "GATE_REJECTED" &&
+      gateRejectionMatchesAttempt(row.block, slug, unit) &&
+      latest.some((convergence) => !attemptEventDefinitelyBefore(row, convergence))
+    );
+    if (reopened) continue;
     const identities = new Set(
       latest.map((row) =>
         [
@@ -25077,6 +25439,16 @@ export function swarmConvergedUnits(
       (sourceChain.state !== "ready" || !sourceChain.units.has(unit))
     ) continue;
     converged.add(unit);
+  }
+  if (slug === "code-generation") {
+    try {
+      const state = readStateFile(projectDir);
+      for (const unit of approvedConstructionUnits(projectDir, state)) {
+        converged.add(unit);
+      }
+    } catch {
+      // Unreadable checkpoint evidence cannot stand in for convergence.
+    }
   }
   return converged;
 }
@@ -25192,6 +25564,35 @@ export type SwarmSourceOpeningFingerprint =
       listing?: WorkspaceSourceListing;
     };
 
+/** Only an exact, current Unit checkpoint rejection opens another source merge.
+ * Preserve aggregate history: rejection retires Unit authority, not landed bytes.
+ */
+export function swarmUnitCheckpointRejections(
+  rows: readonly AuditShardEvent[],
+  slug: string,
+  floor: string,
+  unit: string,
+  batch: string,
+): AuditShardEvent[] {
+  return rows.filter((row) => {
+    if (row.event !== "GATE_REJECTED" ||
+      auditBlockField(row.block, "Checkpoint") !== "swarm-batch" ||
+      auditBlockField(row.block, "Run floor") !== floor ||
+      auditBlockField(row.block, "Batch number") !== batch ||
+      auditBlockField(row.block, "Unit") !== unit ||
+      auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") ||
+      !gateRejectionMatchesAttempt(row.block, slug, unit) ||
+      !(auditBlockField(row.block, "Units") ?? "").split(",").map((name) => name.trim()).includes(unit)) return false;
+    try {
+      const floors = JSON.parse(auditBlockField(row.block, "Run floors") ?? "");
+      const before = rows.filter((candidate) => attemptEventDefinitelyBefore(candidate, row));
+      return floors[unit] === latestMainWorkflowStageRunFloorFromRows(before, slug, false, unit);
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * Resolve the trusted predecessor for the current attempt's first aggregate
  * source merge. A rejection may carry only the final validated aggregate from
@@ -25225,7 +25626,7 @@ export function currentSwarmSourceOpeningFingerprint(
       .filter(
         (row) =>
           row.event === "GATE_REJECTED" &&
-          auditBlockField(row.block, "Stage") === slug,
+          gateRejectionMatchesAttempt(row.block, slug, undefined),
       )
       .sort((a, b) => {
         if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -25270,7 +25671,8 @@ export function currentSwarmSourceOpeningFingerprint(
   const baseline = currentStageSourceBaseline(
     projectDir,
     slug,
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major",
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled",
     intent,
     space,
   );
@@ -25309,7 +25711,11 @@ export function currentSwarmSourceMergeChain(
     intent,
     space,
   );
-  const allRows = readAuditShardEvents(projectDir, intent, space);
+  const unreadable: string[] = [];
+  const allRows = readAuditShardEvents(projectDir, intent, space, unreadable);
+  if (unreadable.length || floor.startsWith("AMBIGUOUS:")) {
+    return { state: "invalid", reason: "source-merge attempt evidence is unreadable or ambiguous" };
+  }
   const rows = allRows
     .filter(
       (row) =>
@@ -25325,6 +25731,7 @@ export function currentSwarmSourceMergeChain(
   if (rows.length === 0) return { state: "none" };
 
   const units = new Set<string>();
+  const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let openingPrevious: string | null = null;
   for (let start = 0; start < rows.length;) {
@@ -25362,7 +25769,14 @@ export function currentSwarmSourceMergeChain(
           reason: `malformed SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit ?? "")}`,
         };
       }
-      if (units.has(unit)) {
+      const rejections = swarmUnitCheckpointRejections(allRows, slug, floor, unit, batch);
+      if (rejections.some((rejection) =>
+        !attemptEventDefinitelyBefore(rejection, row) && !attemptEventDefinitelyBefore(row, rejection))) {
+        return { state: "invalid", reason: `source merge and Unit rejection are causally ambiguous for ${JSON.stringify(unit)}` };
+      }
+      const previousMerge = lastMerge.get(unit);
+      if (previousMerge && !rejections.some((rejection) =>
+        attemptEventDefinitelyBefore(previousMerge, rejection) && attemptEventDefinitelyBefore(rejection, row))) {
         return {
           state: "invalid",
           reason: `duplicate SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)}`,
@@ -25381,7 +25795,12 @@ export function currentSwarmSourceMergeChain(
             candidate.event === "SWARM_UNIT_CONVERGED" &&
             auditBlockField(candidate.block, "Unit name") === unit &&
             auditBlockField(candidate.block, "Stage") === slug &&
-            auditBlockField(candidate.block, "Run floor") === floor,
+            auditBlockField(candidate.block, "Run floor") === floor &&
+            // A later retry must not replace the immutable authority used by
+            // an earlier link. Both rows must occupy the same rejection interval.
+            rejections.every((rejection) =>
+              (attemptEventDefinitelyBefore(rejection, row) && attemptEventDefinitelyBefore(rejection, candidate)) ||
+              (attemptEventDefinitelyBefore(row, rejection) && attemptEventDefinitelyBefore(candidate, rejection))),
         )
         .sort((a, b) => {
           if (a.timestamp !== b.timestamp) {
@@ -25401,6 +25820,7 @@ export function currentSwarmSourceMergeChain(
             );
       if (
         latestConvergences.length === 0 ||
+        !convergenceRows.some((candidate) => attemptEventDefinitelyBefore(candidate, row)) ||
         (new Set(latestConvergences.map((candidate) => candidate.shard)).size >
           1 &&
           new Set(
@@ -25422,14 +25842,17 @@ export function currentSwarmSourceMergeChain(
       if (
         auditBlockField(latestConvergence.block, "Batch number") !== batch ||
         auditBlockField(latestConvergence.block, "Source Commit") !==
-          sourceCommit
+          sourceCommit ||
+        auditBlockField(latestConvergence.block, "Source Freshness Bypass") !== null
       ) {
         return {
           state: "invalid",
           reason: `SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)} does not match its latest convergence`,
         };
       }
-      units.add(unit);
+      lastMerge.set(unit, row);
+      if (rejections.some((rejection) => attemptEventDefinitelyBefore(row, rejection))) units.delete(unit);
+      else units.add(unit);
       priorFingerprint = fingerprint;
     }
     start = end;
@@ -25504,24 +25927,24 @@ function currentUnitLifecycleRows(
         })
         .at(-1)?.timestamp ?? ""
     : latestMainWorkflowStageStarted(audit, slug);
-  let teamOwnership = false;
+  let unitScoped = false;
   try {
-    teamOwnership = isTeamUnitOwnership(
-      stateContent ?? readStateFile(projectDir),
-    );
+    const state = stateContent ?? readStateFile(projectDir);
+    unitScoped = isTeamUnitOwnership(state) ||
+      getField(state, "Construction Checkpoints") === "enabled";
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
   const floorByUnit = new Map<string, string>();
   const floorFor = (unit: string): string => {
-    const key = teamOwnership ? unit : "";
+    const key = unitScoped ? unit : "";
     const existing = floorByUnit.get(key);
     if (existing) return existing;
     const floor = latestMainWorkflowStageRunFloorForProject(
       projectDir,
       slug,
       unitMajor,
-      teamOwnership ? unit : undefined,
+      unitScoped ? unit : undefined,
       sourceRows,
     );
     floorByUnit.set(key, floor);
@@ -25606,9 +26029,10 @@ function currentUnitLifecycleRows(
 
 function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
+    const state = readStateFile(projectDir);
     return (
-      getField(readStateFile(projectDir), "Construction Iteration")?.trim() ===
-      "unit-major"
+      getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(state, "Construction Checkpoints") === "enabled"
     );
   } catch {
     return false;
@@ -25640,7 +26064,8 @@ export function unitLifecycleSnapshot(
   } = {},
 ): UnitLifecycleSnapshot {
   const unitMajor =
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
   const rows = currentUnitLifecycleRows(
     projectDir,
     "",

@@ -81,6 +81,9 @@ import {
   unattendedHumanPresenceHint,
   intentRepos,
   isAutonomousConstructionGate,
+  approvedConstructionUnits,
+  constructionSkeletonOn,
+  isConstructionSwarmEnabled,
   isAutonomousMode,
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
@@ -729,6 +732,8 @@ export function main(argv: string[]): void {
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-construction-checkpoints",
+      "set-construction-execution",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
       "refresh-unit-progress",
@@ -768,6 +773,12 @@ export function main(argv: string[]): void {
         break;
       case "set-construction-iteration":
         handleSetConstructionIteration(args.slice(1));
+        break;
+      case "set-construction-checkpoints":
+        handleSetConstructionPolicy("Construction Checkpoints", args.slice(1));
+        break;
+      case "set-construction-execution":
+        handleSetConstructionPolicy("Construction Execution", args.slice(1));
         break;
       case "set-unit-ownership":
         handleSetUnitOwnership(args.slice(1));
@@ -849,7 +860,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -906,6 +917,11 @@ function handleSet(args: string[]): void {
     const field = pair.slice(0, eqIdx);
     let value = pair.slice(eqIdx + 1);
 
+    if (field === "Construction Checkpoints" || field === "Construction Execution") {
+      content = setConstructionPolicyField(content, field, value);
+      continue;
+    }
+
     // Special values
     if (value === "NOW") {
       value = isoTimestamp();
@@ -925,6 +941,45 @@ function handleSet(args: string[]): void {
   writeStateFile(pd, content);
   console.log(JSON.stringify({ updated: true, fields: args.length }));
   });
+}
+
+function setConstructionPolicyField(content: string, field: string, value: string): string {
+  const allowed = field === "Construction Checkpoints"
+    ? ["enabled", "disabled"]
+    : ["serial", "swarm"];
+  if (!allowed.includes(value)) error(`${field} must be one of: ${allowed.join(", ")}.`);
+  if (
+    field === "Construction Execution" &&
+    getField(content, "Construction Checkpoints") !== "enabled"
+  ) error("Enable Construction Checkpoints before selecting Construction Execution.");
+  if (
+    field === "Construction Execution" && value === "swarm" &&
+    getField(content, "Construction Iteration") === "unit-major"
+  ) error("Select stage-major iteration before choosing swarm execution.");
+  return setOrInsertField(content, "## Runtime State", field, value);
+}
+
+// These typed setters change runtime preferences, like the existing iteration
+// setter; they cannot mutate lifecycle fields or grant autonomy.
+function handleSetConstructionPolicy(field: string, args: string[]): void {
+  if (args.length !== 1) error(`${field} requires exactly one value.`);
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    const updated = setConstructionPolicyField(content, field, args[0]);
+    if (updated !== content) requireHumanConstructionPolicyChange(pd, content);
+    writeStateFile(pd, updated);
+    console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+  });
+}
+
+function requireHumanConstructionPolicyChange(pd: string, content: string): void {
+  if (
+    getField(content, "Lifecycle Phase")?.toLowerCase() === "construction" &&
+    !humanPresenceGuardDisabled() && !humanActedSinceGate(pd)
+  ) {
+    error("Changing Construction policy during execution requires a fresh human request. Keep the current policy until the human asks to change it.");
+  }
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1004,12 +1059,23 @@ function handleSetConstructionIteration(args: string[]): void {
         "Set unit ownership to solo first.",
     );
   }
+  if (
+    value === "unit-major" &&
+    getField(content, "Construction Checkpoints") === "enabled" &&
+    getField(content, "Construction Execution") === "swarm"
+  ) {
+    error("Select Construction Execution: serial before switching to unit-major iteration.");
+  }
   const updated = setOrInsertField(
     content,
     "## Runtime State",
     "Construction Iteration",
     value,
   );
+  if (
+    updated !== content &&
+    getField(content, "Construction Checkpoints") === "enabled"
+  ) requireHumanConstructionPolicyChange(pd, content);
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });
@@ -1971,7 +2037,7 @@ function handleUnit(args: string[]): void {
     // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
     // The autonomy grant persists across backward jumps, where inline per-unit
     // stages still need this interactive lifecycle ledger.
-    if (autonomousSwarmOwnsStage(stage, content)) {
+    if (autonomousSwarmOwnsStage(stage, content, pd)) {
       error(
         `Refusing unit ${action}: Construction Autonomy Mode is autonomous. The swarm referee ` +
           "owns per-unit bookkeeping (SWARM_UNIT_* receipts); interactive unit receipts apply " +
@@ -2105,8 +2171,11 @@ function handleUnit(args: string[]): void {
       "Run floor": latestMainWorkflowStageRunFloorForProject(
         pd,
         slug,
-        getField(content, "Construction Iteration")?.trim() === "unit-major",
-        isTeamUnitOwnership(content) ? unit : undefined,
+        getField(content, "Construction Iteration")?.trim() === "unit-major" ||
+          getField(content, "Construction Checkpoints") === "enabled",
+        isTeamUnitOwnership(content) || getField(content, "Construction Checkpoints") === "enabled"
+          ? unit
+          : undefined,
       ),
       ...claimAttemptFields(pd, unit),
       ...(waveMode
@@ -2536,16 +2605,25 @@ function artifactGuardDisabled(): boolean {
 function autonomousSwarmOwnsStage(
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
+  pd: string,
 ): boolean {
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
-  if (!isAutonomousMode(stateContent)) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
     return false;
   }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
+  if (getField(stateContent, "Construction Checkpoints") === "enabled") {
+    if (constructionSkeletonOn(stateContent)) {
+      const dag = resolveBoltDag(pd);
+      return dag.state === "ok" && dag.units.length > 0 &&
+        approvedConstructionUnits(pd, stateContent).has(dag.batches.flat()[0]);
+    }
+    return true;
+  }
   const first = firstInScopeStageOfPhase("construction", scope);
   return first === null || first.slug !== stage.slug;
 }
@@ -5373,7 +5451,7 @@ function verifyApprovalDecision(
   forceHuman = false,
 ): { approvalInput: string | undefined; autonomousDecision: boolean } {
   const autonomousDecision =
-    !forceHuman && isAutonomousConstructionGate(content, stage);
+    !forceHuman && isAutonomousConstructionGate(content, stage, pd);
   const approvalInput = userInput?.trim();
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
@@ -5845,7 +5923,9 @@ function handleReject(args: string[]): void {
     );
   }
   const autonomousDecision =
-    !teamGate && isAutonomousConstructionGate(content, stage);
+    !teamGate &&
+    getField(content, "Construction Checkpoints") !== "enabled" &&
+    isAutonomousConstructionGate(content, stage, pd);
   if (
     !autonomousDecision &&
     feedbackStatus === "not-applicable" &&

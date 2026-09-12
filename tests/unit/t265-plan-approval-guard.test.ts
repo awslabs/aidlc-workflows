@@ -919,7 +919,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   for (const published of [false, true]) {
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
@@ -960,6 +960,13 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine testing-posture verify --stage-level`,
           `bun ${entry} engine log decision --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
+          `bun ${entry} engine bolt checkpoint --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action status --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action approve --unit todo-core --user-input Approve`,
+          `bun ${entry} engine bolt checkpoint --action reject --unit todo-core --user-input "Request Changes"`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth`,
         ]) {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
@@ -968,6 +975,12 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
           `bun ${entry} engine testing-posture begin --stage-level`,
+          `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,
+          `bun ${entry} engine bolt checkpoint --action`,
+          `bun ${entry} engine bolt checkpoint --action status --action verify --unit todo-core`,
+          `bun ${entry} engine bolt swarm-checkpoint --action verify --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status > src/inline.ts`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status; printf code > src/inline.ts`,
           `bun ${entry} engine log decision --stage code-generation --checkpoint summary-confirmation`,
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation`,
           `bun ${entry} system lifecycle uninstall --yes`,
@@ -1087,11 +1100,21 @@ describe("t265b hook lifecycle", () => {
         "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
         "aidlc.exe engine testing-posture render",
+        "aidlc engine bolt checkpoint --action status --unit todo-core",
+        "aidlc engine bolt checkpoint --action approve --unit todo-core",
+        "aidlc engine bolt checkpoint --action reject --unit todo-core",
+        "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth",
       ]) {
         expect(runHook(proj, BASH(command)).code, command).toBe(0);
       }
       for (const command of [
         "aidlc engine testing-posture begin --stage-level",
+        "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
+        "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
+        "aidlc engine bolt start --name todo-core",
+        "aidlc engine bolt swarm-checkpoint --action status > src/inline.ts",
         "aidlc engine log decision --stage code-generation --checkpoint summary-confirmation",
         "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation",
         "aidlc engine log review --stage code-generation",

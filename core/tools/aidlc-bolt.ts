@@ -71,6 +71,18 @@ import {
   writeStateFile,
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import {
+  approveConstructionCheckpoint,
+  rejectConstructionCheckpoint,
+  resolveConstructionCheckpoint,
+  verifyConstructionCheckpoint,
+  type ConstructionCheckpointKind,
+} from "./aidlc-construction-checkpoints.ts";
+import {
+  approveSwarmCheckpoint,
+  rejectSwarmCheckpoint,
+  resolveSwarmCheckpoint,
+} from "./aidlc-swarm-checkpoints.ts";
 
 function resolveTeamUnitSlug(
   projectDir: string,
@@ -1177,6 +1189,66 @@ function handleSetAutonomy(args: string[]): void {
 
 // --- CLI entry point ---
 
+function handleCheckpoint(args: string[]): void {
+  const flags = parseFlags(args);
+  if (!flags.unit) error("checkpoint requires --unit <name>");
+  const kind = flags.kind ?? "unit";
+  if (kind !== "unit" && kind !== "skeleton") {
+    error("checkpoint --kind must be unit or skeleton");
+  }
+  const checkpointKind: ConstructionCheckpointKind = kind;
+  const pd = resolveProjectDir(projectDir);
+  let result: ReturnType<typeof resolveConstructionCheckpoint>;
+  switch (flags.action ?? "status") {
+    case "status":
+      result = resolveConstructionCheckpoint(pd, flags.unit, checkpointKind);
+      break;
+    case "verify":
+      result = verifyConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, flags["check-cmd"] ?? "",
+      );
+      break;
+    case "approve":
+      result = approveConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, flags["user-input"],
+      );
+      break;
+    case "reject":
+      result = rejectConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "",
+      );
+      break;
+    default:
+      error("checkpoint --action must be status, verify, approve or reject");
+  }
+  console.log(JSON.stringify(result));
+  if (flags.action === "verify" && !result.verified) process.exitCode = 1;
+}
+
+function handleSwarmCheckpoint(args: string[]): void {
+  const flags = parseFlags(args);
+  const batch = Number(flags.batch);
+  if (!Number.isSafeInteger(batch) || batch < 1) error("swarm-checkpoint requires --batch <positive integer>");
+  const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
+  if (units.length === 0) error("swarm-checkpoint requires --units <comma-separated names>");
+  const pd = resolveProjectDir(projectDir);
+  let result: ReturnType<typeof resolveSwarmCheckpoint>;
+  switch (flags.action ?? "status") {
+    case "status":
+      result = resolveSwarmCheckpoint(pd, batch, units);
+      break;
+    case "approve":
+      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"]);
+      break;
+    case "reject":
+      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "");
+      break;
+    default:
+      error("swarm-checkpoint --action must be status, approve or reject");
+  }
+  console.log(JSON.stringify(result));
+}
+
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
@@ -1211,6 +1283,12 @@ export function main(argv: string[]): void {
       case "set-autonomy":
         handleSetAutonomy(filteredArgs.slice(1));
         break;
+      case "checkpoint":
+        handleCheckpoint(filteredArgs.slice(1));
+        break;
+      case "swarm-checkpoint":
+        handleSwarmCheckpoint(filteredArgs.slice(1));
+        break;
       case "dispatch-event":
         handleDispatchEvent(filteredArgs.slice(1));
         break;
@@ -1222,7 +1300,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: start, complete, fail, abort, set-autonomy, dispatch-event, hold-merge, release-merge`
+          `Unknown subcommand: ${subcommand}. Valid: start, complete, fail, abort, set-autonomy, checkpoint, swarm-checkpoint, dispatch-event, hold-merge, release-merge`
         );
     }
   } catch (e) {

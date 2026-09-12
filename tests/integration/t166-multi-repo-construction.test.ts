@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos
+// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos, function:delegatedWorktreeIntent
 // covers: function:redactProjectDirPrefix
 // covers: function:resolveAuditProjectPath
 // covers: function:resolveAuditWorktreePath
@@ -39,8 +39,17 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   readAllAuditShards,
   readUnitSourceManifest,
+  stateDigest,
   workspaceSourceFingerprint,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  codeGenerationRecordDir,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -175,8 +184,54 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
     readFileSync(state, "utf-8")
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
+      .replace(/^- \*\*Construction Iteration\*\*:.*$/m, "- **Construction Iteration**: stage-major")
+      .replace(/^- \*\*Construction Execution\*\*:.*$/m, "- **Construction Execution**: swarm")
       .replace(/^- \[[^\]]\] code-generation.*$/m, "- [?] code-generation — EXECUTE"),
   );
+}
+
+function approvePlan(proj: string, unit: string): void {
+  writeActiveDirectiveMarker(proj, {
+    kind: "invoke-swarm", stage: "code-generation", units: [unit],
+    state_sha256: stateDigest(readFileSync(join(activeRecord(proj), "aidlc-state.md"), "utf-8")),
+  });
+  const contract = resolveTestingPosture(proj);
+  const authority = resolveCodeGenerationAuthority(proj, { unit });
+  const dir = codeGenerationRecordDir(proj, unit);
+  mkdirSync(dir, { recursive: true });
+  const body = `# Plan for ${unit}\n\n${renderTestingContract(contract)}\n## Steps\n- [ ] Update the sibling application source\n`;
+  const instructions = `# Tests for ${unit}\n\nVerify the reviewed source is retained through finalize and merge.\n`;
+  writeFileSync(join(dir, "code-generation-plan.md"), body);
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+  const questions = join(dir, "code-generation-questions.md");
+  writeFileSync(questions, [
+    "## Plan Approval",
+    `[Approval Fingerprint]: ${approvalFingerprint(body, instructions, contract.contract_sha256, authority)}`,
+    `[Planned Source]: ${workspaceSourceFingerprint(proj)}`,
+    "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
+  ].join("\n"));
+  const session = `t166-${unit}`;
+  appendAuditEntry("SESSION_STARTED", { Session: session, Source: "t166 fixture" }, proj);
+  const identity = [
+    "--project-dir", proj, "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--unit", unit, "--questions-file", questions, "--session", session,
+  ];
+  const decision = spawnSync(BUN, [LOG_TOOL, "decision", ...identity,
+    "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"], {
+    encoding: "utf-8", cwd: proj,
+  });
+  if (decision.status !== 0) throw new Error(`${decision.stdout}${decision.stderr}`);
+  const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+    encoding: "utf-8", cwd: proj,
+    env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
+  });
+  if (human.status !== 0) throw new Error(`${human.stdout}${human.stderr}`);
+  writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
+  const answer = spawnSync(BUN, [LOG_TOOL, "answer", ...identity, "--details", "Approve Plan"], {
+    encoding: "utf-8", cwd: proj,
+  });
+  if (answer.status !== 0) throw new Error(`${answer.stdout}${answer.stderr}`);
 }
 
 function recordMainReview(
@@ -189,7 +244,7 @@ function recordMainReview(
   const dir = join(record, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
-    writeFileSync(join(dir, name), `# ${name}\n`);
+    if (!existsSync(join(dir, name))) writeFileSync(join(dir, name), `# ${name}\n`);
   }
   writeFileSync(join(dir, "traceability.json"), "{}\n");
   writeFileSync(
@@ -240,7 +295,7 @@ function recordWorktreeReview(
   const dir = join(record, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
-    writeFileSync(join(dir, name), `# ${name}\n`);
+    if (!existsSync(join(dir, name))) writeFileSync(join(dir, name), `# ${name}\n`);
   }
   writeFileSync(join(dir, "traceability.json"), "{}\n");
   writeFileSync(
@@ -296,6 +351,7 @@ function recordWorktreeReview(
 function uncommittedSiblingRootSourceScenario(
   rootName: "aidlc" | ".aidlc",
 ): {
+  checked: RunResult;
   finalized: RunResult;
   merged: RunResult;
   mainBytes: string;
@@ -319,6 +375,7 @@ function uncommittedSiblingRootSourceScenario(
   );
   if (created.status !== 0) throw new Error(created.out);
   seedOneUnitDag(proj, unit);
+  approvePlan(proj, unit);
   const prepared = runSwarm(
     proj,
     "prepare",
@@ -336,6 +393,7 @@ function uncommittedSiblingRootSourceScenario(
   writeFileSync(join(wt, sourcePath), "export const reviewed = 2;\n");
   const reviewed = recordWorktreeReview(wt, unit, sourcePath);
   if (reviewed.status !== 0) throw new Error(reviewed.out);
+  const checked = runSwarm(proj, "check", "--unit", unit, "--check-cmd", "true");
   const finalized = runSwarm(
     proj,
     "finalize",
@@ -379,6 +437,7 @@ function uncommittedSiblingRootSourceScenario(
         )
       : { status: -1, out: finalized.out, stdout: "" };
   return {
+    checked,
     finalized,
     merged,
     mainBytes:
@@ -416,6 +475,7 @@ function compositionScenario(
   if (created.status !== 0) throw new Error(created.out);
   const unit = `composition-${suffix}`;
   seedOneUnitDag(proj, unit, "service");
+  approvePlan(proj, unit);
   const prepared = runSwarm(
     proj,
     "prepare",
@@ -777,7 +837,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("source refusal wins, validity failure stays advisory, and green completion emits both receipts", () => {
       expect(sourceRefusal.approved.status).not.toBe(0);
       expect(sourceRefusal.approved.out).toContain(
-        "project source changed after aidlc-architecture-reviewer-agent reviewed it",
+        "main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch)",
       );
       expect(completedBlock(sourceRefusal.audit)).toBeUndefined();
       expect(sourceRefusal.audit).not.toContain("**Validation Basis**:");
@@ -1948,6 +2008,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const dotAidlcRoot = uncommittedSiblingRootSourceScenario(".aidlc");
 
     test("uncommitted aidlc/ source is bound into Source Commit and merged", () => {
+      expect(aidlcRoot.checked.status, aidlcRoot.checked.out).toBe(0);
       expect(aidlcRoot.finalized.status, aidlcRoot.finalized.out).toBe(0);
       expect(aidlcRoot.merged.status, aidlcRoot.merged.out).toBe(0);
       expect(aidlcRoot.sourceCommitBytes).toBe("export const reviewed = 2;\n");
@@ -1955,6 +2016,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     });
 
     test("uncommitted .aidlc/ source is bound without retaining injected metadata", () => {
+      expect(dotAidlcRoot.checked.status, dotAidlcRoot.checked.out).toBe(0);
       expect(dotAidlcRoot.finalized.status, dotAidlcRoot.finalized.out).toBe(0);
       expect(dotAidlcRoot.merged.status, dotAidlcRoot.merged.out).toBe(0);
       expect(dotAidlcRoot.sourceCommitBytes).toBe("export const reviewed = 2;\n");
@@ -1984,9 +2046,14 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     git(repoA, "commit", "-q", "-m", "seed sibling aidlc application source");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     seedOneUnitDag(proj, "swarmunit");
+    approvePlan(proj, "swarmunit");
+    const sourceBeforePrepare = workspaceSourceFingerprint(proj);
     const prepared = runSwarm(
       proj, "prepare", "--batch", "1", "--units", "swarmunit", "--base", "main", "--repo", "repo-a",
     );
+    if (prepared.status !== 0) throw new Error(prepared.out);
+    const sourceAfterPrepare = workspaceSourceFingerprint(proj);
+    const repoStatusAfterPrepare = git(repoA, "status", "--porcelain", "--untracked-files=all");
     const wt = worktreeDir(proj, "swarmunit");
     writeFileSync(
       join(wt, "aidlc", "application.ts"),
@@ -2052,6 +2119,9 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("prepare --repo repo-a exits 0", () => {
       expect(prepared.status).toBe(0);
+      expect(sourceAfterPrepare).toBe(sourceBeforePrepare);
+      expect(repoStatusAfterPrepare.status, repoStatusAfterPrepare.out).toBe(0);
+      expect(repoStatusAfterPrepare.out).toBe("");
     });
     test("reviewed sibling aidlc/ source merges with authority and completes", () => {
       expect(merged.status, merged.out).toBe(0);
@@ -2087,6 +2157,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     makeSiblingRepo(proj, "repo-b");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     seedOneUnitDag(proj, "orphanunit");
+    approvePlan(proj, "orphanunit");
     const prepared = runSwarm(proj, "prepare", "--batch", "1", "--units", "orphanunit", "--base", "main");
 
     test("exits non-zero with a 'spans 2 repos' message", () => {
