@@ -114,6 +114,7 @@ import {
   activeDirectiveStorageDir,
   advanceContinuationCursor,
   activeUnitCheckpoint,
+  approvedConstructionUnits,
   artifactFilename,
   auditBlockField,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
@@ -129,6 +130,7 @@ import {
   clearActiveDirectiveMarker,
   codekbRepoName,
   currentUnitLifecycleMode,
+  constructionSkeletonOn,
   effectivePlanAction,
   errorMessage,
   evaluateGuardRefusal,
@@ -145,7 +147,9 @@ import {
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
+  latestMainWorkflowStageRunFloorForProject,
   isAutonomousConstructionGate,
+  isConstructionSwarmEnabled,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -244,6 +248,12 @@ import {
   requestChangesResetIsExecutable,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
+import {
+  checkpointPolicyEnabled,
+  resolveConstructionCheckpoint,
+  type ConstructionCheckpointKind,
+} from "./aidlc-construction-checkpoints.ts";
+import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -411,6 +421,14 @@ function engineChildEnv(
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
 function prepareEmission(directive: Directive): PreparedEmission {
+  if (
+    directive.kind === "run-stage" && directive.construction_policy &&
+    directive.gate === false
+  ) {
+    // This is a work beat, not a completion checkpoint. Body-level questions
+    // remain explicit, but the metadata must not invent a completion gate.
+    directive.construction_policy.human_completion_required = false;
+  }
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
@@ -556,7 +574,10 @@ function attachLegacyKiroPlanApprovalChoices(
     (
       directive.kind === "run-stage" &&
       directive.stage === "code-generation" &&
-      directive.swarm_settled !== true
+      directive.swarm_settled !== true &&
+      directive.construction_checkpoint === undefined &&
+      directive.swarm_checkpoint === undefined &&
+      directive.construction_policy?.completion_only !== true
     ) ||
     directive.kind === "invoke-swarm";
   if (!eligible) return { prepared, session };
@@ -2228,6 +2249,8 @@ type SteeringTokenPayload = {
   w: boolean;
   z?: boolean;
   q?: UnitGateRhythm;
+  j?: ConstructionCheckpointKind;
+  y?: { batch: number; units: string[] };
   h: string | null;
 };
 
@@ -3409,6 +3432,31 @@ function buildRunStageDirective(
       : (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (
+    !singleRun && node.phase === "construction" && stateContent && codekbCtx &&
+    checkpointPolicyEnabled(stateContent) &&
+    !usesStageLevelPerUnitArtifacts(scope, stateContent)
+  ) {
+    const dag = resolveBoltBatches(codekbCtx.projectDir);
+    if (dag.state === "ok" && dag.units.length > 0) {
+      const approved = approvedConstructionUnits(codekbCtx.projectDir, stateContent);
+      const mode = getField(stateContent, AUTONOMY_MODE_FIELD)?.trim();
+      const skeletonApproved = !constructionSkeletonOn(stateContent) ||
+        approved.has(dag.batches.flat()[0]);
+      const unitMajor = readConstructionIteration(stateContent) === "unit-major";
+      directive.construction_policy = {
+        iteration: unitMajor ? "unit-major" : "stage-major",
+        execution: isConstructionSwarmEnabled(stateContent) ? "swarm" : "serial",
+        autonomy: mode === "autonomous" || mode === "gated" ? mode : "unset",
+        offer_autonomy: mode !== "autonomous" && mode !== "gated" &&
+          skeletonApproved && readSkeletonStance(stateContent) !== null,
+        human_completion_required:
+          !isAutonomousConstructionGate(stateContent, node, codekbCtx.projectDir),
+        completion_only: unitMajor && isPerUnit(node) &&
+          dag.units.every((name) => approved.has(name)),
+      };
+    }
+  }
   if (node.mode === "pipeline" && codekbCtx) {
     const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node, {
       singleRun,
@@ -3802,6 +3850,12 @@ function decodeSteeringToken(
       typeof p.w !== "boolean" ||
       (p.z !== undefined && typeof p.z !== "boolean") ||
       (p.q !== undefined && p.q !== "per-stage" && p.q !== "unit-end") ||
+      (p.j !== undefined && p.j !== "unit" && p.j !== "skeleton") ||
+      (p.y !== undefined && (
+        !Number.isSafeInteger(p.y.batch) || p.y.batch < 1 ||
+        !Array.isArray(p.y.units) || p.y.units.length === 0 ||
+        !p.y.units.every((unit) => typeof unit === "string")
+      )) ||
       (p.h !== null && typeof p.h !== "string")
     ) {
       return null;
@@ -3838,6 +3892,10 @@ function steeringTokenPayload(
     w: directive.wave !== undefined,
     z: directive.swarm_settled === true,
     q: directive.unit_gate,
+    j: directive.construction_checkpoint?.kind,
+    y: directive.swarm_checkpoint
+      ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
+      : undefined,
     h: route.stateHash,
   };
 }
@@ -5119,8 +5177,11 @@ function isAutonomousSwarmCandidate(
   if (node.phase !== "construction") return false;
   if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
-  if (isSkeletonGateStage(node, scope)) return false;
-  if (readAutonomyMode(stateContent) !== "autonomous") return false;
+  if (
+    isSkeletonGateStage(node, scope) &&
+    !(stateContent && checkpointPolicyEnabled(stateContent))
+  ) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   return true;
 }
 
@@ -5168,7 +5229,51 @@ function applySettledSwarmShape(
   directive.protocol_modules = ["construction", "swarm"];
   if (directive.ceremony.learnings === "on") directive.protocol_modules.push("learnings");
   directive.swarm_settled = true;
+  if (directive.construction_policy) {
+    directive.construction_policy.completion_only = true;
+    directive.construction_policy.human_completion_required = false;
+  }
   return directive;
+}
+
+function applyConstructionCheckpointShape(
+  directive: RunStageDirective,
+  checkpoint: ReturnType<typeof resolveConstructionCheckpoint>,
+): void {
+  directive.gate = true;
+  directive.unit = checkpoint.unit;
+  directive.construction_checkpoint = {
+    kind: checkpoint.kind, unit: checkpoint.unit, stages: checkpoint.stages,
+    fingerprint: checkpoint.fingerprint, ready: checkpoint.ready,
+    verified: checkpoint.verified, approved: checkpoint.approved,
+    human_required: checkpoint.human_required, errors: checkpoint.errors,
+    proof_path: checkpoint.proof_path,
+  };
+  if (directive.construction_policy) {
+    directive.construction_policy.human_completion_required = checkpoint.human_required;
+  }
+  delete directive.reviewer;
+  delete directive.review_artifact;
+  delete directive.review_class;
+  delete directive.reviewer_max_iterations;
+  directive.protocol_modules = ["construction"];
+}
+
+function applySwarmCheckpointShape(
+  directive: RunStageDirective,
+  checkpoint: ReturnType<typeof resolveSwarmCheckpoint>,
+): void {
+  directive.gate = true;
+  directive.unit = checkpoint.units[checkpoint.units.length - 1];
+  directive.swarm_checkpoint = checkpoint;
+  if (directive.construction_policy) {
+    directive.construction_policy.human_completion_required = checkpoint.human_required;
+  }
+  delete directive.reviewer;
+  delete directive.review_artifact;
+  delete directive.review_class;
+  delete directive.reviewer_max_iterations;
+  directive.protocol_modules = ["construction", "swarm"];
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -5228,6 +5333,17 @@ function tryEmitSwarm(
 ): boolean {
   const node = nodeForSlug(slug);
   if (!node) return false;
+  // An actual walking skeleton finishes and is reviewed before parallel work.
+  if (
+    stateContent && checkpointPolicyEnabled(stateContent) &&
+    constructionSkeletonOn(stateContent)
+  ) {
+    const dag = resolveBoltBatches(projectDir);
+    if (
+      dag.state === "ok" && dag.units.length > 0 &&
+      !approvedConstructionUnits(projectDir, stateContent).has(dag.batches.flat()[0])
+    ) return false;
+  }
   const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
   if (batches === null) return false;
 
@@ -5237,12 +5353,32 @@ function tryEmitSwarm(
   // reads a prior run's rows as coverage.
   const converged = swarmConvergedUnits(projectDir, slug);
   let pendingUnits: string[] | null = null;
-  for (const batch of batches) {
+  let pendingBatch = 0;
+  const inlineApproved = stateContent
+    ? approvedConstructionUnits(projectDir, stateContent)
+    : new Set<string>();
+  for (const [index, batch] of batches.entries()) {
     if (!Array.isArray(batch) || batch.length === 0) continue;
     const owed = batch.filter((u) => !converged.has(u));
     if (owed.length > 0) {
       pendingUnits = owed;
+      pendingBatch = index + 1;
       break;
+    }
+    const builtBySwarm = batch.filter((unit) => !inlineApproved.has(unit));
+    if (stateContent && checkpointPolicyEnabled(stateContent) && builtBySwarm.length > 0) {
+      const checkpoint = resolveSwarmCheckpoint(
+        projectDir, index + 1, builtBySwarm, stateContent,
+      );
+      if (!checkpoint.approved) {
+        const directive = buildRunStageDirective(
+          node, projectType, builtBySwarm[builtBySwarm.length - 1],
+          scope, stateContent, recordPrefix, codekbCtx,
+        );
+        applySwarmCheckpointShape(directive, checkpoint);
+        emit(directive);
+        return true;
+      }
     }
   }
 
@@ -5260,6 +5396,10 @@ function tryEmitSwarm(
     const directive = buildRunStageDirective(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
     );
+    if (directive.construction_policy) {
+      directive.construction_policy.completion_only = true;
+      directive.construction_policy.human_completion_required = false;
+    }
     directive.unit = lastUnit;
     // Gate-only resume surface: every Unit body and reviewer already converged
     // inside the swarm. Keep that fact explicit across fresh sessions and remove
@@ -5319,10 +5459,20 @@ function tryEmitSwarm(
     "construction",
     "swarm",
   ];
+  const retryFloor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
+  const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
+    readAuditShardEvents(projectDir).some((row) =>
+      row.event === "GATE_REJECTED" &&
+      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
+      auditBlockField(row.block, "Run floor") === retryFloor &&
+      pendingUnits!.includes(auditBlockField(row.block, "Unit") ?? "")
+    );
   if (repos.length === 1) {
     const directive: Directive = {
       kind: "invoke-swarm",
       units: pendingUnits,
+      ...(stateContent && checkpointPolicyEnabled(stateContent) ? { batch: pendingBatch } : {}),
+      ...(resumeExisting ? { resume_existing: true as const } : {}),
       ...reviewerFields,
       protocol_modules: protocolModules,
       repo: repos[0],
@@ -5336,6 +5486,8 @@ function tryEmitSwarm(
     const directive: Directive = {
       kind: "invoke-swarm",
       units: pendingUnits,
+      ...(stateContent && checkpointPolicyEnabled(stateContent) ? { batch: pendingBatch } : {}),
+      ...(resumeExisting ? { resume_existing: true as const } : {}),
       ...reviewerFields,
       protocol_modules: protocolModules,
     };
@@ -5449,15 +5601,18 @@ function unitLedgerFor(
   auditRows?: readonly AuditShardEvent[],
   stateContent?: string,
 ): UnitLedger {
+  const policyState = stateContent ?? loadStateFileIfPresent(projectDir);
+  const receiptsRequired = policyState !== null && checkpointPolicyEnabled(policyState);
   if (auditRows && stateContent) {
-    return unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent);
+    const snapshot = unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent);
+    return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
   }
   const receipts = unitCompletedReceipts(projectDir, slug);
   const checkpoint = activeUnitCheckpoint(projectDir, slug);
   return {
     receipts,
     checkpoint,
-    inUse: unitLifecycleReceiptsInUse(projectDir, slug),
+    inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
 }
@@ -6819,7 +6974,18 @@ function emitUnitMajorRunStage(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
   projectDir: string,
+  skeletonOnly = false,
 ): void {
+  if (
+    !skeletonOnly && stateContent && checkpointPolicyEnabled(stateContent) &&
+    getField(stateContent, "Construction Execution") === "swarm"
+  ) {
+    emit(errorDirective(
+      "Unit-major execution runs one Unit at a time. Select stage-major before choosing " +
+        "Construction Execution: swarm, or keep Construction Execution: serial.",
+    ));
+    return;
+  }
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
     emitPerUnitRunStage(
       node,
@@ -6878,9 +7044,12 @@ function emitUnitMajorRunStage(
     );
     return;
   }
-  const units = resolution.batches.flat();
+  const checkpoints = stateContent !== null &&
+    checkpointPolicyEnabled(stateContent) && !teamOwnership;
+  const allUnits = resolution.batches.flat();
+  const units = skeletonOnly ? allUnits.slice(0, 1) : allUnits;
 
-  const block = constructionUnitMajorBlock(scope, stateContent, teamOwnership);
+  const block = constructionUnitMajorBlock(scope, stateContent, teamOwnership || checkpoints);
   // Defensive: if the current node is not itself an active block stage (e.g. it
   // was completed between the read and here, or a scope with no per-unit
   // construction block routed here), fall back to the stage-major path for
@@ -6983,6 +7152,25 @@ function emitUnitMajorRunStage(
         return;
       }
     }
+    if (checkpoints && stateContent) {
+      const kind: ConstructionCheckpointKind =
+        constructionSkeletonOn(stateContent) && u === allUnits[0]
+          ? "skeleton"
+          : "unit";
+      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent);
+      if (!checkpoint.approved) {
+        const gateStage = block[block.length - 1];
+        const directive = buildRunStageDirective(
+          gateStage, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
+          kinds?.get(u) ?? null,
+        );
+        // The Unit body and its reviews have already run. The checkpoint owns
+        // verification and approval; do not dispatch Code Generation again.
+        applyConstructionCheckpointShape(directive, checkpoint);
+        emit(directive);
+        return;
+      }
+    }
   }
 
   // The whole (stage x unit) grid is covered: delegate to the stage-major path
@@ -7018,6 +7206,22 @@ function emitForSlug(
 ): void {
   const node = nodeForSlug(slug);
   if (node && isPerUnit(node)) {
+    if (
+      stateContent && checkpointPolicyEnabled(stateContent) &&
+      !isTeamUnitOwnership(stateContent) && constructionSkeletonOn(stateContent) &&
+      !usesStageLevelPerUnitArtifacts(scope, stateContent)
+    ) {
+      const dag = resolveBoltBatches(projectDir);
+      if (
+        dag.state === "ok" && dag.units.length > 0 &&
+        !approvedConstructionUnits(projectDir, stateContent).has(dag.batches.flat()[0])
+      ) {
+        emitUnitMajorRunStage(
+          node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir, true,
+        );
+        return;
+      }
+    }
     // Unit-major iteration (opt-in) covers EVERY per-unit Construction stage,
     // code-generation included (the swarm never fires under unit-major - see
     // eligibleAutonomousSwarmBatches - so this branch owns the build too).
@@ -8721,7 +8925,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const protectedHumanGate =
     isGated &&
     stageCheckbox.state !== "completed" &&
-    !isAutonomousConstructionGate(stateContent, node) &&
+    (
+      (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
+      !isAutonomousConstructionGate(stateContent, node, pd)
+    ) &&
     resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
 
   if (flags.overrideBlockingSensors) {
@@ -9272,6 +9479,16 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.x) directive.single = true;
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
+  if (payload.j !== undefined && payload.u !== null && liveState !== null) {
+    applyConstructionCheckpointShape(
+      directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),
+    );
+  }
+  if (payload.y !== undefined && liveState !== null) {
+    applySwarmCheckpointShape(
+      directive, resolveSwarmCheckpoint(pd, payload.y.batch, payload.y.units, liveState),
+    );
+  }
   if (payload.w) {
     const resolution = resolveBoltDag(pd);
     if (resolution.state === "ok") {

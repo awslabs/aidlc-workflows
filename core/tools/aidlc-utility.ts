@@ -6657,6 +6657,15 @@ function handleIntentCreateStateBuild(
     `- **Operation**: ${phaseStatus("operation")}`,
   ].join("\n");
 
+  const constructionCheckpointDefaults =
+    (adjustedMapping["units-generation"] ?? scopeDef.stages["units-generation"]) === "EXECUTE" &&
+    graph.some((stage) =>
+      stage.phase === "construction" && stage.for_each === "unit-of-work" &&
+      stage.workspace_requires === true &&
+      (adjustedMapping[stage.slug] ?? scopeDef.stages[stage.slug]) === "EXECUTE"
+    )
+      ? "- **Construction Checkpoints**: enabled\n- **Construction Iteration**: unit-major\n- **Construction Execution**: serial\n"
+      : "";
   const stateContent = `# AI-DLC State Tracking
 
 ## Project Information
@@ -6693,7 +6702,7 @@ ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(re
 
 ## Runtime State
 - **Revision Count**: 0
-
+${constructionCheckpointDefaults}
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->
 

@@ -196,20 +196,20 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
       l.startsWith("| **Walking skeleton** |"),
     );
     expect(boltRow).toBeDefined();
-    expect(boltRow).toMatch(/sprint-like Construction iteration/i);
+    expect(boltRow).toMatch(/Construction planning iteration/i);
     expect(boltRow).toMatch(/Delivery Planning/);
-    expect(boltRow).toMatch(/2\.9/);
     expect(boltRow).toMatch(/one or more dependency-linked Units/i);
-    expect(boltRow).toMatch(/distinct from the Unit definition.*worktree.*swarm/i);
-    expect(boltRow).toMatch(/default stage-major runtime/i);
-    expect(boltRow).toMatch(/does not consume `bolt-plan\.md`/i);
-    expect(boltRow).toMatch(/3\.6.*3\.7.*once/i);
+    expect(boltRow).toMatch(/distinct from a Unit.*worktree.*swarm/i);
+    expect(boltRow).toMatch(/Runtime order comes from the Unit DAG/i);
+    expect(boltRow).toMatch(/`bolt-plan\.md` does not replace them/i);
+    expect(boltRow).toMatch(/Build and Test.*CI Pipeline.*once/i);
     expect(walkRow).toBeDefined();
     expect(walkRow).toMatch(/stage-major/);
     expect(walkRow).toMatch(/unit-major/);
     expect(skeletonRow).toBeDefined();
-    expect(skeletonRow).toMatch(/first in-scope Construction EXECUTE stage/);
-    expect(skeletonRow).not.toMatch(/first design stage/i);
+    expect(skeletonRow).toMatch(/first DAG Unit/);
+    expect(skeletonRow).toMatch(/real end-to-end check and human checkpoint approval/);
+    expect(skeletonRow).toMatch(/first design-stage review is not a working skeleton/i);
   });
 
   // =========================================================================
@@ -234,10 +234,8 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
 
   test("construction protocol destages Bolt-major ceremony as non-executable", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain("Non-executable future-state");
-    expect(CONSTRUCTION_PROTOCOL).toContain("**Planned (non-executable).**");
-    expect(CONSTRUCTION_PROTOCOL).toMatch(
-      /shipped walk does not present subsequent Bolt-level gates/,
-    );
+    expect(CONSTRUCTION_PROTOCOL).toContain("Do not collect questions by Bolt");
+    expect(CONSTRUCTION_PROTOCOL).toContain("do not present a Bolt-level answers gate");
     expect(CONSTRUCTION_PROTOCOL).not.toMatch(
       /That Bolt always presents a Bolt-level\napproval gate/,
     );

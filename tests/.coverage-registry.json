@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 992,
+    "total": 1002,
     "enumeratedByClass": {
-      "function": 682,
+      "function": 688,
       "audit": 99,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 142,
+      "subcommand": 146,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 409,
+      "function": 412,
       "audit": 59,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 129,
+      "subcommand": 133,
       "render-surface": 7
     }
   },
@@ -109,6 +109,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -249,6 +253,14 @@
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -264,6 +276,14 @@
         },
         {
           "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -873,6 +893,10 @@
         {
           "file": "tests/integration/t135-invoke-swarm.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1376,6 +1400,18 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:approvedConstructionUnits",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2281,6 +2317,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:commitPlanApprovalBatch",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -2380,6 +2423,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionCheckpointsApply",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionSkeletonOn",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2544,6 +2601,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3652,6 +3713,10 @@
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3686,6 +3751,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isConstructionSwarmEnabled",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4959,6 +5036,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:planApprovalBatchCommitted",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -7623,8 +7707,13 @@
       "unitClass": "function",
       "unitId": "function:unitSourceFingerprint",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8515,6 +8604,10 @@
         },
         {
           "file": "tests/unit/t276-cursor-adapter.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-plan-approval-batch.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9511,6 +9604,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-bolt checkpoint",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-bolt complete",
       "minMechanism": "cli",
       "coveredBy": [
@@ -9671,7 +9776,23 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt swarm-checkpoint",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10082,6 +10203,10 @@
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-plan-approval-batch.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10097,6 +10222,10 @@
         },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-plan-approval-batch.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10338,6 +10467,10 @@
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10420,6 +10553,10 @@
         },
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10934,6 +11071,30 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-checkpoints",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-execution",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
