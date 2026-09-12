@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos
+// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos, function:delegatedWorktreeIntent
 // covers: function:redactProjectDirPrefix
 // covers: function:resolveAuditProjectPath
 // covers: function:resolveAuditWorktreePath
