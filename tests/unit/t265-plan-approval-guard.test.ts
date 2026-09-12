@@ -1688,6 +1688,66 @@ describe("t265b hook lifecycle", () => {
   });
 });
 
+describe("t265 compound Git checkpoint exemption", () => {
+  for (const directive of ["load-steering", "run-stage"] as const) {
+    for (const command of [
+      "echo x > src/app.ts",
+      "git add -A && echo x > src/app.ts",
+      "git add -A ; echo x > src/app.ts",
+      "git add -A && git push",
+    ]) {
+      test(`blocks ${command} with ${directive} before approval`, () => {
+        const proj = scratchProject();
+        try {
+          seedState(proj);
+          if (directive === "load-steering") seedActiveDirectiveLoadSteering(proj);
+          else seedActiveDirective(proj, "code-generation");
+          const result = runHook(proj, BASH(command), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" });
+          expect(result.code, result.stderr).toBe(2);
+          expect(result.stderr).toContain("Code generation cannot");
+        } finally {
+          rmSync(proj, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
+  for (const command of [
+    'git commit -m "checkpoint"',
+    'git add -A && git commit -m "checkpoint"',
+  ]) {
+    test(`allows checkpoint-only Bash payload: ${command}`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        seedActiveDirectiveLoadSteering(proj);
+        const result = runHook(proj, BASH(command), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" });
+        expect(result.code, result.stderr).toBe(0);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const command of [
+    "git add -A > src/app.ts",
+    'git commit -m "$(echo x > src/app.ts)"',
+  ]) {
+    test(`does not exempt checkpoint redirection or evaluation: ${command}`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        const result = runHook(proj, BASH(command), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" });
+        expect(result.code, result.stderr).toBe(2);
+        expect(result.stderr).toContain("Code generation cannot");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // (c) Registration pins.
 // ---------------------------------------------------------------------------

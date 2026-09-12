@@ -228,6 +228,8 @@ if (
 
 ### Step 1.3 — Allow `git add`/`git commit` at the code-generation boundary (Facet C)
 
+> **Superseded (2026-09-12):** The `invocations.some(...)` implementation below allowed unrelated mutations in compound commands to bypass plan approval. Keep this snippet as historical context only; use the [compound Git bypass tightening plan](plan-approval-compound-git-bypass-fix-plan.md) for the corrected all-invocations, concrete-target, and dynamic-evaluation checks.
+
 In `core/hooks/aidlc-plan-approval-guard.ts`, locate the `mutationIntent`
 function (lines 582–623). Insert this check immediately before the
 `shellWriteTargets` call at line 600:

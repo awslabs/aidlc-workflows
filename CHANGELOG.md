@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.6] - 2026-09-12
+
+Closes a shared plan-approval guard bypass in compound shell commands containing Git checkpoints. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.6` / `install.ps1 -Version 2.9.6`) to refresh the installed guard. No workflow-record migration is required.
+
+* Before plan approval, adding `git add` or `git commit` to a shell command no longer exempts accompanying source writes or `git push` from the guard.
+* Standalone Git checkpoints and checkpoint-only compounds remain available; commands with concrete write targets or dynamic shell evaluation must pass the normal approval checks.
+
 ## [2.9.5] - 2026-09-12
 
 Makes Devin's custom-agent model policy visible and projects native tool restrictions onto shipped core profiles. **Upgrade:** run `aidlc update` (or use `install.sh --version 2.9.5` / `install.ps1 -Version 2.9.5`), refresh the shipped agent profiles and onboarding while preserving intentional local customizations, then restart Devin CLI. No workflow-record migration is required.

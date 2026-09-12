@@ -721,6 +721,8 @@ async function mutationIntent(
     const { shellCommandInvocations, shellWriteTargets } = await import(
       "./aidlc-review-freeze.ts"
     );
+    targets = shellWriteTargets(command, cwd);
+    const dynamicEvaluation = shellUsesDynamicEvaluation(command);
     // `git add` and `git commit` of inception-phase artifacts (scope, codekb,
     // intents, memory) are not code-generation writes. The guard's purpose is
     // to prevent code-generation before Plan Approval, not to prevent git
@@ -734,18 +736,17 @@ async function mutationIntent(
     // plan-approval-guard only — review-freeze is unaffected.
     if (toolName === "Bash" && typeof command === "string") {
       const invocations = shellCommandInvocations(command);
-      const isGitAddOrCommit = invocations.some(
+      const isGitAddOrCommit = invocations.length > 0 && invocations.every(
         (inv) =>
           normalizedCommandName(inv.name) === "git" &&
           ["add", "commit"].includes(gitSubcommand(inv.args) ?? ""),
       );
-      if (isGitAddOrCommit) {
+      if (isGitAddOrCommit && targets.length === 0 && !dynamicEvaluation) {
         return { targets: [], opaqueShell: false, shellCommand: command };
       }
     }
-    targets = shellWriteTargets(command, cwd);
     opaqueShell =
-      shellUsesDynamicEvaluation(command) ||
+      dynamicEvaluation ||
       shellCommandInvocations(command).some((invocation) =>
         shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0)
       );
