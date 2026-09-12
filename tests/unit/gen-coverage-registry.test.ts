@@ -906,6 +906,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // binds" row, which reads a real source walk against a real workspace.
     "unit/t337-source-boundary-reason.test.ts",
     "unit/t339-construction-autonomy-gates.test.ts",
+    "unit/t340-grouped-plan-approval.test.ts",
     "unit/t340-plan-approval-batch.test.ts",
     "unit/t342-construction-checkpoint-routing.test.ts",
     "unit/t343-swarm-checkpoints.test.ts",

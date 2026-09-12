@@ -229,16 +229,53 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(receiptFiles(f.project)).toHaveLength(0);
   }, 30_000);
 
-  test("one plan mutation after approval invalidates every member, including checkbox-only edits", () => {
+  test("progress checkboxes, a terminal review appendix and line endings preserve every grouped receipt", () => {
     const f = fixture();
     approve(f);
     const path = join(codeGenerationRecordDir(f.project, "auth"), "code-generation-plan.md");
-    writeFileSync(path, readFileSync(path, "utf-8").replace("- [ ] Implement", "- [x] Implement"));
-    for (const unit of UNITS) {
-      expect(evaluateCodeGenerationApproval(f.project, { unit }).ok).toBe(false);
-      expect(() => beginCodeGeneration(f.project, { unit })).toThrow();
+    const original = readFileSync(path, "utf-8");
+    const receipts = () => receiptFiles(f.project).map((file) =>
+      readFileSync(join(sessionsDir(f.project), "plan-approval", file), "utf-8"));
+    const before = receipts();
+    const assertCurrent = () => {
+      for (const unit of UNITS) {
+        const approval = evaluateCodeGenerationApproval(f.project, { unit });
+        expect(approval.ok, approval.reason).toBe(true);
+      }
+      expect(receipts()).toEqual(before);
+    };
+    for (const marker of ["[x]", "[X]", "[-]"]) {
+      writeFileSync(path, original.replace("- [ ] Implement", `- ${marker} Implement`));
+      assertCurrent();
     }
+    writeFileSync(path, `${original.replace("- [ ] Implement", "- [x] Implement")}\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
+    assertCurrent();
+    writeFileSync(path, readFileSync(path, "utf-8").replaceAll("\n", "\r\n"));
+    const instructions = join(codeGenerationRecordDir(f.project, "auth"), "unit-test-instructions.md");
+    writeFileSync(instructions, readFileSync(instructions, "utf-8").replaceAll("\n", "\r\n"));
+    assertCurrent();
+    for (const unit of UNITS) expect(() => beginCodeGeneration(f.project, { unit })).not.toThrow();
   }, 30_000);
+
+  test.each(["plan body", "instructions", "instructions review appendix", "nonterminal review"] as const)(
+    "%s changes after approval invalidate every group member", (kind) => {
+      const f = fixture();
+      approve(f);
+      const dir = codeGenerationRecordDir(f.project, "auth");
+      const path = join(dir, kind.startsWith("instructions") ? "unit-test-instructions.md" : "code-generation-plan.md");
+      const original = readFileSync(path, "utf-8");
+      const changed = kind === "plan body"
+        ? original.replace("- [ ] Implement", "- [ ] Implement additional behavior")
+        : kind === "instructions" ? `${original}\nRun an additional command.\n`
+        : kind === "instructions review appendix" ? `${original}\n## Review\n\nRun another command.\n`
+        : `${original}\n## Review\n\nA mid-plan section remains content.\n\n## More steps\n\n- [ ] Additional work\n`;
+      writeFileSync(path, changed);
+      for (const unit of UNITS) {
+        expect(evaluateCodeGenerationApproval(f.project, { unit }).ok).toBe(false);
+        expect(() => beginCodeGeneration(f.project, { unit })).toThrow();
+      }
+    }, 30_000,
+  );
 
   test("re-fingerprinting changed content rotates the group challenge and needs a new human response", () => {
     const f = fixture();

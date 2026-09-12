@@ -1,7 +1,7 @@
 // Swarm convergence referee — the deterministic verdict surface the conductor consults.
 //
-// The swarm fires only under human-granted Construction autonomy, inside a live
-// Claude Code session. That session — the conductor — owns the fan-out (N parallel
+// The swarm follows the recorded Construction execution policy inside a live
+// harness session. That session — the conductor — owns the fan-out (N parallel
 // Task calls, or an inline Dynamic Workflow when AIDLC_USE_SWARM=1) and the retry
 // loop. A bun subprocess cannot issue Task calls, so the worker-dispatch layer is
 // NOT here. What lives here is everything that must be deterministic: the
@@ -28,9 +28,10 @@
 //       Workflow tool was unavailable, so the conductor ran the subagent floor):
 //       emits SWARM_DEGRADED. The driver-SELECTION read (AIDLC_USE_SWARM) is
 //       conductor-side — this tool only learns a degrade happened via the flag.
-//       --resume-existing re-forks framework state after a current swarm-batch
-//       Request Changes. It preserves source, Git history, and prior records,
-//       and requires fresh protected Plan Approval before dispatch.
+//       --resume-existing resumes a current swarm-batch Request Changes. It
+//       preserves surviving source/history and archives framework records, or
+//       creates a new child when native source landing removed the old one.
+//       Both paths require fresh protected Plan Approval before dispatch.
 //   check <unit> --check-cmd <cmd> [--test-file <path>]
 //       Stateless single-unit verdict: the project's check command (exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
@@ -106,6 +107,7 @@ import {
   readUnitSourceSnapshot,
   readRegularFileNoFollowOrThrow,
   readStateFile,
+  removeSlug,
   recordDir,
   relativeRecordDir,
   reviewArtifactFingerprint,
@@ -119,6 +121,7 @@ import {
   resolveWorkflowSelection,
   resolveStage,
   sourceListingSha256,
+  setFieldStrict,
   shapeSourceSnapshotIndex,
   sourceClaimCovers,
   sourceListingEntriesEqual,
@@ -136,6 +139,7 @@ import {
   worktreeReviewAttemptProjection,
   withAuditLock,
   writeBufferAtomic,
+  writeStateFile,
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -145,6 +149,7 @@ import {
   evaluateCodeGenerationApproval,
   readCodeGenerationWorktreeSourceBaseline,
   validateCodeGenerationWorktreeApproval,
+  validateCodeGenerationForkApproval,
 } from "./aidlc-testing-posture.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -1689,6 +1694,35 @@ interface SwarmResume {
   revision: string;
   approvalFingerprint: string;
   alreadyResumed: boolean;
+  recreate: boolean;
+  recovering: boolean;
+  creation: string;
+}
+
+function resumeJournalPath(pd: string, revision: string, unit: string): string {
+  const root = recordDir(pd);
+  if (!root) throw new Error("Resume requires an active intent record.");
+  return join(root, ".aidlc-swarm-resumes", revision, `${swarmBoltSlug(unit)}.json`);
+}
+
+function readResumeJournal(pd: string, revision: string, unit: string): {
+  revision: string; approvalFingerprint: string; creation: string;
+} | null {
+  const path = resumeJournalPath(pd, revision, unit);
+  assertNoSymlinkInChainOrThrow(realpathSync(pd), relative(pd, path));
+  if (!existsSync(path)) return null;
+  return JSON.parse(readRegularFileNoFollowOrThrow(path, "swarm resume journal").toString("utf-8"));
+}
+
+function writeResumeJournal(pd: string, resume: SwarmResume): void {
+  const path = resumeJournalPath(pd, resume.revision, resume.unit);
+  assertNoSymlinkInChainOrThrow(realpathSync(pd), relative(pd, path));
+  mkdirSync(dirname(path), { recursive: true });
+  writeBufferAtomic(path, Buffer.from(JSON.stringify({
+    revision: resume.revision,
+    approvalFingerprint: resume.approvalFingerprint,
+    creation: resume.creation,
+  })));
 }
 
 function latestResumeRow(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
@@ -1701,12 +1735,13 @@ function checkpointRevision(row: AuditShardEvent): string {
 }
 
 function currentCheckpointRejection(
-  rows: AuditShardEvent[], batch: string, unit: string,
+  rows: AuditShardEvent[], batch: string, unit: string, floor: string,
 ): AuditShardEvent | null {
   const gate = latestResumeRow(rows.filter((row) =>
     (row.event === "GATE_REJECTED" || row.event === "GATE_APPROVED") &&
     auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
     auditBlockField(row.block, "Stage") === "code-generation" &&
+    auditBlockField(row.block, "Run floor") === floor &&
     auditBlockField(row.block, "Batch number") === batch &&
     (auditBlockField(row.block, "Unit") === unit ||
       (auditBlockField(row.block, "Unit") === null &&
@@ -1757,7 +1792,7 @@ function validateSwarmResume(
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
   if (unreadable.length) throw new Error("Cannot resume from unreadable audit evidence.");
-  const rejection = currentCheckpointRejection(rows, batch, unit);
+  const rejection = currentCheckpointRejection(rows, batch, unit, attempt.floor);
   if (!rejection || auditBlockField(rejection.block, "Run floor") !== attempt.floor ||
     auditBlockField(rejection.block, "Intent") !== activeIntentUuid(pd) ||
     auditBlockField(rejection.block, "User Input") !== "Request Changes" ||
@@ -1768,12 +1803,43 @@ function validateSwarmResume(
   const slug = swarmBoltSlug(unit);
   const worktree = worktreePath(pd, slug);
   const recordPrefix = relativeRecordDir(pd);
-  if (!recordPrefix || relativeRecordDir(worktree) !== recordPrefix) {
-    throw new Error(`${unit}: preserved worktree belongs to a different or unavailable intent.`);
-  }
+  if (!recordPrefix) throw new Error(`${unit}: active intent record is unavailable.`);
   assertNoSymlinkInChainOrThrow(realpathSync(pd), relative(pd, worktree));
   const creation = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_CREATED" &&
     auditBlockField(row.block, "Bolt slug") === slug));
+  const approval = evaluateCodeGenerationApproval(pd, { unit });
+  if (!approval.ok || !approval.approvalFingerprint) throw new Error(`${unit}: resume requires fresh Plan Approval: ${approval.reason}`);
+  const journal = readResumeJournal(pd, revision, unit);
+  const matchingJournal = !!creation && journal?.revision === revision &&
+    journal.approvalFingerprint === approval.approvalFingerprint &&
+    journal.creation === checkpointRevision(creation);
+  // Native source landing removes its child. A checkpoint revision may create a
+  // new child only after that exact prior Unit source was durably landed.
+  if (!existsSync(worktree)) {
+    const merged = latestResumeRow(rows.filter((row) => row.event === "SWARM_SOURCE_MERGED" &&
+      auditBlockField(row.block, "Unit name") === unit &&
+      auditBlockField(row.block, "Batch number") === batch &&
+      auditBlockField(row.block, "Stage") === attempt.stage &&
+      auditBlockField(row.block, "Run floor") === attempt.floor &&
+      auditBlockField(row.block, "Repo") === (repoName ?? "-")));
+    const converged = latestResumeRow(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
+      auditBlockField(row.block, "Unit name") === unit));
+    if (!creation || !merged || !converged ||
+      !attemptEventDefinitelyBefore(creation, converged) ||
+      !attemptEventDefinitelyBefore(converged, merged) ||
+      !attemptEventDefinitelyBefore(merged, rejection) ||
+      auditBlockField(merged.block, "Source Commit") !== auditBlockField(converged.block, "Source Commit") ||
+      parseRefsList(getField(state, "Bolt Refs") ?? "").includes(slug)) {
+      throw new Error(`${unit}: missing worktree has no completed native source landing for this checkpoint revision.`);
+    }
+    return {
+      unit, worktree, recordPrefix, revision, approvalFingerprint: approval.approvalFingerprint,
+      alreadyResumed: false, recreate: true, recovering: false, creation: checkpointRevision(creation),
+    };
+  }
+  if (!matchingJournal && relativeRecordDir(worktree) !== recordPrefix) {
+    throw new Error(`${unit}: preserved worktree belongs to a different or unavailable intent.`);
+  }
   const metaPath = join(worktree, ".aidlc", "worktree-meta.json");
   assertNoSymlinkInChainOrThrow(realpathSync(worktree), relative(worktree, metaPath));
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "preserved worktree metadata").toString("utf-8"));
@@ -1818,7 +1884,9 @@ function validateSwarmResume(
     attemptEventDefinitelyBefore(rejection, started) && attemptEventDefinitelyBefore(started, swarmStart) &&
     resumedRevision(swarmStart, unit) === revision &&
     auditBlockField(swarmStart.block, "Run floor") === attempt.floor;
-  if (!alreadyResumed) {
+  const recovering = !alreadyResumed && matchingJournal &&
+    (!swarmStart || attemptEventDefinitelyBefore(swarmStart, rejection));
+  if (!alreadyResumed && !recovering) {
     const converged = latestResumeRow(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
       auditBlockField(row.block, "Unit name") === unit));
     if (!started || !converged || !attemptEventDefinitelyBefore(started, converged) ||
@@ -1830,15 +1898,18 @@ function validateSwarmResume(
       throw new Error(`${unit}: resume requires the completed, merged prior Bolt; active or partially re-forked worktrees are not replaced.`);
     }
   }
-  const childState = readRegularFileNoFollowOrThrow(worktreeStateFilePath(worktree, recordPrefix), "preserved worktree state").toString("utf-8");
+  const childStatePath = worktreeStateFilePath(worktree, recordPrefix);
+  const childState = recovering && !existsSync(childStatePath) ? "" :
+    readRegularFileNoFollowOrThrow(childStatePath, "preserved worktree state").toString("utf-8");
   if (getField(childState, "Merge-Held") === "true") throw new Error(`${unit}: resolve its held merge before resuming.`);
-  const approval = evaluateCodeGenerationApproval(pd, { unit });
-  if (!approval.ok || !approval.approvalFingerprint) throw new Error(`${unit}: resume requires fresh Plan Approval: ${approval.reason}`);
   if (alreadyResumed && resumedRevision(swarmStart!, unit, "Resume approvals") !== approval.approvalFingerprint) {
     throw new Error(`${unit}: this revision was already resumed under a different plan; preserve the active work and request a new checkpoint revision.`);
   }
   if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit);
-  return { unit, worktree, recordPrefix, revision, alreadyResumed, approvalFingerprint: approval.approvalFingerprint };
+  return {
+    unit, worktree, recordPrefix, revision, alreadyResumed, recovering, recreate: false,
+    creation: checkpointRevision(creation), approvalFingerprint: approval.approvalFingerprint,
+  };
 }
 
 function archiveSwarmResume(resume: SwarmResume): string {
@@ -1846,8 +1917,13 @@ function archiveSwarmResume(resume: SwarmResume): string {
   const archive = join(root, ".aidlc-swarm-resumes", resume.revision);
   assertNoSymlinkInChainOrThrow(realpathSync(resume.worktree), relative(resume.worktree, archive));
   mkdirSync(dirname(archive), { recursive: true });
-  // Exclusive creation refuses a partial retry without overwriting its backup.
-  mkdirSync(archive);
+  mkdirSync(archive, { recursive: true });
+  const complete = join(archive, "archived.json");
+  // The original archive is immutable. On an interrupted Bolt fork, preserve
+  // its partial records separately before retrying the same revision.
+  const destination = existsSync(complete)
+    ? join(archive, "attempts", randomUUID()) : archive;
+  mkdirSync(destination, { recursive: true });
   for (const [label, path, move] of [
     ["state.md", worktreeStateFilePath(resume.worktree, resume.recordPrefix), false],
     ["audit", dirname(worktreeAuditFilePath(resume.worktree, resume.recordPrefix)), true],
@@ -1857,11 +1933,32 @@ function archiveSwarmResume(resume: SwarmResume): string {
     ["questions.md", join(root, "construction", resume.unit, "code-generation", "code-generation-questions.md"), false],
   ] as const) {
     assertNoSymlinkInChainOrThrow(realpathSync(resume.worktree), relative(resume.worktree, path));
-    if (!existsSync(path)) continue;
-    if (move) renameSync(path, join(archive, label));
-    else writeBufferAtomic(join(archive, label), readRegularFileNoFollowOrThrow(path, "preserved revision record"));
+    const target = join(destination, label);
+    if (!existsSync(path) || existsSync(target)) continue;
+    if (move) renameSync(path, target);
+    else writeBufferAtomic(target, readRegularFileNoFollowOrThrow(path, "preserved revision record"));
   }
+  if (!existsSync(complete)) writeBufferAtomic(complete, Buffer.from(JSON.stringify({ revision: resume.revision })));
   return archive;
+}
+
+function releasePreparationRegistration(pd: string, unit: string): void {
+  // Only used before a SWARM_STARTED dispatch boundary: a newly created fork
+  // failed, or its exact revision journal was validated for recovery. Preserve
+  // files and release only this Unit's registration, never merge partial state.
+  const slug = swarmBoltSlug(unit);
+  if (!parseRefsList(getField(readStateFile(pd), "Bolt Refs") ?? "").includes(slug)) return;
+  const failed = runTool("aidlc-bolt.ts", [
+    "fail", "--name", unit, "--slug", slug,
+    "--error", "Interrupted swarm preparation; source and records preserved for recovery",
+  ], pd);
+  if (!failed.ok) throw new Error(`${unit}: could not close interrupted Bolt before retry: ${failed.stderr.trim()}`);
+  withAuditLock(pd, () => {
+    const state = readStateFile(pd);
+    const refs = getField(state, "Bolt Refs") ?? "";
+    if (!parseRefsList(refs).includes(slug)) return;
+    writeStateFile(pd, setFieldStrict(state, "Bolt Refs", removeSlug(refs, slug)));
+  });
 }
 
 function handlePrepare(rest: string[]): void {
@@ -1982,6 +2079,25 @@ function handlePrepare(rest: string[]): void {
       fail(error instanceof Error ? error.message : String(error));
     }
   }
+  if (!resumeExisting && getField(state, "Construction Checkpoints") === "enabled") {
+    const rows = readAuditShardEvents(projectDir);
+    if (units.some((unit) => currentCheckpointRejection(rows, flags.batch, unit, attempt.floor))) {
+      fail("This batch has a checkpoint revision. Re-run prepare with --resume-existing after fresh Plan Approval.");
+    }
+  }
+  if (requiresPlanApproval) {
+    try {
+      // Validate the entire batch before the first fork or generation receipt.
+      // An approved dirty parent is not a reproducible worktree base.
+      for (const unit of units) {
+        if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
+          validateCodeGenerationForkApproval(projectDir, unit, repoCwd, repoName, base);
+        }
+      }
+    } catch (error) {
+      fail(`prepare source preflight failed before creating worktrees: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   if (requiresPlanApproval) {
     try {
       for (const unit of units) {
@@ -2020,14 +2136,16 @@ function handlePrepare(rest: string[]): void {
   for (const unit of units) {
     const boltSlug = swarmBoltSlug(unit);
     const resume = resumes.get(unit);
-    if (resume) {
+    if (resume && !resume.recreate) {
       let archive: string | undefined;
       try {
         if (!resume.alreadyResumed) {
           const checked = withAuditLock(projectDir, () =>
             validateSwarmResume(projectDir, flags.batch, unit, attempt, repoCwd, repoName));
           if (checked.revision !== resume.revision) throw new Error(`${unit}: checkpoint revision changed before resume`);
+          writeResumeJournal(projectDir, checked);
           archive = archiveSwarmResume(checked);
+          if (checked.recovering) releasePreparationRegistration(projectDir, unit);
           const started = runTool("aidlc-bolt.ts", [
             "start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit,
             ...repoArgs, ...resumeSelectors,
@@ -2089,17 +2207,28 @@ function handlePrepare(rest: string[]): void {
       });
       continue;
     }
+    if (resume) {
+      const creation = latestResumeRow(readAuditShardEvents(projectDir).filter((row) =>
+        row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === boltSlug));
+      if (!creation) throw new Error(`${unit}: created worktree lacks native provenance`);
+      resume.creation = checkpointRevision(creation);
+      resume.recreate = false;
+      writeResumeJournal(projectDir, resume);
+    }
     const started = runTool(
       "aidlc-bolt.ts",
       ["start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit, ...repoArgs],
       projectDir
     );
     if (!started.ok) {
+      if (!resume) releasePreparationRegistration(projectDir, unit);
       prepared.push({
         unit,
         ok: false,
         worktree_path: worktreeDir,
-        error: `bolt start failed: ${started.stderr.trim() || started.stdout.trim()}`,
+        error: `bolt start failed: ${started.stderr.trim() || started.stdout.trim()}; ${
+          resume ? "retry prepare --resume-existing to recover this revision" :
+            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -2107,14 +2236,20 @@ function handlePrepare(rest: string[]): void {
       try {
         bindCodeGenerationWorktreeApproval(projectDir, worktreeDir, unit);
       } catch (error) {
+        if (!resume) releasePreparationRegistration(projectDir, unit);
         prepared.push({
           unit, ok: false, worktree_path: worktreeDir,
-          error: `worktree Plan Approval transfer failed: ${error instanceof Error ? error.message : String(error)}`,
+          error: `worktree Plan Approval transfer failed: ${error instanceof Error ? error.message : String(error)}; ${
+            resume ? "retry prepare --resume-existing to recover this revision" :
+              `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
         });
         continue;
       }
     }
-    prepared.push({ unit, ok: true, worktree_path: worktreeDir });
+    prepared.push({
+      unit, ok: true, worktree_path: worktreeDir,
+      ...(resume ? { resumed: true, revision: resume.revision } : {}),
+    });
   }
 
   // Stamp only worktrees this invocation actually created and started. Emitting
@@ -2566,7 +2701,8 @@ function preparedSwarmAttempt(
       return a.pos - b.pos;
     });
     const latest = maximalAttemptEvents(stamped);
-    const rejection = currentCheckpointRejection(rows, batch, unit);
+    const rejection = currentCheckpointRejection(rows, batch, unit,
+      latestMainWorkflowStageRunFloorForProject(projectDir, "code-generation"));
     if (rejection && getField(readStateFile(projectDir), "Construction Checkpoints") === "enabled") {
       const started = latestResumeRow(rows.filter((row) =>
         row.event === "BOLT_STARTED" && auditBlockField(row.block, "Bolt slug") === swarmBoltSlug(unit)));

@@ -1044,11 +1044,14 @@ and late stage approvals; team-owned Unit gates retain their own policy.
 
 ### Construction order and execution
 
-New Unit workflows with an included source-producing stage record
+New source-producing solo Unit workflows with Unit decomposition in scope record
 `Construction Checkpoints: enabled`, `Construction
 Iteration: unit-major`, and `Construction Execution: serial`. One Unit runs
 through its applicable design stages and Code Generation before the next.
-To choose swarm execution explicitly, select stage-major first:
+Design-only and no-Unit workflows keep their existing stage flow; team-owned
+Units keep their own gate rhythm. Existing workflows and explicit iteration
+choices are preserved. To choose swarm execution explicitly, select stage-major
+first:
 
 ```bash
 aidlc engine state set-construction-iteration stage-major
@@ -1068,11 +1071,32 @@ contradictory swarm setting; run `aidlc engine state set-construction-execution 
 returning to unit-major. Preserve existing explicit choices. Workflows without
 the execution field retain legacy autonomy-based swarm routing.
 
-For checkpoint-enabled solo work with a real non-empty Unit DAG, skeleton-on
+For checkpoint-enabled solo work with a real non-empty Unit DAG and an included
+source-producing stage, skeleton-on
 always builds the first DAG Unit as the smallest working integrated slice
 before later Units, even with stage-major selected. A first design-stage
 review alone does not prove a working skeleton. Already approved inline Units
 are excluded from later swarm batches.
+
+### `aidlc engine swarm prepare` - prepare a reproducible batch
+
+Before initial protected Code Generation prepare, commit the already-approved
+parent application source so the selected base can reproduce it. This includes
+approved inline skeleton source before switching to a parallel batch. The rule
+applies to legacy autonomy and new checkpoint workflows alike; an autonomy grant
+never authorizes an automatic commit.
+
+```bash
+aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"
+```
+
+The tool performs a read-only source/approval preflight for all Units before
+creating any child worktree. If the source is uncommitted, it returns a
+commit-and-retry instruction with no child left behind by that refusal. Commit
+only with explicit authorization, then retry with current approval evidence.
+If the application source or plan changed, re-present any required Plan Approval.
+The requirement concerns application source, not a blanket commit of unrelated
+framework records or other files.
 
 ### `aidlc engine bolt checkpoint` - verify and approve a completed Unit
 
@@ -1115,10 +1139,20 @@ approval. Later completion-only stage directives settle bookkeeping without
 another body, reviewer, or human learnings/approval question.
 
 After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
-uses `aidlc engine swarm prepare --resume-existing` with the same batch and
-exact Unit set, after fresh Plan Approval. The prior worktree and revision
-records are preserved. Source that does not match the reviewed starting point
-must be reconciled and approved before the tool can resume it.
+uses the same batch and exact Unit set, after fresh Plan Approval for that
+rejection revision:
+
+```bash
+aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted Units>"
+```
+
+If a worktree survives, the tool preserves its source and archives old metadata.
+If native source landing removed it, the tool can create a fresh child from the
+already-landed parent source after validating that landing evidence. Both paths
+retain the rejection revision and require fresh Plan Approval. A missing child
+without that evidence is refused. Do not assume every merged child survives, or
+replace a refused resume with ordinary prepare. Source that differs from the
+approved starting point must be reconciled and approved before work resumes.
 
 ### Grouped Code Generation Plan Approval
 
@@ -1331,7 +1365,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 

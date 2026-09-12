@@ -179,11 +179,12 @@ You can force that path with:
 
 ## Construction approvals and execution
 
-New workflows default to building one Unit at a time, serially, with completion
-checkpoints enabled. These checkpoints apply to solo workflows that actually
-have a non-empty Unit dependency graph. Profiles such as Express that skip Unit
-decomposition retain their ordinary single-stage path; team-owned Unit gates
-keep their separate policy.
+New source-producing solo Unit workflows default to building one Unit at a
+time, serially, with verified completion checkpoints. This requires Unit
+decomposition and an included source-producing per-unit stage. Design-only work
+and profiles such as Express that skip Unit decomposition retain their existing
+stage flow; team-owned Unit gates keep their separate policy. Existing workflows
+and explicit iteration choices are not converted by the new defaults.
 
 With skeleton-on, the first Unit is planned as the smallest working integrated
 slice. Its applicable design work and Code Generation finish, a real integrated

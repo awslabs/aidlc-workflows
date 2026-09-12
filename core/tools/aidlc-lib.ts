@@ -17919,12 +17919,23 @@ export function readUnitSourceManifest(
   const manifestPath = join(record, "construction", unit, stageSlug, "source-manifest.json");
 
   let rawBytes: Buffer;
-  let value: unknown;
   try {
     rawBytes = readFileSync(manifestPath);
   } catch (error) {
     return { ok: false, reason: `cannot read source-manifest.json (${errorMessage(error)})` };
   }
+  return validateUnitSourceManifestBytes(projectDir, stageSlug, unit, rawBytes, options);
+}
+
+function validateUnitSourceManifestBytes(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  rawBytes: Buffer,
+  options: ReadUnitSourceManifestOptions,
+  immutableContext?: { carriesWorkspaceShell: boolean },
+): ReadUnitSourceManifestResult {
+  let value: unknown;
   try {
     value = JSON.parse(rawBytes.toString("utf-8")) as unknown;
   } catch (error) {
@@ -17942,11 +17953,11 @@ export function readUnitSourceManifest(
   if (value.version !== 1) return { ok: false, reason: "version must equal 1" };
   if (!Array.isArray(value.writes)) return { ok: false, reason: "writes must be an array" };
 
-  const worktreeContext =
+  const worktreeContext = immutableContext ?? (
     options.worktreeRelative ||
       existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
       ? worktreeSourceExclusionContext(projectDir)
-      : null;
+      : null);
   if (
     (
       options.worktreeRelative ||
@@ -18092,6 +18103,56 @@ export function readUnitSourceManifest(
     for (const index of pathModeIndexes.values()) {
       if (index !== null) rmSync(index.indexFile, { force: true });
     }
+  }
+}
+
+/** Validate transported child bytes against the immutable selected repository.
+ * Repo names remain absent, exactly as reviewed in the child; callers project
+ * the returned claims only after validating the native merge's Repo authority.
+ */
+export function readCommittedUnitSourceManifest(
+  sourceRepoDir: string,
+  commit: string,
+  carriesWorkspaceShell: boolean,
+  stageSlug: string,
+  unit: string,
+  rawBytes: Buffer,
+): { ok: false; reason: string } |
+  (Extract<ReadUnitSourceManifestResult, { ok: true }> & { listing: WorkspaceSourceListing }) {
+  if (!GIT_OBJECT_ID_RE.test(commit) || !/^[a-z][a-z0-9-]*$/.test(stageSlug) ||
+    validateUnitName(unit) !== null) {
+    return { ok: false, reason: "invalid immutable Unit source context" };
+  }
+  const root = join(tmpdir(), `aidlc-commit-manifest-${process.pid}-${randomUUID().slice(0, 8)}`);
+  try {
+    mkdirSync(root, { recursive: true });
+    const gitDir = gitMetadataDirectory(sourceRepoDir);
+    const common = gitDir && gitCommonDirectory(gitDir);
+    const entries = gitTreeLeafEntries(sourceRepoDir, commit);
+    if (!common || !entries || !materializeRawGitTree(sourceRepoDir, root, entries)) {
+      return { ok: false, reason: "immutable reviewed Source Commit is unavailable" };
+    }
+    // A private index/HEAD gives ignore, path-mode and symlink validation the
+    // reviewed tree, without registering a worktree or consulting mutable HEAD.
+    const initialized = spawnSync("git", [
+      "--git-dir", join(root, ".git"), "--work-tree", root,
+      "init", "-q", "--template=", `--object-format=${commit.length === 64 ? "sha256" : "sha1"}`, root,
+    ], { encoding: "utf-8" });
+    if (initialized.status !== 0) return { ok: false, reason: "cannot initialize immutable source context" };
+    writeFileSync(join(root, ".git", "objects", "info", "alternates"), `${join(common, "objects")}\n`);
+    writeFileSync(join(root, ".git", "HEAD"), `${commit}\n`);
+    const manifest = validateUnitSourceManifestBytes(root, stageSlug, unit, rawBytes, {}, { carriesWorkspaceShell });
+    if (!manifest.ok) return manifest;
+    const source = filesystemSourceIdentity(root, carriesWorkspaceShell, new Set(), "tree-only", false);
+    if (!source) return { ok: false, reason: "immutable reviewed source cannot be fingerprinted" };
+    return {
+      ...manifest,
+      listing: prefixedSourceListing(source.listing),
+    };
+  } catch (error) {
+    return { ok: false, reason: `cannot validate immutable source manifest (${errorMessage(error)})` };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -25444,6 +25505,35 @@ export type SwarmSourceOpeningFingerprint =
       listing?: WorkspaceSourceListing;
     };
 
+/** Only an exact, current Unit checkpoint rejection opens another source merge.
+ * Preserve aggregate history: rejection retires Unit authority, not landed bytes.
+ */
+export function swarmUnitCheckpointRejections(
+  rows: readonly AuditShardEvent[],
+  slug: string,
+  floor: string,
+  unit: string,
+  batch: string,
+): AuditShardEvent[] {
+  return rows.filter((row) => {
+    if (row.event !== "GATE_REJECTED" ||
+      auditBlockField(row.block, "Checkpoint") !== "swarm-batch" ||
+      auditBlockField(row.block, "Run floor") !== floor ||
+      auditBlockField(row.block, "Batch number") !== batch ||
+      auditBlockField(row.block, "Unit") !== unit ||
+      auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") ||
+      !gateRejectionMatchesAttempt(row.block, slug, unit) ||
+      !(auditBlockField(row.block, "Units") ?? "").split(",").map((name) => name.trim()).includes(unit)) return false;
+    try {
+      const floors = JSON.parse(auditBlockField(row.block, "Run floors") ?? "");
+      const before = rows.filter((candidate) => attemptEventDefinitelyBefore(candidate, row));
+      return floors[unit] === latestMainWorkflowStageRunFloorFromRows(before, slug, false, unit);
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * Resolve the trusted predecessor for the current attempt's first aggregate
  * source merge. A rejection may carry only the final validated aggregate from
@@ -25477,7 +25567,7 @@ export function currentSwarmSourceOpeningFingerprint(
       .filter(
         (row) =>
           row.event === "GATE_REJECTED" &&
-          auditBlockField(row.block, "Stage") === slug,
+          gateRejectionMatchesAttempt(row.block, slug, undefined),
       )
       .sort((a, b) => {
         if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -25562,7 +25652,11 @@ export function currentSwarmSourceMergeChain(
     intent,
     space,
   );
-  const allRows = readAuditShardEvents(projectDir, intent, space);
+  const unreadable: string[] = [];
+  const allRows = readAuditShardEvents(projectDir, intent, space, unreadable);
+  if (unreadable.length || floor.startsWith("AMBIGUOUS:")) {
+    return { state: "invalid", reason: "source-merge attempt evidence is unreadable or ambiguous" };
+  }
   const rows = allRows
     .filter(
       (row) =>
@@ -25578,6 +25672,7 @@ export function currentSwarmSourceMergeChain(
   if (rows.length === 0) return { state: "none" };
 
   const units = new Set<string>();
+  const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let openingPrevious: string | null = null;
   for (let start = 0; start < rows.length;) {
@@ -25615,7 +25710,14 @@ export function currentSwarmSourceMergeChain(
           reason: `malformed SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit ?? "")}`,
         };
       }
-      if (units.has(unit)) {
+      const rejections = swarmUnitCheckpointRejections(allRows, slug, floor, unit, batch);
+      if (rejections.some((rejection) =>
+        !attemptEventDefinitelyBefore(rejection, row) && !attemptEventDefinitelyBefore(row, rejection))) {
+        return { state: "invalid", reason: `source merge and Unit rejection are causally ambiguous for ${JSON.stringify(unit)}` };
+      }
+      const previousMerge = lastMerge.get(unit);
+      if (previousMerge && !rejections.some((rejection) =>
+        attemptEventDefinitelyBefore(previousMerge, rejection) && attemptEventDefinitelyBefore(rejection, row))) {
         return {
           state: "invalid",
           reason: `duplicate SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)}`,
@@ -25634,7 +25736,12 @@ export function currentSwarmSourceMergeChain(
             candidate.event === "SWARM_UNIT_CONVERGED" &&
             auditBlockField(candidate.block, "Unit name") === unit &&
             auditBlockField(candidate.block, "Stage") === slug &&
-            auditBlockField(candidate.block, "Run floor") === floor,
+            auditBlockField(candidate.block, "Run floor") === floor &&
+            // A later retry must not replace the immutable authority used by
+            // an earlier link. Both rows must occupy the same rejection interval.
+            rejections.every((rejection) =>
+              (attemptEventDefinitelyBefore(rejection, row) && attemptEventDefinitelyBefore(rejection, candidate)) ||
+              (attemptEventDefinitelyBefore(row, rejection) && attemptEventDefinitelyBefore(candidate, rejection))),
         )
         .sort((a, b) => {
           if (a.timestamp !== b.timestamp) {
@@ -25654,6 +25761,7 @@ export function currentSwarmSourceMergeChain(
             );
       if (
         latestConvergences.length === 0 ||
+        !convergenceRows.some((candidate) => attemptEventDefinitelyBefore(candidate, row)) ||
         (new Set(latestConvergences.map((candidate) => candidate.shard)).size >
           1 &&
           new Set(
@@ -25675,14 +25783,17 @@ export function currentSwarmSourceMergeChain(
       if (
         auditBlockField(latestConvergence.block, "Batch number") !== batch ||
         auditBlockField(latestConvergence.block, "Source Commit") !==
-          sourceCommit
+          sourceCommit ||
+        auditBlockField(latestConvergence.block, "Source Freshness Bypass") !== null
       ) {
         return {
           state: "invalid",
           reason: `SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)} does not match its latest convergence`,
         };
       }
-      units.add(unit);
+      lastMerge.set(unit, row);
+      if (rejections.some((rejection) => attemptEventDefinitelyBefore(row, rejection))) units.delete(unit);
+      else units.add(unit);
       priorFingerprint = fingerprint;
     }
     start = end;

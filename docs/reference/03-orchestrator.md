@@ -473,15 +473,16 @@ current-attempt receipts cannot enter or complete approval.
 
 ### Construction Execution <a id="construction-execution"></a>
 
-New workflows record `Construction Checkpoints: enabled`, `Construction
-Iteration: unit-major`, and `Construction Execution: serial`. With a real
-non-empty Unit DAG and solo ownership, the default walks one Unit through all
+New source-producing solo Unit workflows record `Construction Checkpoints:
+enabled`, `Construction Iteration: unit-major`, and `Construction Execution:
+serial`. Unit decomposition and an included source-producing per-unit stage are
+required. With a real non-empty Unit DAG, the default walks one Unit through all
 applicable per-unit stages, including Code Generation, before the next Unit.
 Runtime order comes from `unit-of-work-dependency.md`; `bolt-plan.md` records
 delivery intent rather than replacing the DAG. Preserve an explicit stage-major
 choice. Legacy workflows without the checkpoint field retain the first-stage
 review and late per-stage cascade; team-owned `unit_gate` uses its own policy.
-Zero-Unit and isolated runs do not gain a checkpoint ceremony.
+Design-only, zero-Unit, and isolated runs do not gain a checkpoint ceremony.
 
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
@@ -521,7 +522,8 @@ prompted again. Explicit on-demand requests remain valid during Construction;
 escalation needs a fresh human turn. Autonomy waives ordinary completion questions,
 not skeleton approval, Plan Approval, summary confirmation, or failure stops.
 
-**Execution choice.** New workflows select serial execution independently of
+**Execution choice.** Eligible new source-producing solo Unit workflows select
+serial execution independently of
 autonomy. Explicit `Construction Execution: swarm` requires stage-major and
 supports gated or autonomous batch completion. Unit-major stays serial and refuses
 a contradictory swarm setting. Without the execution field, legacy workflows
@@ -530,12 +532,30 @@ repeated in later swarm batches. Every emitted swarm Unit still needs an approve
 plan; grouped Plan Approval binds the exact live Unit set and produces individual
 receipts, with a single-Unit fallback for unsupported or legacy mediation.
 
+**Initial prepare requires committed approved source.** For protected Code
+Generation in either legacy autonomy or new checkpoint workflows, the approved
+parent application source must be committed and reproducible. Initial prepare
+validates the entire Unit set read-only before creating a worktree. Uncommitted
+approved source produces an actionable commit-and-retry refusal with no orphan
+child. This makes committing the approved inline skeleton source an explicit
+step before a later parallel batch; an autonomy grant does not authorize an
+automatic commit. Current Plan Approval must still bind the source used.
+
 After a swarm batch settles, `swarm_checkpoint` carries `{batch, units,
 fingerprint, ready, approved, human_required, errors}`. It is handled before
 `swarm_settled` and ordinary body logic. Guided completion presents **Approve** /
 **Request Changes**; automatic completion omits `--user-input`. The checkpoint
 must be ready, and approval returns to `next` before another batch. It never
 completes the whole Code Generation stage on behalf of unbuilt batches.
+
+After a batch Request Changes, the emitted `resume_existing: true` uses
+`prepare --resume-existing` after fresh Plan Approval for the same rejection
+revision. A surviving child keeps its source while prior metadata is archived.
+If native source landing removed the child, verified landing evidence permits a
+fresh fork from the already-landed parent source, retaining the revision and
+fresh approval. A missing child without that evidence is refused. Do not assume
+all post-merge children are preserved, or substitute initial prepare for a
+rejected-batch resume.
 
 The engine-driven per-unit loop for the design stages (3.1–3.4) and serial code-generation hands the conductor concrete Unit paths with `gate: false` while work remains. On an explicitly selected stage-major walk, the four inline design stages may also carry `directive.wave`: complete per-Unit entries for the first unsettled batch, derived from one cache-validated, self-healed DAG snapshot. Each entry identifies its Unit and kind, present/absent consumes, all produces, the kind-applicable required produce subset, Unit-local memory path, build state, completion-receipt state, and paired fingerprint-bound review state. The conductor never reads or reconstructs the DAG.
 
@@ -546,7 +566,8 @@ Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 - Solo Code Generation failure: halt, emit `BOLT_FAILED` on the swarm/worktree path, present retry / skip / abort.
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Unit. Retry re-runs only the failed Unit; the batch siblings stay `[x]`.
 
-This example uses the new serial unit-major default, skeleton-on, and an
+This example uses the source-producing solo Unit default (unit-major and serial),
+skeleton-on, and an
 explicit automatic-completion choice after the skeleton:
 
 ```mermaid
