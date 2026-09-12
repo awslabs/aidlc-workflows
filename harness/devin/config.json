@@ -6,21 +6,13 @@
       "write",
       "grep",
       "glob",
-      "Exec(bun)",
-      "Exec(git)",
-      "Exec(node)",
-      "Exec(npm)",
-      "Exec(npx)",
-      "Exec(uvx)",
+      "Exec(bun .devin/tools/*)",
+      "Exec(bun run .devin/tools/*)",
+      "Exec(date -u)",
       "run_subagent",
       "ask_user_question",
-      "webfetch",
-      "mcp__*"
-    ],
-    "deny": [
-      "Exec(sudo)",
-      "Exec(rm -rf)",
-      "Write(.env*)"
+      "web_search",
+      "webfetch"
     ]
   },
   "read_config_from": {

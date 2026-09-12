@@ -976,6 +976,24 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function rewriteDevinNativePermissions(outRoot: string, m: HarnessManifest): void {
+  if (m.name !== "devin") return;
+  const configPath = join(outRoot, m.harnessDir, "config.json");
+  const value = JSON.parse(readFileSync(configPath, "utf-8")) as {
+    permissions?: { allow?: unknown };
+  };
+  const allow = value.permissions?.allow;
+  if (!Array.isArray(allow)) throw new Error("[devin] config.json has no permissions.allow list");
+  value.permissions!.allow = [
+    ...allow.filter((entry) =>
+      entry !== `Exec(bun ${m.harnessDir}/tools/*)` &&
+      entry !== `Exec(bun run ${m.harnessDir}/tools/*)`
+    ),
+    `Exec(${trustedCommand()})`,
+  ];
+  writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "cursor") return;
   const cliPath = join(outRoot, m.harnessDir, "cli.json");
@@ -1004,6 +1022,10 @@ function rewriteNativeOnboarding(value: string): string {
     .replace(
       /^- \*\*Permissions\*\*:.*$/gm,
       `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`,
+    )
+    .replace(
+      "Framework shell grants cover `bun .devin/tools/*`, `bun run .devin/tools/*`, and `date -u`.",
+      `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix and \`date -u\`.`,
     )
     .replace(
       /TypeScript, run via bun/g,
@@ -1183,6 +1205,7 @@ function rewriteNativeInvocations(
   }
   rewriteKiroNativeAllowlists(outRoot, m);
   rewriteClaudeNativePermissions(outRoot, m);
+  rewriteDevinNativePermissions(outRoot, m);
   rewriteCursorNativePermissions(outRoot, m);
   if (m.tierFlavor === "codex") {
     const { emitDefaultRules, emitTrustSeed } = require(

@@ -44,6 +44,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { trustedCommand } from "../../core/tools/aidlc-command.ts";
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -180,28 +181,28 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(re(deliver?.matcher).test("read_subagent")).toBe(false);
   });
 
-  test("4: config.json shape — permissions, read_config_from, no inference keys", () => {
-    const config = JSON.parse(readFileSync(join(ENGINE, "config.json"), "utf-8")) as Record<
-      string,
-      unknown
-    >;
-    const permissions = config.permissions as {
-      allow: string[];
-      deny: string[];
-    };
-    expect(permissions.allow).toContain("Read(**)");
-    expect(permissions.allow).toContain("Exec(bun)");
-    expect(permissions.allow).toContain("run_subagent");
-    expect(permissions.allow).toContain("ask_user_question");
-    expect(permissions.allow).toContain("mcp__*");
-    expect(permissions.deny).toContain("Exec(sudo)");
-    const readConfigFrom = config.read_config_from as Record<string, boolean>;
-    expect(readConfigFrom.cursor).toBe(false);
-    expect(readConfigFrom.windsurf).toBe(false);
-    expect(readConfigFrom.claude).toBe(false);
-    // No inference/config keys at the top level.
-    for (const key of ["model", "env", "effort", "agent", "statusLine", "theme_mode"]) {
-      expect(key in config, `config.json must not carry top-level "${key}"`).toBe(false);
+  test("4: config.json has allow-only framework permissions in copy and native projections", () => {
+    const allow = [
+      "Read(**)", "edit", "write", "grep", "glob",
+      "Exec(bun .devin/tools/*)", "Exec(bun run .devin/tools/*)",
+      "Exec(date -u)", "run_subagent", "ask_user_question", "web_search", "webfetch",
+    ];
+    const nativeAllow = [
+      ...allow.filter((entry) => !entry.startsWith("Exec(bun ")),
+      `Exec(${trustedCommand()})`,
+    ];
+    for (const [path, expectedAllow] of [
+      [join(REPO_ROOT, "harness", "devin", "config.json"), allow],
+      [join(ENGINE, "config.json"), allow],
+      [join(REPO_ROOT, "dist-release", "devin", ".devin", "config.json"), nativeAllow],
+    ] as const) {
+      const config = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      expect(config.permissions, path).toEqual({ allow: expectedAllow });
+      expect(config.read_config_from, path).toEqual({ cursor: false, windsurf: false, claude: false });
+      // No inference/config keys at the top level.
+      for (const key of ["model", "env", "effort", "agent", "statusLine", "theme_mode"]) {
+        expect(key in config, `${path}: config.json must not carry top-level "${key}"`).toBe(false);
+      }
     }
   });
 
@@ -325,6 +326,19 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
       expect(agents).toContain("All five MCP servers are disabled by default.");
       expect(agents).toContain("enable selected entries with `disabled: false`");
+    }
+  });
+
+  test("7f: Devin onboarding describes scoped permissions without blanket MCP approval", () => {
+    for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
+      const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
+      expect(agents).toContain("MCP tool calls are not blanket-pre-approved");
+      expect(agents).toContain("not a general destructive-command security boundary");
+      expect(agents).not.toContain("all MCP tools");
+      expect(agents).not.toContain("Review the broad `mcp__*` permission grant");
+      expect(agents).toContain(root === DEVIN_ROOT
+        ? "`bun .devin/tools/*`"
+        : "`" + trustedCommand() + "`");
     }
   });
 

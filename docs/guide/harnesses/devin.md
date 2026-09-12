@@ -99,9 +99,10 @@ verification is optional and does not gate an AIDLC workflow.
   Kiro. Enabling a server can resolve a changing third-party package version;
   default-off behavior is not dependency pinning or a supply-chain lock. You
   may pin your own enabled configuration to reviewed versions.
-- **Permissions** — review the existing broad `mcp__*` grant in
-  `.devin/config.json` before enabling external tools. These defaults do not
-  change the permission policy.
+- **Permissions** — MCP tool calls are not blanket-pre-approved. Enabling a
+  server and approving its tools are separate decisions; approve only the tools
+  or servers you intend to use, subject to Devin's effective permission mode
+  and user/team policies.
 
 The project registry `.devin/mcp_config.json` is shared with the team. Keep
 personal MCP settings and credentials in `.devin/mcp_config.local.json` and
@@ -145,10 +146,40 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
 - **Hook wiring** — `.devin/hooks.v1.json` (the whole file IS the hooks object
   — no `"hooks"` wrapper key). Seven events map onto the adapter's 15 targets.
 - **Permissions** — `.devin/config.json` pre-approves reads, edits, writes,
-  search, `bun`/`git`/`node`/`npm`/`npx`/`uvx` exec, subagent dispatch,
-  structured questions, web fetch, and all MCP tools — so workflows run without
-  per-call permission prompts. Personal overrides via `.devin/config.local.json`
-  and `.devin/mcp_config.local.json` (both gitignored).
+  search, subagent dispatch, structured questions, web search, and web fetch.
+  Copy installs pre-approve `bun .devin/tools/*`, `bun run .devin/tools/*`, and
+  `date -u`; native installs pre-approve the installed `aidlc engine` command
+  prefix and `date -u`. General Bun, Git, Node, npm, npx, and uvx commands are
+  not blanket-pre-approved. Personal overrides live in
+  `.devin/config.local.json` and `.devin/mcp_config.local.json` (both
+  gitignored).
+
+### Permission and guard boundaries
+
+The shipped configuration uses an allow-list only; it does not enforce a
+general prohibition on destructive commands. Removing the previous deny rules
+also removes their explicit restrictions on `sudo`, matching `rm -rf` commands,
+and matching `.env*` writes. An unmatched operation follows Devin's effective
+permission mode and other configured rules; absence from the allow-list is not
+an unconditional denial.
+
+AI-DLC guard hooks enforce workflow-specific invariants: state-transition
+ownership, reviewer scope, review-artifact freezes, and approval before code
+generation. They are conditional workflow guards, not a general
+destructive-command security boundary or a replacement for Devin permission
+policies, organization controls, and appropriate OS sandboxing. Approve project
+hooks via `/hooks` and fully restart Devin CLI to activate them.
+
+The allow-only shape and broad file-tool grants follow Claude Code;
+framework-scoped shell grants follow both Claude Code and Kiro CLI. This does
+not copy Kiro's explicit recursive-`rm` and `git push` denials. The
+`read_config_from` settings for Cursor, Windsurf, and Claude remain `false`
+intentionally.
+
+For existing installs, review the generated configuration before applying or
+merging it. Preserve deliberate local/team policy; local or user-level grants
+may still pre-approve commands or MCP tools removed from these shipped
+defaults. No workflow-record migration is required.
 
 ## Git integration
 
