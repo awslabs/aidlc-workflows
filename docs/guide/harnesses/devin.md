@@ -1,11 +1,6 @@
 # AI-DLC on Devin CLI
 
-`dist/devin/` is the framework's harness distribution for the **Devin CLI**
-harness. One deterministic core, many harnesses: the engine, state machine,
-audit log, graph, swarm referee, and learnings gate are byte-identical across
-every distribution — only the shell differs. The tree is **generated** from
-`core/` + `harness/devin/` by `bun scripts/package.ts devin`; never hand-edit it
-(the drift guard fails CI).
+The Devin CLI integration is authored in `core/` and `harness/devin/`. The shared engine is projected with Devin-specific configuration, skills, and a hook adapter; shared source does not imply identical host behavior. `bun scripts/package.ts` generates local `dist/devin/` and `dist-release/devin/` outputs. Never hand-edit or commit generated distributions.
 
 ## Prerequisites
 
@@ -13,11 +8,7 @@ every distribution — only the shell differs. The tree is **generated** from
   config diagnostics and `/aidlc --doctor`. This baseline does not claim that
   every required capability first appeared in this release. Check with
   `devin --version`.
-- **bun** — same requirement as every harness; every tool and hook runs via
-  bun. Install via `curl -fsSL https://bun.sh/install | bash` (or
-  `npm install -g bun` / `powershell -c "irm bun.sh/install.ps1 | iex"` on
-  Windows). `bun` must be on PATH for non-interactive shells — Devin sources
-  `~/.zshenv`/`~/.bashrc`.
+- **Runtime** — a native AI-DLC installation uses the self-contained `aidlc` executable and does not require a separate Bun or Node.js installation. Source-copy tools and hooks under `dist/devin/` require Bun, including in the non-interactive hook environment. Select a release or local build that includes Devin support; this guide does not establish that the latest published asset contains PR #996.
 - **Model & environment (user-level)** — model/env/effort are user-level on
   Devin, NOT in the project config. Set your model in
   `~/.config/devin/config.json` (or `%APPDATA%\devin\config.json` on Windows).
@@ -29,36 +20,20 @@ every distribution — only the shell differs. The tree is **generated** from
 
 ## Install
 
-The copies below come from a clone of the
-[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+For a native build containing Devin support, follow [Getting Started](../01-getting-started.md) and [Install and Lifecycle](../18-install-and-lifecycle.md), then run from the project root:
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
-git checkout v2
+aidlc config --harness devin
+aidlc doctor
 ```
 
-1. Copy the distribution into your project:
+A fresh project may fail the hook execution-evidence check until a real Devin SessionStart runs; follow the next section rather than creating a marker yourself.
 
-   ```bash
-   cp -r dist/devin/.devin/ your-project/.devin/
-   cp -r dist/devin/aidlc/   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .devin/
-   cp dist/devin/AGENTS.md   your-project/AGENTS.md   # or merge into yours
-   cp dist/devin/.gitignore  your-project/.gitignore  # or merge the AI-DLC section
-   ```
+For source development, use the checkout containing the Devin changes and run `bun scripts/package.ts` before consuming `dist/devin/`. A fresh clone has no committed distribution to copy. The copy projection requires Bun; the native release projection uses the installed `aidlc` executable. Do not mix their hook commands or permission grants.
 
-   The `aidlc/` directory is the workspace shell — it ships the pre-built
-   `aidlc/spaces/default/memory/` method tree the engine reads. It is a
-   **sibling** of `.devin/`, so copy it separately (or copy the whole
-   `dist/devin/` tree at once). `/aidlc --doctor` fails its "workspace shell
-   ready" check if it is missing.
+The project layout needs both `.devin/` and its sibling `aidlc/` workspace, plus the generated root `AGENTS.md` and `.gitignore` integration. Copy the whole generated copy tree only into a fresh test project. For existing projects, use the installation/refresh mechanism or carefully merge framework-owned content while preserving user configuration, local policy, and workspace records. Never overwrite an existing project's root files blindly.
 
-2. Apply the `.gitignore` entries from the shipped `.gitignore` **before**
-   starting a workflow — the per-clone audit shards under each intent's
-   `audit/` are committed deliberately (each clone writes its own
-   `<host>-<clone>.md`, so concurrent appends never git-conflict), while
-   per-user cursors and machine-local runtime state stay ignored.
+Apply the shipped ignore rules before running a workflow. Audit shards are deliberately versioned; personal configuration, per-user cursors, and machine-local runtime evidence are not.
 
 ## Approve hooks
 
@@ -67,7 +42,7 @@ hooks via `/hooks` — per the official
 [hooks reference](https://docs.devin.ai/cli/extensibility/hooks/overview),
 `/hooks` lists the currently loaded hooks and their source files — approve the
 AI-DLC hooks if prompted, then **fully restart Devin CLI** (`/clear` is not
-enough — unapproved hooks silently no-op). The SessionStart adapter records
+enough for this setup procedure). The SessionStart adapter records
 each successful run in `.devin/.aidlc-session-start.local.json` (gitignored,
 machine-local); `/aidlc --doctor` fails when that evidence is absent or
 invalid. A valid marker is historical execution evidence only — it does not
@@ -97,7 +72,7 @@ verification is optional and does not gate an AIDLC workflow.
 - **Context7** — the existing HTTP header uses the literal placeholder
   `${CONTEXT7_API_KEY}`. When opting in, supply `CONTEXT7_API_KEY` securely
   through the environment or private local configuration. Never commit a
-  literal key or put it in shell history.
+  literal key or put it in shell history. The shipped placeholder is a configuration string, not proof of interpolation; verify the current host's header substitution behavior when enabling the server.
 - **AWS servers** — install `uvx` and the chosen package's supported Python
   runtime, and supply appropriate AWS credentials and permissions when enabled.
   The shipped AWS proxy endpoint and metadata retain `us-east-1`; review them
@@ -139,11 +114,7 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
   `additionalContext` (Devin has no equivalent broadcast field).
 - **Structured gates** — render via Devin's native `ask_user_question` tool
   (per `question-rendering.md`). Gate semantics live in the engine.
-- **Subagent dispatch** — uses `run_subagent` (Devin's subagent tool); the
-  engine binary is invoked via `exec` (`bun .devin/tools/...`). The agent slug
-  is passed as the `profile` field of each `run_subagent` call (the adapter and
-  the `deliver-stage-rules` / `plan-approval-guard` hooks match on
-  `tool_input.profile`, not the prompt text). Shipped AI-DLC custom profiles
+- **Subagent dispatch** — the ensemble protocol uses `run_subagent` with a named `profile` and native task text. Current native-field translation, reviewer attribution, and background completion have [known limitations](../../reference/research/devin/07-subagent-lifecycle-and-ensemble.md); hook registration alone does not establish complete support. Shipped AI-DLC custom profiles
   carry no `model:` and use the **default subagent model**, not automatic
   inheritance of the parent's model. The documented Subagent router default is
   SWE-1.6; an org/enterprise admin can select another model in **Default
@@ -165,11 +136,8 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
   general sandbox. This profile-level tool availability is distinct from the
   project permission auto-approval list in `.devin/config.json`. See
   [Devin profile fields](https://docs.devin.ai/cli/subagents#frontmatter-fields).
-- **Method ambient context** — `.devin/rules/aidlc.md` is auto-loaded by Devin
-  (no `@`-import chain, unlike Claude). AIDLC's stage resolver reads
-  `aidlc/spaces/<space>/memory/` directly, so stage correctness is unaffected.
-- **Hook wiring** — `.devin/hooks.v1.json` (the whole file IS the hooks object
-  — no `"hooks"` wrapper key). Seven events map onto the adapter's 15 targets.
+- **Method ambient context** — `.devin/rules/aidlc.md` has `trigger: always_on` and provides a short pointer to active-space memory. It does not import the pointed-to files. AI-DLC's resolver loads the actual method from `aidlc/spaces/<space>/memory/`.
+- **Hook wiring** — `.devin/hooks.v1.json` is the hooks object itself, without a `hooks` wrapper. Seven lifecycle kinds route through the adapter. `fold-usage` has no registration because a supported Claude-style transcript usage source was not established for Devin; do not infer complete token/cost accounting from generic reporting commands.
 - **Permissions** — `.devin/config.json` pre-approves reads, edits, writes,
   search, subagent dispatch, structured questions, web search, and web fetch.
   Copy installs pre-approve `bun .devin/tools/*`, `bun run .devin/tools/*`, and
@@ -188,13 +156,7 @@ and matching `.env*` writes. An unmatched operation follows Devin's effective
 permission mode and other configured rules; absence from the allow-list is not
 an unconditional denial.
 
-AI-DLC guard hooks enforce workflow-specific invariants: state-transition
-ownership, reviewer scope, review-artifact freezes, and approval before code
-generation. They are conditional workflow guards, not a general
-destructive-command security boundary or a replacement for Devin permission
-policies, organization controls, and appropriate OS sandboxing. Inspect project
-hooks via `/hooks`, approve them if prompted, and fully restart Devin CLI to
-activate them.
+AI-DLC guard hooks implement workflow-specific checks for state transitions, review scope, frozen review artifacts, and approval before code generation. Enforcement depends on the adapter's supported tools, payloads, identity, and error paths; in particular, reviewer-specific native read/search enforcement is not established. These are not a general destructive-command security boundary or a replacement for Devin permission policies, organization controls, or OS sandboxing. Inspect project hooks via `/hooks`, approve them if prompted, and fully restart Devin CLI to collect execution evidence.
 
 The allow-only shape and broad file-tool grants follow Claude Code;
 framework-scoped shell grants follow both Claude Code and Kiro CLI. This does
@@ -206,6 +168,12 @@ For existing installs, review the generated configuration before applying or
 merging it. Preserve deliberate local/team policy; local or user-level grants
 may still pre-approve commands or MCP tools removed from these shipped
 defaults. No workflow-record migration is required.
+
+## Known limitations and upgrade checks
+
+The [Devin engineering findings](../../reference/research/devin/index.md) distinguish implemented behavior from open acceptance gaps. Native dispatch field translation, reviewer-specific read/search identity, and background terminal bookkeeping need additional work/evidence; a configured hook or completion row does not establish these guarantees. Question-response compatibility does not make an unknown or skipped choice an approval. Desktop binary discovery is not verified Desktop execution, and a version check is not a full workflow certification.
+
+Use the [regression and evidence checklist](../../reference/research/devin/14-regression-and-evidence.md) when AI-DLC or Devin changes. Historical runs and synthetic fixtures retain their original scope; this documentation does not claim a fresh interactive acceptance run.
 
 ## Git integration
 
@@ -234,23 +202,16 @@ Existing installs should update AIDLC, refresh the shipped agent profiles and
 onboarding while preserving intentional local customizations, and restart
 Devin CLI; no workflow-record migration is required.
 
-`devin doctor --json` emits CFG005 warnings for `display_name`, `examples`,
-`disallowedTools`, and `maxTurns` on `.devin/agents/*.md` when those fields are
-present. This is expected and does not indicate a broken install — those
-fields are authored once in `core/agents/` for the harnesses that consume them,
-and Devin's native agent loader simply ignores them.
+Historical `devin doctor --json` checks reported CFG005 warnings for retained `display_name`, `examples`, `disallowedTools`, and `maxTurns` fields on custom profiles. These fields serve the shared AI-DLC metadata contract, not Devin-native enforcement. The native `allowed-tools` list supplies direct tool restrictions. Recheck current host diagnostics after an upgrade rather than stripping shared metadata merely to silence a warning.
 
 ## Regenerating
 
 ```bash
 bun scripts/package.ts devin          # regenerate dist/devin from core/ + harness/devin/
-bun scripts/package.ts --check        # CI drift guard (every harness)
+bun scripts/package.ts --check        # independent-build determinism (every harness)
 ```
 
-Core `.ts` files are byte-identical to their `core/tools/` and `core/hooks/`
-sources (pinned by `tests/unit/t331-devin-packaging.test.ts`); prose carries the
-`{{HARNESS_DIR}}` token the packager substitutes to `.devin`, the one permitted
-transform class.
+The Devin copy-tree engine TypeScript parity is checked by `tests/unit/t331-devin-packaging.test.ts`. Markdown receives harness substitutions and frontmatter additions; native projections rewrite invocation surfaces. `--check` proves independent-build determinism, not live host behavior or equality with an existing checked-in distribution.
 
 ## Next steps
 

@@ -77,3 +77,5 @@ Maintainers author in `core/` and `harness/`. Generated `dist/` and
 See the [Contributing Guide](reference/11-contributing.md) for the development
 workflow and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
 to add another runtime.
+
+For the Devin port's implementation decisions, superseded approaches, known gaps, and upgrade checks, see [Devin harness findings](reference/research/devin/index.md).
