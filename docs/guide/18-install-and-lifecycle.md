@@ -248,6 +248,10 @@ After apply, gerund receipts name the project files and settings layer,
 genuinely blocking actions follow, then the wizard prints the exact harness
 launch and first workflow command.
 
+Step 3 also offers a fourth option, `unchanged`, which records no preset and
+preserves existing model settings; projects without model policy use shipped
+defaults. `balanced` remains the recommended default.
+
 An existing-project rerun keeps the seven-row map for Harnesses, Models,
 Runtime, Flags, Project, Providers, and Trust. Rows are lowercase `[ok]` or
 `[needs]`; one default-yes gate walks only Runtime, Providers, and Trust
@@ -275,9 +279,9 @@ interactive wizard.
 
 ### Model Policy
 
-`aidlc config models` records project model policy under the selected harness's
-`tools/data/harness.json` and applies it through the normal config plan,
-confirmation, refresh guard, and transaction. It never contacts a model
+`aidlc config models` records model policy in the selected settings layer
+(`aidlc.settings.json` for `--project`) and applies it through the normal config
+plan, confirmation, refresh guard, and transaction. It never contacts a model
 provider.
 
 The public groups are:
@@ -297,9 +301,10 @@ Policy resolves per agent in this order:
 
 Pins bind in both directions. A pinned agent stays pinned if the session later
 moves to a larger model. The framework never raises an agent above the session
-on its own. Judgment and Writing up inherit by default; only the measured
-balanced reviewer baseline ships a step-down. Use `aidlc config models` to
-record a per-install Writing up downgrade.
+on its own. With no recorded policy, Deciding and Writing up inherit; only the
+measured reviewing tier baseline ships a step-down. The first-run wizard's
+default choice records the `balanced` preset, which sets all three groups to
+medium effort.
 
 ```bash
 aidlc config models --show
@@ -336,12 +341,23 @@ written.
 
 Three immutable effort-only presets ship:
 
-- `thorough`: reviewing effort xhigh
-- `balanced`: reviewing effort medium, explicitly matching the shipped default
-- `minimal`: reviewing effort medium, writing-up effort low
+| Preset | Deciding | Reviewing | Writing up |
+|--------|----------|-----------|------------|
+| `thorough` | session effort | `xhigh` | session effort |
+| `balanced` (wizard default) | `medium` | `medium` | `medium` |
+| `minimal` | `medium` | `medium` | `low` |
 
-Presets never set model IDs or deciding effort. Deciding work continues to
-inherit the session ceiling.
+Presets never set model IDs. Explicit group dials and per-agent exceptions can
+override the preset's efforts.
+
+On upgrade, an install that recorded `preset: balanced` or `preset: minimal`
+picks up these efforts the next time its projections are regenerated. After
+`aidlc update`, run `aidlc config --yes` between workflows to reapply the
+recorded policy, or explicitly select it with
+`aidlc config models --preset balanced --project --yes` (substitute `minimal`
+as needed). Update changes only the machine runtime; doctor and
+`aidlc config models --check` report issues without applying changes. Installs
+with no recorded model policy keep the shipped tier defaults and are unaffected.
 
 Derive a project profile from a preset or an existing profile:
 
@@ -478,7 +494,7 @@ present.
 ### Project Flags
 
 `aidlc config flags` records project answers for default scope, swarm mode,
-hook debug, sensor timeout, and explicit guard bypasses:
+hook debug, sensor timeout, and explicit guard bypasses or ceremony kill switches:
 
 ```bash
 aidlc config flags --default-scope <installed-scope> \
@@ -499,7 +515,7 @@ data. On Claude Code, config also rewrites the staged
 `AWS_AIDLC_DEFAULT_SCOPE` value in `.claude/settings.json`; otherwise the
 shipped session environment would shadow the lower-precedence record.
 
-The recordable bypass set is limited to the documented recovery switches:
+The recordable bypass set includes the documented recovery and ceremony switches:
 
 - `AIDLC_SKIP_ARTIFACT_GUARD`
 - `AIDLC_SKIP_HUMAN_PRESENCE_GUARD`
@@ -510,6 +526,9 @@ The recordable bypass set is limited to the documented recovery switches:
 - `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`
 - `AIDLC_DISABLE_REVIEW_FREEZE_HOOK`
 - `AIDLC_DISABLE_USAGE_TRACKING`
+- `AIDLC_DISABLE_SENSORS` — disables sensor execution and sensor gate checks
+- `AIDLC_DISABLE_LEARNINGS` — disables the stage learnings ritual
+- `AIDLC_DISABLE_SUMMARY_CONFIRMATION` — disables the separate summary-confirmation checkpoint, not stage approval
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
