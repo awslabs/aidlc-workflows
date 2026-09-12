@@ -34,9 +34,11 @@ script (top-level dispatch, `process.exit`) crashes the session
   projection. Native installs and versioned release runtimes dispatch through
   the installed `aidlc` executable.
 - **A model provider** — the shipped project `opencode.json` pins no session
-  model; your global opencode config supplies it. Tiered personas pin
-  `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per agent in
-  the project `opencode.json` if your provider differs.
+  model; your global opencode config supplies it. Only the shipped reviewer
+  tier pins `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per
+  agent in the project `opencode.json` if your provider differs. Deciding and
+  Writing up inherit the session model; selecting an AI-DLC effort preset does
+  not change those model choices.
 
 ## Install
 

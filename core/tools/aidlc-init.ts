@@ -94,6 +94,7 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
+  HARNESS_HONESTY,
   harnessHonestyNotes,
   isModelEffort,
   isModelPreset,
@@ -723,11 +724,13 @@ function modelPolicyHelp(): string {
     `  ${cmd(`${invoke} config models [flags]`, out)}`,
     "",
     "Pins bind in both directions: a pinned agent stays pinned if the session later moves to a larger model.",
-    "Judgment and Writing up inherit by default; the balanced reviewer baseline is the disclosed shipped step-down.",
+    "Without a recorded policy, Deciding and Writing up inherit; only the shipped reviewing tier pins medium effort.",
     "",
     heading("POLICY", out),
     "  --preset <thorough|balanced|minimal>",
-    "    balanced explicitly matches the shipped reviewing default",
+    "    thorough: session effort for deciding and writing up, extra-high reviewing",
+    "    balanced: medium effort for deciding, reviewing, and writing up (wizard default)",
+    "    minimal: medium deciding and reviewing, low writing up",
     "  --from <preset|profile> [--save-as <name>]",
     "  --deciding-effort <low|medium|high|xhigh|max>",
     "  --reviewing-effort <low|medium|high|xhigh|max>",
@@ -1092,7 +1095,10 @@ function modelsWizard(
   if (!choice) return current;
   if (choice === "1") {
     process.stdout.write(
-      "Presets: thorough raises reviewing to xhigh; balanced matches the shipped reviewing default; minimal also lowers Writing up to low.\n",
+      "Presets:\n" +
+        "  thorough: session effort for deciding and writing up, extra-high reviewing\n" +
+        "  balanced: medium effort for deciding, reviewing, and writing up\n" +
+        "  minimal: medium deciding and reviewing, low writing up\n",
     );
     const selected = configPrompt("Preset [thorough/balanced/minimal]:")?.trim() ?? "";
     if (!isModelPreset(selected)) throw new Error("preset selection cancelled");
@@ -4101,7 +4107,7 @@ type FirstRunChoices = {
   provider: "amazon-bedrock" | "other";
   region: string;
   profile: string;
-  preset: "balanced" | "thorough" | "minimal";
+  preset: "balanced" | "thorough" | "minimal" | "unchanged";
   plugins: string;
   pluginLabel: string;
   mcp: "defaults" | "none";
@@ -4380,16 +4386,18 @@ function applyFirstRunChoices(
     "--json",
   ];
   runConfigChild(common, projectDir, snapshot);
-  runConfigChild([
-    "models",
-    "--project-dir",
-    projectDir,
-    `--${choices.target}`,
-    "--preset",
-    choices.preset,
-    "--yes",
-    "--json",
-  ], projectDir, snapshot);
+  if (choices.preset !== "unchanged") {
+    runConfigChild([
+      "models",
+      "--project-dir",
+      projectDir,
+      `--${choices.target}`,
+      "--preset",
+      choices.preset,
+      "--yes",
+      "--json",
+    ], projectDir, snapshot);
+  }
   runConfigChild([
     "project",
     "--project-dir",
@@ -4727,16 +4735,20 @@ function customizeFirstRun(
     }
     if (step === 3) {
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
-      process.stdout.write("    1. balanced    reviewing at medium effort - the shipped default\n");
-      process.stdout.write("    2. thorough    reviewing at xhigh effort - deepest correctness checking; slower, costlier reviews\n");
-      process.stdout.write("    3. minimal     lightest touch - review medium, write-ups at low effort\n");
+      process.stdout.write("    1. balanced    medium effort for deciding, reviewing, and writing up (recommended, default)\n");
+      process.stdout.write("    2. thorough    session effort for deciding and writing up, extra-high reviewing\n");
+      process.stdout.write("    3. minimal     medium deciding and reviewing, low writing up\n");
+      process.stdout.write("    4. unchanged   records no preset and keeps existing settings; new projects use shipped defaults\n");
+      process.stdout.write("                   where agents inherit your session's model and effort\n");
       const selected = promptChoice(
         "  Preset",
-        3,
-        choices.preset === "balanced" ? 1 : choices.preset === "thorough" ? 2 : 3,
+        4,
+        choices.preset === "balanced" ? 1 : choices.preset === "thorough" ? 2 : choices.preset === "minimal" ? 3 : 4,
       );
-      choices.preset = selected === 1 ? "balanced" : selected === 2 ? "thorough" : "minimal";
-      process.stdout.write(`  Using the ${choices.preset} preset.\n\n`);
+      choices.preset = selected === 1 ? "balanced" : selected === 2 ? "thorough" : selected === 3 ? "minimal" : "unchanged";
+      process.stdout.write(choices.preset === "unchanged"
+        ? "  Keeping existing settings unchanged; no preset recorded.\n\n"
+        : `  Using the ${choices.preset} preset.\n\n`);
       return;
     }
     if (step === 4) {
@@ -4793,7 +4805,7 @@ function customizeFirstRun(
         ? `amazon-bedrock, ${choices.region}, ${choices.profile || "default credential chain"}`
         : "other"
     }\n`);
-    process.stdout.write(`    3. Preset       ${choices.preset}\n`);
+    process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
     process.stdout.write(`    4. Plugins      ${choices.pluginLabel}\n`);
     process.stdout.write(`    5. MCP          ${choices.mcp === "defaults" ? "on" : "off"}\n`);
     process.stdout.write(`    6. Record in    ${firstRunSettingsTargetLabel(choices.target)}\n`);
@@ -4883,6 +4895,13 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         : "provider recorded as other; manual provider setup remains"
     }\n`,
   );
+  if (HARNESS_HONESTY[modelHarness(candidate.stamp.distribution)].groupEffort) {
+    process.stdout.write("                                       Records balanced (default): medium project agent effort for deciding,\n");
+    process.stdout.write("                                       reviewing, and writing up; your session (conductor) effort stays unchanged.\n");
+  } else {
+    process.stdout.write("                                       Records balanced (default).\n");
+    process.stdout.write(`                                       In ${candidate.descriptor.productName}, effort dials do not apply, so agents keep your session's effort.\n`);
+  }
   process.stdout.write(
     "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer\n",
   );

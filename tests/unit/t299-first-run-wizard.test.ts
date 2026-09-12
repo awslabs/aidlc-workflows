@@ -189,6 +189,8 @@ describe("t299 first-run setup wizard", () => {
     );
     expect(result.stdout).toContain("1. Yes, use recommended defaults");
     expect(result.stdout).toContain("MCP servers on, all plugins, Bedrock via your AWS credentials");
+    expect(result.stdout).toContain("medium project agent effort for deciding");
+    expect(result.stdout).not.toContain("effort dials do not apply");
     expect(result.stdout).toContain("Writing project files ... done");
     expect(result.stdout).toContain(
       "Recording your choices ... done  (aidlc.settings.json in this project)",
@@ -212,6 +214,19 @@ describe("t299 first-run setup wizard", () => {
     ).models.preset).toBe("balanced");
   }, 60_000);
 
+  test("recommended defaults explain unsupported group effort on Kiro CLI", () => {
+    const result = runWizard("\n", {
+      harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("In Kiro CLI, effort dials do not apply");
+    expect(result.stdout).not.toContain("medium project agent effort for deciding");
+    expect(JSON.parse(
+      readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
+    ).models.preset).toBe("balanced");
+    expect(existsSync(join(result.project, ".kiro"))).toBe(true);
+  }, 60_000);
+
   test("customize re-asks invalid preset and writes nothing when review declines", () => {
     const result = runWizard(
       "2\n\n\n\n\nthorogh\n2\n\n\n\nn\n",
@@ -223,13 +238,65 @@ describe("t299 first-run setup wizard", () => {
       expect(result.stdout).toContain(`Step ${step} of 6`);
     }
     expect(result.stdout).toContain(
-      "That's not one of the choices - enter 1, 2, or 3.",
+      "That's not one of the choices - enter 1, 2, ... or 4.",
     );
     expect(result.stdout).toContain("Using the thorough preset.");
     expect(result.stdout).toContain("Your choices - Enter to apply");
     expect(result.stdout).toContain("Nothing written.");
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
+  }, 60_000);
+
+  test("unchanged completes setup without recording model policy in any settings layer", () => {
+    const env = isolatedMachineEnv();
+    const result = runWizard("2\n\n\n\n\n4\n\n\n\n\n", { env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Keeping existing settings unchanged; no preset recorded.");
+    expect(result.stdout).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).not.toContain("Using the unchanged preset.");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".claude", "settings.json"))).toBe(true);
+    for (const path of [
+      join(result.project, "aidlc.settings.json"),
+      join(result.project, "aidlc.settings.local.json"),
+      join(env.AIDLC_INSTALL_ROOT as string, "aidlc.settings.json"),
+    ]) {
+      const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+      expect(settings).not.toHaveProperty("models");
+    }
+  }, 60_000);
+
+  test("unchanged preserves pre-seeded project policy byte-for-byte when recording locally", () => {
+    const prior = `${JSON.stringify({
+      schemaVersion: 1,
+      models: {
+        schemaVersion: 1,
+        preset: "thorough",
+        groups: { reviewing: { effort: "xhigh" } },
+        agents: { architect: { model: { claude: "vendor/custom-model" }, effort: "high" } },
+      },
+    }, null, 4)}\n`;
+    const env = isolatedMachineEnv();
+    const result = runWizard("2\n\n\n\n\n4\n\n\n2\n\n", {
+      env,
+      prepare: (project) => {
+        writeFileSync(join(project, "aidlc.settings.json"), prior);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Setup complete.");
+    expect(readFileSync(join(result.project, "aidlc.settings.json"), "utf-8")).toBe(prior);
+    for (const path of [
+      join(result.project, "aidlc.settings.local.json"),
+      join(env.AIDLC_INSTALL_ROOT as string, "aidlc.settings.json"),
+    ]) {
+      const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+      expect(settings).not.toHaveProperty("models");
+    }
+    expect(readFileSync(
+      join(result.project, ".claude", "agents", "aidlc-product-lead-agent.md"),
+      "utf-8",
+    )).toContain("effort: xhigh");
   }, 60_000);
 
   test("review accepts a step number, re-enters it, then applies", () => {
