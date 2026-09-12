@@ -1,20 +1,25 @@
 # AI-DLC Workflows 2.0 - Roadmap
 
-Status as of 2026-09-01.
+Status as of 2026-09-11.
 
-- The current v2 version is **2.6.124** (`origin/main` tip `82d2e304`).
-  Version numbers describe the committed framework tree, not GitHub Releases.
-- AI-DLC Workflows 2.0 is **GA** on the default `main` branch. Use `main` for
-  new installations and upgrades. The earlier implementation is maintained
-  separately on `v1`.
-- Release publication is not yet aligned with `main`: GitHub still marks
-  `v1.0.1` as Latest, tracked by #635. The native distribution implementation
-  for #722 remains under review in #756; no public v2 native release exists yet.
+- The latest stable release is **2.8.2** (tag `v2.8.2`, commit `355903d6`).
+  The current `origin/main` tip is `0a21d7fb` and contains unreleased work
+  merged after that tag. Release-preparation pull requests own release metadata
+  changes.
+- AI-DLC Workflows 2.0 is **GA**. Users install and update from the latest
+  stable GitHub Release; `main` is the active development branch. The earlier
+  implementation is maintained separately on `v1`.
+- Native binaries, installers, version selection, project configuration and
+  release provenance shipped through #722 and #756. GitHub marks `v2.8.2` as
+  Latest. Stable and preview publication use separate release paths
+  (#1008, #1127, #1129).
 - PR validation now includes the deterministic integration and end-to-end tiers
   in addition to smoke, unit, packaging, typecheck and lint (#791).
 
-The version numbers below describe where work landed on `main`. Future
-themes and open pull requests are directional, not committed release promises.
+Published version ranges below identify the release where work became
+available. Rows marked as post-release identify work already on `main` but not
+yet included in a stable release. Future themes and open pull requests are
+directional, not committed release promises.
 
 ## North star reference
 
@@ -43,8 +48,9 @@ The seven functional goals of the AI-DLC Workflows 2.0 North Star, verbatim in i
 
 Two strategic pillars shape how the North Star reaches users and evolves:
 
-- **Productization and distribution (#722)** - make AI-DLC straightforward to
-  install, configure, upgrade, release and roll back across supported harnesses.
+- **Productization and lifecycle (#722)** - the native distribution baseline is
+  shipped. Current work focuses on provider-neutral configuration, filesystem
+  safety, project migration and release-channel hardening.
 - **Plugin ecosystem and marketplace (#723)** - make trusted extensions
   discoverable, installable and reusable, with a clear path from external plugin
   to first-party capability.
@@ -56,11 +62,11 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | # | Goal | Status | Delivered by | Remaining work |
 | --- | --- | --- | --- | --- |
 | 1 | Real-world ensemble | Shipped | 2.5.0 independent collaborators and selectable topologies (#568), enforced reviewer receipts (#569), batch-parallel per-unit waves (#617), team-owned parallel Units (#879) | Harness-native live-team transports remain an enhancement |
-| 2 | Customization | Shipped, with follow-ups | 2.3.0 plugin seam, 2.3.5 content projection/selection (#550), deterministic rule delivery (#658), plugin scopes (#664), reusable plugin test kit (#792), plugin doctor extensions (#797), standalone authoring toolchain (#892) | Stage-specific rules, `when:` evaluation, remote discovery and marketplace (#723) |
-| 3 | Adaptiveness | Shipped | 2.2.0 composer, entropy-scored composition (#595), deterministic ARS (#644), unit-major Code Generation (#705), Classic/Express scopes and conditional protocol modules (#767), per-session workflow bindings (#858) | Boundary changes remain human-approved by design |
-| 4 | Verifier as adversary | Shipped | 2.4.0 adversarial evidence contract (#566), gate-and-completion enforcement (#569, #551), reviewer-class cost dial (#718), turn/recovery backstops (#613, #758), gate-bound blocking sensors (#836) | Pull-request-level adversarial review is under development in #799 |
+| 2 | Customization | Shipped, with follow-ups | 2.3.0 plugin seam, 2.3.5 content projection/selection (#550), deterministic rule delivery (#658), plugin scopes (#664), reusable plugin test kit (#792), plugin doctor extensions (#797), standalone authoring toolchain (#892) | Marketplace delivery is active in #1104; stage ordering (#1100), stage-specific rules and `when:` evaluation remain open |
+| 3 | Adaptiveness | Shipped | 2.2.0 composer, entropy-scored composition (#595), deterministic ARS (#644), unit-major Code Generation (#705), Classic/Express scopes and conditional protocol modules (#767), per-session workflow bindings (#858) | First-class amendment and feedback ingestion (#1122-#1124) and on-demand Construction autonomy (#1142) are open extensions |
+| 4 | Verifier as adversary | Shipped | 2.4.0 adversarial evidence contract (#566), gate-and-completion enforcement (#569, #551), reviewer-class cost dial (#718), turn/recovery backstops (#613, #758), gate-bound blocking sensors (#836) | Pull-request-level adversarial review (#799) and explicit producer/reviewer verification disciplines (#1134, #1136) remain open |
 | 5 | Cyclic flows | Partial | Within-stage review/revision loops, bounded recovery mechanics, explicit human-authorized forward/backward/redo stage jumps, and bounded Build & Test to Code Generation loop-back (#616) | General governed cross-stage feedback loops remain unbuilt |
-| 6 | Traceability | Partial | Artefact graph, upstream coverage, per-stage enforcement (#401), claim provenance (#647, #686), shared CodeKB safeguards (#670), domain/contract boundaries (#711), stale-result propagation (#716), source-bound and per-Unit review receipts (#646, #813) | Progressive in-place enrichment and cross-unit discovery propagation (#299) |
+| 6 | Traceability | Partial | Artefact graph, upstream coverage, per-stage enforcement (#401), claim provenance (#647, #686), shared CodeKB safeguards (#670), domain/contract boundaries (#711), stale-result propagation (#716), source-bound and per-Unit review receipts (#646, #813), commit-to-intent resolution (#1052) | Progressive in-place enrichment, cross-unit discovery propagation (#299) and one-byte commit-provenance fidelity |
 | 7 | Org repository | Shipped | 2.1.0 spaces/intents/org-KB, declared multi-repo manifest and sync (#674), clone-safe active-space cursor (#709), DocumentKB indexing and citations (#731), summaries and tags (#894) | Auditable supplemental-knowledge selection remains an active extension (#694) |
 
 <!-- markdownlint-enable MD013 -->
@@ -110,27 +116,30 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | 2.6.107 | Team-owned Units and parallel Construction across teams | 1, 3 | #879 |
 | 2.6.114 | No-DAG per-Unit review continuity | 1, 4 | #947 |
 | 2.6.121 - 2.6.124 | Immutable reviewer evidence, Git-independent source binding and portable workflow state paths | 4, 6 | #888, #904, #962 |
+| 2.7.0 - 2.8.0 | Native binaries, installers, project configuration, version selection, update and tag-bound release provenance | - | #756, #993, #1050 |
+| 2.7.1 - 2.8.2 | Plan Approval and Change Control hardening, cross-harness native-hook repairs, config wizard fixes and stable/preview release channels | 1, 3, 4 | #997, #1000, #1054, #1064, #1065, #1067, #1008, #1097, #1111, #1127, #1129 |
+| Post-2.8.2 on `main` | Commit-to-intent provenance resolution | 6 | #1052 |
+| Post-2.8.2 on `main` | Intent archive/unarchive lifecycle | - | #1033 |
 
 <!-- markdownlint-enable MD013 -->
 
-## In flight
+## Open implementation tracks
 
-Selected open work is listed without version claims. Merge readiness changes
-frequently; each linked pull request is authoritative.
+Selected open work is listed without version claims. This is not the complete
+pull-request backlog. Each linked pull request is authoritative for review and
+merge state.
 
 <!-- markdownlint-disable MD013 -->
 
 | PR | Work | Theme |
 | --- | --- | --- |
-| [#756](https://github.com/awslabs/aidlc-workflows/pull/756) | Native distribution, six-command CLI, config policy and release hardening | Installation and releases |
-| [#775](https://github.com/awslabs/aidlc-workflows/pull/775) | Unified Kiro distribution aligned to the agent harness | Harness parity |
-| [#782](https://github.com/awslabs/aidlc-workflows/pull/782) | Product-discovery plugin (AI-PLC) | Plugins and product discovery |
-| [#799](https://github.com/awslabs/aidlc-workflows/pull/799) | Adversarial AI pull-request review agent | CI and verification |
-| [#969](https://github.com/awslabs/aidlc-workflows/pull/969) | Construction integration through pull requests | Delivery workflow |
-| [#968](https://github.com/awslabs/aidlc-workflows/pull/968) | Devin CLI and Desktop harness | Harness expansion |
-| [#907](https://github.com/awslabs/aidlc-workflows/pull/907) | mabl verification plugin | Plugins and verification |
-| [#753](https://github.com/awslabs/aidlc-workflows/pull/753) | Evaluator integration | Evaluation |
-| [#526](https://github.com/awslabs/aidlc-workflows/pull/526) | Product discovery in Ideation | Product discovery |
+| [#1104](https://github.com/awslabs/aidlc-workflows/pull/1104) | Registered plugin marketplaces, search, verified install/update and graduation support | Plugins and marketplace |
+| [#1101](https://github.com/awslabs/aidlc-workflows/pull/1101) | Preserve the current model provider unless the user selects Bedrock | Configuration |
+| [#1107](https://github.com/awslabs/aidlc-workflows/pull/1107) | Preserve existing `.gitignore` rules and report unsupported config filesystems | Configuration |
+| [#1063](https://github.com/awslabs/aidlc-workflows/pull/1063) | Serve Kiro CLI and Kiro IDE from one maintained distribution | Harness parity |
+| [#1135](https://github.com/awslabs/aidlc-workflows/pull/1135), [#1138](https://github.com/awslabs/aidlc-workflows/pull/1138) | Explicit verification disciplines for reviewer and producing personas | Verification |
+| [#1140](https://github.com/awslabs/aidlc-workflows/pull/1140) | Grant Construction autonomy on demand | Adaptive workflow |
+| [#1141](https://github.com/awslabs/aidlc-workflows/pull/1141) | Add visual direction and foundation-token contracts to Design | Design workflow |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -199,8 +208,11 @@ but do not yet have committed release versions.
   `plugin validate` and `plugin build` routes also ship. Top-level
   `plugin create` and `plugin test` routes remain proposed in
   [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
-  Remote discovery, trust, a first-party marketplace and a graduation path are
-  also proposed in #723.
+  Registered marketplaces, remote search, verified install/update, catalog
+  emission and graduation tombstones are under implementation in
+  [#1104](https://github.com/awslabs/aidlc-workflows/pull/1104). Creating the
+  first-party marketplace repository and completing the first graduation stay
+  outside that pull request.
   Product discovery
   ([#652](https://github.com/awslabs/aidlc-workflows/issues/652),
   [#782](https://github.com/awslabs/aidlc-workflows/pull/782)) and design
@@ -230,23 +242,43 @@ but do not yet have committed release versions.
   [#652](https://github.com/awslabs/aidlc-workflows/issues/652).
 - The delivery surface, core versus first-party plugin, is not yet settled.
 
+### Intent lifecycle and iteration
+
+- `aidlc intent archive` and `aidlc intent unarchive` shipped on `main` in
+  [#1033](https://github.com/awslabs/aidlc-workflows/pull/1033), closing
+  [#980](https://github.com/awslabs/aidlc-workflows/issues/980). Archived
+  intents leave active routing without deleting their records. Explicit
+  unarchive restores them.
+- Warm re-scan, a first-class `amend` scope and batch feedback ingestion are
+  tracked in
+  [#1122](https://github.com/awslabs/aidlc-workflows/issues/1122),
+  [#1123](https://github.com/awslabs/aidlc-workflows/issues/1123) and
+  [#1124](https://github.com/awslabs/aidlc-workflows/issues/1124).
+
 ### Installation, upgrades and releases
 
 - The GA implementation and its active development line now live on `main`.
   The earlier implementation remains on `v1`.
-- [#722](https://github.com/awslabs/aidlc-workflows/issues/722) covers binary
-  packaging, installers, release automation, rollback and post-install setup;
-  its milestones 1-3 implementation is under review in
-  [#756](https://github.com/awslabs/aidlc-workflows/pull/756). The earlier Bun
-  dependency tracker [#399](https://github.com/awslabs/aidlc-workflows/issues/399)
-  is closed as superseded by #722.
-- [#636](https://github.com/awslabs/aidlc-workflows/issues/636) tracks a
-  first-class upgrade contract. The earlier implementation PR
-  [#535](https://github.com/awslabs/aidlc-workflows/pull/535) closed without
-  merging.
-- [#635](https://github.com/awslabs/aidlc-workflows/issues/635) tracks the
-  mismatch between the v2 GA `main` branch and GitHub's Latest release still
-  pointing at `v1.0.1`.
+- [#722](https://github.com/awslabs/aidlc-workflows/issues/722) and
+  [#756](https://github.com/awslabs/aidlc-workflows/pull/756) delivered native
+  binaries, installers, transactional project configuration, update/use/pin
+  commands, release assets and tag-bound provenance. The earlier Bun dependency
+  tracker [#399](https://github.com/awslabs/aidlc-workflows/issues/399) is
+  closed as superseded.
+- Stable releases are published from version tags, and GitHub Latest now points
+  to `v2.8.2`, closing
+  [#635](https://github.com/awslabs/aidlc-workflows/issues/635). The preview
+  channel and isolation between stable and preview publication shipped in
+  [#1008](https://github.com/awslabs/aidlc-workflows/pull/1008),
+  [#1127](https://github.com/awslabs/aidlc-workflows/pull/1127) and
+  [#1129](https://github.com/awslabs/aidlc-workflows/pull/1129).
+- The main unresolved lifecycle work is safe behavior at configuration
+  boundaries: provider-neutral defaults and cleanup in
+  [#1101](https://github.com/awslabs/aidlc-workflows/pull/1101), existing-file
+  and filesystem handling in
+  [#1107](https://github.com/awslabs/aidlc-workflows/pull/1107), and the
+  remaining enterprise compatibility-reporting scope in
+  [#636](https://github.com/awslabs/aidlc-workflows/issues/636).
 
 ### Harness expansion and parity
 
@@ -254,14 +286,20 @@ but do not yet have committed release versions.
   [#657](https://github.com/awslabs/aidlc-workflows/pull/657), and its RFC
   [#472](https://github.com/awslabs/aidlc-workflows/issues/472) is closed.
 - Cursor support shipped in
-  [#661](https://github.com/awslabs/aidlc-workflows/pull/661). A unified Kiro
-  distribution is under review in
-  [#775](https://github.com/awslabs/aidlc-workflows/pull/775). Native Kiro IDE
+  [#661](https://github.com/awslabs/aidlc-workflows/pull/661). Native Kiro IDE
   surfaces shipped in
   [#824](https://github.com/awslabs/aidlc-workflows/pull/824), closing
   [#555](https://github.com/awslabs/aidlc-workflows/issues/555), and hook matcher
   hardening shipped in
   [#788](https://github.com/awslabs/aidlc-workflows/pull/788).
+- The earlier unified-Kiro proposal
+  [#775](https://github.com/awslabs/aidlc-workflows/pull/775) closed without
+  merging. Its maintained successor,
+  [#1063](https://github.com/awslabs/aidlc-workflows/pull/1063), proposes one
+  `kiro` distribution for Kiro CLI and Kiro IDE.
+- Devin support has two open implementation proposals,
+  [#968](https://github.com/awslabs/aidlc-workflows/pull/968) and
+  [#996](https://github.com/awslabs/aidlc-workflows/pull/996).
 - Antigravity setup is proposed in
   [#690](https://github.com/awslabs/aidlc-workflows/issues/690).
 
@@ -281,11 +319,14 @@ but do not yet have committed release versions.
 ## Known gaps
 
 - Stage-specific rules (`aidlc-stage-<slug>.md`) are reserved but unbuilt.
-- Plugin `when:` evaluation, remote discovery and marketplace trust remain open.
+- Plugin `when:` evaluation remains unbuilt. Marketplace discovery and trust
+  are implemented in open PR #1104, not yet shipped.
 - Write-fired sensors remain advisory; gate-bound sensors support blocking
   severity and human-backed override.
 - General cross-stage cycles and progressive in-place artefact enrichment remain
   North Star gaps.
-- The unified Kiro distribution remains under review in #775.
-- Older community PR #526 remains open and needs rebasing or disposition. PRs
-  #432, #535, #552, #653 and #712 closed without merging.
+- Provider-neutral project configuration remains blocked on the open findings
+  in #1101.
+- The unified Kiro distribution remains under review in #1063.
+- Core and plugin product-discovery proposals remain open in #526 and #782 and
+  need alignment on the delivery surface before either lands.
