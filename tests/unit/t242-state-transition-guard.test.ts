@@ -492,61 +492,41 @@ describe("t242 state-transition ownership guard", () => {
       `bun run --print 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
     ]) {
       expect(delegatedLifecycleCommand(command), command).toBeNull();
-      expect(backgroundLifecycleCommand(command), command).toBe(
-        "bun eval/print beyond guard inspection",
-      );
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
   });
 
-  test("background classification resolves literal script and verb variables before routing", () => {
-    for (const [command, expected] of [
-      [
-        'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-        "aidlc-orchestrate.ts next",
-      ],
-      [
-        'script=.cursor/tools/aidlc-orchestrate.ts; bun "$script" next',
-        "aidlc-orchestrate.ts next",
-      ],
-      [
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test
-        'tool=orchestrate; verb=continue; bun ".cursor/tools/aidlc-${tool}.ts" "$verb" token',
-        "aidlc-orchestrate.ts continue",
-      ],
-      [
-        'script=.cursor/tools/aidlc-state.ts; verb=unpark; bun run "$script" "$verb"',
-        "aidlc-state.ts unpark",
-      ],
-      [
-        'verb=execute; bun .cursor/tools/aidlc-jump.ts "$verb" --target feasibility',
-        "aidlc-jump.ts execute",
-      ],
-      [
-        'verb=intent-create; bun .cursor/tools/aidlc-utility.ts "$verb" --scope mvp',
-        "aidlc-utility.ts intent-create",
-      ],
-      [
-        'group=orchestrate; verb=next; aidlc engine "$group" "$verb"',
-        "aidlc engine orchestrate next",
-      ],
-      [
-        'verb=next; bun .cursor/tools/aidlc.ts "$verb"',
-        "aidlc.ts next",
-      ],
-    ] as const) {
-      expect(backgroundLifecycleCommand(command), command).toBe(expected);
-    }
+  test("background commands require literal tokens and direct read-only entrypoints", () => {
     for (const command of [
-      'verb=get; bun .cursor/tools/aidlc-state.ts "$verb" "Current Stage"',
-      'script=.cursor/tools/aidlc-utility.ts; verb=version; bun "$script" "$verb"',
+      'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
+      's=.cursor/tools/aidlc-orchestrate.ts; bun "$s" next',
+      "bun .cursor/tools/aidlc-orchestrate.ts $(printf next)",
+      "sh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
+      'node -e "require(\'node:child_process\').execSync(\'bun .cursor/tools/aidlc-orchestrate.ts next\')"',
+      'python3 -c "import subprocess; subprocess.run([\'bun\', \'.cursor/tools/aidlc-orchestrate.ts\', \'next\'])"',
+      "pwsh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
+      "cmd /c bun .cursor/tools/aidlc-orchestrate.ts next",
+      String.raw`find . -name x -exec bun .cursor/tools/aidlc-orchestrate.ts next \;`,
+      "./run.sh",
+      "bun --preload ./p.ts .cursor/tools/aidlc-orchestrate.ts next",
+      'bun -e "Bun.spawnSync([\'bun\', \'.cursor/tools/aidlc-orchestrate.ts\', \'next\'])"',
+      'verb=status; bun .cursor/tools/aidlc-utility.ts "$verb"',
+      'bun .cursor/tools/aidlc-utility.ts "$verb"',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test
-      'tool=state; verb=count; bun ".cursor/tools/aidlc-${tool}.ts" "$verb" completed',
-      'group=state; verb=get; aidlc engine "$group" "$verb" "Current Stage"',
-      'background_read=\'bun .cursor/tools/aidlc-utility.ts version\'; sh -c "$background_read"',
-      'sh -c \'verb=version; bun .cursor/tools/aidlc-utility.ts "$verb"\'',
+      'bun .cursor/tools/aidlc-utility.ts "${verb}"',
+      "bun .cursor/tools/aidlc-utility.ts `printf status`",
+      "eval 'bun .cursor/tools/aidlc-utility.ts status'",
+      "sh -c 'bun .cursor/tools/aidlc-utility.ts status'",
+      "bash -c 'bun .cursor/tools/aidlc-utility.ts status'",
+      "xargs bun .cursor/tools/aidlc-utility.ts status",
+      "bun -r ./p.ts .cursor/tools/aidlc-utility.ts status",
+      "env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-utility.ts status",
+      "command env nice -n 5 nohup bun .cursor/tools/aidlc-utility.ts status",
+      "/usr/bin/env bun .cursor/tools/aidlc-utility.ts status",
     ]) {
-      expect(backgroundLifecycleCommand(command), command).toBeNull();
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
+    expect(backgroundLifecycleCommand("bun .cursor/tools/aidlc-utility.ts status")).toBeNull();
   });
 
   test("background classification refuses computed shell execution without guessing its output", () => {
@@ -573,17 +553,6 @@ describe("t242 state-transition ownership guard", () => {
       "'<helper'",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
-    }
-    for (const command of [
-      "printf '%s\\n' '$(bun .cursor/tools/aidlc-orchestrate.ts next)'",
-      "echo '`node helper.js`'",
-      "rg '\\$verb|node|python|find -exec' README.md",
-      String.raw`printf '%s\n' \$verb`,
-      "echo ok # $(node helper.js)",
-      'verb=version; test "$verb" = version && bun .cursor/tools/aidlc-utility.ts version',
-      'verb=get; verb=next bun .cursor/tools/aidlc-state.ts "$verb" "Current Stage"',
-    ]) {
-      expect(backgroundLifecycleCommand(command), command).toBeNull();
     }
   });
 
@@ -639,7 +608,7 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
-  test("background read utilities remain usable with project paths, wrappers, and quoted command examples", () => {
+  test("background read utilities remain usable through direct literal invocations", () => {
     for (const command of [
       "bun .cursor/tools/aidlc-utility.ts version",
       "bun .cursor/tools/aidlc-utility.ts --project-dir /project status --json",
@@ -653,30 +622,18 @@ describe("t242 state-transition ownership guard", () => {
       "bun .cursor/tools/aidlc-jump.ts resolve --stage feasibility",
       "bun .cursor/tools/aidlc-orchestrate.ts --help",
       "bun --silent run .cursor/tools/aidlc-utility.ts version",
-      "env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-utility.ts version",
-      "command env nice -n 5 nohup bun .cursor/tools/aidlc-utility.ts version",
-      "/usr/bin/env bun .cursor/tools/aidlc-utility.ts version",
-      "sh -c -- 'bun .cursor/tools/aidlc-utility.ts version'",
       "aidlc --project-dir /project engine state get 'Current Stage'",
       "aidlc engine status",
       "aidlc --status",
       "aidlc engine utility version",
       "aidlc intent list",
       "aidlc space",
-      "cd /project && rg -n 'aidlc next' README.md | head -20",
-      "find . -maxdepth 2 -type f -name '*.md' -print",
-      "sed -n '1,100p' README.md",
-      "sort -u README.md",
-      "jq -r '.command' fixture.json",
-      "printf '%s\\n' 'bun --preload helper.ts .cursor/tools/aidlc-utility.ts version'",
-      "printf '%s\\n' 'rm -rf aidlc/.aidlc-cursor-subagents'",
-      "[ 1 -eq 1 ] && echo ok",
     ]) {
       expect(backgroundLifecycleCommand(command), command).toBeNull();
     }
   });
 
-  test("background script identity checks apply through variables and nested shells", () => {
+  test("background script identity requires the installed entrypoint", () => {
     const installed = (path: string) => path === ".cursor/tools/aidlc-utility.ts";
     for (const command of [
       "bun helpers/.cursor/tools/aidlc-utility.ts version",
@@ -686,11 +643,12 @@ describe("t242 state-transition ownership guard", () => {
       "env -C helpers bun .cursor/tools/aidlc-utility.ts version",
       "env --chdir=helpers bun .cursor/tools/aidlc-utility.ts version",
       "bun --cwd helpers .cursor/tools/aidlc-utility.ts version",
+      'script=.cursor/tools/aidlc-utility.ts; sh -c "bun $script version"',
     ]) {
       expect(backgroundLifecycleCommand(command, installed), command).not.toBeNull();
     }
     expect(backgroundLifecycleCommand(
-      'script=.cursor/tools/aidlc-utility.ts; sh -c "bun $script version"',
+      "bun .cursor/tools/aidlc-utility.ts version",
       installed,
     )).toBeNull();
   });

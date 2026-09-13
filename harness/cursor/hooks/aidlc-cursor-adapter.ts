@@ -226,10 +226,7 @@ export async function run(
     const temporary = `${path}.${process.pid}.tmp`;
     try {
       mkdirSync(LEDGER_DIR, { recursive: true });
-      const identity = cursor.is_background_agent || sessionIdentity() === "background"
-        ? "background"
-        : "foreground";
-      writeFileSync(temporary, identity, { mode: 0o600 });
+      writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
       renameSync(temporary, path);
       registerMain();
       return true;
@@ -242,12 +239,14 @@ export async function run(
   function sessionIdentity(): "background" | "foreground" | "unknown" {
     const path = sessionIdentityFile();
     if (!path) return "unknown";
-    // Background identity is sticky until sessionEnd, with no inactivity
-    // expiry. Later tool/stop payloads have no is_background_agent field.
+    // Lifecycle events own this protected conversation identity. Tool/stop
+    // payloads omit the flag. Unknown identity retains foreground behavior.
     try {
       if (!lstatSync(path).isFile()) return "unknown";
-      const identity = readFileSync(path, "utf-8");
-      return identity === "background" || identity === "foreground" ? identity : "unknown";
+      const identity = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean };
+      return typeof identity.background === "boolean"
+        ? identity.background ? "background" : "foreground"
+        : "unknown";
     } catch {
       return "unknown";
     }
@@ -791,7 +790,7 @@ export async function run(
   }
 
   async function backgroundWorkflowCommand(): Promise<string | null> {
-    if (sessionIdentity() === "foreground" || toolName !== "Bash") return null;
+    if (toolName !== "Bash") return null;
     const command = cursor.tool_input?.command;
     if (typeof command !== "string") return "uninspectable shell command";
     try {
@@ -2898,6 +2897,9 @@ export async function run(
     }
 
     case "session-end": {
+      // sessionEnd also carries the authoritative flag. Retain its final
+      // identity for any trailing tool/stop events from this conversation.
+      rememberSessionIdentity();
       // Cursor does not deliver Task postToolUse on its real CLI lifecycle.
       // Retire every still-live Task for this parent through the canonical
       // SubagentStop hook before ending the session, explicitly qualifying the
@@ -2935,8 +2937,6 @@ export async function run(
         }
         removeLedger(mainFile(cursor.conversation_id));
       }
-      const identity = sessionIdentityFile();
-      if (identity) removeLedger(identity);
       const fwd = JSON.stringify({
         hook_event_name: "SessionEnd",
         reason: cursor.reason ?? "other",
@@ -3034,9 +3034,8 @@ export async function run(
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
-            "Cursor background or unidentified sessions cannot delegate tasks or access " +
-            "protected session identity. Submit a foreground prompt to establish workflow " +
-            "control, or complete the background review directly.",
+            "Cursor background sessions cannot delegate tasks or access protected " +
+            "session identity. Complete the background review directly.",
         })}\n`);
         return 0;
       }
@@ -3050,15 +3049,6 @@ export async function run(
             agent_message:
               `AIDLC nested delegation is not allowed: ${identity} must complete ` +
               "its delegated task directly and cannot invoke Task.",
-          })}\n`);
-          return 0;
-        }
-        if (sessionIdentity() !== "foreground") {
-          process.stdout.write(`${JSON.stringify({
-            permission: "deny",
-            agent_message:
-              "Cursor session identity is unavailable; submit a foreground prompt before " +
-              "dispatching Tasks.",
           })}\n`);
           return 0;
         }
@@ -3116,14 +3106,6 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (!agent && sessionIdentity() === "unknown" && await backgroundTouchesProtectedState()) {
-        process.stdout.write(`${JSON.stringify({
-          permission: "deny",
-          agent_message:
-            "Cursor session identity is unavailable; protected session identity cannot be accessed.",
-        })}\n`);
-        return 0;
-      }
       const guards = [
         {
           file: "aidlc-state-transition-guard.ts",
@@ -3159,21 +3141,6 @@ export async function run(
       }
       for (const guard of guards) {
         if (blockedByGuard(guard.file, guard.input)) return 0;
-      }
-      // Task delegates have their own protected attribution and have already
-      // passed dynamic-execution and shared lifecycle guards. Preserve those
-      // checks; apply the background policy when no identity was established.
-      if (!agent && sessionIdentity() === "unknown") {
-        const command = await backgroundWorkflowCommand();
-        if (command !== null) {
-          process.stdout.write(`${JSON.stringify({
-            permission: "deny",
-            agent_message:
-              `Cursor session identity is unavailable; cannot run ${command}. ` +
-              "Submit a foreground prompt to establish workflow control.",
-          })}\n`);
-          return 0;
-        }
       }
       writeAllow();
       return 0;
@@ -3223,7 +3190,7 @@ export async function run(
       // Entering the core Stop loop here can run a fresh `next`, reset the
       // shared single-use steering cursor, and invalidate the foreground
       // conversation's already-issued successor.
-      if (sessionIdentity() !== "foreground") return 0;
+      if (sessionIdentity() === "background") return 0;
       // Cursor's stop hook CANNOT block (no decision channel). The core stop
       // hook's {"decision":"block","reason"} converts to a followup_message —
       // the forwarding-loop nudge is ADVISORY on this harness (the opencode

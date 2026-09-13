@@ -409,25 +409,29 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn. Failing open never means falling through to a write: the probe path has no write to fall through to, and a barrier violation is one of the non-zero exits this step absorbs.
 
 Cursor applies one harness-local authority check before this shared hook:
-`is_background_agent: true` on `sessionStart` or `beforeSubmitPrompt` records
-background identity in a protected, conversation-scoped marker under
-`aidlc/.aidlc-cursor-subagents/`. `beforeSubmitPrompt` covers hosts without
-`sessionStart`; identity persists until `sessionEnd`, without an inactivity
-timeout. Tool and stop payloads omit the flag and consult the marker instead.
-Background stops are silent and never invoke the core loop.
-Missing, unreadable, or malformed identity also prevents forwarding and
-workflow commands. A prompt whose identity cannot be saved is explicitly
-rejected so the user can restore runtime-directory access and resubmit.
-The same operation identity is denied workflow lifecycle and routing commands
-at PreToolUse through the recursive classifier's strict background mode,
-including nested shells, command substitution, and variable-derived script
-names or verbs. Uninspectable execution hosts, helper scripts, and Bun
-preloads are refused as well. Background tools cannot modify protected
-identity or dispatch untracked child Tasks. Background reviews
-therefore cannot issue a fresh `next`, consume a continuation, or reset the
-foreground conversation's single-use steering cursor; read-only utilities
-remain available through verified installed entrypoints. Unlisted commands
-and directory-changing execution wrappers require the foreground conversation.
+the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
+`sessionEnd` is persisted as `background` in
+`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker`.
+`beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
+`conversation_id`, updated by each lifecycle event, and retained after
+`sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
+payloads omit the flag and consult this protected record instead. Unknown
+identity (no lifecycle event seen) retains foreground behavior. Background stops
+are silent and never invoke the core loop. A prompt whose identity cannot be
+saved is rejected so runtime-directory access can be restored and retried.
+
+Background PreToolUse shell classification is allowlist-literal-only, separate
+from ordinary delegated-agent classification: every token must be literal, the
+execution host must be direct `bun` or the compiled `aidlc` dispatcher, and the
+script/verb must select a supported read-only command. Installed script identity
+is checked by the Cursor adapter. Variables (including known literal bindings),
+substitutions, backticks, `eval`, nested shells, other interpreters, `find -exec`,
+`xargs`, helper scripts, Bun eval/print/preload flags, and shell control syntax
+are denied rather than interpreted. Unknown commands are denied as well.
+Background tools cannot modify protected identity or dispatch untracked child
+Tasks. This prevents background reviews from issuing `next`, consuming a
+continuation, or resetting the foreground conversation's steering cursor while
+preserving direct read-only utilities and native read/search tools.
 The ordinary delegated-agent mode keeps benign Bun eval/print
 validation available and continues to block only identified lifecycle/routing
 commands.

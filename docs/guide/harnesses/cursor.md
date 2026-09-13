@@ -120,19 +120,22 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   is the real discipline. Cursor background agents are excluded from this
   follow-up path: their stops remain silent, so an ancillary background review
   cannot reset or consume the foreground conversation's steering continuation.
-  The adapter records background identity from `sessionStart` or, when that
-  event is unavailable, `beforeSubmitPrompt`. Later tool and stop events use
-  this protected conversation-scoped record because their payloads omit the
-  background flag. The record remains active until `sessionEnd`.
-  Missing or unreadable identity also withholds workflow control; resubmit a
-  foreground prompt after restoring access to the session record.
-  Their PreToolUse boundary also denies workflow lifecycle and routing commands,
-  including computed script names and verbs, and refuses execution it cannot
-  inspect: interpreter evaluation, helper scripts, and runtime preloads.
-  Read-only utilities in the installed harness remain available; commands
-  outside the supported read policy must run in the foreground conversation.
-  Background agents cannot change their
-  identity record or dispatch child Tasks.
+  The adapter persists the boolean `is_background_agent` from `sessionStart`,
+  `beforeSubmitPrompt` (including hosts without `sessionStart`), and `sessionEnd`
+  as `background` in a protected record keyed by `conversation_id` under
+  `aidlc/.aidlc-cursor-subagents/`. Tool and stop payloads omit this flag and
+  consult the stored identity, which has no inactivity timeout. Unknown identity
+  (no lifecycle event seen) retains foreground behavior. A later lifecycle event
+  updates the flag; `sessionEnd` retains it for trailing tool/stop events.
+
+  Background shell commands follow an allowlist-literal-only rule: one direct
+  `bun` invocation of an installed read-only AIDLC entrypoint, or the compiled
+  `aidlc` dispatcher's read-only commands. Every token must be literal; variable
+  expansion, substitutions, shell wrappers, interpreter evaluation, helper
+  scripts, and Bun preloads are denied, even when they appear to select a
+  read-only verb. All other shell commands require the foreground conversation.
+  Native read/search tools remain available. Background agents cannot change
+  their identity record or dispatch child Tasks.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).

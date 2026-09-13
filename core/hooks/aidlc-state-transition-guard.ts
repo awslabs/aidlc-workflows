@@ -250,87 +250,57 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
 }
 
 export function delegatedLifecycleCommand(command: string): string | null {
-  return delegatedLifecycleCommandAtDepth(command, 0, false);
+  return delegatedLifecycleCommandAtDepth(command, 0);
 }
 
 export function backgroundLifecycleCommand(
   command: string,
   installedScript?: (path: string) => boolean,
 ): string | null {
-  return delegatedLifecycleCommandAtDepth(command, 0, true, installedScript);
+  const argv = backgroundShellWords(command);
+  if (typeof argv === "string") return argv;
+  const executable = commandBasename(argv[0]);
+  if (!backgroundProgramPath(argv[0] ?? "")) {
+    return "execution host beyond background read policy";
+  }
+  if (/^aidlc(?:\.exe)?$/.test(executable)) {
+    return backgroundReadDispatcher(argv.slice(1))
+      ? null
+      : "aidlc command beyond background read policy";
+  }
+  if (!/^bun(?:\.exe)?$/.test(executable)) {
+    return "execution host beyond background read policy";
+  }
+  const invocation = bunScriptInvocation(argv, true);
+  if (invocation?.kind === "dynamic") return "bun eval/print beyond guard inspection";
+  if (invocation?.kind !== "script") return "bun script or runtime options beyond guard inspection";
+  if (installedScript && !installedScript(invocation.path)) {
+    return "script outside the installed harness tools";
+  }
+  const { script, args } = invocation;
+  const tool = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/)?.[1];
+  const readOnly = tool
+    ? backgroundReadTool(tool, args)
+    : script === "aidlc.ts" && backgroundReadDispatcher(args);
+  return readOnly ? null : `${script} command beyond background read policy`;
 }
 
-// Background work admits a deliberately small shell language. The legacy
-// detector below is a lifecycle denylist, not proof that an unknown program
-// cannot change routing (or the files that establish background attribution).
-// Resolve literal leading assignments without evaluating shell code. Reject
-// substitutions, redirections, control flow and ambiguous expansion instead of
-// silently dropping them during tokenization. Quoted examples remain data.
-function backgroundShellCommands(command: string): string[][] | string {
-  const commands: string[][] = [];
-  const variables = new Map<string, string>();
-  let leadingAssignments = true;
-  let words: string[] = [];
-  let literalAssignments: boolean[] = [];
+// Background execution is an allowlist, never the foreground lifecycle
+// denylist. Admit one direct literal invocation: do not resolve assignments,
+// expand variables, unwrap execution hosts, or interpret shell programs.
+function backgroundShellWords(command: string): string[] | string {
+  const words: string[] = [];
   let word = "";
   let started = false;
-  let literalAssignment = false;
-  let glob = false;
   let quote: "'" | '"' | null = null;
-  const finishWord = (): string | null => {
-    if (!started) return null;
-    if (glob && word !== "[" && word !== "]") {
-      return "shell expansion beyond guard inspection";
-    }
-    words.push(word);
-    literalAssignments.push(literalAssignment);
+  const finishWord = (): void => {
+    if (started) words.push(word);
     word = "";
     started = false;
-    literalAssignment = false;
-    glob = false;
-    return null;
-  };
-  const finishCommand = (separator: string): string | null => {
-    const error = finishWord();
-    if (error) return error;
-    if (words.length === 0) return null;
-    const bindings = words.map(assignment);
-    for (let i = 0; i < bindings.length && bindings[i] !== null; i++) {
-      if (!literalAssignments[i]) {
-        return "computed assignment or executable beyond guard inspection";
-      }
-    }
-    if (bindings.every((binding) => binding !== null)) {
-      // Conditional/pipeline assignments and assignments after commands need
-      // real shell control/data-flow analysis. Never use their presumed value.
-      if (!leadingAssignments || ![";", "\n", ""].includes(separator)) {
-        return "conditional shell assignment beyond guard inspection";
-      }
-      for (const binding of bindings) {
-        if (binding) {
-          if (!backgroundVariableName(binding.name)) {
-            return "execution environment beyond guard inspection";
-          }
-          variables.set(binding.name, binding.value);
-        }
-      }
-    } else {
-      leadingAssignments = false;
-      if (["if", "then", "else", "elif", "fi", "while", "until", "do", "done",
-        "for", "select", "case", "esac", "function", "!", "[["].includes(words[0])) {
-        return "shell control flow beyond guard inspection";
-      }
-      commands.push(words);
-    }
-    words = [];
-    literalAssignments = [];
-    return null;
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
-    if (!started && quote === null && /[A-Za-z_]/.test(ch)) {
-      literalAssignment = /^[A-Za-z_][A-Za-z0-9_]*=/.test(command.slice(i));
-    }
+    if (ch === "$" || ch === "`") return "dynamic shell argument beyond guard inspection";
     if (quote === "'") {
       if (ch === "'") quote = null;
       else word += ch;
@@ -338,10 +308,10 @@ function backgroundShellCommands(command: string): string[][] | string {
     }
     if (ch === "\\") {
       const next = command[i + 1];
-      if (next === undefined) return "incomplete shell command beyond guard inspection";
-      if (next === "\n") {
-        i++;
-      } else if (quote === null || /[$`"\\]/.test(next)) {
+      if (next === undefined || /[$`\r\n]/.test(next)) {
+        return "shell expansion beyond guard inspection";
+      }
+      if (quote === null || /["\\]/.test(next)) {
         word += next;
         started = true;
         i++;
@@ -355,67 +325,21 @@ function backgroundShellCommands(command: string): string[][] | string {
       started = true;
       continue;
     }
-    if (ch === "`") return "command substitution beyond guard inspection";
-    if (ch === "$") {
-      const rest = command.slice(i);
-      const reference = rest.match(/^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/);
-      if (reference) {
-        const value = variables.get(reference[1] ?? reference[2]);
-        if (
-          value === undefined ||
-          (quote === null && (value.length === 0 || /[\s*?[\]]/.test(value)))
-        ) {
-          return "dynamic shell argument beyond guard inspection";
-        }
-        word += value;
-        started = true;
-        i += reference[0].length - 1;
-        continue;
-      }
-      if (rest.startsWith("$(")) return "command substitution beyond guard inspection";
-      if (/^\$[{'"\d@*#?$!_-]/.test(rest)) {
-        return "shell expansion beyond guard inspection";
-      }
-    }
     if (quote === null) {
-      if (ch === "#" && !started) {
-        const newline = command.indexOf("\n", i);
-        i = newline < 0 ? command.length : newline - 1;
-        continue;
-      }
-      if (/[<>(){}]/.test(ch)) {
-        return "shell execution syntax beyond guard inspection";
-      }
-      if (";|&\n".includes(ch)) {
-        let separator = ch;
-        if ((ch === "&" || ch === "|") && command[i + 1] === ch) {
-          separator += command[++i];
-        }
-        const error = finishCommand(separator);
-        if (error) return error;
-        if (separator !== ";" && separator !== "\n") leadingAssignments = false;
-        continue;
-      }
+      if (/[;|&<>(){}*?[\]~#\r\n]/.test(ch)) return "shell syntax beyond background read policy";
       if (/\s/.test(ch)) {
-        const error = finishWord();
-        if (error) return error;
+        finishWord();
         continue;
       }
-      if (/[*?[\]~]/.test(ch)) glob = true;
     }
     word += ch;
     started = true;
   }
   if (quote !== null) return "incomplete shell command beyond guard inspection";
-  const error = finishCommand("");
-  return error ?? commands;
+  finishWord();
+  return words;
 }
 
-function backgroundVariableName(name: string): boolean {
-  // Literal variables used for argv are fine; changing executable lookup,
-  // runtime startup, shell semantics or utility plugins is not inspectable.
-  return !/^(?:PATH|CDPATH|FPATH|PWD|OLDPWD|HOME|SHELL|ENV|BASH_ENV|BASHOPTS|SHELLOPTS|IFS|ZDOTDIR|GLOBIGNORE|BUN_.*|NODE_.*|LD_.*|DYLD_.*|RIPGREP_CONFIG_PATH|GIT_.*)$/.test(name);
-}
 
 function backgroundProgramPath(program: string): boolean {
   return !/[\\/]/.test(program) ||
@@ -683,13 +607,10 @@ function commandBasename(command: string | undefined): string {
 
 const UNINSPECTABLE_EXECUTION_WRAPPER = "__aidlc_uninspectable_execution_wrapper__";
 
-function executableArgv(segment: string | string[], strict = false): string[] {
-  let words = typeof segment === "string" ? shellWords(segment) : [...segment];
+function executableArgv(segment: string): string[] {
+  let words = shellWords(segment);
   let cursor = 0;
   const skipRedirections = (): void => {
-    // Strict lexing has already refused real redirections. A quoted ">" or
-    // "<file" here is an operand/executable, never permission to discard argv.
-    if (strict) return;
     while (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)/.test(words[cursor] ?? "")) {
       const redirection = words[cursor++];
       if (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)$/.test(redirection)) cursor++;
@@ -708,11 +629,6 @@ function executableArgv(segment: string | string[], strict = false): string[] {
       }
       skipRedirections();
       while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[cursor] ?? "")) {
-        if (strict && !backgroundVariableName(assignment(words[cursor])?.name ?? "")) {
-          words = [UNINSPECTABLE_EXECUTION_WRAPPER];
-          cursor = 0;
-          return;
-        }
         cursor++;
       }
     }
@@ -723,23 +639,19 @@ function executableArgv(segment: string | string[], strict = false): string[] {
     if (allowShellPrefixes) skipPrefixes();
     else skipRedirections();
     allowShellPrefixes = false;
-    if (strict && !backgroundProgramPath(words[cursor] ?? "")) {
-      return [UNINSPECTABLE_EXECUTION_WRAPPER];
-    }
     const wrapper = commandBasename(words[cursor]);
 
     if (wrapper === "time") {
       cursor++;
       while ((words[cursor] ?? "").startsWith("-")) {
         const option = words[cursor++];
-        if (strict && option !== "-p") return [UNINSPECTABLE_EXECUTION_WRAPPER];
         if (["-f", "--format", "-o", "--output"].includes(option)) {
           skipRedirections();
           if (cursor >= words.length) return [];
           cursor++;
         }
       }
-      allowShellPrefixes = !strict;
+      allowShellPrefixes = true;
       continue;
     }
 
@@ -769,7 +681,7 @@ function executableArgv(segment: string | string[], strict = false): string[] {
         if (!/^-[cl]+$/.test(option)) return [];
         cursor++;
       }
-      allowShellPrefixes = !strict;
+      allowShellPrefixes = true;
       continue;
     }
 
@@ -780,9 +692,6 @@ function executableArgv(segment: string | string[], strict = false): string[] {
         if (cursor >= words.length) break;
         const word = words[cursor];
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
-          if (strict && !backgroundVariableName(assignment(word)?.name ?? "")) {
-            return [UNINSPECTABLE_EXECUTION_WRAPPER];
-          }
           cursor++;
           continue;
         }
@@ -805,7 +714,6 @@ function executableArgv(segment: string | string[], strict = false): string[] {
         }
         if (split !== null) {
           if (/[\\$`#]/.test(split)) return [UNINSPECTABLE_EXECUTION_WRAPPER];
-          if (strict) return [UNINSPECTABLE_EXECUTION_WRAPPER];
           words = [
             ...words.slice(0, splitOptionIndex),
             ...shellWords(split),
@@ -815,9 +723,6 @@ function executableArgv(segment: string | string[], strict = false): string[] {
           continue;
         }
         if (["-u", "--unset", "-C", "--chdir", "-P"].includes(word)) {
-          if (strict && word !== "-u" && word !== "--unset") {
-            return [UNINSPECTABLE_EXECUTION_WRAPPER];
-          }
           cursor++;
           skipRedirections();
           if (cursor >= words.length) return [];
@@ -832,9 +737,6 @@ function executableArgv(segment: string | string[], strict = false): string[] {
           ["--ignore-environment", "--debug", "--list-signal-handling"].includes(word) ||
           /^--(?:block|default|ignore)-signal(?:=.*)?$/.test(word)
         ) {
-          if (strict && (/^-C/.test(word) || /^--chdir=/.test(word))) {
-            return [UNINSPECTABLE_EXECUTION_WRAPPER];
-          }
           cursor++;
           continue;
         }
@@ -1127,80 +1029,19 @@ function backgroundReadDispatcher(rawArgs: string[]): boolean {
   return workspace.kind === "list" || workspace.kind === "help";
 }
 
-function backgroundReadCommand(executable: string, args: string[]): boolean {
-  // These utilities cannot interpret operands as programs. Programs such as
-  // Node, Python, PowerShell, CMD, awk, xargs, package runners and arbitrary
-  // helper scripts are intentionally absent, even with help-looking operands.
-  if ([
-    ":", "true", "false", "echo", "pwd", "cd", "ls", "cat", "head", "tail",
-    "wc", "cut", "tr", "uniq", "nl", "od", "base64", "basename", "dirname",
-    "readlink", "realpath", "stat", "grep", "fgrep", "egrep", "jq",
-  ].includes(executable)) return true;
-  if (executable === "printf") {
-    const format = args[0] === "--" ? args[1] : args[0];
-    return !args.some((arg) => arg.startsWith("-v")) &&
-      !/%(?:\d+\$)?[-+ #0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[hljztL]*n/.test(format ?? "");
-  }
-  if (executable === "rg") {
-    return !args.some((arg) => /^--(?:pre|hostname-bin)(?:[=-]|$)/.test(arg));
-  }
-  if (executable === "sort") {
-    // GNU long-option abbreviations also select execution/output options, so
-    // accept known flags rather than trying to blacklist their full spellings.
-    return args.every((arg) => !arg.startsWith("-") ||
-      /^-[bdfghinMrsuvV]+$/.test(arg) ||
-      ["-", "--", "--reverse", "--numeric-sort", "--unique"].includes(arg));
-  }
-  if (executable === "sed") {
-    // General sed programs can execute commands or write files. Admit only
-    // the ordinary line-range printing form used to inspect source.
-    return args[0] === "-n" && /^\d+(?:,\d+)?p$/.test(args[1] ?? "") &&
-      args.slice(2).every((arg) => !arg.startsWith("-") || arg === "--");
-  }
-  if (executable === "test" || executable === "[") {
-    const operands = executable === "[" && args.at(-1) === "]" ? args.slice(0, -1) : args;
-    if (operands.length === 1) return true;
-    if (operands.length === 2) return ["-n", "-z", "-e", "-f", "-d", "-r"].includes(operands[0]);
-    return operands.length === 3 &&
-      (["=", "!="].includes(operands[1]) ||
-        (["-eq", "-ne", "-lt", "-le", "-gt", "-ge"].includes(operands[1]) &&
-          /^-?\d+$/.test(operands[0]) && /^-?\d+$/.test(operands[2])));
-  }
-  if (executable === "find") {
-    let predicates = false;
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (!predicates && !arg.startsWith("-") && arg !== "!") continue;
-      predicates = true;
-      if (["-name", "-iname", "-path", "-ipath", "-type", "-maxdepth", "-mindepth", "-size", "-mtime", "-mmin"].includes(arg)) {
-        if (++i >= args.length) return false;
-      } else if (!["-print", "-print0", "-empty", "-depth", "!", "-not", "-a", "-and", "-o", "-or"].includes(arg)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return false;
-}
 
 function delegatedLifecycleCommandAtDepth(
   command: string,
   depth: number,
-  strict: boolean,
-  installedScript?: (path: string) => boolean,
 ): string | null {
   if (depth > 8) return "nested shell command beyond guard inspection limit";
-  const backgroundCommands = strict ? backgroundShellCommands(command) : null;
-  if (typeof backgroundCommands === "string") return backgroundCommands;
-  const heredocBodies = strict ? [] : heredocSubstitutionBodies(command);
-  const source = strict ? "" : maskHeredocBodies(command);
+  const heredocBodies = heredocSubstitutionBodies(command);
+  const source = maskHeredocBodies(command);
   const substitutions = executableSubstitutions(source);
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
     const nested = delegatedLifecycleCommandAtDepth(
       body,
       depth + 1,
-      strict,
-      installedScript,
     );
     if (nested !== null) return nested;
   }
@@ -1209,8 +1050,8 @@ function delegatedLifecycleCommandAtDepth(
   // Resolve those values where possible; fail closed when a delegated
   // executable or shell command remains dynamically indeterminate.
   const assignments = new Map<string, string>();
-  for (const segment of backgroundCommands ?? shellCommandSegments(substitutions.masked)) {
-    const segmentWords = typeof segment === "string" ? shellWords(segment) : segment;
+  for (const segment of shellCommandSegments(substitutions.masked)) {
+    const segmentWords = shellWords(segment);
     const segmentAssignments = segmentWords.map(assignment);
     if (
       segmentAssignments.length > 0 &&
@@ -1222,8 +1063,8 @@ function delegatedLifecycleCommandAtDepth(
       continue;
     }
 
-    let argv = executableArgv(segment, strict);
-    const executableVariable = strict ? null : variableReference(argv[0] ?? "");
+    let argv = executableArgv(segment);
+    const executableVariable = variableReference(argv[0] ?? "");
     if (executableVariable !== null) {
       const value = assignments.get(executableVariable);
       const resolved = value === undefined ? [] : shellWords(value);
@@ -1241,15 +1082,12 @@ function delegatedLifecycleCommandAtDepth(
     }
     if (argv.length === 0) continue;
     if (executable === "eval") {
-      if (strict) return "eval shell command beyond guard inspection";
       const evalArgs = argv.slice(1);
       if (evalArgs[0] === "--") evalArgs.shift();
       const evalCommand = evalArgs.join(" ");
       const nested = delegatedLifecycleCommandAtDepth(
         evalCommand,
         depth + 1,
-        strict,
-        installedScript,
       );
       if (
         nested === "dynamic executable beyond guard inspection" ||
@@ -1258,17 +1096,12 @@ function delegatedLifecycleCommandAtDepth(
         return "dynamic eval shell command beyond guard inspection";
       }
       if (nested !== null) return nested;
-      if (/[$`\\]/.test(typeof segment === "string" ? segment : segment.join(" "))) {
+      if (/[$`\\]/.test(segment)) {
         return "dynamic eval shell command beyond guard inspection";
       }
       continue;
     }
     if (/^(?:ba|da|a|k|z)?sh(?:\.exe)?$/.test(executable)) {
-      // Scripts, stdin, login/init files and alternate shell modes all execute
-      // text outside this request. Only a literal -c body is inspectable.
-      if (strict && (argv[1] !== "-c" || argv.length < 3)) {
-        return "shell script or startup options beyond guard inspection";
-      }
       for (let i = 1; i < argv.length; i++) {
         const option = argv[i];
         if (["-O", "+O", "-o", "+o", "--rcfile", "--init-file"].includes(option)) {
@@ -1279,7 +1112,7 @@ function delegatedLifecycleCommandAtDepth(
           let commandIndex = i + 1;
           if (argv[commandIndex] === "--") commandIndex++;
           let nestedCommand = argv[commandIndex] ?? "";
-          const commandVariable = strict ? null : variableReference(nestedCommand);
+          const commandVariable = variableReference(nestedCommand);
           if (commandVariable !== null) {
             const value = assignments.get(commandVariable);
             if (value === undefined) {
@@ -1287,14 +1120,12 @@ function delegatedLifecycleCommandAtDepth(
             }
             nestedCommand = value;
           }
-          if (!strict && nestedCommand.includes("$")) {
+          if (nestedCommand.includes("$")) {
             return "dynamic shell command beyond guard inspection";
           }
           const nested = delegatedLifecycleCommandAtDepth(
             nestedCommand,
             depth + 1,
-            strict,
-            installedScript,
           );
           if (nested !== null) return nested;
           break;
@@ -1306,23 +1137,14 @@ function delegatedLifecycleCommandAtDepth(
 
     let args = argv.slice(1);
     let script = executable;
-    if (strict && /^aidlc(?:-[a-z-]+)?\.ts$/.test(script)) {
-      return "script entrypoint beyond background read policy";
-    }
     if (/^bun(?:\.exe)?$/.test(executable)) {
-      const invocation = bunScriptInvocation(argv, strict);
+      const invocation = bunScriptInvocation(argv);
       if (!invocation) continue;
       if (invocation.kind === "uninspectable") {
         return "bun script or runtime options beyond guard inspection";
       }
       if (invocation.kind === "dynamic") {
-        if (strict) {
-          return "bun eval/print beyond guard inspection";
-        }
         continue;
-      }
-      if (installedScript && !installedScript(invocation.path)) {
-        return "script outside the installed harness tools";
       }
       script = invocation.script;
       args = invocation.args;
@@ -1345,32 +1167,16 @@ function delegatedLifecycleCommandAtDepth(
         const utility = delegatedUtilityCommand("aidlc-utility.ts", args);
         if (utility !== null) return utility;
       }
-      if (strict && !backgroundReadTool(tool, args)) {
-        return `aidlc-${tool}.ts command beyond background read policy`;
-      }
       continue;
     }
     if (script === "aidlc.ts") {
       const delegated = delegatedDispatcherCommand("aidlc.ts", args);
       if (delegated !== null) return delegated;
-      if (strict && !backgroundReadDispatcher(args)) {
-        return "aidlc.ts command beyond background read policy";
-      }
       continue;
     }
     if (/^aidlc(?:\.exe)?$/.test(script)) {
       const delegated = delegatedDispatcherCommand("aidlc", args);
       if (delegated !== null) return delegated;
-      if (strict && !backgroundReadDispatcher(args)) {
-        return "aidlc command beyond background read policy";
-      }
-      continue;
-    }
-    if (
-      strict &&
-      ((installedScript && executable === "cd") || !backgroundReadCommand(executable, args))
-    ) {
-      return `${executable} execution beyond background read policy`;
     }
   }
   return null;
