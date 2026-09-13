@@ -2,7 +2,7 @@
   {
     "kind": "load-steering",
     "stage": "functional-design",
-    "bundle": "sha256:094566dfe1044b631d797687cf119c794344766613b6a10e8f79fde99384c9aa",
+    "bundle": "sha256:230c2d41e28a2358d56ee8fd9ead7c3a4a5a6686d24d201107848d019ea2061d",
     "part": 1,
     "parts": 1,
     "rules_content": [
@@ -21,6 +21,10 @@
       {
         "path": "aidlc/spaces/default/memory/org.md",
         "text": "## Testing Posture\n\nWe treat tests as a first-class deliverable in every Bolt. The specific\nmethodology (TDD, BDD, ATDD, or classic test-after) is affirmed at\npractices-discovery and recorded in `team.md` under this heading with explicit\n`Methodology` and `Ordering` fields; Code Generation resolves those fields\nindependently from coverage, tooling, and scope notes.\n\nWhen no posture has been affirmed, our default per scope is:\n- **Methodology**: test-after\n- **Ordering**: implement each applicable testable layer, then write and run\n  that layer's tests.\n- `mvp`, `enterprise`, `feature`, `infra`, `classic` add an 80% line-coverage\n  floor and CI execution before merge.\n- `bugfix`, `security-patch` add a targeted regression for the specific\n  bug/vulnerability and require the existing suite to remain green.\n- `express` uses the Minimal strategy: requirement-driven unit tests (one per\n  requirement, with a happy-path floor per component); existing tests remain\n  green.\n- `poc`, `refactor`, `workshop` add no extra new-test floor and require the\n  existing suite to remain green.\n\nThe active `Test Strategy` still applies in every scope and determines test\nvolume/types. Scope floors are additive; they never reduce or replace the\nselected strategy.\n\nBuild and Test verifies defined coverage floors and affirmed quality targets;\nthey may not be weakened to make a step pass.\n\nAffirm a stricter posture in `team.md` if the team commits to one.\n\n"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "text": "## Change Control\n\n<!-- Mode: strict or relaxed. Strict here holds for every intent in this space and cannot be changed from chat. -->\n\n"
       },
       {
         "path": "aidlc/spaces/default/memory/org.md",

@@ -1,3 +1,4 @@
+import { reconcilePrIntegration } from "./aidlc-pr.ts";
 // The orchestration engine — the deterministic "what's next?" answerer that
 // stands BESIDE the prose orchestrator (skills/aidlc/SKILL.md), not inside it.
 // Nothing in SKILL.md calls this file yet; it is exercised only by its own
@@ -4385,7 +4386,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   }
 
   const pd = resolveProjectDir(projectDir);
-  const stateContent = loadStateFileIfPresent(pd);
+  let stateContent = loadStateFileIfPresent(pd);
   // Runtime state-version guard (see staleStateVersionError): refuse to advance
   // a pre-v8 state up front rather than silently routing until it hits the
   // renamed/missing Inception rows. Fires after the workspace/plugin/compose
@@ -5019,6 +5020,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   // Branch 10 — the happy path. Read the workflow's position from state and map
   // it to the stage to run next.
+  if (!isReadOnlyEngineProbe() && readIntegrationMode(stateContent) === "pr") {
+    reconcilePrIntegration(pd);
+    stateContent = loadStateFileIfPresent(pd) ?? stateContent;
+  }
   const currentSlug = getField(stateContent, "Current Stage");
   if (!currentSlug || currentSlug.length === 0) {
     emit(errorDirective(

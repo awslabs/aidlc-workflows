@@ -1627,9 +1627,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
         if (i + 1 >= args.length) return null;
         i++;
-      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
-        continue;
-      } else {
+      } else if (literal || !native || !["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
         clean.push(arg);
       }
     }
@@ -25536,7 +25534,10 @@ function currentUnitLifecycleRows(
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
   ]);
-  if (integrationActive) unitEvents.add("UNIT_INTEGRATING");
+  if (integrationActive) {
+    unitEvents.add("UNIT_INTEGRATING");
+    unitEvents.add("STAGE_REVISING");
+  }
   const rows: UnitLifecycleRow[] = [];
   for (const row of sourceRows) {
     if (!unitEvents.has(row.event)) continue;
@@ -25702,7 +25703,8 @@ export function unitLifecycleSnapshot(
     if (
       !final ||
       final.event === "UNIT_COMPLETED" ||
-      final.event === "UNIT_INTEGRATING"
+      final.event === "UNIT_INTEGRATING" ||
+      final.event === "STAGE_REVISING"
     ) {
       continue;
     }
@@ -25904,7 +25906,8 @@ export function activeUnitCheckpoint(
     if (
       !final ||
       final.event === "UNIT_COMPLETED" ||
-      final.event === "UNIT_INTEGRATING"
+      final.event === "UNIT_INTEGRATING" ||
+      final.event === "STAGE_REVISING"
     ) {
       continue;
     }

@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { auditBlockField, findAllEvents, readAllAuditShards, unitCompletedReceipts, unitIntegratingReceipts } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   emitOpenReceipts,
   prIntegrationRunFloor,
@@ -185,8 +186,17 @@ type NextDirective = {
   integrating_units: IntegratingRow[];
 };
 
-function next(proj: string): NextDirective {
-  const result = runOrchestrateNext(ORCH, proj, [], { env: process.env });
+function fixtureEnv(proj: string, pulls?: PullSnapshot[]): NodeJS.ProcessEnv {
+  const values = pulls ?? findAllEvents(readAllAuditShards(proj), "PR_OPENED").map((row) => ({
+    ...snapshot(auditBlockField(row.block, "Unit")!, Number(auditBlockField(row.block, "PR Number"))),
+  }));
+  const path = join(proj, "pr-routing.json");
+  writeFileSync(path, JSON.stringify(values));
+  return { ...process.env, AIDLC_TEST_PR_FIXTURES: "1", AIDLC_TEST_PR_FIXTURE: path };
+}
+
+function next(proj: string, pulls?: PullSnapshot[]): NextDirective {
+  const result = runOrchestrateNext(ORCH, proj, [], { env: fixtureEnv(proj, pulls) });
   expect(result.status, result.out).toBe(0);
   expect(result.directive).not.toBeNull();
   return result.directive as unknown as NextDirective;
@@ -255,6 +265,81 @@ describe("t328-pr-integration-routing", () => {
     expect(directive.integrating_units[0].prs[0].url)
       .toBe("https://github.com/example/service/pull/1");
     expect(directive.gate).toBeUndefined();
+  });
+
+  test("merged PR reconciliation clears awaiting-integration through normal next", () => {
+    const proj = project("pr");
+    seedBoltDag(proj, ["alpha"]);
+    record(proj, "alpha");
+    integrating(proj, "alpha", 42);
+    expect(next(proj).kind).toBe("awaiting-integration");
+    const merged = { ...snapshot("alpha", 42), state: "MERGED", merged: true,
+      mergedAt: "2026-08-28T01:00:00Z", mergeCommit: { oid: "merge-42" } };
+    const routed = next(proj, [merged]);
+    expect(routed.kind, "merged PR must not re-emit awaiting-integration").not.toBe("awaiting-integration");
+    expect(unitCompletedReceipts(proj, "pr-integration").has("alpha")).toBe(true);
+    expect(findAllEvents(readAllAuditShards(proj), "PR_MERGED")).toHaveLength(1);
+  });
+
+  test("formal changes request reactivates revision through normal next", () => {
+    const proj = project("pr");
+    seedBoltDag(proj, ["alpha"]);
+    record(proj, "alpha");
+    integrating(proj, "alpha", 42);
+    const review = { ...snapshot("alpha", 42), reviews: [{ id: 1, user: { login: "reviewer" },
+      state: "CHANGES_REQUESTED", submitted_at: "2026-08-28T01:00:00Z", body: "Fix the race" }] };
+    expect(next(proj, [review])).toMatchObject({ kind: "run-stage", unit: "alpha", stage: "pr-integration" });
+    expect(unitIntegratingReceipts(proj, "pr-integration").has("alpha")).toBe(false);
+    const audit = readAllAuditShards(proj);
+    expect(findAllEvents(audit, "STAGE_REVISING")).toHaveLength(1);
+    expect(audit).toContain("Fix the race");
+    expect(next(proj, [review]).kind).not.toBe("awaiting-integration");
+  });
+
+  test("status refresh settles a merge without another manual tool call", () => {
+    const proj = project("pr");
+    seedBoltDag(proj, ["alpha"]);
+    record(proj, "alpha");
+    integrating(proj, "alpha", 42);
+    const merged = { ...snapshot("alpha", 42), state: "MERGED", merged: true,
+      mergedAt: "2026-08-28T01:00:00Z", mergeCommit: { oid: "merge-42" } };
+    const result = spawnSync(process.execPath, [UTILITY, "status", "--refresh", "--project-dir", proj],
+      { encoding: "utf-8", env: fixtureEnv(proj, [merged]) });
+    expect(result.status, result.stderr).toBe(0);
+    expect(unitCompletedReceipts(proj, "pr-integration").has("alpha")).toBe(true);
+    expect(next(proj, [merged]).kind).not.toBe("awaiting-integration");
+  });
+
+  test("status refresh surfaces changes requests and read-only probes never reconcile", () => {
+    const proj = project("pr");
+    seedBoltDag(proj, ["alpha"]);
+    record(proj, "alpha");
+    integrating(proj, "alpha", 42);
+    const review = { ...snapshot("alpha", 42), reviews: [{ id: 2, user: { login: "reviewer" },
+      state: "CHANGES_REQUESTED", submitted_at: "2026-08-28T02:00:00Z", body: "Handle the empty queue" }] };
+    const env = fixtureEnv(proj, [review]);
+    const probe = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_ROUTE_CHECK: "1" } });
+    expect(probe.directive?.kind).toBe("awaiting-integration");
+    expect(findAllEvents(readAllAuditShards(proj), "PR_FEEDBACK")).toHaveLength(0);
+    const status = spawnSync(process.execPath, [UTILITY, "status", "--refresh", "--project-dir", proj], { encoding: "utf-8", env });
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain("Handle the empty queue");
+    expect(next(proj, [review])).toMatchObject({ kind: "run-stage", unit: "alpha" });
+  });
+
+  test("drive-by comments stay integrating and repeated formal review opens only one revision", () => {
+    const proj = project("pr");
+    seedBoltDag(proj, ["alpha"]);
+    record(proj, "alpha");
+    integrating(proj, "alpha", 42);
+    const commented = { ...snapshot("alpha", 42), reviews: [{ id: 3, user: { login: "reviewer" },
+      state: "COMMENTED", submitted_at: "2026-08-28T02:00:00Z", body: "Consider a different name" }] };
+    expect(next(proj, [commented]).kind).toBe("awaiting-integration");
+    const requested = { ...commented, reviews: [{ ...commented.reviews[0], id: 4, state: "CHANGES_REQUESTED" }] };
+    expect(next(proj, [requested]).kind).toBe("run-stage");
+    emitOpenReceipts(proj, "pr-integration", "alpha", [snapshot("alpha", 42)]);
+    expect(next(proj, [requested]).kind).toBe("awaiting-integration");
+    expect(findAllEvents(readAllAuditShards(proj), "STAGE_REVISING")).toHaveLength(1);
   });
 
   test("PR mode cannot be disabled while a Unit is integrating", () => {

@@ -997,7 +997,7 @@ describe("detector corpus", () => {
       'META=`aidlc engine orchestrate next` aidlc engine orchestrate next space teamb',
       String.raw`aidlc engine orchestrate next intent cr\eate --scope poc`,
       String.raw`aidlc --project-dir . engine orchestrate next intent cr\eate --scope poc`,
-      String.raw`aidlc engine orchestrate next intent 'create' --scope poc`,
+      "aidlc engine orchestrate next intent 'create' --scope poc",
       'aidlc next intent "$ACTION" --scope poc',
     ]) {
       expect(d1(command), command).toBe(true);
