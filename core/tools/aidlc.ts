@@ -228,7 +228,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "team-board [--snapshot]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -1024,10 +1024,16 @@ export const ROUTES: readonly Route[] = [
     group: "orchestrate",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park"],
+    verbs: ["next", "continue", "report", "park", "team-board"],
     tool: TOOLS.orchestrate,
     ...HIDDEN_ENGINE,
-    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
+    all: [
+      "next [args]",
+      "continue <token>",
+      "report [args]",
+      "park [args]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
+    ],
   },
   {
     id: "engine-orchestrate-help",
