@@ -1,15 +1,6 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.8.3] - 2026-09-13
-
-Make a `/aidlc compose` custom scope durable. Its only copy used to be the harness pair (`<harness>/scopes/aidlc-<name>.md` plus a `scope-grid.json` column), so a copy-channel reinstall overwrote the generated grid, dropped the column, and left the scope resolving as an empty all-SKIP plan — with no restore path and no health check, because `/aidlc plugin sync` and the "Composed plugin surface" check are both plugin-scoped and a composer scope is not a plugin. The durable record now lives in the shared tree at `aidlc/scopes/<name>.md` (identity frontmatter plus a `## Stage Grid` JSON fence in one file) and the harness pair is a projection that `aidlc engine graph compile` regenerates. **Upgrade:** none required — the first compile after upgrading back-fills a record for every composed scope you already have, then keeps it as the source. Commit `aidlc/scopes/` along with the rest of your `aidlc/` tree. Closes #963.
-
-* A composed scope survives an engine reinstall: `aidlc engine graph compile` restores both the scope file and its grid column from the durable record, with the approved EXECUTE/SKIP cells intact.
-* A composed scope now works across harnesses. Because the record travels in the shared `aidlc/` tree, a collaborator on a different harness (`.kiro/`, `.codex/`, …) resolves a scope you composed after one `graph compile`, instead of having no definition at all.
-* `/aidlc --doctor` gains a **Composed scope durability** check that fails on the three ways the pairing breaks: a scope file with no grid column (the silently emptied plan), a durable record not yet projected into the harness tree, and a workflow whose recorded `Scope` has no resolvable definition. Each names `graph compile` as the remedy; the third also says to restore the missing `aidlc/scopes/<name>.md`.
-* Automation note: a project with no composed scope is unaffected and no `aidlc/scopes/` directory is created.
-
 ## [2.8.2] - 2026-09-10
 
 Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.

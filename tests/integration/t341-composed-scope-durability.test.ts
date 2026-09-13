@@ -48,7 +48,8 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
@@ -115,6 +116,16 @@ const compile = (proj: string): { status: number; out: string } =>
 const doctor = (proj: string): { status: number; out: string } =>
   runTool(proj, "aidlc-utility.ts", ["doctor", "--verbose", "--project-dir", proj]);
 
+/** Read the grid out of a record's generated region — from INSIDE the sentinels,
+ *  the same way the parser does, so a decoy fence in authored prose cannot be
+ *  mistaken for it here either. */
+function gridInRecord(record: string): Record<string, string> {
+  const region = /BEGIN aidlc composed-scope-grid[\s\S]*?-->([\s\S]*?)<!-- END aidlc composed-scope-grid -->/
+    .exec(record)?.[1] ?? "";
+  const fence = /```json\s*\n([\s\S]*?)```/.exec(region)?.[1] ?? "{}";
+  return (JSON.parse(fence) as { stages?: Record<string, string> }).stages ?? {};
+}
+
 /** The durability row, whatever its pass/fail decoration. */
 function durabilityRow(report: string): string {
   const line = report
@@ -167,10 +178,11 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(LIVE_STAGES[AUTHORED_SKIP]).toBe("SKIP");
     expect(LIVE_STAGES[AUTHORED_EXECUTE]).toBe("EXECUTE");
     for (const key of LIVE_FRONTMATTER_KEYS) expect(LIVE_SCOPE_MD).toContain(key);
-    // The body carries its own `##` headings, so the record's Stage Grid
-    // heading must not already appear in the composer's prose.
-    expect(LIVE_SCOPE_MD).not.toContain("## Stage Grid");
+    // The composer writes a prose body with its own `##` headings — which is why
+    // the record's grid region is fenced by a sentinel a user will not type rather
+    // than by a heading they might.
     expect(LIVE_SCOPE_MD).toMatch(/^## /m);
+    expect(LIVE_SCOPE_MD).not.toContain("aidlc composed-scope-grid");
   });
 
   test("the full journey: back-fill -> reinstall -> detect -> recover", () => {
@@ -191,12 +203,9 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     for (const key of LIVE_FRONTMATTER_KEYS) expect(record).toContain(key);
     // The composer's whole prose body survives verbatim, headings and all.
     expect(record).toContain(LIVE_SCOPE_MD.trimEnd());
-    expect(record).toContain("## Stage Grid");
-    expect(
-      (JSON.parse(/```json\n([\s\S]*?)```/.exec(record)?.[1] ?? "{}") as {
-        stages: Record<string, string>;
-      }).stages,
-    ).toEqual(authored);
+    expect(record).toContain("BEGIN aidlc composed-scope-grid");
+    expect(record).toContain("<!-- END aidlc composed-scope-grid -->");
+    expect(gridInRecord(record)).toEqual(authored);
     // The compile itself is non-destructive: the column is still there.
     expect(readGrid(proj)[SCOPE].stages).toEqual(authored);
 
@@ -296,4 +305,59 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(existsSync(join(proj, "aidlc", "scopes"))).toBe(false);
     expect(durabilityRow(doctor(proj).out)).toContain("no composed scopes");
   });
+});
+
+// The recovery above runs through the `graph compile` CLI. `aidlc config`/`aidlc
+// update` reaches the same fold-back by a DIFFERENT route: it stages a fresh
+// projection in a temp root, points the compile at the project's real records, and
+// installs the result. That path called compileStageGraph() directly, and the
+// fold-back only resurrects a grid column whose identity file exists — so a record
+// whose projection was already gone got filtered out and its column silently
+// dropped into the tree about to be installed. Which is exactly the reinstall this
+// whole change exists to survive, so the two recovery paths have to agree.
+describe("t341 the update path recovers a composed scope too", () => {
+  const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
+  const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
+
+  const init = (proj: string, args: string[]): { status: number; out: string } => {
+    const res = spawnSync(BUN, [INIT, ...args], {
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env } as Record<string, string>,
+    });
+    return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  };
+
+  test("a staged refresh restores a record whose projection is already gone", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t341-update-"));
+    projects.push(proj);
+
+    // A real install, so the refresh has a baseline to work from.
+    const installed = init(proj, [
+      "config", "--project-dir", proj, "--from", CLAUDE_RELEASE, "--harness", "claude",
+    ]);
+    expect(installed.status, installed.out).toBe(0);
+
+    // Compose the old way, then let compile mint the durable record.
+    const authored = authorLegacyComposedScope(proj);
+    expect(compile(proj).status).toBe(0);
+    expect(existsSync(recordPath(proj))).toBe(true);
+
+    // Now destroy the harness projection — the state a reinstall leaves.
+    simulateReinstall(proj);
+    expect(existsSync(identityPath(proj))).toBe(false);
+    expect(readGrid(proj)[SCOPE]).toBeUndefined();
+
+    // Refresh from the same release. This is the `aidlc update` route, not the
+    // compile CLI: it must restore both halves on its own.
+    const refreshed = init(proj, ["config", "--project-dir", proj, "--from", CLAUDE_RELEASE]);
+    expect(refreshed.status, refreshed.out).toBe(0);
+
+    expect(existsSync(identityPath(proj))).toBe(true);
+    expect(readFileSync(identityPath(proj), "utf-8").trimEnd()).toBe(LIVE_SCOPE_MD.trimEnd());
+    expect(readGrid(proj)[SCOPE]?.stages).toEqual(authored);
+    // And the installed tree is healthy by its own report.
+    expect(durabilityRow(doctor(proj).out)).toContain("recorded and projected");
+  }, 180_000);
 });

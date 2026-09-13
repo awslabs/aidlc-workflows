@@ -60,6 +60,11 @@ const STAGES: Record<string, "EXECUTE" | "SKIP"> = {
 
 const RECORD = renderComposedScopeRecord(IDENTITY, STAGES);
 
+// The sentinel pair, read back out of a rendered record rather than restated, so
+// these tests can never drift from what the emitter actually writes.
+const BEGIN = /^<!-- BEGIN aidlc composed-scope-grid:.*-->$/m.exec(RECORD)?.[0] ?? "";
+const END = /^<!-- END aidlc composed-scope-grid -->$/m.exec(RECORD)?.[0] ?? "";
+
 function recordFor(
   name: string,
   stages: Record<string, "EXECUTE" | "SKIP">,
@@ -70,6 +75,11 @@ function recordFor(
 const STOCK = new Set(["bugfix", "classic"]);
 
 describe("t340 record format round-trip", () => {
+  test("the sentinels were actually emitted (guards the two constants above)", () => {
+    expect(BEGIN).toContain("BEGIN aidlc composed-scope-grid");
+    expect(END).toBe("<!-- END aidlc composed-scope-grid -->");
+  });
+
   test("render then parse recovers the name, the grid, and the identity verbatim", () => {
     const parsed = parseComposedScopeRecord(RECORD, "aidlc/scopes/lean-feature.md");
     expect(parsed.name).toBe("lean-feature");
@@ -85,9 +95,10 @@ describe("t340 record format round-trip", () => {
     expect(renderComposedScopeRecord(parsed.identity, parsed.stages)).toBe(RECORD);
   });
 
-  test("the projection carries no Stage Grid section (it is harness-tree shaped)", () => {
+  test("the projection carries no generated region (it is harness-tree shaped)", () => {
     const parsed = parseComposedScopeRecord(RECORD, "r.md");
-    expect(parsed.identity).not.toContain("## Stage Grid");
+    expect(parsed.identity).not.toContain(BEGIN);
+    expect(parsed.identity).not.toContain(END);
     expect(parsed.identity).not.toContain("```json");
   });
 });
@@ -118,7 +129,6 @@ describe("t340 round-trip over a real composer-authored scope", () => {
     // A full 33-stage grid, and a prose body with its own `##` headings.
     expect(Object.keys(liveStages).length).toBeGreaterThan(30);
     expect(liveMd).toMatch(/^## /m);
-    expect(liveMd).not.toContain("## Stage Grid");
   });
 
   test("back-fill then parse recovers the composer's bytes and grid exactly", () => {
@@ -129,39 +139,135 @@ describe("t340 round-trip over a real composer-authored scope", () => {
     // The projection is the composer's file back, untouched — every frontmatter
     // key and every prose heading, with no re-rendering.
     expect(parsed.identity.trimEnd()).toBe(liveMd.trimEnd());
-    expect(parsed.identity).not.toContain("## Stage Grid");
+    expect(parsed.identity).not.toContain(BEGIN);
     // And it is stable across repeated compiles.
     expect(renderComposedScopeRecord(parsed.identity, parsed.stages)).toBe(record);
   });
 });
 
+// The identity half of a record is PROSE THE USER WROTE, so the boundary between
+// it and the generated grid must be something they cannot write by accident. An
+// earlier draft split on a `## Stage Grid` heading; a scope author documenting
+// their own plan with that heading made the parser adopt the first ```json fence
+// in their prose as the grid — resolving the scope to a DIFFERENT set of executed
+// stages — and drop every authored line after the collision on the next
+// write-back. These cases pin that the sentinel boundary is immune.
+describe("t340 authored prose cannot capture the grid boundary", () => {
+  const hostile = [
+    "---",
+    "name: hostile",
+    "depth: Minimal",
+    "keywords: []",
+    "---",
+    "",
+    "# hostile",
+    "",
+    "## Stage Grid", // the exact heading the old format split on
+    "",
+    "My plan, for humans (do not edit by hand):",
+    "",
+    "```json",
+    '{ "stages": { "DECOY": "EXECUTE" } }', // a decoy fence in authored prose
+    "```",
+    "",
+    "More authored prose that must survive.",
+    "",
+  ].join("\n");
+  const real: Record<string, "EXECUTE" | "SKIP"> = {
+    "intent-capture": "EXECUTE",
+    "units-generation": "SKIP",
+  };
+
+  test("the real grid is adopted, not the decoy fence in the prose", () => {
+    const parsed = parseComposedScopeRecord(
+      renderComposedScopeRecord(hostile, real),
+      "aidlc/scopes/hostile.md",
+    );
+    expect(parsed.stages).toEqual(real);
+    expect(parsed.stages.DECOY).toBeUndefined();
+  });
+
+  test("every authored line survives, including the colliding heading", () => {
+    const parsed = parseComposedScopeRecord(
+      renderComposedScopeRecord(hostile, real),
+      "aidlc/scopes/hostile.md",
+    );
+    expect(parsed.identity.trimEnd()).toBe(hostile.trimEnd());
+    expect(parsed.identity).toContain("## Stage Grid");
+    expect(parsed.identity).toContain("do not edit by hand");
+    expect(parsed.identity).toContain("More authored prose that must survive.");
+  });
+
+  test("the round trip stays byte-stable, so repeated compiles never erode it", () => {
+    const record = renderComposedScopeRecord(hostile, real);
+    const parsed = parseComposedScopeRecord(record, "aidlc/scopes/hostile.md");
+    expect(renderComposedScopeRecord(parsed.identity, parsed.stages)).toBe(record);
+  });
+
+  test("a duplicated sentinel is refused rather than resolved by guesswork", () => {
+    const record = renderComposedScopeRecord(hostile, real);
+    // Two generated regions: which one is the grid is unanswerable, and guessing
+    // is how a wrong plan gets adopted silently.
+    const doubled = record + record;
+    expect(() => parseComposedScopeRecord(doubled, "aidlc/scopes/hostile.md")).toThrow(
+      /exactly one of each is required/,
+    );
+  });
+
+  test("render refuses an identity that already carries a sentinel", () => {
+    const record = renderComposedScopeRecord(hostile, real);
+    expect(() => renderComposedScopeRecord(record, real)).toThrow(
+      /already contains an aidlc composed-scope-grid sentinel/,
+    );
+  });
+});
+
 describe("t340 record parse failures name the file and never degrade silently", () => {
+  // Build a body with a real generated region so each case isolates ONE defect.
+  const withRegion = (frontmatter: string, fence: string): string =>
+    `${frontmatter}\n\n${BEGIN}\n\n\`\`\`json\n${fence}\n\`\`\`\n\n${END}\n`;
+
   const cases: Array<[string, string, RegExp]> = [
-    ["no frontmatter", "# just prose\n\n## Stage Grid\n\n```json\n{}\n```\n", /missing frontmatter/],
+    ["no frontmatter", withRegion("# just prose", "{}"), /missing frontmatter/],
     [
       "frontmatter without name",
-      "---\ndepth: Minimal\n---\n\n## Stage Grid\n\n```json\n{\"stages\":{}}\n```\n",
+      withRegion("---\ndepth: Minimal\n---", '{"stages":{}}'),
       /missing required frontmatter: name/,
     ],
-    ["no Stage Grid section", "---\nname: x\n---\n\n# x\n", /no "## Stage Grid" section/],
+    ["no grid region at all", "---\nname: x\n---\n\n# x\n", /has no generated grid region/],
     [
-      "Stage Grid without a json fence",
-      "---\nname: x\n---\n\n## Stage Grid\n\nnothing here\n",
-      /no\s+```json fence/,
+      "BEGIN sentinel but no END",
+      `---\nname: x\n---\n\n${BEGIN}\n\n\`\`\`json\n{"stages":{}}\n\`\`\`\n`,
+      /has no generated grid region/,
+    ],
+    [
+      "END sentinel before BEGIN",
+      `---\nname: x\n---\n\n${END}\n\n\`\`\`json\n{"stages":{}}\n\`\`\`\n\n${BEGIN}\n`,
+      /END grid sentinel before its BEGIN/,
+    ],
+    [
+      "region without a json fence",
+      `---\nname: x\n---\n\n${BEGIN}\n\nnothing here\n\n${END}\n`,
+      /no\s+```json fence inside it/,
+    ],
+    [
+      "a json fence OUTSIDE the region but none inside",
+      `---\nname: x\n---\n\n\`\`\`json\n{"stages":{"a":"EXECUTE"}}\n\`\`\`\n\n${BEGIN}\n\nempty\n\n${END}\n`,
+      /no\s+```json fence inside it/,
     ],
     [
       "unparseable fence",
-      "---\nname: x\n---\n\n## Stage Grid\n\n```json\n{not json}\n```\n",
-      /unparseable Stage Grid fence/,
+      withRegion("---\nname: x\n---", "{not json}"),
+      /unparseable grid fence/,
     ],
     [
       "fence without a stages member",
-      "---\nname: x\n---\n\n## Stage Grid\n\n```json\n{\"grid\":{}}\n```\n",
+      withRegion("---\nname: x\n---", '{"grid":{}}'),
       /must be an object with a "stages" member/,
     ],
     [
       "invalid action",
-      "---\nname: x\n---\n\n## Stage Grid\n\n```json\n{\"stages\":{\"a\":\"MAYBE\"}}\n```\n",
+      withRegion("---\nname: x\n---", '{"stages":{"a":"MAYBE"}}'),
       /invalid action "MAYBE"/,
     ],
   ];
@@ -174,6 +280,14 @@ describe("t340 record parse failures name the file and never degrade silently", 
       );
     });
   }
+
+  test("the missing-region message names the recovery path", () => {
+    // The record is committed user work, so aborting compile has to tell the
+    // reader how to get moving again without inventing a repair.
+    expect(() => parseComposedScopeRecord("---\nname: x\n---\n", "aidlc/scopes/x.md")).toThrow(
+      /deleting this record and re-running compile/,
+    );
+  });
 });
 
 describe("t340 composedFoldBack source priority", () => {

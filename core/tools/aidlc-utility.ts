@@ -4779,14 +4779,21 @@ export async function collectDoctorReport(
   //       shape a copy-channel reinstall leaves behind.
   //   (b) UNPROJECTED — a durable record whose harness identity file is absent,
   //       so `--scope <name>` does not resolve at all until the next compile.
-  //   (c) DANGLING — a workflow whose recorded Scope has no definition anywhere.
-  //       Typically a collaborator's checkout missing aidlc/scopes/.
+  //   (c) DANGLING — a RUNNABLE workflow whose recorded Scope has no definition
+  //       anywhere. Typically a collaborator's checkout missing aidlc/scopes/.
   //
   // All three FAIL rather than advise: every one of them silently changes which
   // stages a workflow will run, which is the class of defect a health check
   // exists to make loud. Plugin-owned scopes are excluded — a disabled plugin's
   // scope legitimately has no grid column (the selection filter drops it), and
   // the plugin checks own that state.
+  //
+  // What this does NOT check: whether a record's descriptive frontmatter (depth,
+  // description, keywords) still matches its projected file. The grid always comes
+  // from the record, so a divergence cannot change which stages run; and compile
+  // deliberately leaves an existing identity file alone rather than overwrite a
+  // hand-edit. Reconciling would mean choosing to clobber that edit, which is a
+  // behavior change, not a durability fix. The docs say so explicitly.
   // ---------------------------------------------------------------------------
   try {
     const stockScopeNames = new Set<string>();
@@ -4810,10 +4817,22 @@ export async function collectDoctorReport(
     const dangling: string[] = [];
     for (const space of listSpaces(projectDir)) {
       for (const intent of listIntents(projectDir, space.name)) {
-        if (isArchivedIntent(intent) || !intent.dirName) continue;
+        // Only workflows that can still run. A finished workflow needs no scope
+        // definition, and holding one to this standard would be unrecoverable:
+        // `intent archive` refuses a completed intent outright, so the only exit
+        // would be recreating a scope the user deliberately deleted. Mirrors the
+        // enumeration activeWorkflowDependencyViolations already uses in this file
+        // (which t224 pins), so completion releases this check the same way it
+        // releases the plugin-selection block.
+        if (isArchivedIntent(intent) || intent.status === "complete" || !intent.dirName) {
+          continue;
+        }
         const sp = stateFilePath(projectDir, intent.dirName, space.name);
         if (!existsSync(sp)) continue;
-        const scope = getField(readFileSync(sp, "utf-8"), "Scope");
+        const content = readFileSync(sp, "utf-8");
+        const status = getField(content, "Status") ?? "";
+        if (status === "Completed" || status === "Archived") continue;
+        const scope = getField(content, "Scope");
         if (scope && !validScopes().has(scope)) {
           dangling.push(`${space.name}/${intent.dirName} → "${scope}"`);
         }
