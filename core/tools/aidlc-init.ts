@@ -68,6 +68,7 @@ import {
   writeOperation,
 } from "./aidlc-transaction.ts";
 import { compileStageGraph, __resetGraphCache } from "./aidlc-graph.ts";
+import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -5183,6 +5184,15 @@ function planRootIntegrations(
     }
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
+      if (integration.path === ".gitignore") {
+        // The managed block has no re-inclusions, so the on-disk rules also
+        // describe the merged result. Checking here keeps dry-run read-only.
+        const conflicts = committedRecordIgnoreConflicts(projectDir);
+        if (conflicts.length > 0) {
+          actions.push({ path: integration.path, action: "conflict", detail: conflicts.join("; ") });
+          continue;
+        }
+      }
       const merged = mergeBlock(
         integration.path,
         current,

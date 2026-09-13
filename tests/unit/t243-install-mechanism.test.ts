@@ -1273,6 +1273,61 @@ describe("t243 project initialization", () => {
       .toBeUndefined();
   }, 60_000);
 
+  test("unmarked gitignore hiding committed records refuses config without writing the block", () => {
+    const project = temp("aidlc-t243-hidden-records-");
+    expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+    const path = join(project, ".gitignore");
+    const original = "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n";
+    writeFileSync(path, original);
+    // Apply first: the negative control must really write the block, not just plan it.
+    for (const flags of [[], ["--dry-run", "--verbose"], ["--force"]]) {
+      const refused = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+        "--harness", "claude", "--mcp", "none", ...flags,
+      ], project);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(".gitignore:2: aidlc/ hides committed workflow records");
+      for (const record of ["intents.json", "aidlc-state.md", "audit/*.md", "memory/**", "codekb/**"]) {
+        expect(refused.stdout).toContain(record);
+      }
+      expect(readFileSync(path, "utf-8")).toBe(original);
+      expect(readFileSync(path, "utf-8")).not.toContain("BEGIN AI-DLC:gitignore");
+      expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+    }
+  }, 60_000);
+
+  test("unmarked harmless AI-DLC rules remain user-owned in a real git repository", () => {
+    const project = temp("aidlc-t243-visible-records-");
+    expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+    const path = join(project, ".gitignore");
+    const original = "# AI-DLC notes\naidlc/**/*.log\n";
+    writeFileSync(path, original);
+    const applied = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none",
+    ], project);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const installed = readFileSync(path, "utf-8");
+    expect(installed).toStartWith(original);
+    expect(installed).toContain("# BEGIN AI-DLC:gitignore");
+  }, 60_000);
+
+  test("unmarked blanket aidlc ignore is preserved outside a git repository", () => {
+    const project = temp("aidlc-t243-no-git-");
+    const path = join(project, ".gitignore");
+    const original = "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n";
+    writeFileSync(path, original);
+    const applied = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none",
+    ], project);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const installed = readFileSync(path, "utf-8");
+    expect(installed).toStartWith(original);
+    expect(installed).toContain("# BEGIN AI-DLC:gitignore");
+    expect(existsSync(join(project, ".git"))).toBe(false);
+  }, 60_000);
+
   for (const fixture of [
     {
       name: "ordinary ignore rules",

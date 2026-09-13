@@ -638,12 +638,28 @@ project content.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
-modified unmarked `.gitignore` content remains user-owned, including `aidlc/`
-rules and AI-DLC comments. Config preserves that content as a prefix and
-appends a fresh managed block; no rename or deletion is needed. Other modified
-legacy lookalikes, including ambiguous AI-DLC content in `AGENTS.md`, remain
-refused. A `.gitignore` that is not valid UTF-8 also remains untouched and
-requires an encoding conversion before config can merge it safely.
+modified unmarked `.gitignore` content remains user-owned, including AI-DLC
+comments and rules that do not hide shared records. Config preserves that
+content as a prefix and appends a fresh managed block; no rename or deletion
+is needed. Other modified legacy lookalikes, including ambiguous AI-DLC
+content in `AGENTS.md`, remain refused. A `.gitignore` that is not valid UTF-8
+also remains untouched and requires an encoding conversion before config can
+merge it safely.
+
+Inside a Git repository, config checks the existing ignore rules before
+planning the managed block, including during `--dry-run`. A user-owned rule
+such as `aidlc/` that hides committed workflow records is an exit-4 conflict,
+even with `--force`: the message names the rule's file, line, pattern, and
+hidden record paths (`memory/**`, `codekb/**`, `intents.json`, `aidlc-state.md`,
+and `audit/*.md`). Narrow the rule so teammates receive those records; config
+does not rewrite it or append the block while the conflict remains. This
+check skips when Git is unavailable or the project is not a Git repository.
+
+`/aidlc --doctor` repeats this check beside the uncommitted-records check.
+Its **Workspace record visibility** advisory names the same rule and hidden
+paths if an ignore rule is added after config succeeds. The warning does not
+change doctor's exit code and is absent when no records are hidden or Git
+cannot check the project.
 
 `--force` can replace a modified, baseline-owned managed block or managed
 harness file. It cannot adopt ambiguous unmarked content, overwrite a
