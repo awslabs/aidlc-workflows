@@ -126,7 +126,7 @@ function isolatedMachineEnv(): NodeJS.ProcessEnv {
 
 // Run the real CLI with an isolated filesystem mock. The trace proves that a
 // failure reached linkSync, rather than stopping at a missing runtime or stdin.
-function hardLinkFailurePreload(): { preload: string; trace: string } {
+function hardLinkFailurePreload(removeProbeFails = false): { preload: string; trace: string } {
   const directory = temp("aidlc-t299-filesystem-mock-");
   const preload = join(directory, "reject-hard-links.ts");
   const trace = join(directory, "links.ndjson");
@@ -138,6 +138,12 @@ function hardLinkFailurePreload(): { preload: string; trace: string } {
       linkSync(source, destination) {
         actual.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ source, destination }) + "\\n");
         throw Object.assign(new Error("simulated hard-link failure"), { code: "EMLINK" });
+      },
+      rmSync(path, ...args) {
+        if (${JSON.stringify(removeProbeFails)} && String(path).includes(".aidlc-lock-probe-")) {
+          throw Object.assign(new Error("simulated probe removal failure"), { code: "EACCES" });
+        }
+        return actual.rmSync(path, ...args);
       },
     }));
   `);
@@ -396,6 +402,21 @@ describe("t299 first-run setup wizard", () => {
       expect(treeSnapshot(result.project)).toEqual(before);
     }, 60_000);
   }
+
+  test("probe removal failure keeps the wizard's storage fix alongside the cleanup diagnostic", () => {
+    const { preload, trace } = hardLinkFailurePreload(true);
+    const result = runWizard("", { preload, env: { NO_COLOR: "1" } });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("the filesystem rejected hard-link creation (EMLINK)");
+    expect(output).toContain("Could not remove temporary transaction lock probe");
+    expect(output).toMatch(/fix:.*Use a filesystem that supports hard links/);
+    expect(output).toContain("S3-backed workspace");
+    expect(output).not.toContain("Set up AI-DLC for");
+    const [{ source }] = linkTrace(trace);
+    expect(existsSync(source)).toBe(true);
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
+  }, 60_000);
 
   for (const mode of ["json", "quiet", "human"] as const) {
     test(`noninteractive ${mode} config preserves filesystem remediation on apply failure`, () => {

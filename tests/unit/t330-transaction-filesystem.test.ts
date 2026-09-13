@@ -76,6 +76,10 @@ type FilesystemObservation = {
     remediation?: string;
     transactionLockError: boolean;
     aggregateError: boolean;
+    causeAggregateError: boolean;
+    aggregateHasCleanupError: boolean;
+    aggregateHasCloseError: boolean;
+    aggregateHasLockError: boolean;
     sameAsInjected: boolean;
     sameAsCloseError: boolean;
   } | null;
@@ -197,6 +201,7 @@ function filesystemFailure(
         });
       }
     } catch (error) {
+      const aggregate = error instanceof AggregateError ? error : error.cause;
       failure = {
         name: error.name,
         message: error.message,
@@ -205,6 +210,11 @@ function filesystemFailure(
         remediation: error.remediation,
         transactionLockError: error instanceof transaction.TransactionLockError,
         aggregateError: error instanceof AggregateError,
+        causeAggregateError: error.cause instanceof AggregateError,
+        aggregateHasCleanupError: aggregate instanceof AggregateError && aggregate.errors.includes(removeError),
+        aggregateHasCloseError: aggregate instanceof AggregateError && aggregate.errors.includes(closeError),
+        aggregateHasLockError: aggregate instanceof AggregateError && aggregate.errors.some((cause) =>
+          cause instanceof transaction.TransactionLockError && cause.cause === injected),
         sameAsInjected: error === injected,
         sameAsCloseError: error === closeError,
       };
@@ -369,18 +379,29 @@ describe("t330 transaction filesystem diagnostics", () => {
       expect(remove).toBeDefined();
       const probe = remove.path;
       try {
-        expect(result.error).toEqual(expect.objectContaining({
-          name: "AggregateError",
-          aggregateError: true,
-          transactionLockError: false,
-        }));
-        expect(result.error?.message).toContain(probe);
-        expect(result.error?.message).toMatch(/cleanup|clean up|remov/i);
-        expect(result.error?.message).toMatch(/fail|could not|cannot|unable/i);
+        expect(result.error?.aggregateHasCleanupError).toBe(true);
+        expect(result.error?.aggregateHasCloseError).toBe(closeCode !== undefined);
+        expect(result.error?.message).toContain(`Could not remove temporary transaction lock probe ${probe}`);
         if (code !== null) {
+          expect(result.error).toEqual(expect.objectContaining({
+            name: "TransactionLockError",
+            root,
+            code,
+            transactionLockError: true,
+            causeAggregateError: true,
+            aggregateHasLockError: true,
+          }));
+          expect(result.error?.remediation).toMatch(/hard[- ]links?/i);
+          expect(result.error?.remediation).toMatch(/S3|FUSE/i);
           expect(result.error?.message).toContain(
             `Cannot create an AI-DLC transaction lock in ${root}: the filesystem rejected hard-link creation (EMLINK).`,
           );
+        } else {
+          expect(result.error).toEqual(expect.objectContaining({
+            name: "AggregateError",
+            aggregateError: true,
+            transactionLockError: false,
+          }));
         }
         const link = result.events.find((event) => event.operation === "link")!;
         expect(dirname(probe)).toBe(root);

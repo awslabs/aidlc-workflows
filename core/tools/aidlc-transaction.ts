@@ -437,12 +437,18 @@ export function assertTransactionFilesystem(path: string): void {
     rmSync(probe, { recursive: true, force: true });
   } catch (cleanupError) {
     const primary = failure instanceof Error ? `${failure.message} ` : "";
-    throw new AggregateError(
+    const aggregate = new AggregateError(
       [failure, closeError, cleanupError].filter((error) => error !== undefined),
       `${primary}Could not remove temporary transaction lock probe ${probe}: ${
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
       }`,
     );
+    if (failure instanceof TransactionLockError) {
+      const error = new TransactionLockError(failure.root, failure.code, aggregate);
+      error.message = aggregate.message;
+      throw error;
+    }
+    throw aggregate;
   }
   if (failure !== undefined) throw failure;
   if (closeError !== undefined) throw closeError;
