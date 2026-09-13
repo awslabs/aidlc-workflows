@@ -45,7 +45,6 @@ export type ModelHarness =
   | "copilot"
   | "cursor"
   | "kiro"
-  | "kiro-ide"
   | "opencode";
 export type ModelPolicyLayer =
   | "agent-exception"
@@ -130,18 +129,11 @@ export const HARNESS_HONESTY = Object.freeze({
       "opencode can express model and variant policy; xhigh effort clamps down to high.",
   }),
   kiro: Object.freeze({
-    model: true,
-    effort: true,
-    groupEffort: false,
-    message:
-      "Kiro CLI cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults.",
-  }),
-  "kiro-ide": Object.freeze({
     model: false,
     effort: false,
     groupEffort: false,
     message:
-      "Kiro IDE cannot express model or effort policy; its md-only agent surfaces carry no model keys, so set the chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
+      "Kiro agents are Markdown and carry no model keys, so neither a per-agent model nor an effort dial has a surface to land on. The per-model effort default in settings/cli.json is projection-owned and read by Kiro CLI only; Kiro IDE reads neither, so set its chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
   }),
   cursor: Object.freeze({
     model: false,
@@ -345,7 +337,7 @@ export function profileGroups(
 }
 
 function tierHarness(harness: ModelHarness): TierHarness {
-  return harness === "kiro-ide" ? "kiro" : harness;
+  return harness;
 }
 
 function projectedEffort(value: ReturnType<typeof projectTier>): ModelEffort | undefined {
@@ -625,11 +617,13 @@ export function applyModelPolicyToProjection(
       );
     }
   } else if (harness === "kiro") {
+    // The row's agents are Markdown and carry no model keys, so there is no
+    // per-agent surface to write and HARNESS_HONESTY.kiro reports both a
+    // requested model and a requested effort as unexpressed. This loop stays so
+    // a policy that already names a model still refreshes that model's default;
+    // with no model in play it writes cli.json back byte-identical.
     const modelEfforts: Array<{ model: string; effort: KiroEffort }> = [];
     for (const item of effective) {
-      const path = join(harnessRoot, "agents", `${modelAgentStem(item.agent)}.json`);
-      if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      writeFileSync(path, writeKiroAgentSurface(readFileSync(path, "utf-8"), item));
       if (item.model && item.effort) {
         modelEfforts.push({ model: item.model, effort: item.effort });
       }
@@ -730,24 +724,18 @@ export function modelPolicySurfaceDrift(
       path = join(projectDir, ".opencode", "agents", `${modelAgentStem(name)}.md`);
       if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "variant");
     } else if (harness === "kiro") {
-      path = join(harnessRoot, "agents", `${modelAgentStem(name)}.json`);
-      if (existsSync(path)) {
-        const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-        actual.model = typeof parsed.model === "string" ? parsed.model : undefined;
-        if (surfaceExpected.model && surfaceExpected.effort) {
-          const cli = JSON.parse(
-            readFileSync(join(harnessRoot, "settings", "cli.json"), "utf-8"),
-          ) as Record<string, unknown>;
-          const defaults = isRecord(cli["chat.modelDefaults"])
-            ? cli["chat.modelDefaults"]
-            : {};
-          const rawEntry = defaults[surfaceExpected.model];
-          const entry: Record<string, unknown> = isRecord(rawEntry) ? rawEntry : {};
-          const output = isRecord(entry.output_config) ? entry.output_config : {};
-          actual.effort = typeof output.effort === "string" && isModelEffort(output.effort)
-            ? output.effort
-            : undefined;
-        }
+      // No per-agent surface: the row's agents are Markdown without model keys.
+      // The only surface effort lands on is the per-model default in cli.json.
+      path = join(harnessRoot, "settings", "cli.json");
+      if (existsSync(path) && surfaceExpected.model && surfaceExpected.effort) {
+        const cli = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const defaults = isRecord(cli["chat.modelDefaults"]) ? cli["chat.modelDefaults"] : {};
+        const rawEntry = defaults[surfaceExpected.model];
+        const entry: Record<string, unknown> = isRecord(rawEntry) ? rawEntry : {};
+        const output = isRecord(entry.output_config) ? entry.output_config : {};
+        actual.effort = typeof output.effort === "string" && isModelEffort(output.effort)
+          ? output.effort
+          : undefined;
       }
     } else {
       actual = {};

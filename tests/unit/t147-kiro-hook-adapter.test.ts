@@ -28,6 +28,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -141,6 +142,30 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+/** The adapter's own drop log, one line per recorded degradation. */
+function dropLines(dir: string): string[] {
+  const path = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf-8").split("\n").filter((l) => l.trim().length > 0);
+}
+
+// The core hooks resolve their own health directory from the docs root, which
+// moves with the space and the intent - and before an intent exists it is not
+// under a record at all. So find the file rather than deriving its path.
+function freezeDropFiles(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      if (entry.name === ".kiro" || entry.name === "node_modules") continue;
+      const full = join(at, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === "review-freeze.drops") found.push(full);
+    }
+  };
+  walk(dir);
+  return found;
+}
+
 function appendInteractionEvent(
   dir: string,
   event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
@@ -187,6 +212,65 @@ function runAdapter(
     stdout: r.stdout ?? "",
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
+  };
+}
+
+// The delegation window is how a guard learns WHO is acting now that the
+// per-agent registration (and its persona argv) is gone. Opening it is the same
+// event Kiro sends when the conductor delegates: the dispatch tool's PreToolUse.
+// Both calls must resolve the same session identity, which they do - neither
+// payload carries session_id, so both fall back to the remembered one.
+function openDelegationWindow(projectDir: string, agent: string): void {
+  const r = runAdapter(projectDir, "log-subagent", {
+    hook_event_name: "PreToolUse",
+    cwd: projectDir,
+    tool_name: `subagent_${agent}`,
+    tool_input: { prompt: `delegate to ${agent}` },
+  });
+  expect(r.code, `open window for ${agent}`).toBe(0);
+}
+
+function closeDelegationWindow(projectDir: string, agent: string): void {
+  runAdapter(projectDir, "log-subagent", {
+    hook_event_name: "PostToolUse",
+    cwd: projectDir,
+    tool_name: `subagent_${agent}`,
+    tool_input: { prompt: `delegate to ${agent}` },
+    tool_response: `**Agent:** ${agent}\ndone`,
+  });
+}
+
+// A CREW dispatch: one event naming several personas in `stages[].role`. It opens
+// one window per persona, and one close must release all of them.
+function openCrewWindow(projectDir: string, agents: string[]): void {
+  const r = runAdapter(projectDir, "log-subagent", crewPayload(projectDir, agents, "PreToolUse"));
+  expect(r.code, `open crew window ${agents.join("+")}`).toBe(0);
+}
+
+function closeCrewWindow(projectDir: string, agents: string[]): void {
+  runAdapter(projectDir, "log-subagent", {
+    ...crewPayload(projectDir, agents, "PostToolUse"),
+    tool_response: "crew done",
+  });
+}
+
+function crewPayload(
+  projectDir: string,
+  agents: string[],
+  event: "PreToolUse" | "PostToolUse",
+): Record<string, unknown> {
+  return {
+    hook_event_name: event,
+    cwd: projectDir,
+    tool_name: "subagent",
+    tool_input: {
+      task: "crew",
+      stages: agents.map((agent, index) => ({
+        name: `stage_${index}`,
+        role: agent,
+        prompt_template: "{task}",
+      })),
+    },
   };
 }
 
@@ -237,13 +321,22 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
         cwd: dir,
       };
+      // The mint belongs to record-human-turn, which this row registers in its own
+      // manifest. verb-intercept used to mint as well - that was the pre-merge CLI
+      // row, where hook wiring lived inside the agent config and there was no
+      // second registration to double-count with. Asserting BOTH halves here is
+      // the point: the mint happens once, and it happens on the other seam.
+      expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
+      expect(readAudit(dir), "verb-intercept must not mint").not.toContain("HUMAN_TURN");
+
       expect(
-        runAdapter(dir, "verb-intercept", payload, [], {
+        runAdapter(dir, "record-human-turn", payload, [], {
           AIDLC_UNATTENDED: "1",
         }).code,
       ).toBe(0);
-      expect(readAudit(dir)).not.toContain("HUMAN_TURN");
-      expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
+      expect(readAudit(dir), "unattended withholds the ledger event")
+        .not.toContain("HUMAN_TURN");
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -936,51 +1029,396 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("5d: every Kiro worker registers an identity-scoped lifecycle guard", () => {
-    const agentDir = join(KIRO_TREE, "agents");
-    const workerFiles = require("node:fs")
-      .readdirSync(agentDir)
-      .filter((name: string) => /^aidlc-.+-agent\.json$/.test(name))
-      .sort() as string[];
-    expect(workerFiles).toHaveLength(14);
-
-    for (const name of workerFiles) {
-      const config = JSON.parse(
-        readFileSync(join(agentDir, name), "utf-8"),
-      ) as {
-        name: string;
-        hooks?: {
-          preToolUse?: Array<{
-            matcher?: string;
-            command?: string;
-            timeout_ms?: number;
-          }>;
-        };
+  test("5d: the delegation window is what scopes the lifecycle guard to a persona", () => {
+    // This used to walk 14 agent-v1 JSONs and assert each one registered
+    // `state-transition-guard <its own name>`. That registration channel is gone
+    // (a v3 hook manifest has no agent scope), and the window replaces it: open
+    // it and the guard enforces against the delegate, close it and the main
+    // session is free to run the same verb. Both halves are asserted here,
+    // because either one alone passes for the wrong reason.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
       };
-      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
-        matcher: "execute_bash",
-        command:
-          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}`,
-        timeout_ms: 15000,
+
+      // Main session: allowed.
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+
+      openDelegationWindow(dir, "aidlc-design-agent");
+      const delegated = runAdapter(dir, "state-transition-guard", lifecycle);
+      expect(delegated.code).toBe(2);
+      expect(delegated.stderr).toContain("aidlc-design-agent");
+      expect(delegated.stderr).toContain(
+        "only the main workflow session can change stage status or routing",
+      );
+
+      closeDelegationWindow(dir, "aidlc-design-agent");
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d2: one dispatch of the same persona twice needs two closes", () => {
+    // Regression: the window is keyed by the dispatch payload, so two identical
+    // concurrent dispatches used to collapse into one entry and a single close
+    // released both - dropping enforcement while a delegate was still running.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      openDelegationWindow(dir, "aidlc-design-agent");
+      openDelegationWindow(dir, "aidlc-design-agent");
+      closeDelegationWindow(dir, "aidlc-design-agent");
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "one delegate is still inflight",
+      ).toBe(2);
+      closeDelegationWindow(dir, "aidlc-design-agent");
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9: the 0.x notice fires only on the legacy channel, and reads neither", () => {
+    const dir = scratchProject(false);
+    try {
+      // A supported host carries no USER_PROMPT: the notice must not interrupt a
+      // session it cannot diagnose.
+      const modern = runAdapter(dir, "legacy-ide-notice", "");
+      expect(modern.code).toBe(0);
+      expect(modern.stdout).toBe("");
+      expect(modern.stderr).toBe("");
+
+      // A 0.x host delivers the payload in USER_PROMPT - on this trigger the tool
+      // input, verbatim from a 0.12.333 firing. Exit 2 is the refusal that seam
+      // honours (measured: a preToolUse hook exiting 2 refused the read outright),
+      // and the denial text is the explanation the model is told to obey. Both
+      // streams carry it because `stdout || stderr` is the success path's rule.
+      const payload = JSON.stringify({
+        path: "/w/AGENTS.md",
+        start_line: null,
+        end_line: 10,
+        explanation: "User asked to read the first 10 lines of AGENTS.md.",
       });
-      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
-        matcher: "fs_write",
-        command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
-        timeout_ms: 15000,
+      const legacy = runAdapter(dir, "legacy-ide-notice", "", [], {
+        USER_PROMPT: payload,
+        // The socket name 0.12.333 was measured to set.
+        VSCODE_IPC_HOOK: "/Users/u/Library/Application Support/Kiro/0.12-main.sock",
       });
-      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
-        matcher: "execute_bash",
-        command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
-        timeout_ms: 15000,
+      expect(legacy.code).toBe(2);
+      // The denial has to lead on whichever stream the host surfaces.
+      for (const stream of [legacy.stdout, legacy.stderr]) {
+        expect(stream.startsWith("ACCESS DENIED.")).toBe(true);
+        expect(stream).toContain("no longer supports this version of Kiro IDE");
+        expect(stream).toContain("Kiro CLI");
+      }
+
+      // A SUPPORTED host that runs this target anyway - which one click on the
+      // `Migrate` button beside the legacy hook produces, and where 1.x populates
+      // USER_PROMPT just the same - must hear nothing. Otherwise the notice denies
+      // every tool call on an install AI-DLC supports. Socket name measured on
+      // 1.0.437, trailing dot included.
+      const supported = runAdapter(dir, "legacy-ide-notice", "", [], {
+        USER_PROMPT: payload,
+        VSCODE_IPC_HOOK: "/Users/u/Library/Application Support/Kiro/1.0.-main.sock",
       });
+      expect(supported.code).toBe(0);
+      expect(supported.stdout).toBe("");
+      expect(supported.stderr).toBe("");
+      // Silence here is the whole point: a migrated hook on a supported host must
+      // not refuse anything, and exit 2 would now do exactly that.
+
+      // An unreadable host line is silence too: informing is this target's only
+      // job, and refusing work on a supported install is the worse error.
+      for (const ipc of ["", "/tmp/not-a-kiro-socket", "/x/Kiro/main.sock"]) {
+        const unknown = runAdapter(dir, "legacy-ide-notice", "", [], {
+          USER_PROMPT: payload,
+          VSCODE_IPC_HOOK: ipc,
+        });
+        expect(unknown.code, `silent on ${ipc || "<empty>"}`).toBe(0);
+        expect(unknown.stdout, `silent on ${ipc || "<empty>"}`).toBe("");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d3: one crew dispatch is one window, however many personas it named", () => {
+    // Regression: openDelegation appends one open per persona under the same
+    // dispatch key, and a close used to cancel only the most recent - so a
+    // two-persona crew left one open inflight until the 6h TTL and the lifecycle
+    // guard kept refusing the MAIN session's own verbs after the crew finished.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      const crew = ["aidlc-developer-agent", "aidlc-quality-agent"];
+      openCrewWindow(dir, crew);
+      expect(runAdapter(dir, "state-transition-guard", lifecycle).code, "crew inflight").toBe(2);
+      closeCrewWindow(dir, crew);
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "one close releases every persona that dispatch named",
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d4: a second target on the same dispatch event opens no second window", () => {
+    // Regression, measured on a real run: dispatch tools match TWO ledger-writing
+    // targets on PreToolUse (`log-subagent`, `plan-approval-guard`) but only one
+    // on PostToolUse. The ledger write used to run for every INPUT_TARGET on the
+    // reasoning that a repeat for the same event was "a no-op rather than a double
+    // count" - but `openDelegation` mints a fresh group per call and a close
+    // cancels only the most-recent group, so every dispatch opened two and closed
+    // one. The leftover window kept the lifecycle guard refusing the MAIN
+    // session's own verbs with the finished delegate named as the caller.
+    const dir = scratchProject(false);
+    try {
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      const crew = ["aidlc-composer-agent"];
+      openCrewWindow(dir, crew);
+      // The same host event, delivered to the other target registered on it.
+      runAdapter(dir, "plan-approval-guard", crewPayload(dir, crew, "PreToolUse"));
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "the window is open once, not twice",
+      ).toBe(2);
+      closeCrewWindow(dir, crew);
+      expect(
+        runAdapter(dir, "state-transition-guard", lifecycle).code,
+        "one close releases the dispatch, whatever else saw the same event",
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
+    // Regression: with two DIFFERENT personas inflight the adapter used to forward
+    // an empty identity, so the core guard passed the call through - the exact gap
+    // the persona axis exists to close. It resolves the ambiguity from the dispatch
+    // record instead.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-architecture-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      openDelegationWindow(dir, "aidlc-developer-agent");
+      const r = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "read_file",
+        tool_input: { path: "construction/sibling-unit/design.md" },
+      });
+      expect(r.code, "two personas inflight must not disable the guard").toBe(2);
+      expect(r.stderr).toContain("This review cannot open");
+      // The attribution and its cost are recorded, since the refusal may belong
+      // to the other delegate.
+      expect(dropLines(dir)).toHaveLength(1);
+      expect(dropLines(dir)[0]).toContain("attributed to the dispatched reviewer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g2: a crew with no review in flight leaves the drop log clean", () => {
+    // Regression: the ambiguity branch logged a drop whenever two delegates were
+    // inflight, including when NO dispatch record existed - the ordinary state of
+    // a crew stage. That appended a line per guarded call for the whole stage,
+    // and a non-empty .drops file is a release signal in this repo.
+    const dir = scratchProject(true);
+    try {
+      openDelegationWindow(dir, "aidlc-developer-agent");
+      openDelegationWindow(dir, "aidlc-quality-agent");
+      for (let i = 0; i < 3; i++) {
+        const r = runAdapter(dir, "reviewer-scope", {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "read_file",
+          tool_input: { path: `construction/todo-core/file-${i}.md` },
+        });
+        expect(r.code, "no review in flight: nothing to enforce").toBe(0);
+      }
+      expect(dropLines(dir), "no record means no drop").toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g3: a record naming a delegate that is not inflight is a drop", () => {
+    // The other half of the same branch: enforcement WAS expected here, and the
+    // adapter could not attribute the call, so the gap is recorded.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-quality-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      openDelegationWindow(dir, "aidlc-developer-agent");
+      const r = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "read_file",
+        tool_input: { path: "construction/sibling-unit/design.md" },
+      });
+      expect(r.code, "identity unresolved: fail open").toBe(0);
+      expect(dropLines(dir)).toHaveLength(1);
+      expect(dropLines(dir)[0]).toContain("is not among them");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g4: a reviewer's directory walk and filename search reach the guard", () => {
+    // Regression: canonicalTool() translated only write, read and shell names, so
+    // list_directory/file_search/grep_search fell through to the reviewer-scope
+    // branch's `else { return 0 }`. Core carries purpose-built LS/Glob/Grep logic
+    // for exactly those shapes and nothing on this row ever fed it, so the read
+    // half of the §12a bound was unreachable. The standalone manifest this row
+    // ships has to match the names too, or the hook is never invoked at all.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-architecture-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+
+      const sibling = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "list_directory",
+        tool_input: { path: "construction/sibling-unit", depth: 3 },
+      });
+      expect(sibling.code, "walking a sibling unit is the violation this guard is for").toBe(2);
+
+      const own = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "list_directory",
+        tool_input: { path: "construction/todo-core", depth: 1 },
+      });
+      expect(own.code, "the reviewed unit's own directory stays available").toBe(0);
+
+      // file_search carries the needle as `query` and no search root at all, so it
+      // lands on the core rule for a pathless glob that does not limit itself to
+      // the reviewed unit. grep_search reaches the pathless-Grep rule the same way;
+      // its content regex deliberately does not travel, because matching content is
+      // not a file access.
+      const search = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "file_search",
+        tool_input: { query: "design", excludePattern: null, includeIgnoredFiles: null },
+      });
+      expect(search.code, "a rootless repo-wide filename search is not scoped").toBe(2);
+
+      // grep_search carries no path at all: its only scope is `includePattern`,
+      // and that field is frequently null (both shapes are in the capture archive).
+      const scoped = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "grep_search",
+        tool_input: {
+          query: "mentions construction/sibling-unit",
+          caseSensitive: null,
+          excludePattern: null,
+          includePattern: "construction/todo-core/**",
+        },
+      });
+      expect(
+        scoped.code,
+        "a search confined to the reviewed unit is allowed, and its content regex is not scanned",
+      ).toBe(0);
+
+      const unscoped = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "grep_search",
+        tool_input: {
+          query: "design",
+          caseSensitive: null,
+          excludePattern: null,
+          includePattern: null,
+        },
+      });
+      expect(
+        unscoped.code,
+        "a content search that expresses no scope reaches the pathless-Grep rule",
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5g5: review-freeze stays quiet before a workflow record exists", () => {
+    // Regression, measured on a live run: the pre-merge row registered this hook
+    // inside the reviewer agents' own configs, so it could not fire before a
+    // dispatch. One standalone manifest serving both surfaces also sees the
+    // conductor's own writes - including the ones that create the record - and core
+    // reaches "nothing to protect" by reading the state file and failing open on
+    // the throw, which records a drop. A non-empty .drops file is a release signal
+    // in this repo, so "the workflow has not started" must not produce one.
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(dir, "review-freeze", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "fs_write",
+        tool_input: { path: "aidlc/spaces/default/intents/todo/ideation/intent.md" },
+      });
+      expect(r.code, "no record yet: nothing to freeze").toBe(0);
+      expect(
+        freezeDropFiles(dir),
+        "no record yet is not a swallowed failure",
+      ).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("5e: a Kiro worker identity cannot invoke orchestrator lifecycle", () => {
     const dir = scratchProject(false);
     try {
+      openDelegationWindow(dir, "aidlc-design-agent");
       const r = runAdapter(
         dir,
         "state-transition-guard",
@@ -992,7 +1430,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
               "bun .kiro/tools/aidlc-orchestrate.ts next --resume",
           },
         },
-        ["aidlc-design-agent"],
       );
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("only the main workflow session can change stage status or routing");
@@ -1016,6 +1453,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         "utf-8",
       );
       const reviewerHeartbeat = join(healthDir, "reviewer-scope.last");
+      // The reviewer's identity used to arrive as the persona argv of a
+      // registration scoped to that agent. It comes from the delegation window
+      // now, so open one for the reviewer before exercising the guard.
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
       for (const tool_name of ADAPTER_TOOL_NAMES.reads) {
         rmSync(reviewerHeartbeat, { force: true });
         const r = runAdapter(
@@ -1029,7 +1470,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
               ? { paths: [null, "construction/sibling-unit/design.md"] }
               : { path: "construction/sibling-unit/design.md" },
           },
-          ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
         expect(r.stderr, tool_name).toContain("This review cannot open");
@@ -1050,7 +1490,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             tool_name,
             tool_input: { path: "construction/sibling-unit/design.md" },
           },
-          ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
         expect(r.stderr, tool_name).toContain("This review cannot open");
@@ -1083,7 +1522,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             operations: [null, { path: "construction/sibling-unit/design.md" }],
           },
         },
-        ["aidlc-architecture-reviewer-agent"],
       );
       expect(operations.code).toBe(2);
       expect(operations.stderr).toContain("This review cannot open");
@@ -1499,13 +1937,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("15: shipped kiro + kiro-ide adapter sources respawn via process.execPath, never a bare 'bun' argv[0]", () => {
+  test("15: the shipped kiro adapter source respawns via process.execPath, never a bare 'bun' argv[0]", () => {
     // Source pin (matches this suite's grep-pin style). Both shipped adapter
     // copies must spawn children via the running interpreter, so a stale
     // regeneration or a hand-edit reintroducing the bare-name respawn reds here.
     for (const adapter of [
       join(REPO_ROOT, "dist", "kiro", ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
-      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
     ]) {
       const src = readFileSync(adapter, "utf-8");
       // No spawn whose argv[0] is the bare literal "bun".

@@ -121,7 +121,6 @@ describe("t298 aidlc.settings hierarchy", () => {
       ["copilot", ".aidlc"],
       ["cursor", ".cursor"],
       ["kiro", ".kiro"],
-      ["kiro-ide", ".kiro"],
       ["opencode", ".aidlc"],
     ]) {
       expect(JSON.parse(readFileSync(

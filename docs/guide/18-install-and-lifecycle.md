@@ -41,7 +41,7 @@ failure and prints the command above; it never runs `apk` or installs system
 packages. The upstream Bun tracking includes `oven-sh/bun#15829` and
 `oven-sh/bun#29681`.
 
-The installer includes `claude`, `kiro`, `kiro-ide`, `codex`, and `opencode`
+The installer includes `claude`, `kiro`, `codex`, and `opencode`
 together:
 
 ```bash
@@ -427,8 +427,7 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 |---------|-----------------------------|
 | Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
-| Kiro CLI | Writes the AWS MCP URL and metadata in `.kiro/settings/mcp.json` |
-| Kiro IDE | Records and instructs only; the chat model must be selected manually in the IDE |
+| Kiro | Records and instructs only. This row's registry ships no `aws-mcp` entry to rewrite, and the chat model is chosen in the host — the IDE's model picker or the CLI's `/model` |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
 | GitHub Copilot | Records acknowledgement of the manual BYOK environment setup |
 | Cursor | Records acknowledgement of the manual provider and model-picker setup |
@@ -539,10 +538,10 @@ never adds MCP entries.
 
 On Claude Code, `.mcp.json` is the consent-managed surface: `--check` verifies
 both `defaults` and `none`, and later plain config refreshes reapply the answer.
-Kiro CLI always ships `.kiro/settings/mcp.json`; `defaults` is satisfied by
-that file and its five shipped servers, while `none` is an instruct-only
-preference and does not remove a framework-owned file. The current Codex,
-opencode, Copilot, Kiro IDE, and Cursor distributions ship no MCP surface, so
+Kiro always ships `.kiro/settings/mcp.json`; `defaults` is satisfied by
+that file and the two keyless HTTP servers it declares, while `none` is an
+instruct-only preference and does not remove a framework-owned file. The current Codex,
+opencode, Copilot, and Cursor distributions ship no MCP surface, so
 their recorded answer is informational and does not make `--check`
 permanently red. `--show` names the actual MCP file whenever one exists.
 
@@ -627,7 +626,7 @@ project content.
 |---------|-----------|--------|
 | `.gitignore` | All | Own one marked AI-DLC block; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
-| `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
+| `AGENTS.md` | Kiro, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
 
@@ -658,8 +657,7 @@ Successful config prints the host-specific next step:
 | Harness | Next step |
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
-| Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor` |
+| Kiro | Run `kiro-cli chat`, or open the project in Kiro IDE, then `/aidlc --doctor` |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

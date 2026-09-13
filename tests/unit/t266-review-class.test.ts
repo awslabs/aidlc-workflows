@@ -187,7 +187,6 @@ describe("t266 review class", () => {
     const graphs = [
       "dist/claude/.claude/tools/data/stage-graph.json",
       "dist/kiro/.kiro/tools/data/stage-graph.json",
-      "dist/kiro-ide/.kiro/tools/data/stage-graph.json",
       "dist/codex/.codex/tools/data/stage-graph.json",
       "dist/opencode/.aidlc/tools/data/stage-graph.json",
       "dist/cursor/.cursor/tools/data/stage-graph.json",
@@ -397,7 +396,6 @@ describe("t266 review class", () => {
     const skills = [
       "harness/claude/skills/aidlc/SKILL.md",
       "harness/kiro/skills/aidlc/SKILL.md",
-      "harness/kiro-ide/skills/aidlc/SKILL.md",
       "harness/codex/skills/aidlc/SKILL.md",
       "harness/opencode/skills/aidlc/SKILL.md",
       "harness/cursor/skills/aidlc/SKILL.md",

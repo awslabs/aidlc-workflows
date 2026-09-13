@@ -823,60 +823,36 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Kiro CLI wires the adapter's reviewer-scope target inside BOTH reviewer agent JSONs", () => {
+  test("Kiro registers reviewer-scope in a standalone hook manifest", () => {
+    // This used to pin the opposite: the IDE row shipped NO registration because
+    // its payloads carried empty toolArgs, so a PreToolUse hook could never see
+    // the attempted path. Later 1.x builds populate them (measured), and the
+    // acting persona - the other thing this guard needs, and the reason the CLI
+    // row registered it per-agent - is recovered from the delegation window. So
+    // the seam is enforceable on this row now, and shipping no registration
+    // would be the defect.
     const harnesses = HARNESS_MATRIX.filter(
-      (harness) => harness.capabilities.reviewerScopeRegistration === "kiro-agent-json",
+      (harness) => harness.capabilities.reviewerScopeRegistration === "kiro-manifest",
     );
     expect(harnesses.length).toBeGreaterThan(0);
     for (const harness of harnesses) {
-      for (const agent of ["aidlc-architecture-reviewer-agent", "aidlc-product-lead-agent"]) {
-        const a = JSON.parse(
-          readFileSync(join(harness.engineRoot, "agents", `${agent}.json`), "utf-8"),
-        ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
-        const entries = a.hooks?.preToolUse ?? [];
-        const reviewerEntries = entries.filter((entry) =>
-          entry.command?.includes("aidlc.ts engine adapter kiro reviewer-scope")
-        );
-        expect(reviewerEntries.length, `${harness.name}/${agent}`).toBe(3);
-        const matchers = reviewerEntries.map((e) => e.matcher).sort();
-        expect(matchers).toEqual(["execute_bash", "fs_read", "fs_write"]);
-        for (const e of reviewerEntries) {
-          // The registration passes its own agent name so the adapter forwards
-          // a real identity instead of a bare scoped_registration.
-          expect(e.command).toBe(
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}`,
-          );
-        }
-        expect(
-          entries.some((entry) =>
-            entry.command?.includes(`aidlc.ts engine adapter kiro state-transition-guard ${agent}`)
-          ),
-          `${harness.name}/${agent}`,
-        ).toBe(true);
+      const manifestPath = join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.json");
+      expect(existsSync(manifestPath), manifestPath).toBe(true);
+      const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        hooks: Array<{ trigger?: string; matcher?: string; action?: { command?: string } }>;
+      };
+      expect(parsed.hooks.length).toBeGreaterThan(0);
+      for (const hook of parsed.hooks) {
+        // PreToolUse is the only trigger that can refuse the call.
+        expect(hook.trigger).toBe("PreToolUse");
+        expect(hook.action?.command).toContain("engine adapter kiro reviewer-scope");
+        // Reads count: reading outside the reviewed artifact is the violation.
+        expect(new RegExp(hook.matcher ?? "").test("read_file")).toBe(true);
       }
-    }
-  });
-
-  test("Kiro IDE ships NO reviewer-scope registration (documented gap: toolArgs is always empty)", () => {
-    // The IDE delivers hook context via USER_PROMPT with toolArgs always {}
-    // (docs/reference/kiro-ide-hook-payload.md): a preToolUse hook there can
-    // never see the attempted path or command, so there is nothing to match
-    // on. Per the porting guide, an unenforceable seam ships NO registration
-    // rather than a dead hook - the 12a prose bound governs on that harness.
-    // This pins the deliberate absence so a future blanket-registration sweep
-    // does not wire an inert (or worse, blindly blocking) entry.
-    const harnesses = HARNESS_MATRIX.filter(
-      (harness) => harness.capabilities.reviewerScopeRegistration === "unsupported",
-    );
-    expect(harnesses.length).toBeGreaterThan(0);
-    for (const harness of harnesses) {
-      // Both wiring generations: the legacy .kiro.hook and the v2 hook JSON.
-      expect(existsSync(join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.kiro.hook"))).toBe(
-        false,
-      );
-      expect(existsSync(join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.json"))).toBe(
-        false,
-      );
+      // The agent-v1 generation must not come back alongside it.
+      expect(
+        existsSync(join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.kiro.hook")),
+      ).toBe(false);
     }
   });
 
@@ -967,29 +943,20 @@ describe("t221 (c) harness registration and protocol prose", () => {
     // Step 1: the write, per-unit only, exempt list carries the carve-out.
     expect(body).toMatch(/Dispatch record \(per-unit stages; enforcement-capable harnesses only\)/);
     expect(body).toMatch(/append its path to `exempt`/);
-    expect(body).toContain("On a harness without reviewer-scope enforcement");
-    expect(body).toContain("do not write the record");
+    // The carve-out for a harness without enforcement is gone: every shipped
+    // harness enforces the hook now, so the record is always written.
+    expect(body).not.toContain("On a harness without reviewer-scope enforcement");
+    expect(body).toContain("Every shipped harness enforces this hook");
     // Step 3: the delete on verdict read.
     expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
   });
 
   test("harnesses with reviewer-scope enforcement point at the shared module", () => {
-    for (const harness of HARNESS_MATRIX.filter(
-      (entry) => entry.capabilities.reviewerScopeRegistration !== "unsupported",
-    )) {
+    for (const harness of HARNESS_MATRIX) {
       const body = readFileSync(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"), "utf-8");
       const labelled = `harness ${harness.name}: ${body}`;
       expect(labelled).toContain("stage-protocol-reviewer.md");
     }
   });
 
-  test("Kiro IDE documents its prose-only reviewer bound and omits the unused record", () => {
-    const body = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
-      "utf-8",
-    );
-    expect(body).toContain("stage-protocol-reviewer.md");
-    expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
-    expect(body).not.toContain("reviewer-scope PreToolUse hook enforces");
-  });
 });

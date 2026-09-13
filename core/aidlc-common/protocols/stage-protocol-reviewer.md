@@ -88,14 +88,14 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` content through any tool - not by opening files, and not via grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search) - except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing or searching the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
-   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-reviewer-dispatch.json`:
+   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-reviewer-dispatch.json`:
 
    ```json
    {"reviewer": "<directive.reviewer>", "stage": "<stage slug>", "unit": "<directive.unit>",
     "exempt": ["<each resolved directive.consumes path>", "<stage file path>", "<Q&A file path>"]}
    ```
 
-   When the current unit's design explicitly names an integration point in a sibling unit's file, resolve that single owning file via the shared contracts and append its path to `exempt` - the record is where the spot-check carve-out is granted. The `stage` field appears verbatim in any `REVIEWER_SCOPE_BLOCKED` audit row; use the current stage slug. The reviewer-scope PreToolUse hook reads this record to enforce the read-scope bound deterministically while the review is in flight; on a NOT-READY re-invoke (step 3 back to step 1), write a fresh record. Single-stage reviews (no `directive.unit`) write no record. On a harness without reviewer-scope enforcement (Kiro IDE today), do not write the record; the reviewer read-scope bound remains mandatory prose in the delegated task and reviewer persona.
+   When the current unit's design explicitly names an integration point in a sibling unit's file, resolve that single owning file via the shared contracts and append its path to `exempt` - the record is where the spot-check carve-out is granted. The `stage` field appears verbatim in any `REVIEWER_SCOPE_BLOCKED` audit row; use the current stage slug. The reviewer-scope PreToolUse hook reads this record to enforce the read-scope bound deterministically while the review is in flight; on a NOT-READY re-invoke (step 3 back to step 1), write a fresh record. Single-stage reviews (no `directive.unit`) write no record. Every shipped harness enforces this hook, so the record is always written for a per-unit review; the reviewer read-scope bound also remains mandatory prose in the delegated task and reviewer persona.
 
    If that dispatch fails, times out, or ends without a recorded verdict - the
    session died, or the reviewer returned an incomplete attempt (step 3: no
@@ -308,13 +308,7 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via `Tas
 
 ---
 
-### Kiro CLI
-
-If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the `subagent` tool targeting the reviewer agent config).
-
----
-
-### Kiro IDE
+### Kiro
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the `subagent` tool targeting the reviewer agent config).
 

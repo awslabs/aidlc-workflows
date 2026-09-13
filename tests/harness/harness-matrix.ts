@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
@@ -11,9 +11,13 @@ type ReviewerScopeRegistration =
   | "codex-hooks"
   | "copilot-hooks"
   | "cursor-hooks"
-  | "kiro-agent-json"
-  | "opencode-plugin"
-  | "unsupported";
+  // Kiro registers it in a standalone hook manifest. The agent-v1 form this
+  // replaces ("kiro-agent-json") registered the guard inside each reviewer's own
+  // agent config, and that registration is what supplied the acting persona; a v3
+  // manifest has no agent scope, so the adapter recovers the persona from the
+  // delegation window instead. Different mechanism, same enforced contract.
+  | "kiro-manifest"
+  | "opencode-plugin";
 
 type HarnessCapabilities = {
   harnessDir: string;
@@ -25,7 +29,7 @@ type HarnessCapabilities = {
   rootFiles: readonly string[];
   skillsRoot: string;
   plugin: {
-    kind: "store" | "kiro" | "kiro-ide" | "cursor";
+    kind: "store" | "kiro" | "cursor";
     manifestDir: string;
     wiringFile: string | null;
   };
@@ -34,10 +38,8 @@ type HarnessCapabilities = {
     | "codex-env"
     | "copilot-agents-md"
     | "cursor-rule"
-    | "kiro-resources"
     | "kiro-steering"
     | "opencode-instructions";
-  kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
 };
@@ -61,7 +63,6 @@ const HARNESS_CAPABILITIES = {
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "claude-import",
-    kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "claude-settings",
   },
@@ -80,7 +81,6 @@ const HARNESS_CAPABILITIES = {
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "codex-env",
-    kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "codex-hooks",
   },
@@ -99,7 +99,6 @@ const HARNESS_CAPABILITIES = {
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "copilot-agents-md",
-    kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "copilot-hooks",
   },
@@ -118,28 +117,8 @@ const HARNESS_CAPABILITIES = {
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "cursor-rule",
-    kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "cursor-hooks",
-  },
-  "kiro-ide": {
-    harnessDir: ".kiro",
-    onboarding: {
-      mode: "manifest",
-      fills: "onboarding.fills.ts",
-      dist: "AGENTS.md",
-    },
-    rootFiles: [".gitignore", "AGENTS.md"],
-    skillsRoot: ".kiro/skills",
-    plugin: {
-      kind: "kiro-ide",
-      manifestDir: ".kiro-plugin",
-      wiringFile: ".kiro/hooks/aidlc-test-pro-compose.json",
-    },
-    memoryInclude: "kiro-steering",
-    kiroAgentJson: false,
-    ideAgentTools: true,
-    reviewerScopeRegistration: "unsupported",
   },
   kiro: {
     harnessDir: ".kiro",
@@ -153,12 +132,14 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "kiro",
       manifestDir: ".kiro-plugin",
-      wiringFile: null,
+      // The row emits a standalone manifest for a plugin's compose hook now. It
+      // was null while the row registered hooks inside its agent-v1 configs,
+      // where a plugin had no agent to write into.
+      wiringFile: ".kiro/hooks/aidlc-test-pro-compose.json",
     },
-    memoryInclude: "kiro-resources",
-    kiroAgentJson: true,
-    ideAgentTools: false,
-    reviewerScopeRegistration: "kiro-agent-json",
+    memoryInclude: "kiro-steering",
+    ideAgentTools: true,
+    reviewerScopeRegistration: "kiro-manifest",
   },
   opencode: {
     harnessDir: ".aidlc",
@@ -175,7 +156,6 @@ const HARNESS_CAPABILITIES = {
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "opencode-instructions",
-    kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "opencode-plugin",
   },
@@ -205,16 +185,32 @@ function fail(name: string, message: string): never {
   throw new Error(`harness matrix [${name}]: ${message}`);
 }
 
+// Two ways a row can put a tools grant on a Markdown agent, and the capability
+// means the same thing either way: the row's agents are capability-bearing.
+// `frontmatterAdditions` injects the grant into a core-owned agent file; an
+// authored `agents/*.md` harnessFile carries it directly. Only the first existed
+// when this was written, so a row that authors its conductor outright read as
+// granting nothing.
 export function manifestGrantsIdeAgentTools(
-  manifest: Pick<HarnessManifest, "frontmatterAdditions">,
+  manifest: Pick<HarnessManifest, "frontmatterAdditions" | "harnessFiles">,
+  authoredRoot?: string,
 ): boolean {
-  return (
-    manifest.frontmatterAdditions?.some(
-      ({ file, lines }) =>
-        /^agents\/[^/]+\.md$/.test(file) &&
-        lines.some((line) => line.split(":", 1)[0]?.trim() === "tools"),
-    ) ?? false
-  );
+  const injected = manifest.frontmatterAdditions?.some(
+    ({ file, lines }) =>
+      /^agents\/[^/]+\.md$/.test(file) &&
+      lines.some((line) => line.split(":", 1)[0]?.trim() === "tools"),
+  ) ?? false;
+  if (injected) return true;
+  if (!authoredRoot) return false;
+  return (manifest.harnessFiles ?? []).some((file) => {
+    if (!/^agents\/[^/]+\.md$/.test(file.dst)) return false;
+    const path = join(authoredRoot, file.src);
+    if (!existsSync(path)) return false;
+    const fm = readFileSync(path, "utf-8").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    return (fm?.[1] ?? "")
+      .split(/\r?\n/)
+      .some((line) => line.split(":", 1)[0]?.trim() === "tools");
+  });
 }
 
 function validateManifest(
@@ -257,15 +253,12 @@ function validateManifest(
     fail(name, `project-root onboarding "${onboarding.dst}" is absent from rootFiles metadata`);
   }
 
-  const hasKiroAgentJson = manifest.harnessFiles.some(
-    (file) => file.dst === "agents/aidlc.json",
-  );
-  if (hasKiroAgentJson !== capabilities.kiroAgentJson) {
-    fail(name, "kiroAgentJson does not agree with manifest harnessFiles");
+  // No row ships an agent-v1 conductor any more, so the JSON twin is a defect
+  // rather than a shape to describe: assert its absence instead of tracking it.
+  if (manifest.harnessFiles.some((file) => file.dst === "agents/aidlc.json")) {
+    fail(name, "ships an agent-v1 agents/aidlc.json; the conductor is Markdown");
   }
   if (
-    (capabilities.memoryInclude === "kiro-resources") !==
-      (hasKiroAgentJson && !capabilities.ideAgentTools) ||
     (capabilities.memoryInclude === "kiro-steering") !==
       manifest.harnessFiles.some(
         (file) => file.dst === "steering/aidlc-active-memory.md",
@@ -286,7 +279,10 @@ function validateManifest(
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }
-  if (manifestGrantsIdeAgentTools(manifest) !== capabilities.ideAgentTools) {
+  if (
+    manifestGrantsIdeAgentTools(manifest, join(HARNESS_ROOT, name)) !==
+      capabilities.ideAgentTools
+  ) {
     fail(name, "ideAgentTools does not agree with manifest agent tools grants");
   }
   if (

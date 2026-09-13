@@ -635,12 +635,9 @@ const HARNESS_CLI: Record<
   },
   kiro: {
     command: "kiro-cli",
-    required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
-  },
-  "kiro-ide": {
     required: false,
-    install: "Kiro IDE has no required separate CLI for this project surface.",
+    install:
+      "Open this project in Kiro IDE, or install Kiro CLI and ensure `kiro-cli --version` works.",
   },
   opencode: {
     command: "opencode",
@@ -899,7 +896,7 @@ export function requiredProviderActions(
   if (record.provider === "other") return ["non-bedrock-provider-configuration"];
   if (record.provider !== "amazon-bedrock") return [];
   const actions: ProviderPendingActionId[] = ["bedrock-model-access"];
-  if (harness === "kiro-ide") actions.push("kiro-ide-chat-model");
+  if (harness === "kiro") actions.push("kiro-ide-chat-model");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
   return actions;
@@ -1120,11 +1117,6 @@ export function providerFiles(
     files.push({
       setting: "Bedrock AWS region and profile",
       file: join(harnessDir, "config.toml"),
-    });
-  } else if (harness === "kiro") {
-    files.push({
-      setting: "AWS MCP region endpoint and metadata",
-      file: join(harnessDir, "settings", "mcp.json"),
     });
   } else if (harness === "opencode" && record.opencodeDefault) {
     files.push({
@@ -1375,13 +1367,29 @@ export function completionInstruction(
   return `eval "$(${invoke} system completions ${shell})"`;
 }
 
-const SHIPPED_MCP_SERVERS = [
+// The shipped registry differs per harness, so the drift checks below cannot use
+// one list. Claude ships the four uvx AWS servers plus context7; the Kiro row
+// ships two keyless HTTP entries. A single list would report a false
+// `project-mcp-defaults-drift` on whichever harness ships fewer.
+const SHIPPED_MCP_SERVERS_CLAUDE = [
   "aws-iac",
   "aws-mcp",
   "aws-pricing",
   "aws-serverless",
   "context7",
 ] as const;
+const SHIPPED_MCP_SERVERS_KIRO = [
+  "aws-knowledge-mcp-server",
+  "context7",
+] as const;
+
+// Only Claude and Kiro ship a registry. Cursor reaches the `defaults` drift check
+// too when a user-owned `.cursor/mcp.json` exists, and it has been measured against
+// Claude's list since before this split — a pre-existing mismatch this change
+// neither introduces nor fixes, left alone rather than silently widened here.
+function shippedMcpServers(harness: ModelHarness): readonly string[] {
+  return harness === "kiro" ? SHIPPED_MCP_SERVERS_KIRO : SHIPPED_MCP_SERVERS_CLAUDE;
+}
 
 export function projectChoiceFiles(
   projectDir: string,
@@ -1488,7 +1496,7 @@ export function projectChoiceIssues(
   }
   if (
     record.mcp === "defaults" &&
-    SHIPPED_MCP_SERVERS.some((name) => !servers.has(name))
+    shippedMcpServers(harness).some((name) => !servers.has(name))
   ) {
     issues.push({
       id: "project-mcp-defaults-drift",
@@ -1499,7 +1507,7 @@ export function projectChoiceIssues(
   if (
     surface.kind === "claude" &&
     record.mcp === "none" &&
-    SHIPPED_MCP_SERVERS.some((name) => servers.has(name))
+    shippedMcpServers(harness).some((name) => servers.has(name))
   ) {
     issues.push({
       id: "project-mcp-none-drift",
@@ -1552,15 +1560,10 @@ function providerValueIssues(
       ) {
         mismatch("provider-codex", path, "Codex Bedrock settings do not reflect the recorded region/profile");
       }
-    } else if (harness === "kiro") {
-      const path = join(projectDir, harnessDir, "settings", "mcp.json");
-      const text = readFileSync(path, "utf-8");
-      if (
-        !text.includes(`https://aws-mcp.${record.region}.api.aws/mcp`) ||
-        !text.includes(`AWS_REGION=${record.region}`)
-      ) {
-        mismatch("provider-kiro", path, "Kiro AWS MCP settings do not reflect the recorded region");
-      }
+    // Kiro has no region-bearing provider file to check. Its registry ships two
+    // keyless HTTP entries and no `aws-mcp` launcher, so there is no URL or
+    // `AWS_REGION=` metadata a recorded region could be reflected in — a check
+    // against them could never pass, and would report `provider-kiro` forever.
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -1711,27 +1714,21 @@ export function trustFilesForHarness(
       join(process.env.CODEX_HOME || join(process.env.HOME || homedir(), ".codex"), "config.toml"),
     );
   }
-  if (harness === "kiro" || harness === "kiro-ide") {
-    const agentsDir = join(projectDir, harnessDir, "agents");
-    if (existsSync(agentsDir)) {
-      files.push(
-        ...readdirSync(agentsDir)
-          .filter((name) => name.endsWith(".json"))
-          .sort()
-          .map((name) => join(agentsDir, name)),
-      );
-    }
+  if (harness === "kiro") {
+    // Follow the channel that declares commands. Agent surfaces are Markdown and
+    // carry no command, and the 0.12-era `.kiro.hook` manifests are gone; the
+    // standalone `hooks/*.json` manifests are what a host is asked to trust.
     const hooksDir = join(projectDir, harnessDir, "hooks");
     if (existsSync(hooksDir)) {
       files.push(
         ...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(".json") || name.endsWith(".kiro.hook"))
           .sort()
           .map((name) => join(hooksDir, name)),
       );
     }
   }
-  if (harness === "kiro-ide") {
+  if (harness === "kiro") {
     files.push(join(projectDir, ".vscode", "settings.json"));
   }
   if (harness === "cursor") {
@@ -1755,7 +1752,7 @@ export function trustStatus(
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
   }
-  if (harness === "kiro-ide") {
+  if (harness === "kiro") {
     const path = join(projectDir, ".vscode", "settings.json");
     try {
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;

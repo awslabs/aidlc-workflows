@@ -1879,21 +1879,26 @@ describe("t265c registrations", () => {
     expect(adapter).toContain('tool_name: "Agent"');
   });
 
-  test("kiro: the conductor agent registers the guard on the subagent matcher", () => {
-    const agent = readFileSync(
-      join(REPO_ROOT, "dist", "kiro", ".kiro", "agents", "aidlc.json"),
-      "utf-8",
+  test("kiro: a standalone manifest registers the guard on the mutation matchers", () => {
+    // The agent-v1 conductor JSON that used to carry this registration is gone
+    // with the row merge; the manifest is the registration channel both of the
+    // row's surfaces read.
+    const manifestPath = join(
+      REPO_ROOT, "dist", "kiro", ".kiro", "hooks", "aidlc-plan-approval-guard.json",
     );
-    expect(agent).toContain("plan-approval-guard");
-    const parsed = JSON.parse(agent) as {
-      hooks: { preToolUse: Array<{ matcher?: string; command: string }> };
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      hooks: Array<{ trigger?: string; matcher?: string; action?: { command?: string } }>;
     };
-    const entries = parsed.hooks.preToolUse.filter((h) =>
-      h.command.includes("plan-approval-guard")
-    );
-    expect(entries.map((entry) => entry.matcher).sort()).toEqual(
-      ["execute_bash", "fs_write", "subagent"],
-    );
+    expect(parsed.hooks.length).toBeGreaterThan(0);
+    for (const hook of parsed.hooks) {
+      expect(hook.trigger).toBe("PreToolUse");
+      expect(hook.action?.command).toContain("plan-approval-guard");
+    }
+    const matchesSomeHook = (tool: string): boolean =>
+      parsed.hooks.some((hook) => new RegExp(hook.matcher ?? "").test(tool));
+    for (const tool of ["execute_bash", "fs_write", "subagent"]) {
+      expect(matchesSomeHook(tool), tool).toBe(true);
+    }
   });
 
   test("opencode: the plugin consults the guard on task dispatches", () => {
@@ -1917,12 +1922,13 @@ describe("t265c registrations", () => {
     expect(adapter).toContain('const planToolName = toolName === "Delete" ? "Write" : toolName');
   });
 
-  test("kiro-ide: populated PreToolUse payloads route through the plan guard", () => {
-    const ideHooks = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
-    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(true);
-    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.json"))).toBe(true);
+  test("kiro: populated PreToolUse payloads route through the plan guard", () => {
+    const hooks = join(REPO_ROOT, "harness", "kiro", "hooks");
+    expect(existsSync(join(hooks, "aidlc-plan-approval-guard.json"))).toBe(true);
+    // The agent-v1 wiring generation is gone with the row merge.
+    expect(existsSync(join(hooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(false);
     const skill = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
+      join(REPO_ROOT, "harness", "kiro", "skills", "aidlc", "SKILL.md"),
       "utf-8",
     );
     expect(skill).not.toContain("plan-approval guard is likewise prose-only");

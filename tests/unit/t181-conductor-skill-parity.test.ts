@@ -8,8 +8,8 @@
 // WHY THIS EXISTS (the P11 "RESOLVE (2)" obligation): the workspace refactor
 // (per-intent layout, --init retirement, intent/space verbs, multi-repo --repo,
 // the "offer a second intent" conductor prose) updated every authored conductor
-// SKILL — EXCEPT harness/kiro-ide/skills/aidlc/SKILL.md, which was a stale fork
-// byte-identical to kiro CLI's SKILL at origin/main and never re-synced across the
+// SKILL — EXCEPT the second Kiro row's SKILL.md, which was a stale fork
+// byte-identical to kiro's SKILL at origin/main and never re-synced across the
 // 43-commit stack. It shipped GREEN because NO test reads a per-harness conductor
 // SKILL: package determinism cannot detect a self-consistent but stale authored
 // SKILL. This gate closes that hole in BOTH directions:
@@ -219,8 +219,7 @@ const P3_EVIDENCE_DIR = join(
 const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   claude: ["/clear", "`/aidlc`"],
   codex: ["restart Codex CLI", "`$aidlc`"],
-  kiro: ["restart Kiro CLI", "`/aidlc`"],
-  "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
+  kiro: ["new Kiro CLI session", "new Kiro IDE chat", "`/aidlc`"],
   opencode: ["restart OpenCode", "`/aidlc`"],
   copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
   cursor: ["new Cursor chat", "`/aidlc`"],
@@ -434,7 +433,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("Kiro conductor SKILLs pin the native todo_list schema", () => {
     const missing: string[] = [];
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const harness of ["kiro"]) {
       const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!body.includes(KIRO_TASK_LIST_TOKEN)) {
@@ -446,7 +445,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("Kiro conductor SKILLs pin the native subagent crew schema", () => {
     const missing: string[] = [];
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const harness of ["kiro"]) {
       const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!body.includes(KIRO_SUBAGENT_TOKEN)) {
@@ -467,7 +466,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
     const failures: string[] = [];
     const bodies = new Map<string, string>();
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const harness of ["kiro"]) {
       const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       bodies.set(harness, body);
@@ -480,27 +479,16 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     expect(failures).toEqual([]);
 
-    const cli = bodies.get("kiro") as string;
-    const ide = bodies.get("kiro-ide") as string;
+    // The CLI-vs-IDE diary comparison that closed this test is gone: the two
+    // SKILLs it compared are one file now, so the anchors it walked cannot drift
+    // apart. What it was really pinning - that each anchor is PRESENT - is kept.
+    const kiro = bodies.get("kiro") as string;
     for (const anchor of [
       "**Isolated stage-runner branch.**",
       "| `run-stage` |",
       "**Per-unit batch waves (optional).**",
     ]) {
-      const nextAnchor =
-        anchor === "**Isolated stage-runner branch.**"
-          ? "For an isolated run's reviewer"
-          : anchor === "| `run-stage` |"
-            ? "| `ask` |"
-            : "`directive.mode` selects";
-      const cliStart = cli.indexOf(anchor);
-      const ideStart = ide.indexOf(anchor);
-      expect(cliStart, `Kiro CLI missing ${anchor}`).toBeGreaterThan(-1);
-      expect(ideStart, `Kiro IDE missing ${anchor}`).toBeGreaterThan(-1);
-      expect(
-        cli.slice(cliStart, cli.indexOf(nextAnchor, cliStart)).trim(),
-        `${anchor} diary contract drifted between Kiro CLI and IDE`,
-      ).toBe(ide.slice(ideStart, ide.indexOf(nextAnchor, ideStart)).trim());
+      expect(kiro.indexOf(anchor), `Kiro missing ${anchor}`).toBeGreaterThan(-1);
     }
   });
 
@@ -619,7 +607,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
     const missing: string[] = [];
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const harness of ["kiro"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel = `harness/${harness}/skills/aidlc/question-rendering.md`;
       const skill = readFileSync(join(REPO_ROOT, skillRel), "utf-8");
@@ -804,7 +792,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("prose renderers remap file-backed source letters to numbered prose", () => {
     const missing: string[] = [];
-    for (const harness of ["cursor", "kiro", "kiro-ide"]) {
+    for (const harness of ["cursor", "kiro"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel =
         `harness/${harness}/skills/aidlc/question-rendering.md`;
@@ -839,7 +827,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "codex",
       "cursor",
       "kiro",
-      "kiro-ide",
       "opencode",
     ]) {
       const rel = `harness/${harness}/skills/aidlc/question-rendering.md`;

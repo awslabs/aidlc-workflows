@@ -539,7 +539,7 @@ function attachLegacyKiroPlanApprovalChoices(
   if (
     !projectDir ||
     prepared.marker?.stage !== "code-generation" ||
-    installedHarnessName(projectDir) !== "kiro-ide"
+    installedHarnessName(projectDir) !== "kiro"
   ) {
     return { prepared };
   }
@@ -738,7 +738,7 @@ const IS_COMPILED = isCompiledExecutable();
 function isKiroRoutingHarness(): boolean {
   if (IS_COMPILED) {
     const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro" || explicit === "kiro-ide";
+    return explicit === "kiro";
   }
   const invokedScript = (process.argv[1] ?? "").replaceAll("\\", "/");
   if (/(^|\/)\.kiro\/tools\/aidlc-orchestrate\.ts$/.test(invokedScript)) {
@@ -748,11 +748,11 @@ function isKiroRoutingHarness(): boolean {
     const parsed = JSON.parse(
       readFileSync(join(TOOLS_DIR, "data", "harness.json"), "utf-8"),
     ) as { name?: unknown };
-    return parsed.name === "kiro" || parsed.name === "kiro-ide";
+    return parsed.name === "kiro";
   } catch {
     // Authored core and compiled binaries can lack generated metadata.
     const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro" || explicit === "kiro-ide";
+    return explicit === "kiro";
   }
 }
 
@@ -3835,7 +3835,8 @@ function steeringRouteHash(node: GraphStage, scope: string): string {
 //   - a Copilot-owned marker, whose attempt bookkeeping needs the write
 //   - a tracked attempt id, likewise
 //   - `--single`, which owns its own synthetic attempt
-//   - the legacy Kiro IDE window, whose protected choices are rotated BY the
+//   - a LIVE legacy Kiro window (asked of the window, not of the harness name:
+//     one row serves both surfaces), whose protected choices are rotated BY the
 //     publication this would skip
 //   - different stage, Unit, rule bundle, or directive body
 //   - for a partial delivery: a different part count, or a continuation token that
@@ -3855,7 +3856,19 @@ function retainedTransportForCurrentState(
   if (!stateHash) return null;
   let marker: ActiveDirectiveMarker | null = null;
   try {
-    if (installedHarnessName(projectDir) === "kiro-ide") return null;
+    // One row serves both Kiro surfaces, so the name cannot say whether a legacy
+    // window is in play — ask the window itself. A live legacy host means the
+    // publication this would skip is what rotates its protected choices. Reading
+    // the environment alone would catch a supported IDE 1.x session and a CLI run
+    // from a VS Code terminal, both of which keep the reuse.
+    const legacySession = kiroIdeLegacyPlanApprovalSessionId();
+    if (
+      legacySession !== null &&
+      readKiroIdeLegacyPlanApprovalHost(projectDir, legacySession)?.session ===
+        legacySession
+    ) {
+      return null;
+    }
     const state = loadStateFileIfPresent(projectDir);
     if (state === null) return null;
     marker = readActiveDirectiveMarker(projectDir, state);

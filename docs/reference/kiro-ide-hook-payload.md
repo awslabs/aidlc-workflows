@@ -3,9 +3,10 @@
 How Kiro IDE delivers context to a command hook, captured live on 0.12-main
 (probe `.kiro.hook` files that dumped stdin, argv, and the full environment),
 1.0.165 (probe v2 hook JSON files; upstream #543/#555), and 1.0.242
-(UserPromptSubmit and PreToolUse probes on Windows). This is the evidence base
-for the `harness/kiro-ide/` adapter; the CLI harness (`harness/kiro/`) uses a
-different, kiro-cli-shaped stdin mechanism.
+(UserPromptSubmit and PreToolUse probes on Windows). This is the IDE-surface evidence base
+for the one Kiro adapter (`harness/kiro/hooks/aidlc-kiro-adapter.ts`), which
+serves both surfaces: the CLI surface delivers the same payloads through a
+kiro-cli-shaped stdin mechanism, and the adapter normalises the two.
 
 The redacted native Windows before/after captures are retained in
 [`research/kiro-windows-output-encoding/`](research/kiro-windows-output-encoding/).

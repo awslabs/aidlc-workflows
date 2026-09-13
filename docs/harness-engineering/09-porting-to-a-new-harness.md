@@ -1,6 +1,6 @@
 # Porting AI-DLC to a New Harness
 
-AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
+AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro (IDE and CLI),
 Codex CLI, Cursor, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
@@ -79,7 +79,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for
-  in-tree harnesses (claude, kiro, kiro-ide); codex emits them instead.
+  in-tree harnesses (claude, kiro); codex emits them instead.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into each channel (supported text formats get token
   substitution).
@@ -90,9 +90,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   that tree, such as `.agents/skills/aidlc/SKILL.md`.
 - `frontmatterAdditions` (optional) - per-file YAML lines appended to a
   core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
-  field that must not ship to other harnesses (kiro-ide injects
-  `tools: ["read", "write", "shell"]` into its delegation-target agent files -
-  the IDE reads subagent tool grants from the `.md` frontmatter). Declared as
+  field that must not ship to other harnesses. No shipped row uses it today - the
+  Kiro row did while it injected `tools:` into its delegation targets, and dropped
+  the injection when those grants turned out to be optional. Declared as
   manifest data so core stays single-source; the packager errors on a typo'd
   path, a missing frontmatter block, or a key core already declares.
 - `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
@@ -149,9 +149,11 @@ tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
 registrations out and document the gap rather than wiring dead hooks - the
 prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
 payloads carry no subagent identity, scope reviewer-scope registration to the
-reviewer agents themselves where the harness supports per-agent hooks (the
-Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
-matching `agent_type`).
+reviewer agents themselves where the harness supports per-agent hooks — the
+adapter then asserts `scoped_registration` instead of matching `agent_type`.
+Where it does not, derive the identity from whatever the harness does mark: an
+unnamed child session (the OpenCode pattern) or the dispatch call that opened
+the delegation window (the Kiro pattern).
 
 > **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
 > (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new

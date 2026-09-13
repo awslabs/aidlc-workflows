@@ -2,7 +2,7 @@
 
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
-runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
+runs natively in Claude Code, Kiro (IDE and CLI), Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
 ![version](https://img.shields.io/badge/version-2.8.2-blue)
@@ -45,7 +45,7 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
+Replace `claude` with `kiro`, `codex`, `cursor`, `opencode`, or
 `copilot`. Running `aidlc config` without `--harness` starts the interactive
 setup when a terminal is available.
 
@@ -70,8 +70,7 @@ guide in the table below. The complete walkthrough is in
 | Harness | Configure | Open | Invoke | Guide |
 | --- | --- | --- | --- | --- |
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
-| Kiro CLI >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
-| Kiro IDE | `aidlc config --harness kiro-ide` | Open the project | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro IDE / Kiro CLI >= 2.21.1 | `aidlc config --harness kiro` | Open the project, or `kiro-cli` | `/aidlc` | [Kiro](docs/guide/harnesses/kiro.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |

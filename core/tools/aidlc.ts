@@ -1148,14 +1148,13 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
   copilot: ".aidlc",
   cursor: ".cursor",
   kiro: ".kiro",
-  "kiro-ide": ".kiro",
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
@@ -2110,37 +2109,41 @@ async function readStdin(): Promise<string> {
   return bufferedStdin;
 }
 
-async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
-  return await new Promise<string>((resolve) => {
-    const chunks: Buffer[] = [];
-    let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
-    const cleanup = () => {
-      clearTimeout(timeout);
-      process.stdin.off("data", onData);
-      process.stdin.off("end", onEnd);
-      process.stdin.off("error", onError);
-    };
-    const finish = (value: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(value);
-    };
-    const onData = (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    };
-    const onEnd = () => finish(Buffer.concat(chunks).toString("utf-8"));
-    const onError = () => finish("");
-    timeout = setTimeout(() => {
-      process.stdin.pause();
-      finish("");
-    }, timeoutMs);
-    process.stdin.on("data", onData);
-    process.stdin.once("end", onEnd);
-    process.stdin.once("error", onError);
-    process.stdin.resume();
-  });
+// A broken-channel ceiling for a hook payload read, mirroring the one the Kiro
+// adapter's own entry point keeps. This is not host-generation support: a
+// supported host writes and closes stdin, and this path is what keeps a host that
+// DOESN'T from wedging the hook forever. AIDLC_IDE_STDIN_TIMEOUT_MS is the seam
+// the latency tests raise so "did this path read stdin at all?" is a
+// deterministic assertion rather than a millisecond budget.
+// Set when the ceiling fired and a stdin read is still pending. `Bun.stdin.text()`
+// keeps the event loop alive, so the caller must exit explicitly or the process
+// outlives the hook it was answering - the very hang the ceiling exists to avoid.
+let abandonedStdinRead = false;
+
+async function readHookStdin(): Promise<string> {
+  // A non-empty USER_PROMPT is the payload already: take it and never touch the
+  // channel, so a host that holds stdin open costs nothing here.
+  const envPayload = process.env.USER_PROMPT ?? "";
+  if (envPayload.trim().length > 0) return envPayload;
+  if (process.stdin.isTTY) return "";
+  const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
+  const timeoutMs = Number.isFinite(override) && override > 0 ? override : 2000;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      readStdin(),
+      new Promise<string>((settle) => {
+        timeout = setTimeout(() => {
+          abandonedStdinRead = true;
+          settle("");
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return "";
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 async function withProjectDir(
@@ -2214,35 +2217,17 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       return 1;
     }
     let input = "";
-    if (action.harness !== "kiro-ide") {
-      input = await readStdin();
-    } else if (
-      action.target === "audit-and-sensors" ||
-      action.target === "log-subagent" ||
-      action.target === "plan-approval-guard" ||
-      action.target === "record-human-turn" ||
-      action.target === "rebuild-stage-graph" ||
-      action.target === "session-start" ||
-      action.target === "continue-workflow" ||
-      action.target === "verb-intercept" ||
-      action.target === "terminal-command-guard"
-    ) {
-      // Mirror the adapter entry point's dual-generation channel contract.
-      // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
-      // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
-      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
-      const legacyPayload = process.env.USER_PROMPT ?? "";
-      if (legacyPayload.trim().length > 0) {
-        input = legacyPayload;
-      } else if (!process.stdin.isTTY) {
-        // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
-        // entry points share one contract.
-        const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
-        input = await readStdinWithTimeout(ceiling);
-      }
+    // A supported host writes and closes stdin, so one read serves every target -
+    // but read it through the broken-channel ceiling, or a host that never closes
+    // wedges the hook. The notice that asks a Kiro IDE 0.x host to upgrade skips
+    // the channel entirely: that host opens stdin and never closes it, so even a
+    // bounded read would delay the very message it needs to print.
+    if (action.target !== "legacy-ide-notice") {
+      input = await readHookStdin();
     }
-    return await mod.run(action.target, input, action.extraArgs);
+    const code = await mod.run(action.target, input, action.extraArgs);
+    if (abandonedStdinRead) process.exit(code);
+    return code;
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
@@ -2962,9 +2947,13 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (
     route?.routeOnly === "hook" ||
     route?.routeOnly === "statusline" ||
-    (route?.routeOnly === "adapter" && withoutProjectDirFlag(argv)[2] !== "kiro-ide")
+    (route?.routeOnly === "adapter" && withoutProjectDirFlag(argv)[3] !== "legacy-ide-notice")
   ) {
-    await readStdin();
+    // Buffer the payload before the pinned-version handoff can need it, but
+    // through the ceiling: an unbounded read here is what actually hung, because
+    // it runs before the route's own acquisition and a host that never closes
+    // stdin left the hook waiting forever.
+    await readHookStdin();
   }
   if (
     route?.id === "top-config" &&

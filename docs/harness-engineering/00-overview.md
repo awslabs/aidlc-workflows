@@ -3,7 +3,7 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
+on the harness you use — Claude Code, Kiro (IDE and CLI), Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
 (11 domain experts, 2 reviewers, and the composer), 33 stages, 11 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
@@ -118,7 +118,7 @@ Everything a harness engineer authors lives in **`core/`** — the hand-authored
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
 The per-harness `dist/<harness>/` trees used for source development (`dist/claude/.claude/`,
-`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/cursor/`,
+`dist/kiro/.kiro/`, `dist/codex/`, `dist/cursor/`,
 `dist/opencode/`, and `dist/copilot/`) are **generated**
 from `core/` plus a thin `harness/<name>/` surface. They are ignored local
 outputs, never committed or hand-edited. The loop is always:

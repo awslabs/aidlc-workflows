@@ -75,7 +75,7 @@ import {
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import { seededAuditShard, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
-import { cleanupTuiProject, KIRO_IDE_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
+import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 import {
   autoApprove,
   generateKiroIdeSeed,
@@ -135,7 +135,7 @@ function diagnostic(event: string, fields: Record<string, unknown> = {}): void {
 // (never mutate the developer's dir); otherwise we generate the minimal seed. Returns
 // the dir; the caller removes it in finally via removeSeedDir (Windows lock latency).
 function makeSeedDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aidlc-kiro-ide-seed-"));
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-kiro-seed-"));
   if (SEED_OVERRIDE) {
     cpSync(SEED_OVERRIDE, dir, { recursive: true });
     return dir;
@@ -417,7 +417,7 @@ function skipReason(): string | null {
   if (SEED_OVERRIDE && !existsSync(SEED_OVERRIDE)) {
     return `AIDLC_KIRO_IDE_SEED set but path does not exist: ${SEED_OVERRIDE}`;
   }
-  if (!existsSync(KIRO_IDE_SRC)) return `distributable missing: ${KIRO_IDE_SRC}`;
+  if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
   return null;
 }
 const SKIP_REASON = skipReason();
@@ -722,7 +722,7 @@ describe("t-ide-kiro-checkpoint fixture", () => {
   // Real git/tool setup can exceed Bun's 5s default under concurrent live-gate load.
   test("code-generation gate review binds to a real source fingerprint", () => {
     const sandbox = setupTuiProject({
-      harness: "kiro-ide",
+      harness: "kiro",
       withState: "state-mid-inception.md",
       withAudit: true,
     });
@@ -750,19 +750,19 @@ describe("t-ide-kiro-checkpoint fixture", () => {
 });
 
 describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
-  // Drives the SHIPPED dist/kiro-ide tree (harness:"kiro-ide" => mint + block
+  // Drives the SHIPPED dist/kiro tree (one row serves both Kiro surfaces
   // v2 hook JSON files seeded) and asserts the REAL fix surfaces on disk: the
   // HUMAN_TURN events the mint hook records + the GATE_APPROVED audit ledger.
   test.skipIf(SKIP_REASON !== null || LIVE_CASE === "ratio")(
     `one human turn commits the approved gate and REFUSES a same-turn fabricated approval${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // harness:"kiro-ide" seeds dist/kiro-ide/.kiro (the v2 hook JSON files the IDE
+      // harness:"kiro" seeds dist/kiro/.kiro (the standalone hook manifests the IDE
       // actually reads - mint on UserPromptSubmit, block on PreToolUse) + a real open
       // gate via the mid-inception state fixture plus seedApprovalGate. The committed
       // slug is that stage; the blocked slug is the next stage's gate, opened by the
       // second explicit report command after the first approve auto-advances.
       const sandbox = setupTuiProject({
-        harness: "kiro-ide",
+        harness: "kiro",
         withState: "state-mid-inception.md",
         withAudit: true,
       });
@@ -924,7 +924,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       // and the watch loop times out at humanTurnCount==0. Seeding any valid state
       // file makes the record resolve so the mint and the reader agree on one shard.
       const sandbox = setupTuiProject({
-        harness: "kiro-ide",
+        harness: "kiro",
         withState: "state-mid-inception.md",
         withAudit: true,
       });

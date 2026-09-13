@@ -15,7 +15,6 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -306,38 +305,24 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     ).toBe(false);
   });
 
-  const kiroHarnesses = HARNESS_MATRIX.filter(
-    (harness) => harness.capabilities.kiroAgentJson,
-  );
   const kiroFamilyHarnesses = HARNESS_MATRIX.filter(
-    (harness) => harness.name === "kiro" || harness.name === "kiro-ide",
+    (harness) => harness.capabilities.harnessDir === ".kiro",
   );
-  test("matrix exposes at least one kiroAgentJson harness (floor guard)", () => {
-    expect(kiroHarnesses.length).toBeGreaterThan(0);
+  test("matrix exposes the Kiro row (floor guard)", () => {
+    expect(kiroFamilyHarnesses.length).toBeGreaterThan(0);
   });
-  for (const harness of kiroHarnesses) {
-    test(`${harness.name} agent JSONs: NO "model" pin on any agent (inherit the session model, #601), NO effort-like keys anywhere`, () => {
-      // The full shipped roster, not a sample: a single pinned ID rejects
-      // every spawn on installs where that model isn't enabled.
+  // The agent-v1 roster this used to walk (15 JSONs, asserting none pinned a
+  // model) is gone: the row's conductor and personas are Markdown. The model/
+  // effort assertion it carried now lives in the .md test below, which covers the
+  // same roster, so what is left to pin here is that no JSON twin comes back -
+  // a twin would restate the persona and drift from it silently.
+  for (const harness of kiroFamilyHarnesses) {
+    test(`${harness.name} ships no agent-v1 agent JSON (the conductor is Markdown)`, () => {
       const agentsDir = join(harness.engineRoot, "agents");
-      const jsons = readdirSync(agentsDir).filter((f) => f.endsWith(".json"));
-      expect(jsons.length).toBeGreaterThanOrEqual(15); // conductor + 14 personas
-      for (const file of jsons) {
-        const parsed = JSON.parse(
-          readFileSync(join(agentsDir, file), "utf-8"),
-        ) as Record<string, unknown>;
-        expect("model" in parsed, `${harness.name}/${file}: must omit "model" (#601)`).toBe(
-          false,
-        );
-        // kiro-cli fail-closes on unknown agent-JSON fields: any effort-like
-        // key would break agent validation at install.
-        for (const key of Object.keys(parsed)) {
-          expect(
-            /effort|reasoning|thinking/i.test(key),
-            `${harness.name}/${file}: forbidden inference key "${key}"`,
-          ).toBe(false);
-        }
-      }
+      expect(readdirSync(agentsDir).filter((f) => f.endsWith(".json"))).toEqual([]);
+      expect(
+        readdirSync(agentsDir).filter((f) => f.endsWith(".md")).length,
+      ).toBe(15); // conductor + 14 personas
     });
   }
 
@@ -359,16 +344,17 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("Kiro CLI cli.json keeps authored defaults; Kiro IDE ships no CLI settings", () => {
-    const s = JSON.parse(
+  test("Kiro cli.json keeps authored defaults and pins the agent engine", () => {
+    const raw = JSON.parse(
       readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8"),
-    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+    ) as Record<string, unknown>;
+    const s = raw as Record<string, Record<string, { output_config?: { effort?: string } }>>;
     const defaults = s["chat.modelDefaults"];
     expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
     expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
-    expect(
-      existsSync(dist("kiro-ide", ".kiro", "settings", "cli.json")),
-    ).toBe(false);
+    // The engine pin is what lets plain `kiro-cli` reach the agent runtime this
+    // row targets, so it belongs in an assertion rather than only in prose.
+    expect(raw["chat.agentEngine"]).toBe("v3");
   });
 
   // Full-roster completeness: raw `tier:` must never leak into ANY shipped

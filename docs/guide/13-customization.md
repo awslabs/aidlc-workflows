@@ -6,15 +6,13 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > configuration, stage depth, knowledge, and rules — apply on every harness. The
 > mechanism-level config in this chapter (`settings.json` / `settings.local.json`,
 > the statusline command, `$CLAUDE_PROJECT_DIR`, tool-permission blocks) is
-> **Claude Code-specific**. Kiro CLI configures the equivalents in
-> `.kiro/settings/cli.json` + its agent config; Kiro IDE uses agent Markdown
-> `tools:` and `permissions.rules`. Codex uses `.codex/config.toml`
+> **Claude Code-specific**. Kiro configures the equivalents in agent Markdown
+> (`tools:`, `permissions.rules`) plus `.kiro/settings/cli.json`. Codex uses `.codex/config.toml`
 > + Starlark rules, Cursor in `.cursor/hooks.json` + `.cursor/cli.json`
 > (permissions only), opencode in the project-root `opencode.json`, and Copilot
 > in `.github/hooks/aidlc.json` (hook wiring) + `~/.copilot/config.json`
 > (folder trust) — see
-> [Running on Kiro CLI](harnesses/kiro-cli.md),
-> [Running on Kiro IDE](harnesses/kiro-ide.md),
+> [Running on Kiro](harnesses/kiro.md),
 > [Running on Codex CLI](harnesses/codex-cli.md),
 > [AI-DLC on Cursor](harnesses/cursor.md),
 > [AI-DLC on opencode](harnesses/opencode.md), and
@@ -42,7 +40,7 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, while balanced and templated agents both pin a mid-size model at `medium` effort on Claude Code, Codex, and opencode. Those two tiers currently project identically but remain distinct so either can be retuned independently. On Kiro, Cursor, and Copilot all tiers inherit the session model. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
-To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until `aidlc config` refreshes that framework-owned file or you manually replace it from the same versioned `runtime/<harness>/` release payload. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro, set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until `aidlc config` refreshes that framework-owned file or you manually replace it from the same versioned `runtime/<harness>/` release payload. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 

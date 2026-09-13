@@ -13,7 +13,7 @@
 //     "section omitted"); an UNKNOWN {{SLOT:...}} left in the output is a bug and
 //     throws — that is the "a new harness gets a complete doc, provably" guard.
 //
-// Both consumers import renderOnboarding(): package.ts (claude, kiro, kiro-ide)
+// Both consumers import renderOnboarding(): package.ts (claude, kiro)
 // and harness/codex/emit.ts (codex). Adding a harness = author one fills file;
 // the skeleton and this renderer are untouched.
 

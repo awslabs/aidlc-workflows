@@ -93,7 +93,6 @@ const PACKAGED_HARNESSES = [
   { name: "copilot", engineDir: ".aidlc" },
   { name: "cursor", engineDir: ".cursor" },
   { name: "kiro", engineDir: ".kiro" },
-  { name: "kiro-ide", engineDir: ".kiro" },
   { name: "opencode", engineDir: ".aidlc" },
 ] as const;
 

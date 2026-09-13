@@ -57,6 +57,10 @@ const manifest: HarnessManifest = {
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
           // The pre-v2-sync shipped variant (2.6.123 merge changed the bytes).
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
+          "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
+          // The variant shipped before this branch rewrote the shared onboarding
+          // skeleton; an install from that release must still be recognised.
+          "sha256:a505f2396863edc957b18779baa32e9c44a10d62c2472c3a309fec78c3cae3f4",
         ],
       },
     },

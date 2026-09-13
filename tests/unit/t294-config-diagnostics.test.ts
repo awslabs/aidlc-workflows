@@ -292,9 +292,12 @@ describe("t294 runtime diagnostics", () => {
       status: "missing",
     }));
 
-    expect(probeHarnessCli("kiro-ide")).toEqual(expect.objectContaining({
+    // The Kiro row serves the IDE as well as the CLI, so `kiro-cli` is optional:
+    // a project opened only in Kiro IDE needs no separate CLI.
+    expect(probeHarnessCli("kiro", { which: () => null })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
       required: false,
-      status: "not-applicable",
+      status: "missing",
     }));
   });
 });
@@ -378,8 +381,35 @@ describe("t294 provider diagnostics", () => {
     cpSync(join(DIST, "kiro"), kiro, { recursive: true });
     applyConfigDiagnosticRecords(kiro, ".kiro", "kiro", emptyRecords(record));
     const kiroMcp = readFileSync(join(kiro, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(kiroMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
-    expect(kiroMcp).toContain("AWS_REGION=eu-west-1");
+    // The Kiro row ships two keyless HTTP entries and no `aws-mcp` launcher, so
+    // the region rewriter has nothing to rewrite here — it must leave the
+    // registry byte-identical rather than inventing an entry. Claude's registry
+    // above is where the rewrite is proven.
+    expect(kiroMcp).toBe(
+      readFileSync(join(DIST, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
+    );
+    expect(kiroMcp).not.toContain("aws-mcp");
+    // Regression: the value check used to require this registry to contain
+    // `https://aws-mcp.<region>.api.aws/mcp` and `AWS_REGION=<region>`. With no
+    // `aws-mcp` entry that can never be satisfied, so a completed Bedrock record
+    // reported `provider-kiro` on every doctor run, forever, with a remediation
+    // pointing at a file that has nothing to fix.
+    // The invariant is the absence of THAT id, not an empty list: `providerIssues`
+    // also reports environment facts this case says nothing about — a machine with
+    // no discoverable AWS credentials raises `provider-credentials-missing`, which
+    // is how this passed locally and failed on CI when it demanded emptiness.
+    expect(
+      providerIssues(kiro, ".kiro", "kiro", record).map((issue) => issue.id),
+      "a completed Kiro provider record raises no provider-kiro",
+    ).not.toContain("provider-kiro");
+    // `providerFiles` always offers the provider answer file — that is where the
+    // record itself lives — so the invariant is that the Bedrock branch adds
+    // NOTHING for this harness: no registry is offered for a region it cannot
+    // carry. Asserting an empty list instead was unsatisfiable by construction.
+    expect(
+      providerFiles(kiro, ".kiro", "kiro", record).map((entry) => entry.file),
+      "only the provider answer file, and no registry offered for a region it cannot carry",
+    ).toEqual([join(kiro, ".kiro", "tools", "data", "harness.json")]);
 
     const opencode = temp("aidlc-t294-provider-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });
@@ -413,7 +443,7 @@ describe("t294 provider diagnostics", () => {
     expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
 
     for (const [harness, dir, file] of [
-      ["kiro-ide", ".kiro", "tools/data/harness.json"],
+      ["kiro", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
     ] as const) {
@@ -501,8 +531,8 @@ describe("t294 trust diagnostics", () => {
   });
 
   test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
-    const project = temp("aidlc-t294-trust-kiro-ide-");
-    cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
+    const project = temp("aidlc-t294-trust-kiro-");
+    cpSync(join(DIST, "kiro"), project, { recursive: true });
     mkdirSync(join(project, ".vscode"), { recursive: true });
     writeFileSync(
       join(project, ".vscode", "settings.json"),
@@ -510,9 +540,9 @@ describe("t294 trust diagnostics", () => {
         "kiroAgent.trustedCommands": ["aidlc engine *"],
       }, null, 2)}\n`,
     );
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues).toEqual([]);
+    expect(trustStatus(project, ".kiro", "kiro").issues).toEqual([]);
     writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues.map((item) => item.id))
+    expect(trustStatus(project, ".kiro", "kiro").issues.map((item) => item.id))
       .toContain("kiro-ide-trusted-command-missing");
 
     const codex = temp("aidlc-t294-siblings-codex-");
@@ -1244,7 +1274,7 @@ describe("t294 config diagnostics CLI", () => {
       status: "pending",
     });
 
-    const ide = install("kiro-ide");
+    const ide = install("kiro");
     expect(run([
       "config",
       "providers",

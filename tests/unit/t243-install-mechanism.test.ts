@@ -88,15 +88,13 @@ const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
-const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
-const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
+const KIRO_COPY = join(REPO_ROOT, "dist", "kiro");
+const KIRO_RELEASE = join(REPO_ROOT, "dist-release", "kiro");
 const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
 const COMMAND_NAME = process.platform === "win32" ? "aidlc.cmd" : "aidlc";
 const INSTALLED_EXECUTABLE = process.platform === "win32" ? "aidlc.exe" : "aidlc";
-const KIRO_RELEASES = [
-  join(REPO_ROOT, "dist-release", "kiro"),
-  join(REPO_ROOT, "dist-release", "kiro-ide"),
-] as const;
+// One Kiro row. The array shape is kept so the cases that index it read the same.
+const KIRO_RELEASES = [join(REPO_ROOT, "dist-release", "kiro")] as const;
 const NEXT_VERSION = (() => {
   const [major, minor, patch] = AIDLC_VERSION.split(".").map(Number);
   return `${major}.${minor}.${patch + 1}`;
@@ -1846,9 +1844,9 @@ describe("t243 project initialization", () => {
       "--project-dir",
       project,
       "--from",
-      KIRO_IDE_RELEASE,
+      KIRO_RELEASE,
       "--harness",
-      "kiro-ide",
+      "kiro",
     ], project);
     expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     let settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
@@ -1863,7 +1861,7 @@ describe("t243 project initialization", () => {
       "--project-dir",
       project,
       "--from",
-      KIRO_IDE_COPY,
+      KIRO_COPY,
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
@@ -3747,7 +3745,7 @@ describe("t243 projection channel", () => {
       );
       expect(copyText).not.toContain("{{INVOKE}}");
       expect(releaseText).not.toContain("{{INVOKE}}");
-      if (harness === "kiro-ide") {
+      if (harness === "kiro") {
         expect(existsSync(join(copy, ".vscode", "settings.json"))).toBe(false);
         expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(true);
       }
@@ -3782,6 +3780,8 @@ describe("t243 projection channel", () => {
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
           "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
+          "sha256:a505f2396863edc957b18779baa32e9c44a10d62c2472c3a309fec78c3cae3f4",
+          "sha256:77eccbf8a91947e4a8c625382a90d7648944aa97db56a2302441992b93ed547c",
         ],
       },
       kiro: {
@@ -3796,20 +3796,12 @@ describe("t243 projection channel", () => {
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
-        ],
-      },
-      "kiro-ide": {
-        "AGENTS.md": [
-          "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
-          "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
-          "sha256:8d59f353b5575abe6ee12e8abd5ac75f55461bd7307d677d64388c16690e5afa",
-          "sha256:aef608b826a4993d47e3de98679a81abe4823c7c73556def4a339c5cb92999e7",
-          "sha256:b58a882d1b56bbb5cdb9a3c356b1428eb8d2593f4a9ca22118b98ca7cd0bae9c",
-          "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
-          "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
-          "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
-          "sha256:990d80744904bfa3f9923b8a04bbb2e69b454154346915edca1e1a4ef7e31c07",
-          "sha256:025c596b2f44b688a329d419b5cd39fd2ee2a6d6cae4e6491dc6cd0f663c04ea",
+          // The current render. The packager appends it, so this list moves every
+          // time the onboarding text changes - which is the point: an install
+          // carrying any earlier variant must still be recognized as ours.
+          "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
+          "sha256:1989d45c43801ae58a6f0c9830d593a8ab17f5ada4cfa2cf03891b307a9d7634",
+          "sha256:2f71266e84b8adca3c5dbfb848915cefaa483db5d48c02a31794de2a5c7ee52f",
         ],
       },
     };
@@ -3817,7 +3809,6 @@ describe("t243 projection channel", () => {
       claude: ".claude",
       codex: ".codex",
       kiro: ".kiro",
-      "kiro-ide": ".kiro",
     };
     for (const [harness, paths] of Object.entries(expected)) {
       const descriptor = JSON.parse(
@@ -3921,7 +3912,7 @@ describe("t243 projection channel", () => {
         );
     }
     const ideSettings = JSON.parse(
-      readFileSync(join(KIRO_IDE_RELEASE, ".vscode", "settings.json"), "utf-8"),
+      readFileSync(join(KIRO_RELEASE, ".vscode", "settings.json"), "utf-8"),
     ) as { "kiroAgent.trustedCommands": string[] };
     expect(ideSettings["kiroAgent.trustedCommands"]).toEqual([trustedCommand("*")]);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {

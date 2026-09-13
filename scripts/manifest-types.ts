@@ -201,14 +201,14 @@ export type HarnessManifest = {
    * gets a plugin projection instead of being silently skipped. A harness with
    * no host plugin store uses a folder-drop projection: Kiro CLI sets kind
    * "kiro" and relies on the explicit composer, while Kiro IDE sets kind
-   * "kiro-ide" for its v2 SessionStart registration. Cursor sets kind "cursor"
+   * Cursor sets kind "cursor"
    * for its flat camelCase hook schema.
    */
   plugin?: {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
     /** Host-specific plugin hook projection shape. */
-    kind: "store" | "kiro" | "kiro-ide" | "cursor";
+    kind: "store" | "kiro" | "cursor";
     /**
      * Additional project-root surfaces emitted outside harnessDir that compose
      * must copy into a disposable plugin-test candidate.

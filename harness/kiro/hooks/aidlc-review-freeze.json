@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-review-freeze",
+      "trigger": "PreToolUse",
+      "matcher": "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|execute_bash|execute_pwsh|shell)$",
+      "description": "Freezes artifact writes once a reviewer receipt is terminal, so a late edit cannot reopen a closed review loop. PreToolUse because it must refuse: the PostToolUse audit hook sees the same tools but cannot block.",
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro review-freeze"
+      }
+    }
+  ]
+}

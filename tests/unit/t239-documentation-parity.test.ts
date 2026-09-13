@@ -114,8 +114,7 @@ const harnessLabels: Record<string, string> = {
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
-  kiro: "Kiro CLI",
-  "kiro-ide": "Kiro IDE",
+  kiro: "Kiro",
   opencode: "opencode",
 };
 
@@ -216,7 +215,6 @@ describe("documentation parity derives current behavior from authored implementa
       "copilot",
       "cursor",
       "kiro",
-      "kiro-ide",
       "opencode",
     ]);
     expect(Object.keys(harnessLabels).sort()).toEqual(harnessNames);
@@ -260,8 +258,8 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
-  test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
-    const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+  test("Kiro documentation names the surfaces of one row, not two harnesses", () => {
+    const skill = read("harness", "kiro", "skills", "aidlc", "SKILL.md");
     const reviewerProtocol = read(
       "core",
       "aidlc-common",
@@ -270,23 +268,24 @@ describe("documentation parity derives current behavior from authored implementa
     );
     const questionRendering = read(
       "harness",
-      "kiro-ide",
+      "kiro",
       "skills",
       "aidlc",
       "question-rendering.md",
     );
-    const ideHooks = at("harness", "kiro-ide", "hooks");
+    const hooks = at("harness", "kiro", "hooks");
 
-    expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
-    expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.json"))).toBe(false);
+    // Registration is a standalone manifest; the agent-v1 generation is gone.
+    expect(existsSync(join(hooks, "aidlc-reviewer-scope.json"))).toBe(true);
+    expect(existsSync(join(hooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
     expect(skill).toContain("stage-protocol-reviewer.md");
-    expect(reviewerProtocol).toContain(
-      "On a harness without reviewer-scope enforcement (Kiro IDE today)",
-    );
+    // Every shipped harness enforces reviewer-scope now, so the protocol carries
+    // no carve-out naming one that does not.
+    expect(reviewerProtocol).not.toContain("without reviewer-scope enforcement");
     expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
-    expect(skill).not.toContain("kiro-cli");
-    expect(questionRendering).toContain("Kiro IDE has no structured-question tool");
-    expect(questionRendering).not.toContain("Kiro CLI");
+    // The annex belongs to the row, not to one of its surfaces.
+    expect(questionRendering).toContain("has no structured-question tool");
+    expect(questionRendering).not.toContain("Kiro CLI harness annex");
 
     const primitiveMap = sliceBetween(
       read("docs", "reference", "14-claude-features.md"),
@@ -297,22 +296,29 @@ describe("documentation parity derives current behavior from authored implementa
       .split("\n")
       .filter((line) => line.startsWith("| **"))
       .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
-    const ideCell = (label: string): string => {
+    // Column 2 is Kiro. It was 3 while the map carried a Kiro CLI column and a
+    // Kiro IDE column; one row means one column.
+    const kiroCell = (label: string): string => {
       const row = rows.find((candidate) => candidate[0].startsWith(`**${label}**`));
       if (!row) throw new Error(`missing primitive-map row: ${label}`);
-      return row[3];
+      return row[2];
     };
 
-    expect(ideCell("Agent personas")).toContain("`tools:`/`permissions.rules`");
-    expect(ideCell("Agent personas")).not.toContain("agent configs");
-    expect(ideCell("Standing rules")).toContain("always-included steering");
-    expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
-    expect(ideCell("Permissions / config")).toContain("`permissions.rules`");
-    expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
+    expect(kiroCell("Agent personas")).toContain("agents/aidlc.md");
+    expect(kiroCell("Agent personas")).toContain("persona `.md`");
+    // The agent-v1 roster must not reappear in the documented shape.
+    expect(kiroCell("Agent personas")).not.toContain(".json");
+    expect(kiroCell("Standing rules")).toContain("always-included steering");
+    expect(kiroCell("Standing rules")).toContain("`resources`");
+    expect(kiroCell("Standing rules")).not.toContain("`rules_in_context`");
+    expect(kiroCell("Permissions / config")).toContain("`permissions.rules`");
+    // cli.json belongs in this cell now: it is where the engine pin and the
+    // workspace default agent live, and one row serves both surfaces.
+    expect(kiroCell("Permissions / config")).toContain("settings/cli.json");
 
     const steering = read(
       "harness",
-      "kiro-ide",
+      "kiro",
       "steering",
       "aidlc-active-memory.md",
     );

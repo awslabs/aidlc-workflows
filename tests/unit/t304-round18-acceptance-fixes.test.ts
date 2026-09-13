@@ -129,7 +129,6 @@ function runWizard(
       copilot: { found: false, probed: true },
       cursor: { found: false, probed: true },
       kiro: { found: false, probed: true },
-      "kiro-ide": { found: false, probed: false },
       opencode: { found: false, probed: true },
     },
     aws: {

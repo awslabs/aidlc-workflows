@@ -30,7 +30,6 @@ const HARNESS_NAMES = [
   "copilot",
   "cursor",
   "kiro",
-  "kiro-ide",
   "opencode",
 ] as const;
 
@@ -83,7 +82,7 @@ function detection(
       HARNESS_NAMES.map((name) => {
         const value = harnesses[name] ?? {
           found: false,
-          probed: name !== "kiro-ide",
+          probed: true,
         };
         return [
           name,
@@ -138,7 +137,7 @@ function runWizard(
   mkdirSync(join(project, ".git"));
   executable(join(bin, "claude"), "claude 2.1.220");
   for (const [name, value] of Object.entries(options.harnesses ?? {})) {
-    if (!value.found || name === "claude" || name === "kiro-ide") continue;
+    if (!value.found || name === "claude") continue;
     executable(
       join(bin, name === "kiro" ? "kiro-cli" : name),
       value.version ?? `${name} 1.0.0`,
@@ -218,7 +217,10 @@ describe("t299 first-run setup wizard", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Customize setup - 6 steps");
-    expect(result.stdout).toContain("Kiro IDE        (not probed)");
+    // Kiro is one roster row and is probed like every other harness (`kiro-cli`),
+    // so no entry carries the "(not probed)" tag any more.
+    expect(result.stdout).toMatch(/^ *\d+\. Kiro *$/m);
+    expect(result.stdout).not.toContain("not probed");
     for (let step = 1; step <= 6; step++) {
       expect(result.stdout).toContain(`Step ${step} of 6`);
     }

@@ -175,7 +175,6 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     for (const harness of [
       "claude",
       "kiro",
-      "kiro-ide",
       "codex",
       "opencode",
       "cursor",

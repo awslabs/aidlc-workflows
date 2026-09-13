@@ -206,8 +206,7 @@ function humanReport(
     codex: "Codex CLI",
     copilot: "GitHub Copilot",
     cursor: "Cursor",
-    kiro: "Kiro CLI",
-    "kiro-ide": "Kiro IDE",
+    kiro: "Kiro",
     opencode: "opencode",
   };
   const frameworkPattern =

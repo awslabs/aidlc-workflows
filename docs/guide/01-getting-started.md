@@ -44,8 +44,7 @@ Replace `claude` with the harness you use:
 | Harness | Config value | Open | Invoke |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
-| Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project | `/aidlc` |
+| Kiro (IDE and CLI) | `kiro` | Open the project, or `kiro-cli` | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -89,8 +88,7 @@ still apply.
 | Harness | Important first-run requirement | Guide |
 | --- | --- | --- |
 | Claude Code | Configure a supported provider; the shipped default is Amazon Bedrock | [Claude setup below](#aws-bedrock-setup) |
-| Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
-| Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Kiro (IDE, or CLI >= 2.21.1) | Sign in, then open the project or run `kiro-cli` | [Kiro](harnesses/kiro.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
 | Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
 | opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
@@ -192,8 +190,7 @@ After config, complete any action named in its output:
 | Harness | Typical action |
 | --- | --- |
 | Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
-| Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
-| Kiro IDE | Open the configured project |
+| Kiro | Start `kiro-cli chat`, or open the configured project in the IDE; either way the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
