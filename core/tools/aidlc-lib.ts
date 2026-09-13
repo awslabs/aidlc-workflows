@@ -2316,6 +2316,72 @@ export function codekbScopeFingerprint(
   }
 }
 
+// The per-file delta behind a STALE scope verdict: the analyzed-scope files that
+// changed between the store's recorded fingerprint and the current working tree.
+// Both fingerprints are git tree objects (temp-index `write-tree`), so
+// `git diff --name-only` between them is the exact changed-file set within the
+// analyzed scope - the warm-rescan signal that lets reverse-engineering
+// re-derive only what moved instead of re-scanning the whole tree. `--no-renames`
+// is passed so a renamed file always emits BOTH its old (deleted) and new (added)
+// path regardless of the repo's diff.renames config - a rescan must revisit both,
+// and rename-collapsed output would drop the deleted source and retain stale
+// knowledge for it.
+//
+// `currentFingerprint` is the tree the caller already computed for its
+// CURRENT/STALE decision (via codekbScopeFingerprint), threaded in so the delta
+// diffs the SAME snapshot the verdict was drawn from - no second write-tree, and
+// no window where a file reverts between the two snapshots and yields STALE with
+// an empty delta.
+//
+// Returns null (delta unknown - callers fall back to a full rescan, never a
+// silent empty delta) when either fingerprint is absent or not a well-formed
+// tree hash, either object is not actually a tree in this repo (a commit SHA
+// would otherwise diff its whole-repo tree against the scoped tree and leak
+// out-of-scope paths), git cannot diff the two trees, or the diff output is not
+// valid UTF-8 (a non-UTF-8 filename would corrupt a targeted rescan). Returns []
+// only when the two trees genuinely match (the CURRENT case, not STALE).
+export function codekbScopeChangedFiles(
+  repoDir: string,
+  storedFingerprint: string | null,
+  currentFingerprint: string | null,
+): string[] | null {
+  const isTree = (fp: string | null): fp is string =>
+    fp !== null && /^[0-9a-f]{40,64}$/.test(fp);
+  if (!isTree(storedFingerprint) || !isTree(currentFingerprint)) return null;
+  if (storedFingerprint === currentFingerprint) return [];
+  // Confirm both objects are trees. A well-formed hex that resolves to a commit
+  // (e.g. a corrupt/hostile store) would make `git diff` exit 0 and diff the
+  // commit's entire repo tree against the scoped tree, returning out-of-scope
+  // paths as the delta. currentFingerprint is always a write-tree result, but
+  // storedFingerprint is read verbatim from the store file - guard both.
+  for (const fp of [storedFingerprint, currentFingerprint]) {
+    const objType = spawnSync("git", ["cat-file", "-t", fp], {
+      cwd: repoDir,
+      encoding: "utf-8",
+    });
+    if (objType.status !== 0 || objType.stdout.trim() !== "tree") return null;
+  }
+  const diff = spawnSync(
+    "git",
+    ["diff", "--name-only", "--no-renames", "-z", storedFingerprint, currentFingerprint],
+    { cwd: repoDir },
+  );
+  if (diff.status !== 0) return null;
+  // git paths are bytes, not UTF-8. Decode strictly: a filename with invalid
+  // UTF-8 bytes (legal on Unix) must NOT be silently rewritten with replacement
+  // characters - a corrupted path would point a targeted rescan at a file that
+  // does not exist and leave the real change unscanned. Fail to null (rescan
+  // full) instead, honoring the same "delta unknown -> rescan full" contract.
+  const raw: Buffer = diff.stdout ?? Buffer.alloc(0);
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    return null;
+  }
+  return decoded.split("\0").filter((entry) => entry !== "");
+}
+
 function normalizeGenerationPath(path: string): string | null {
   const portable = path.trim().replaceAll("\\", "/");
   if (

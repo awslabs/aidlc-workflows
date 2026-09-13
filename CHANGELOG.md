@@ -1,6 +1,10 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.3] - 2026-09-11
+
+* `codekb-scope-diff` now reports a per-file delta on a `STALE` verdict: the status output carries a `changed_files` list (the analyzed-scope files that changed between the store's recorded fingerprint and the current working tree), so an iteration can re-derive only what moved instead of re-scanning the whole tree. Both the stored fingerprint and the recomputed value are git tree objects (verified via `git cat-file`), so the delta is a `git diff --name-only -z` between them; `changed_files: null` means the delta was not computable and the full analyzed scope should be rescanned. Read-only and additive: the CURRENT/STALE/UNVERIFIED/UNKNOWN_SCOPE verdicts are unchanged, and only the STALE payload gains the new `changed_files` field.
+
 ## [2.8.2] - 2026-09-10
 
 Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
