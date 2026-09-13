@@ -2076,13 +2076,20 @@ function handleReview(args: string[]): void {
             message,
           );
         }
-        if (!recoveryEligible && budget !== null && iteration > budget) {
-          refuseAttemptGuard(
-            "REVIEW_BUDGET_EXHAUSTED",
-            "Review requests do not exceed the configured attempt budget.",
-            reviewBudgetMessage(flags.stage, iteration, budget),
-          );
-        }
+        // The budget is measured against `expected` ONLY. `iteration` is the
+        // caller's claim about which pass this is, and it is validated against
+        // `expected` further down with a message that names the right ordinal.
+        // Measuring the budget against the claim instead turned a recoverable
+        // off-by-one into an unrecoverable refusal: after a gate rejection the
+        // accounting floor moves (reviewAttemptAccounting treats GATE_REJECTED as
+        // an attempt boundary), so `expected` is 1 again while a conductor that
+        // kept counting passes `--iteration 2`. On an `advisory` stage, whose
+        // budget is 1, that claim alone produced REVIEW_BUDGET_EXHAUSTED - and
+        // its guidance ("do not ask the reviewer again; include the findings in
+        // the approval summary") then routes to a gate that refuses for
+        // REVIEW_EVIDENCE_MISSING, because the revision path needs the fresh
+        // receipt the refusal just forbade. The only remedy left is a redo jump,
+        // which discards the attempt the human was mid-revision on.
         if (!recoveryEligible && budget !== null && expected > budget) {
           refuseAttemptGuard(
             "REVIEW_BUDGET_EXHAUSTED",
