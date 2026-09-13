@@ -88,10 +88,17 @@ interface RunResult {
   out: string;
 }
 
-function runNext(proj: string, args: string[]): RunResult {
+function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
   const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     cwd: proj,
+    env: {
+      ...process.env,
+      AIDLC_DISABLE_SENSORS: "0",
+      AIDLC_DISABLE_LEARNINGS: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+      ...env,
+    },
   });
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -179,6 +186,33 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(m).not.toContain("per unit of work");
   });
 
+  test("classic creation preview honors explicit ceremony opt-ins", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const result = runNext(proj, [
+      "--scope", "classic", "--sensors", "on", "--learnings", "on",
+      "--summary-confirmation", "on", "add login support",
+    ]);
+    expect(result.rc, result.out).toBe(0);
+    const d = directiveOf(result.out);
+    expect(d.kind).toBe("print");
+    const message = String(d.message);
+    expect(message).toContain("--sensors on --learnings on --summary-confirmation on");
+    expect(message.match(/; no [^)]*/)?.[0]).toBe("; no reviewers");
+  });
+
+  test("feature creation preview discloses the environment sensor kill switch", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const result = runNext(proj, ["--scope", "feature", "--sensors", "on"], {
+      AIDLC_DISABLE_SENSORS: "1",
+    });
+    expect(result.rc, result.out).toBe(0);
+    const d = directiveOf(result.out);
+    expect(d.kind).toBe("print");
+    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors");
+  });
+
   for (const scope of ["classic", "feature"]) {
     test(`next ${scope} retains the derived per-unit clause`, () => {
       proj = createTestProject();
@@ -189,6 +223,13 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(expected.perUnitStages).toBeGreaterThan(0);
       expect(String(d.message)).toContain(costClause(expected));
       expect(String(d.message)).toContain("per unit of work");
+      if (scope === "classic") {
+        expect(String(d.message)).toContain(
+          "; no reviewers, sensors, learnings ritual, or summary confirmation",
+        );
+      } else {
+        expect(String(d.message)).not.toContain("; no ");
+      }
     });
   }
 });

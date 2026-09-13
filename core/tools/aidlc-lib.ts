@@ -144,6 +144,8 @@ export interface ScopeDefinition {
   /** The scope's Change Control default (`change_control:` frontmatter);
    *  absent means strict. Resolution lives in resolveChangeControl. */
   changeControl?: ChangeControl;
+  /** Scope-owned ceremony defaults; omitted settings stay on. */
+  ceremony?: Partial<CeremonyPolicy>;
 }
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -8586,6 +8588,7 @@ export function checkSummaryConfirmationEvidence(
   options: {
     workflow?: string;
     stateContent?: string | null;
+    scope?: string | null;
     unit?: string;
     selection?: WorkflowSelectionOptions;
   } = {},
@@ -8646,6 +8649,15 @@ export function checkSummaryConfirmationEvidence(
   };
   const acceptedChanges: AcceptedChange[] = [];
   if (summaryConfirmationGuardDisabled()) {
+    return { ok: true, required: false };
+  }
+  if (
+    resolveCeremony(
+      "summary_confirmation",
+      options.scope ?? getField(options.stateContent ?? "", "Scope"),
+      options.stateContent,
+    ).value === "off"
+  ) {
     return { ok: true, required: false };
   }
   if (
@@ -25996,6 +26008,7 @@ interface ScopeMetadata {
   /** The scope's Change Control default (`change_control:` frontmatter).
    *  Absent = strict. Resolution lives in resolveChangeControl. */
   changeControl?: ChangeControl;
+  ceremony?: Partial<CeremonyPolicy>;
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -26111,6 +26124,17 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.changeControl = changeControl;
+    }
+    for (const key of CEREMONY_KEYS) {
+      const value = scalarField(fm, key);
+      if (!value) continue;
+      if (value !== "on" && value !== "off") {
+        throw new Error(
+          `Scope file ${filePath} has invalid ${key} value "${value}". Expected "on" or "off".`,
+        );
+      }
+      meta.ceremony ??= {};
+      meta.ceremony[key] = value;
     }
     out[name] = meta;
   }
@@ -26243,6 +26267,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
     if (meta.changeControl !== undefined) def.changeControl = meta.changeControl;
+    if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
     out[name] = def;
   }
   _scopeMapping = out;
@@ -26282,30 +26307,40 @@ export function validScopes(): ReadonlySet<string> {
 
 export interface DefaultScopeResolution {
   scope: string;
+  source: "env" | "default";
+  error?: string;
+}
+
+// Shared implicit-default ladder: the real environment wins over recorded
+// project flags; an empty value falls back to the framework default. Unknown
+// configured names retain the env source so callers own their canonical error.
+export function defaultScopeResolution(): DefaultScopeResolution {
+  const raw = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") ?? "").trim();
+  if (raw.length > 0) {
+    if (validScopes().has(raw)) return { scope: raw, source: "env" };
+    // Only installed-but-disabled scopes participate in selection-aware rescue.
+    if (loadScopeMetadataAll()[raw] === undefined) return { scope: raw, source: "env" };
+    const fallback = selectionAwareDefaultScope(raw);
+    if (!fallback.error && fallback.note) {
+      process.stderr.write(
+        `AWS_AIDLC_DEFAULT_SCOPE="${raw}" is not an enabled scope; using ${fallback.scope} (sole enabled plugin's first scope)\n`,
+      );
+    }
+    return { scope: fallback.scope, source: "env", error: fallback.error };
+  }
+  try {
+    const fallback = selectionAwareDefaultScope("classic");
+    return { scope: fallback.scope, source: "default", error: fallback.error };
+  } catch {
+    return { scope: "classic", source: "default" };
+  }
+}
+
+export function selectionAwareDefaultScope(preferred: string): {
+  scope: string;
   error?: string;
   note?: string;
-}
-
-// The framework's single hard-coded default scope — the bottom of every
-// default ladder (the engine's scope resolution, `/aidlc-init`, the low-level
-// `intent-create` fallback, and the help-text "(default)" marker). Exactly two
-// things control the implicit default: the AWS_AIDLC_DEFAULT_SCOPE env var
-// (which overrides when set) and this constant (when the var is unset).
-export const DEFAULT_SCOPE = "classic";
-
-// AWS_AIDLC_DEFAULT_SCOPE resolved with the engine ladder's semantics: unset →
-// null; a valid scope → itself; an installed-but-disabled scope → the
-// selection-aware rescue; an unknown value → returned verbatim so the caller's
-// own validation owns the canonical `Unknown scope` error.
-export function envDefaultScope(): string | null {
-  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
-  if (envScope.length === 0) return null;
-  if (validScopes().has(envScope)) return envScope;
-  if (loadScopeMetadataAll()[envScope] === undefined) return envScope;
-  return selectionAwareDefaultScope(envScope).scope;
-}
-
-export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): DefaultScopeResolution {
+} {
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
@@ -26356,17 +26391,9 @@ export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): D
   };
 }
 
-/**
- * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
- * callers that just need the resolved scope name. `preferred` is the caller's
- * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
- * intent creation).
- * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
- * the nominated freeform default (or the sole enabled plugin's first scope) is
- * returned, falling back to `preferred` when nothing can be chosen.
- */
-export function resolveDefaultScope(preferred: string): string {
-  return selectionAwareDefaultScope(preferred).scope;
+/** Return the shared implicit default for callers that only need its name. */
+export function defaultScope(): string {
+  return defaultScopeResolution().scope;
 }
 
 // Agent metadata derived from `.claude/agents/*.md` frontmatter. Adding a
@@ -27294,6 +27321,7 @@ export interface ScopeCostSummary {
                          // computeGate() in aidlc-orchestrate.ts - change together
   perUnitStages: number; // EXECUTE stages that repeat per Unit of Work when
                          // units-generation EXECUTEs; otherwise they run once
+  off: string[];        // scope defaults omitted from the gated-flow ceremony
 }
 
 // Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
@@ -27323,14 +27351,40 @@ export function gridCostSummary(
     // degrade to one stage-level pass (aidlc-orchestrate.ts).
     if (hasUnitDag && isPerUnitStage(node)) perUnitStages++;
   }
-  return { total, execute, skip: total - execute, gates, perUnitStages };
+  return { total, execute, skip: total - execute, gates, perUnitStages, off: [] };
+}
+
+/** Labels of ceremonies the effective policy turns off, plus reviewers when
+ * the scope caps reviews at none. Pure: scope metadata and supplied policy only. */
+export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[] {
+  const off: string[] = [];
+  if (loadScopeMetadata()[scope]?.reviewCap === "none") off.push("reviewers");
+  if (policy.sensors === "off") off.push("sensors");
+  if (policy.learnings === "off") off.push("learnings ritual");
+  if (policy.summary_confirmation === "off") off.push("summary confirmation");
+  return off;
 }
 
 // Cost of a named scope's grid. Returns null for an unknown scope.
 export function scopeCostSummary(scope: string): ScopeCostSummary | null {
   const def = loadScopeMapping()[scope];
   if (!def) return null;
-  return gridCostSummary(def.stages);
+  const summary = gridCostSummary(def.stages);
+  summary.off = ceremonyOffList(scope, {
+    sensors: def.ceremony?.sensors ?? "on",
+    learnings: def.ceremony?.learnings ?? "on",
+    summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
+  });
+  return summary;
+}
+
+/** Human-readable policy clause appended to the scope's stage/gate counts. */
+export function ceremonyOffClause(summary: ScopeCostSummary): string {
+  const { off } = summary;
+  if (off.length === 0) return "";
+  if (off.length === 1) return `; no ${off[0]}`;
+  if (off.length === 2) return `; no ${off[0]} or ${off[1]}`;
+  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}`;
 }
 
 // --- Timestamp ---
@@ -27699,6 +27753,126 @@ export function formatChangeControl(value: ChangeControl, source: string): strin
   return `${value} (${changeControlSourceLabel(source)})`;
 }
 
+// Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
+export type CeremonySetting = "on" | "off";
+export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
+export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
+  sensors: "Sensors",
+  learnings: "Learnings",
+  summary_confirmation: "Summary Confirmation",
+};
+/** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
+export const CEREMONY_ENV: Record<CeremonyKey, string> = {
+  sensors: "AIDLC_DISABLE_SENSORS",
+  learnings: "AIDLC_DISABLE_LEARNINGS",
+  summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
+};
+export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
+  sensors: "--sensors",
+  learnings: "--learnings",
+  summary_confirmation: "--summary-confirmation",
+};
+export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
+export interface CeremonyResolution {
+  key: CeremonyKey;
+  value: CeremonySetting;
+  /** Human-worded: env AIDLC_DISABLE_SENSORS, you, scope classic, or default. */
+  source: string;
+  scopeDefault: CeremonySetting;
+  intent: { value: CeremonySetting; source: string } | null;
+  rawStateValue: string | null;
+}
+
+export function parseCeremonySetting(raw: string | null | undefined): CeremonySetting | null {
+  if (raw === null || raw === undefined) return null;
+  const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
+  return word === "on" || word === "off" ? word : null;
+}
+
+const CEREMONY_STATE_LINE_RE = /^(on|off)\b(?:\s*\((.*)\))?\s*$/i;
+
+export function parseCeremonyStateLine(
+  raw: string | null | undefined,
+): { value: CeremonySetting; source: string } | null {
+  if (!raw) return null;
+  const match = CEREMONY_STATE_LINE_RE.exec(raw.trim());
+  if (!match) return null;
+  return {
+    value: match[1].toLowerCase() as CeremonySetting,
+    source: changeControlSourceFromLabel((match[2] ?? "").trim()),
+  };
+}
+
+export function formatCeremony(value: CeremonySetting, source: string): string {
+  return `${value} (${changeControlSourceLabel(source)})`;
+}
+
+export function scopeCeremonyDefault(
+  key: CeremonyKey,
+  scope: string | null | undefined,
+): CeremonySetting {
+  if (!scope) return "on";
+  try {
+    return loadScopeMapping()[scope.trim().toLowerCase()]?.ceremony?.[key] ?? "on";
+  } catch {
+    return "on";
+  }
+}
+
+/** Pure resolution of the supplied state; no intent-file reads or writes. */
+export function resolveCeremony(
+  key: CeremonyKey,
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+): CeremonyResolution {
+  const scopeName = scope?.trim().toLowerCase();
+  let declared: CeremonySetting | undefined;
+  try {
+    declared = scopeName ? loadScopeMapping()[scopeName]?.ceremony?.[key] : undefined;
+  } catch {
+    // Scope data is unavailable; saved intent values and the on default remain usable.
+  }
+  const scopeDefault = declared ?? "on";
+  const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
+  const intent = parseCeremonyStateLine(rawStateValue);
+  const disabled = resolveProjectFlag(CEREMONY_ENV[key]) === "1";
+  return {
+    key,
+    value: disabled ? "off" : intent?.value ?? scopeDefault,
+    source: disabled
+      ? `env ${CEREMONY_ENV[key]}`
+      : intent?.source ?? (declared === undefined ? "default" : `scope ${scopeName}`),
+    scopeDefault,
+    intent,
+    rawStateValue,
+  };
+}
+
+export function resolveCeremonyPolicy(
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+): Record<CeremonyKey, CeremonyResolution> {
+  return {
+    sensors: resolveCeremony("sensors", scope, stateContent),
+    learnings: resolveCeremony("learnings", scope, stateContent),
+    summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
+  };
+}
+
+export function ceremonyPolicyValues(
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+): CeremonyPolicy {
+  const policy = resolveCeremonyPolicy(scope, stateContent);
+  return {
+    sensors: policy.sensors.value,
+    learnings: policy.learnings.value,
+    summary_confirmation: policy.summary_confirmation.value,
+  };
+}
+
 function changeControlMemoryDir(
   projectDir: string,
   selection: WorkflowSelectionOptions = {},
@@ -28045,23 +28219,6 @@ export function governedChangeControl(
     }
   }, intent, selection.space);
   return resolution;
-}
-
-/**
- * The CHANGE_CONTROL_SET row the verb writes when it rewrites the state line.
- */
-export function recordChangeControlSet(
-  projectDir: string,
-  oldValue: string | null,
-  newValue: ChangeControl,
-  source: string,
-  selection: WorkflowSelectionOptions = {},
-): void {
-  appendChangeControlSetRow(projectDir, {
-    "Old Value": oldValue ?? "unknown",
-    "New Value": newValue,
-    Source: source,
-  }, selection);
 }
 
 // --- Helpers ---

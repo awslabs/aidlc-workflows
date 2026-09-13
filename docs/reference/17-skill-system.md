@@ -35,7 +35,7 @@ never invoke the corresponding `aidlc-state.ts` lifecycle verb directly.
 handling: the conductor runs the body, configured topology and reviewer, then
 calls `report --single --stage <slug> --result completed` exactly once. Report
 requires the open start boundary and records the matching `STAGE_COMPLETED`; it
-does not fabricate both rows. The isolated path does not run workflow learnings,
+does not fabricate both rows. The isolated path keeps no diary and does not run workflow learnings,
 open an approval gate, call main-workflow `next`, or park. The returned `done`
 terminates the isolated run.
 
@@ -70,6 +70,10 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
 ---
 
 ## 3. The forwarding loop and the Stop hook
+
+Before stage work, read the named `directive.protocol_modules`: `reviewer` → `stage-protocol-reviewer.md`, `ensemble` → `stage-protocol-ensemble.md`, `construction` → `stage-protocol-construction.md`, `swarm` → `stage-protocol-swarm.md`, and `learnings` → `stage-protocol-learnings.md`. Already-loaded modules need not be read again, but only the current directive's listed modules apply. The `learnings` module owns the diary and the §13 ritual; when absent, skip both and go directly from completion to the approval gate.
+
+`directive.ceremony` resolves `sensors`, `learnings`, and `summary_confirmation` for this intent. Each defaults to its scope's setting (absent means `on`), with a per-intent override and an env kill switch above it. `/aidlc --sensors on|off`, `--learnings on|off`, and `--summary-confirmation on|off` set intent overrides. `summary_confirmation: off` generates directly from answers without the consolidated-summary checkpoint or receipt; required questions, Assumption Confirmation, Plan Approval, and approval gates stay. `sensors: off` leaves `sensors_applicable` empty and skips automatic checks and their correction/rerun instructions. All 17 hook registrations remain.
 
 `skills/aidlc/SKILL.md` is the **conductor**: a thin forwarding loop that acts on the engine's directives. Its whole control structure is:
 
@@ -116,8 +120,8 @@ Two drift guards keep the on-disk runner sets pinned to their sources: `aidlc-ru
 
 Scope is a file-authored primitive, the same muscle memory as authoring a sensor or an agent. There is **no `scope-mapping.json`** — it has been removed from the shipped tree. Scope identity and stage membership are split across two file-authored surfaces, transposed into a compiled grid:
 
-1. **Identity** is authored in one file per scope at `core/scopes/aidlc-<name>.md` and projected to `<harness-dir>/scopes/` — frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `review_cap`, and `runner`) plus prose describing the scope. The shipped set is `bugfix`, `classic`, `enterprise`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
-2. **Membership** lives in each stage's `scopes:` frontmatter — the list of scopes for which that stage is EXECUTE.
+1. **Identity** is authored in one file per scope at `core/scopes/aidlc-<name>.md` and projected to `<harness-dir>/scopes/` — frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `review_cap`, `change_control`, `sensors`, `learnings`, `summary_confirmation`, and `runner`) plus prose describing the scope. The shipped set is `bugfix`, `classic`, `enterprise`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
+2. **Membership** lives in each stage's `scopes:` frontmatter — the list of scopes for which that stage is EXECUTE. Classic includes Initialization plus Inception and Construction (19 of 33 stages); Operation stays a placeholder outside its executable membership. Classic disables reviewers in the gated flow, sensors, the learnings ritual, and summary confirmation; explicit autonomy keeps the single pre-merge review.
 
 `aidlc engine graph compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
 
@@ -137,7 +141,7 @@ The referee is **stateless** — no iteration counter, no persisted progress —
 | `check <unit> --check-cmd <cmd> [--test-file <path>]` | Stateless single-unit verdict: run the project's own check command (exit 0 = green, the authoritative signal — a worker's self-claim is never trusted) plus an anti-tamper compare of the protected file against its forked-git baseline. Prints `{converged, tampered, reason}`; exits 0 iff genuinely converged. | None (advisory; informs the conductor's retry decision). |
 | `finalize --batch <n> --units <a,b,c> --claimed <a,b> --check-cmd <cmd> [--test-file <path>] [--reasons <unit>=<reason>,…]` | The authoritative gate: **re-run the check on every claimed unit** and, when the current stage declares a reviewer, require that unit's matching terminal receipt after its Bolt started. For a modern source-bearing worktree it also requires the current global `Source Fingerprint`, current `Unit Source Fingerprint` and manifest-byte binding, the attested raw-aware `Base Source Listing`, and containment of every base-to-worktree source change by the reviewed manifest claims. `AIDLC_SKIP_SOURCE_FRESHNESS=1` explicitly bypasses those source checks only; the convergence row records the bypass and source merge must repeat the switch. A claimed unit that is red, tampered, unreviewed, stale, or outside its reviewed footprint is refused before merge (the lying-conductor guard), then genuine passes snapshot and land exact declared record artifacts plus the bound source manifest before merging AIDLC metadata under the serial HOLD-MERGE lock. The conductor must next run the correlated `aidlc-worktree merge`; it consumes the immutable `Source Commit`, emits `SWARM_SOURCE_MERGED`, and is cleanup-idempotent after that authority lands. Modern batch routing and settled approval require the complete aggregate chain. Exits 0 (record/metadata convergence) or 2 (failure envelope). | `SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` / `SWARM_BATON_RETURNED` / `SWARM_COMPLETED`; later source merge emits `SWARM_SOURCE_MERGED`. |
 
-These seven `SWARM_*` events are part of the 98-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
+These seven `SWARM_*` events are part of the 99-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool - it is the harness's Stop-hook ceiling, which is 8 blocks on this autonomous-Construction path (§3).
 
@@ -153,6 +157,6 @@ test instructions. Workers never re-resolve Testing Posture independently.
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** - the workflow / phase / stage machines and the 98-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 99-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).

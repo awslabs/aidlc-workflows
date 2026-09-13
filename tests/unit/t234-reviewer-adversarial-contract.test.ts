@@ -94,8 +94,8 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
   test("the revision path re-runs the reviewer on changed artifacts (Part 0 + module)", () => {
     // A rejection-driven revision edits produces[] AFTER the reviewer's
     // verdict landed; without this binding the gate reopens on a stale READY.
-    // The learnings ritual, by contrast, runs once per stage - pin both so
-    // neither drifts.
+    // The learnings ritual, when enabled, runs at the initial gate only - pin
+    // both so neither drifts.
     for (const path of [CORE_STATIC_PROTOCOL, DIST_STATIC_PROTOCOL]) {
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(
@@ -104,14 +104,14 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
       expect(src).toContain(
         "fresh `## Review` verdict replacing the stale one",
       );
-      expect(src).toContain(
-        "The §13 learnings ritual runs once per stage and is not re-run",
+      expect(src).toMatch(
+        /`learnings` module[^.]*ritual\b[^.]*not re-run for gate revisions/,
       );
-      // Part 0 orders the gate open AFTER the logged learnings answer - the
-      // QUESTION_ANSWERED-before-STAGE_AWAITING_APPROVAL audit proof.
+      // With learnings enabled, Part 0 opens the gate AFTER the logged answer;
+      // without the module, it opens directly after the completion summary.
       // Core carries the {{INVOKE}} token; dist carries its channel expansion.
       expect(src).toMatch(
-        /After the learnings answer is logged: `(?:\{\{INVOKE\}\}|bun |aidlc )/,
+        /After the learnings answer is logged[^:\n]*when the `learnings` module is absent: `(?:\{\{INVOKE\}\}|bun |aidlc )/,
       );
       expect(src).not.toContain(
         "Before showing the completion message",

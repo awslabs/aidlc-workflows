@@ -21,14 +21,15 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across seven files, loaded conditionally by the
+The stage protocol is split across eight files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
 |------|----------|-------------|
-| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, and the §13 Learnings Ritual | Every stage (mandatory) |
+| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, and the conditional §13 module pointer | Every stage (mandatory) |
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
+| `stage-protocol-learnings.md` | §13 diary, surfacing, human learning question, admission check, and persistence | Only when `directive.protocol_modules` lists `learnings` |
 | `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
 | `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
 | `stage-protocol-construction.md` | Planned Bolt-major ceremony (labeled non-executable future-state), the shipped per-unit walk, Build-and-Test loop-back, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
@@ -47,6 +48,7 @@ The conductor's Routing section defines the loading rules:
   (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
   traceability check. This limits governance overhead to the points where it
   is needed.
+- **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
   `reviewer`, or when the directive carries a reviewer.
 - **`stage-protocol-ensemble.md`**: load when `protocol_modules` includes
@@ -61,8 +63,7 @@ Before running the stage body, the conductor reads every module named by
 The split reduces fixed context during normal stage execution while ensuring
 rare-path reviewer, ensemble, Construction, swarm, recovery, and governance
 rules are loaded when relevant. Capturing in-stage corrections as durable Rules
-is handled by the §13 Learnings Ritual in `stage-protocol.md` (loaded every
-stage), not by a separate governance flow.
+is handled by the conditional §13 Learnings Ritual in `stage-protocol-learnings.md`, not by a separate governance flow. A module loaded earlier in the session does not override the current directive's ceremony policy.
 
 ---
 
@@ -93,7 +94,7 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. Gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"` for request-changes. Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
@@ -359,7 +360,7 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   "Select 'Other' on any question to discuss it before answering."
 - After each batch, IMMEDIATELY write answers to the questions file
 - Log each batch with fresh ISO timestamp
-- Present a consolidated answer summary, then print
+- Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
   the structured **Looks correct** / **Request changes** confirmation. The
   deterministic brief names the stage, questions file, generated artifacts,
@@ -382,15 +383,17 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   **ready** and I'll continue."
 - WAIT for completion signal. Do not read file or proceed until signaled.
 - Present the consolidated summary and use the same persisted, receipt-backed
-  confirmation as Guide Me. Self-guided editing does not waive confirmation.
+  confirmation as Guide Me only when `ceremony.summary_confirmation` is `on`. Self-guided editing does not waive an enabled confirmation.
 
 #### Chat (Freeform Mode)
 
 - Open-ended conversation; extract decisions as they emerge
 - End signal: "When ready to proceed, say **done** and I'll summarize."
 - Write extracted answers to file with value, timestamp, and `**Mode:** chat`
-- Present the decision summary, then persist and use the same **Looks correct / Request changes** structured confirmation before proceeding
+- Only when `ceremony.summary_confirmation` is `on`, present the decision summary, then persist and use the same **Looks correct / Request changes** structured confirmation before proceeding
 - Best for: exploratory stages, brainstorming, questions needing discussion
+
+With `ceremony.summary_confirmation: off`, all three modes generate directly from the answers: no consolidated-summary prompt, confirmation entry, or receipt. Required questions, Assumption Confirmation, Plan Approval, and stage approval gates are unchanged.
 
 **Step 4: Verify completeness.** Read file, confirm all `[Answer]:` tags
 filled. If any blank, present unanswered via `AskUserQuestion`. Do not
@@ -983,9 +986,9 @@ investigation before marking complete.
 
 When a `run-stage` directive carries a non-null `reviewer` field, the conductor
 invokes that reviewer as a **separate sub-agent** after the stage body produces its
-artifacts and before the §13 Learnings Ritual and the approval gate. The stage
+artifacts and before the enabled §13 Learnings Ritual and the approval gate. The stage
 ritual sequence in full: questions → artifact → reviewer (if declared) →
-learnings → gate.
+learnings (only when its module is listed) → gate.
 
 *(Conditional module: `stage-protocol-reviewer.md`, Section 12a)*
 
@@ -1053,7 +1056,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    that names it and pins its digest. Only this command writes a record; a
    record edited afterwards no longer hashes to its row and is not the review.
    On `advisory`, both verdicts are terminal in
-   normal flow: the workflow proceeds to the learnings ritual and the gate.
+   normal flow: the workflow proceeds to the learnings ritual only when its module is listed, then the gate.
    Before that gate, `aidlc-review-brief.ts review --stage <slug> --why
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), hydrated findings from the record, decision effects, and
@@ -1061,7 +1064,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    is 1, engine-enforced). The final gate of a per-Unit stage renders every Unit
    covered by that single approval; Unit filtering remains limited to reviewer
    dispatch context.
-   On `adversarial`: READY → proceed to the learnings ritual then the gate.
+   On `adversarial`: READY → run the learnings ritual only when its module is listed, then proceed to the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
    re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
@@ -1148,10 +1151,9 @@ When a human corrects agent behavior, the correction can become a persistent
 rule (guardrail) for the next workflow. v0.5.0 handles this through the
 tool-as-actor Learnings Ritual, not a separate guardrail-emission flow.
 
-*(Protocol Section 13)*
+*(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
 
-The ritual runs at every gated stage, between the completion message and the
-approval gate:
+When `directive.protocol_modules` lists `learnings`, the ritual runs between the completion message and the approval gate. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or ritual; per-unit `gate: false` iterations defer the ritual to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. Gate revisions never rerun it. With the module absent, keep no diary, surface no candidates, ask no learning question, and go directly to the approval gate. The enabled ritual is:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
    Deviations / Tradeoffs / Open questions) as it works.
@@ -1170,7 +1172,7 @@ approval gate:
    transaction), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 Learnings apply on the **next** workflow's compile, not the in-flight run. See
-`stage-protocol.md` §13 for the full tool-as-actor protocol, and
+`stage-protocol-learnings.md` §13 for the full tool-as-actor protocol, and
 [Rule System](08-rule-system.md) for the strict-additive resolution the written
 rules feed into.
 
@@ -1182,7 +1184,7 @@ At each phase transition, traceability verification ensures completed-phase
 outputs are sufficient and consistent for the next phase.
 
 *(`stage-protocol-governance.md` Section 13 — distinct from the Learnings
-Ritual, which is `stage-protocol.md` Section 13)*
+Ritual, which is `stage-protocol-learnings.md` Section 13)*
 
 ### Triggers
 

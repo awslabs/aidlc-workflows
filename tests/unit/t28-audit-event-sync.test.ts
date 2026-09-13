@@ -79,8 +79,8 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // PLAN_APPROVAL_OVERRIDDEN and GUARD_DISABLED (the human-only break-glass exit and
 // the audited guard off-switch) take it to 95; SOURCE_COMMITTED (aidlc-attest.ts
 // anchor, commit provenance) takes it to 96; WORKFLOW_ARCHIVED and
-// WORKFLOW_UNARCHIVED take it to 98.
-const CANONICAL_COUNT = 98;
+// WORKFLOW_UNARCHIVED take it to 98; CEREMONY_SET takes it to 99.
+const CANONICAL_COUNT = 99;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

@@ -227,13 +227,15 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 **Trigger:** After every `Write` or `Edit` Claude Code tool call (matcher: `"Write|Edit"`)
 **Purpose:** Fire the active stage's compile-resolved Sensors on matching writes (advisory; never blocks)
 
+The scope frontmatter key `sensors: on|off` sets the default (`on` when omitted; `classic` sets `off`). `/aidlc --sensors on|off` overrides the active intent's **Sensors** state line. `AIDLC_DISABLE_SENSORS=1` forces automatic sensors off, even when the intent opts in. With Sensors off, the hook exits silently before its heartbeat, first-fire banner, or dispatcher spawn; `gate-start`, `revise`, and the approve-time revision backstop likewise skip sensor dispatch and blocking-verdict checks. Approval gates and the other safety hooks remain in place. All hook registrations, stage `sensors:` imports, and Sensor manifests remain installed; explicit `aidlc engine sensor fire` is still available for diagnostics.
+
 **Processing steps:**
 
 1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
 2. **Audit + state guards:** Exits silently if the `audit/` shard or `aidlc-state.md` does not exist (pre-init).
 3. **Active-stage read:** The engine atomically records each validated `load-steering` part and final `run-stage` in the active intent's gitignored `.aidlc-active-directive.json`, bound to the exact project, intent, and `aidlc-state.md` SHA-256. Shared marker consumers therefore see the upcoming stage while its rules are still being delivered. Task activation refreshes the digest only when its slug matches the marker, preserving a per-unit directive's unit while rejecting unrelated state changes. The hook uses that stage while the digest matches, then reads its `sensors_applicable` array from `stage-graph.json`. This keeps unit-major code-generation diagnostics under `code-generation` even while the durable cursor remains on an earlier design stage. A pending Copilot attempt may retain the marker across `report --single`; otherwise successful single-stage completion clears it. A missing, malformed, stale, or graph-unknown marker falls back to `Current Stage`.
 4. **Dispatch:** For each applicable Sensor, spawns `aidlc-sensor.ts fire <id> --stage <slug> --output-path <path>`. The dispatcher applies each Sensor's `matches` glob hook-side; a non-matching write is skipped. Outcomes are advisory — the hook never blocks the write.
-5. **Health heartbeat:** Writes `.aidlc-hooks-health/run-sensors.last` on a fire, so the doctor can distinguish a healthy idle hook from a silent failure.
+5. **Health heartbeat:** When Sensors is on, writes `.aidlc-hooks-health/run-sensors.last` after the input/audit/state guards and before stage/graph lookup, so the doctor can distinguish a healthy idle hook from a silent failure. Sensors off leaves the heartbeat unchanged.
 
 See [Sensor System](07-sensor-system.md) for the manifest schema and the fire lifecycle.
 
@@ -661,7 +663,8 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
 | **Interaction** | 9 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Navigation** | 7 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `PLUGIN_SELECTION_CHANGED` | `aidlc-utility.ts` |
-| **Change Control** | 2 | `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED` | `aidlc-lib.ts` on behalf of the `change-control` verb and the three governed checkpoints (`aidlc-log.ts`, `aidlc-state.ts`, `aidlc-testing-posture.ts`, plan-approval-guard hook) |
+| **Change Control** | 2 | `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED` | `aidlc-utility.ts` builds `CHANGE_CONTROL_SET` batches for `config-change` / `scope-change`; `aidlc-lib.ts` observes effective memory changes through `appendChangeControlSetRow` and records accepted changes at the three governed checkpoints |
+| **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |
 | **Unit configuration/lifecycle** | 7 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
@@ -692,7 +695,7 @@ All audit events follow the format defined in `audit-format.md`:
 ---
 ```
 
-All events — hook-generated and tool-generated — use the same canonical `appendAuditEntry` emitter, producing identical structured markdown with `**Event**:` fields. The heading is derived from the event name via `EVENT_HEADINGS` in `aidlc-audit.ts`.
+All events — hook-generated and tool-generated — use the canonical `appendAuditEntry` or batched `appendAuditEntries` API, producing identical structured markdown with `**Event**:` fields. The heading is derived from the event name via `EVENT_HEADINGS` in `aidlc-audit.ts`.
 
 ### Mandatory Events
 
@@ -790,10 +793,9 @@ path for a framework command.
 | `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
 | `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
 | `select-plugins [names]` | Query/update behind `aidlc engine plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
-| `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
-| `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`, `review`); `config-list --json` emits the structured shape. | none |
-| `config-change` | Write active workflow config. Dispatcher form: `/aidlc config set depth <value>`, `/aidlc config set test-strategy <value>`, or `/aidlc config set review <value>`. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED` |
-| `change-control <strict\|relaxed>` | Rewrite the intent's `Change Control` state line (`<value> (set by you)`); the target of `/aidlc --change-control <value>` and of the plain-chat request. Refuses under a memory layer's `Mode: strict` naming that file. `intent-create --change-control <value>` writes the line at creation. | `CHANGE_CONTROL_SET` |
+| `scope-change` | Re-plan which stages execute and apply any of the seven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Change Control/ceremony rows follow new defaults; human overrides and absent legacy rows are preserved. Memory-enforced strict still controls the effective value while the scope-owned Change Control row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
+| `config-get`, `config-list` | Read all seven workflow settings: `depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`. Change Control and ceremony values include effective sources. `config-list --json` emits the structured shape. | none |
+| `config-change` | The single intent-settings setter. Accepts any combination of the seven setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. All `aidlc engine config set <key> <value>` routes and matching slash flags use it. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `CHANGE_CONTROL_SET`, `CEREMONY_SET` for changed settings |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
@@ -810,6 +812,36 @@ The user-facing `intent`, `space`, and `space-create` forms are covered in
 [Spaces and Intents](../guide/03-spaces-and-intents.md). Use
 `aidlc engine workspace codekb` and `aidlc engine plugin select` for the corresponding
 dispatcher forms; the utility verb names are internal delegate targets.
+
+### Configuration transaction
+
+Mixed settings are one command, not a chain of setters. For example:
+
+```bash
+aidlc engine config set depth standard --review advisory --change-control relaxed --sensors off --learnings on --summary-confirmation off --intent login-fix --space platform
+aidlc engine scope change --scope bugfix --change-control strict --sensors on
+```
+
+Both utility mutation handlers use the same applier, which validates the full
+request and returns candidate state, `AuditEntryInput[]`, and output lines in
+the canonical key order above. One caller-held audit lock covers reading the
+selected state, applying settings, appending the complete batch with
+`appendAuditEntries`, and writing state once. Selectors keep the state, memory
+policy, and audit shard aligned; they do not switch the active cursors. A Change
+Control change calls `assertChangeControlLedgerWritable` before any write.
+Audit failure leaves state untouched. No-op settings emit no setting rows and
+do not change `Last Updated`.
+
+A memory layer's `Mode: strict` refuses an explicit `--change-control relaxed`
+for the whole command, including companion settings or a scope change, and
+names the memory file. Explicit strict and unrelated settings remain allowed.
+`review adversarial` stores an empty `Review Override`; explicit Change Control
+and ceremony choices store `<value> (set by you)`. Scope defaults retain their
+scope source, and a same-value change of source is still a recorded change.
+Environment kill switches override effective ceremony values without changing
+the saved choice. `intent-create` accepts the same setting flags when creating
+the intent. See [CLI Commands](../guide/12-cli-commands.md#workflow-configuration-one-atomic-setter)
+for values, precedence, and isolated-run semantics.
 
 ## Plugin State Tool
 

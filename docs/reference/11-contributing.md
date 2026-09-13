@@ -181,10 +181,43 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 1. Add a subcommand to `core/tools/aidlc-utility.ts`
 2. Register a semantic dispatcher noun/verb and call it from SKILL.md through `aidlc engine <noun> <verb>` (or its public route)
 3. No task tracking needed -- the script runs in under a second
-4. Handle audit logging inside the script via `appendAuditEntry` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks)
+4. Handle audit logging inside the script via `appendAuditEntry` or `appendAuditEntries` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks). Multi-setting mutations use one caller-held lock and append the complete audit batch before the single state write.
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
+
+The intent-configuration handlers share a single mutation path:
+
+| Dispatcher route | Utility handler | Contract |
+|------------------|-----------------|----------|
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation` |
+| `aidlc engine config list [--json]` | `config-list` | Read all seven settings in that order; Change Control and ceremony values include effective sources |
+| `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
+| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same seven settings in the same transaction, including when the requested scope is already current |
+
+`config-change` accepts only the seven setting flags plus `--intent`, `--space`,
+and `--project-dir`, and requires at least one setting. Reject unknown flags by
+name and validate all values before any mutation. A shared utility applier
+returns candidate content, `AuditEntryInput[]`, and output lines in canonical
+key order; it does not write. Both mutation handlers hold one `withAuditLock`
+across state read, apply, `appendAuditEntries` in caller-held-lock mode, and a
+single state write. If Change Control changes, call
+`assertChangeControlLedgerWritable` before any write. A memory layer's
+`Mode: strict` refuses an explicit `--change-control relaxed` for the entire
+command, including companion settings and scope changes. Under that memory
+policy, an implicit scope change still updates the scope-owned Change Control
+line and records the change; memory continues to control the effective value.
+
+Preserve state and event contracts: `review adversarial` stores an empty
+`Review Override`; explicit Change Control and ceremony values use
+`(set by you)`, while inherited scope defaults retain scope provenance. A
+scope change preserves explicit human overrides and absent legacy Change
+Control/ceremony rows. Only real stored field or source changes produce setting
+events or update `Last Updated`. The utility applier builds `CHANGE_CONTROL_SET`
+and `CEREMONY_SET` entries directly; `aidlc-lib.ts` still uses
+`appendChangeControlSetRow` when a governed checkpoint observes an effective
+memory-policy change. Do not add separate setter wrappers or split a combined
+request into multiple dispatcher calls.
 
 The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `codekb-scope-diff` handlers are **direct utility verbs**: stage prose invokes
@@ -236,6 +269,11 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
    - `change_control` (optional): `strict` | `relaxed`. The Change Control default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once and continues). Absence means strict. Validated like `skeleton` (the loader names the file and the two values). A memory layer's `## Change Control` `Mode: strict` wins over any scope default.
+   - `sensors` (optional): `on` | `off`, absent means on. Controls sensor execution and sensor gate checks. Per-intent flag: `/aidlc --sensors on|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`.
+   - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
+   - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
+
+   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Classic turns all three off; other shipped scopes inherit on. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 

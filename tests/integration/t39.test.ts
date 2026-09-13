@@ -213,7 +213,7 @@ const EXPECTED_SKIPPED: Record<string, string[]> = {
   refactor: ["ideation"],
   infra: ["ideation"],
   "security-patch": ["ideation"],
-  classic: ["ideation"],
+  classic: ["ideation", "operation"],
   workshop: ["ideation"],
   express: ["ideation"],
 };

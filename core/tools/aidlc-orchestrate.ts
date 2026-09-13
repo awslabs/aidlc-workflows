@@ -116,6 +116,12 @@ import {
   auditBlockField,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
+  CEREMONY_FLAGS,
+  CEREMONY_KEYS,
+  type CeremonyPolicy,
+  ceremonyOffClause,
+  ceremonyOffList,
+  ceremonyPolicyValues,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
@@ -158,12 +164,12 @@ import {
   listIntents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
-  loadScopeMetadataAll,
   resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
   parseChangeControl,
+  parseCeremonySetting,
   pipelineLinkEvidence,
   parseBoltDag,
   type KnowledgeCommand,
@@ -188,14 +194,14 @@ import {
   relativeSpaceRecordPrefix,
   resolveBoltDag,
   type BoltDagResolution,
+  resolveCeremony,
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
   scopeCostSummary,
-  selectionAwareDefaultScope,
   singleStageAttemptIsOpen,
-  resolveDefaultScope,
-  DEFAULT_SCOPE,
+  defaultScope,
+  defaultScopeResolution,
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
@@ -282,14 +288,6 @@ function loadStateFileIfPresent(projectDir: string): string | null {
   if (!existsSync(path)) return null;
   return readFileSync(path, "utf-8");
 }
-
-// The default scope when neither the state file, a --scope flag, nor the
-// AWS_AIDLC_DEFAULT_SCOPE env var supplies one lives in aidlc-lib.ts
-// (DEFAULT_SCOPE, imported above) so exactly one constant plus the env var
-// control the implicit default everywhere. Mirrors the prose orchestrator's
-// freeform-fallback default (SKILL.md detect-scope fallback).
-// selectionAwareDefaultScope() maps it to the sole enabled plugin's
-// nominated default on a plugin-only install where it is deselected.
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth
@@ -1454,33 +1452,43 @@ function detectedProjectType(projectDir: string): string | null {
   return projectType;
 }
 
-function effectiveScopeCostSummary(scope: string, projectDir: string) {
+function effectiveScopeCostSummary(
+  scope: string,
+  projectDir: string,
+  overrides?: Partial<CeremonyPolicy>,
+) {
   const nominal = scopeCostSummary(scope);
   if (!nominal) return null;
+  const policy = {} as CeremonyPolicy;
+  for (const key of CEREMONY_KEYS) {
+    const base = resolveCeremony(key, scope, null);
+    policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
+  }
+  const off = ceremonyOffList(scope, policy);
   const definition = loadScopeMapping()[scope];
   if (
     definition?.stages["reverse-engineering"] !== "EXECUTE" ||
     detectedProjectType(projectDir) !== "greenfield"
   ) {
-    return nominal;
+    return { ...nominal, off };
   }
   const adjusted = { ...definition.stages, "reverse-engineering": "SKIP" as const };
-  return gridCostSummary(adjusted);
+  return { ...gridCostSummary(adjusted), off };
 }
 
-// The one-line ceremony preview for a scope, deterministic from the effective
-// compiled grid: "N of T stages, G approval gates" plus a per-unit clause when
-// Construction stages fan out per Unit of Work. Greenfield previews apply the
-// same reverse-engineering adjustment intent creation writes into state.
+// The one-line ceremony preview uses effective policy and the compiled grid:
+// "N of T stages, G approval gates" plus a per-unit clause when Construction
+// stages fan out per Unit of Work. Greenfield previews apply the same
+// reverse-engineering adjustment intent creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
-function costClause(scope: string, projectDir: string): string {
-  const c = effectiveScopeCostSummary(scope, projectDir);
+function costClause(scope: string, projectDir: string, overrides?: Partial<CeremonyPolicy>): string {
+  const c = effectiveScopeCostSummary(scope, projectDir, overrides);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
     : "";
-  return `${c.execute} of ${c.total} stages, ${c.gates} approval gates${perUnit}`;
+  return `${c.execute} of ${c.total} stages, ${c.gates} approval gates${perUnit}${ceremonyOffClause(c)}`;
 }
 
 // --- Flag parsing ---
@@ -1494,6 +1502,7 @@ interface ParsedFlags {
   testStrategy?: string;
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   changeControl?: string; // --change-control <strict|relaxed>: the per-intent Change Control value
+  ceremony?: Partial<CeremonyPolicy>;
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
@@ -1668,6 +1677,21 @@ function parseNextFlags(args: string[]): ParsedFlags {
         }
         i++;
       }
+    } else if (a === CEREMONY_FLAGS.sensors || a === CEREMONY_FLAGS.learnings || a === CEREMONY_FLAGS.summary_confirmation) {
+      const key = CEREMONY_KEYS.find((key) => CEREMONY_FLAGS[key] === a)!;
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `${a} requires <on|off>.`;
+      } else {
+        const parsed = parseCeremonySetting(value);
+        if (parsed === null) {
+          flags.parseError = `${a} requires <on|off>; received "${value}".`;
+        } else {
+          flags.ceremony ??= {};
+          flags.ceremony[key] = parsed;
+        }
+        i++;
+      }
     } else if (a === "--new-scope") {
       flags.newScope = true;
     } else if (a === "--report" && i + 1 < args.length) {
@@ -1785,10 +1809,13 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
   if (flags.changeControl) cmd.push(`--change-control ${flags.changeControl}`);
+  for (const key of CEREMONY_KEYS) {
+    if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
+  }
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir);
+  const clause = costClause(scope, projectDir, flags.ceremony);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -2043,9 +2070,9 @@ function intentPickPromptIfRecordsExist(
 
 // Resolve the scope by the precedence ladder: state file Scope field wins (an
 // active workflow is authoritative), then an explicit --scope flag, then a
-// leading positional scope, then the AWS_AIDLC_DEFAULT_SCOPE env var, then the
-// default. Returns the resolved scope plus whether it was found in the valid
-// set (an unknown scope is the caller's to turn into an error directive).
+// leading positional scope, then the shared environment/project/default ladder.
+// Unknown scopes and default-resolution errors remain the caller's to turn into
+// error directives; the source preserves configured defaults' canonical errors.
 function resolveScope(
   stateContent: string | null,
   flags: ParsedFlags,
@@ -2060,30 +2087,12 @@ function resolveScope(
   if (flags.positionalScope && flags.positionalScope.length > 0) {
     return { scope: flags.positionalScope, source: "positional" };
   }
-  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
-  if (envScope.length > 0) {
-    if (validScopes().has(envScope)) return { scope: envScope, source: "env" };
-    // Only installed-but-disabled scopes participate in selection-aware
-    // fallback. The resolve-env-scope validator below owns the canonical error
-    // for an explicit unknown value.
-    if (loadScopeMetadataAll()[envScope] === undefined) {
-      return { scope: envScope, source: "env" };
-    }
-    const fallback = selectionAwareDefaultScope(envScope);
-    if (!fallback.error && fallback.note) {
-      process.stderr.write(
-        `AWS_AIDLC_DEFAULT_SCOPE="${envScope}" is not an enabled scope; using ${fallback.scope} (sole enabled plugin's first scope)\n`,
-      );
-    }
-    return { scope: fallback.scope, source: "env", error: fallback.error };
-  }
-  const fallback = selectionAwareDefaultScope(DEFAULT_SCOPE);
-  return { scope: fallback.scope, source: "default", error: fallback.error };
+  return defaultScopeResolution();
 }
 
-// Derive the memory diary path for a stage (SKILL.md: every stage keeps a
-// <record>/<phase>/<stage>/memory.md diary). `recordPrefix` is the RELATIVE
-// per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
+// Derive the memory diary path for a stage. When the learnings ritual is on,
+// each stage keeps a <record>/<phase>/<stage>/memory.md diary. `recordPrefix` is
+// the RELATIVE per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
 // threads in from the active intent (relativeRecordDir), or null → the bare space
 // record prefix (relativeSpaceRecordPrefix - a pre-creation shell with no intent
 // yet). These are agent-consumed RELATIVE paths the conductor resolves against
@@ -2106,10 +2115,10 @@ function unitMemoryPathFor(
   return `${prefix}/construction/${unit}/${slug}/memory.md`;
 }
 
-// Create the stage diary at the deterministic directive-emission boundary so
-// the conductor never has to probe a maybe-absent path. This is advisory: a
-// missing install template, unresolved placeholder, or filesystem failure must
-// not prevent the run-stage directive from being emitted.
+// Callers create the stage diary at the deterministic directive-emission boundary
+// only when the learnings ritual is on, so the conductor need not probe for it.
+// This is advisory: a missing install template, unresolved placeholder, or
+// filesystem failure must not prevent the run-stage directive from being emitted.
 export function bootstrapDirectiveMemory(
   memoryPath: string,
   codekbCtx?: { projectDir: string },
@@ -3329,7 +3338,7 @@ function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
   unit: string | null = UNIT_NAME_PLACEHOLDER,
-  scope: string = resolveDefaultScope(DEFAULT_SCOPE),
+  scope: string = defaultScope(),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
@@ -3364,6 +3373,7 @@ function buildRunStageDirective(
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
+  const ceremony = ceremonyPolicyValues(scope, stateContent);
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
@@ -3389,7 +3399,10 @@ function buildRunStageDirective(
     rules_in_context:
       ruleEntries?.map((entry) => entry.rel) ??
       (node.rules_in_context ?? []).map((r) => r.path),
-    sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
+    ceremony,
+    sensors_applicable: ceremony.sensors === "off"
+      ? []
+      : (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
   if (node.mode === "pipeline" && codekbCtx) {
@@ -3452,6 +3465,7 @@ function buildRunStageDirective(
   if (node.phase === "construction") {
     protocolModules.push("construction");
   }
+  if (ceremony.learnings === "on") protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }
@@ -3486,7 +3500,9 @@ function buildRunStageDirective(
       forcePersona,
     });
   }
-  bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
+  if (ceremony.learnings === "on") {
+    bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
+  }
   return directive;
 }
 
@@ -4088,6 +4104,16 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  if (
+    flags.ceremony &&
+    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+      flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
+  ) {
+    emit(errorDirective(
+      "Cannot combine ceremony flags with read-only, workspace, compose, single-stage, jump, or resume modes. Apply the ceremony setting first, then run the other command.",
+    ));
+    return;
+  }
 
   if (flags.claim || flags.release) {
     if (flags.claim && flags.release) {
@@ -4597,17 +4623,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 5 — natural-language scope/depth/test-strategy change against an
-  // existing workflow (SKILL.md:141/:144/:147 + step 7/8). Changing scope or
-  // config is a MUTATION, so `next` names the move (print) and the conductor
+  // Branch 5 — scope or configuration changes against an existing workflow.
+  // Changing scope or config is a MUTATION, so `next` names the move (print) and the conductor
   // runs the tool; it never mutates here. Fires only when a modifier is present
   // WITHOUT an explicit --stage/--phase jump (those take the jump path below).
   if (stateContent && !flags.stage && !flags.phase) {
+    const modifiers: string[] = [];
+    if (flags.depth) modifiers.push(`depth ${flags.depth}`);
+    if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
+    if (flags.review) modifiers.push(`review ${flags.review}`);
+    if (flags.changeControl) modifiers.push(`change-control ${flags.changeControl}`);
+    for (const key of CEREMONY_KEYS) {
+      if (flags.ceremony?.[key]) {
+        modifiers.push(`${CEREMONY_FLAGS[key].slice(2)} ${flags.ceremony[key]}`);
+      }
+    }
     // A scope-change requires a VALID --scope that DIFFERS from the active
-    // workflow's scope. An invalid or same-as-current --scope is not a change —
-    // state wins on the precedence ladder and we fall through to the happy path
-    // (this is also why an active workflow's scope is authoritative: a stray
-    // --scope flag never silently re-routes a live workflow).
+    // workflow's scope. Otherwise state remains authoritative and any supplied
+    // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
     if (
       flags.scope &&
@@ -4615,43 +4648,19 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       flags.scope !== currentStateScope
     ) {
       const parts = [`--scope ${flags.scope}`];
-      if (flags.depth) parts.push(`--depth ${flags.depth}`);
-      if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
-      if (flags.review) parts.push(`--review ${flags.review}`);
+      for (const modifier of modifiers) parts.push(`--${modifier}`);
       emit(printDirective(
         `Run \`${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
     }
-    // `--change-control <value>` against a live workflow names the verb that
-    // rewrites the intent's line; the verb owns the memory-strict refusal and
-    // the CHANGE_CONTROL_SET row. Ordered before config-change so the two
-    // never combine into one command line.
-    if (flags.changeControl) {
+    // Every setting belongs to one atomic config-change, including a
+    // same-as-current --scope: no sibling modifier may be silently discarded.
+    if (modifiers.length > 0) {
+      const command = [aidlcDispatcherInvocation(`config set ${modifiers[0]}`)];
+      for (let i = 1; i < modifiers.length; i++) command.push(`--${modifiers[i]}`);
       emit(printDirective(
-        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts change-control ${flags.changeControl}\` to update Change Control, then print its output verbatim and stop.`,
-      ));
-      return;
-    }
-    // A depth / test-strategy / review modifier with no scope change is a
-    // config-change. A same-as-current --scope is also config-only: dropping
-    // it here would silently discard the modifiers and run the current stage.
-    if (
-      (!flags.scope || flags.scope === currentStateScope) &&
-      (flags.depth || flags.testStrategy || flags.review)
-    ) {
-      const route = flags.depth
-        ? `config set depth ${flags.depth}`
-        : flags.testStrategy
-        ? `config set test-strategy ${flags.testStrategy}`
-        : `config set review ${flags.review}`;
-      const extra = flags.depth && flags.testStrategy
-        ? ` --test-strategy ${flags.testStrategy}`
-        : flags.review && (flags.depth || flags.testStrategy)
-        ? ` --review ${flags.review}`
-        : "";
-      emit(printDirective(
-        `Run \`${aidlcDispatcherInvocation(route)}${extra}\` to update the configuration, then print its output verbatim and stop.`,
+        `Run \`${command.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -4744,7 +4753,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       // Preview the ceremony the user is confirming: stage/gate counts from the
       // compiled grid (never estimates). Drop the clause if the scope does not
       // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope, pd);
+      const clause = costClause(inferred.scope, pd, flags.ceremony);
       const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
         `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
@@ -5148,6 +5157,7 @@ function applySettledSwarmShape(
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
   directive.protocol_modules = ["construction", "swarm"];
+  if (directive.ceremony.learnings === "on") directive.protocol_modules.push("learnings");
   directive.swarm_settled = true;
   return directive;
 }
@@ -5338,7 +5348,7 @@ function tryEmitSwarm(
 function emitRunStageForSlug(
   slug: string,
   projectType: "brownfield" | "greenfield" | null = null,
-  scope: string = resolveDefaultScope(DEFAULT_SCOPE),
+  scope: string = defaultScope(),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
@@ -5690,8 +5700,10 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
-  for (const entry of entries) {
-    bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+  if (directive.ceremony.learnings === "on") {
+    for (const entry of entries) {
+      bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+    }
   }
   return null;
 }
@@ -7035,20 +7047,49 @@ function emitForSlug(
 const SINGLE_INIT_ERROR =
   "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
+// Call only after confirming an open attempt. Match its boundary ordering and
+// never borrow ceremony policy from the main workflow; legacy rows return null.
+function singleStageAttemptScope(projectDir: string, slug: string): string | null {
+  const workflow = syntheticWorkflowId(slug);
+  const attemptStart = readAuditShardEvents(projectDir)
+    .filter((entry) =>
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === slug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    })
+    .pop();
+  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
+}
+
 function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
+  scope: string,
 ): string | null {
+  if (singleStageAttemptIsOpen(projectDir, node.slug)) {
+    const recordedScope = singleStageAttemptScope(projectDir, node.slug);
+    if (recordedScope !== null && recordedScope !== scope) {
+      return `The open isolated attempt uses scope "${recordedScope}", not requested scope "${scope}". ` +
+        `Complete it with \`report --single --stage ${node.slug} --result approved\`, ` +
+        `or re-run with \`--scope ${recordedScope}\`.`;
+    }
+    return null;
+  }
   // A query never appends a lifecycle event: an observer that opened a
   // single-stage attempt would move the run floor it came to read.
   if (isReadOnlyEngineProbe()) return null;
-  if (singleStageAttemptIsOpen(projectDir, node.slug)) return null;
   return appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
       Stage: node.slug,
       Agent: node.lead_agent,
       Workflow: syntheticWorkflowId(node.slug),
+      Scope: scope,
     },
   }]);
 }
@@ -7080,10 +7121,10 @@ function emitSingleRunStage(
     ));
     return;
   }
-  const startError = ensureSingleStageStarted(projectDir, node);
+  const startError = ensureSingleStageStarted(projectDir, node, scope);
   if (startError) {
     emit(errorDirective(
-      `Failed to record the isolated start boundary for "${node.slug}": ${startError}`,
+      `Cannot start isolated stage "${node.slug}": ${startError}`,
     ));
     return;
   }
@@ -8145,6 +8186,7 @@ function handleSingleReport(
   const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
     workflow: wfId,
     stateContent: null,
+    scope: singleStageAttemptScope(pd, node.slug),
   });
   if (!summaryEvidence.ok) {
     emit(errorDirective(summaryEvidence.message));

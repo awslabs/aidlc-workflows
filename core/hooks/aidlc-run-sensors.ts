@@ -31,6 +31,7 @@ import {
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
+  resolveCeremony,
   resolveProjectFlag,
   resolveProjectDirFromHook,
   sensorsDir,
@@ -117,6 +118,11 @@ try {
 } catch {
   return 0;
 }
+
+// Scope and intent policy disable automatic sensors without leaving health
+// markers or the first-fire banner. Explicit sensor fire remains available.
+const scope = getField(stateContent, "Scope");
+if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 
 // Step 8 — Heartbeat (G3). The future hook-health doctor reads this
 // file's mtime to detect silent-hook failure. Placement: AFTER

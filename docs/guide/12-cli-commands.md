@@ -59,9 +59,12 @@ diagnostic and lifecycle routes.
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
 | `/aidlc --change-control <value>` | Set what an input change after an approval does for this piece of work (strict, relaxed) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`) |
-| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`, `review`) |
-| `/aidlc config list` | List active workflow config (`--json` for structured output) |
+| `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
+| `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
+| `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`) |
+| `/aidlc config set <key> <value> [--key value ...]` | Change one or more of the seven settings in one transaction |
+| `/aidlc config list` | List all seven active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
@@ -236,8 +239,9 @@ intent's `aidlc-state.md` with the scope plan.
 It logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`,
 `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, plus per-stage
 `STAGE_STARTED`/`STAGE_COMPLETED`). Naming a scope (`/aidlc --scope feature`)
-seeds the initial scope; absent one it resolves `AWS_AIDLC_DEFAULT_SCOPE`, then
-defaults to `classic`. To add team knowledge
+seeds the initial scope; absent one it resolves the real `AWS_AIDLC_DEFAULT_SCOPE`
+environment variable, then the recorded `aidlc config flags --default-scope` value,
+then `classic`. To add team knowledge
 or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
 files; the space-level `aidlc/knowledge/` directory is created (empty) once the
 first intent exists, and you add free-form files to it from there.
@@ -405,6 +409,12 @@ Display current workflow progress without modifying anything.
 ```
 
 **Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), and the stage progress list. An invalid Change Control field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+
+Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
+rows with each effective value and its source, for example `Sensors: off (from
+scope classic)`, `Learnings: on (set by you)`, or `Summary Confirmation: off (from
+env AIDLC_DISABLE_SUMMARY_CONFIRMATION)`. A missing saved setting falls back to
+the current scope, then `on (from default)`; see the ceremony controls below.
 
 Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
 Snapshot** with the same board unscoped main renders: Unit Progress, locally
@@ -833,7 +843,9 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, and `--review`; all supplied overrides are applied in the same change.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--change-control`, `--sensors`, `--learnings`, and `--summary-confirmation`; the scope and all supplied settings are applied in one transaction. Scope-sourced Change Control and ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. This also updates the scope-sourced Change Control line when memory enforces strict; memory still controls the effective value. Explicit flags in the same command take precedence over scope defaults and retain human provenance. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an explicit `--change-control relaxed` refused by strict memory policy, refuse the whole update.
+
+The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
 Refused under autonomous Construction (`Construction Autonomy Mode: autonomous`), the same rule as `recompose`: re-shaping the plan needs a human at the gate, and an unattended run has none. Switch to gated Construction first (`aidlc-bolt set-autonomy --mode gated`) or let the swarm finish.
 
@@ -918,14 +930,16 @@ frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
 (one normal-flow review pass; findings are quoted verbatim at the approval gate
 for you to triage). The effective class per stage is the LOWEST of the stage's
-declaration, the scope's `review_cap` (bugfix, poc, classic, and workshop cap to
-`advisory`; express caps to `none`), and this override — so
+declaration, the scope's `review_cap` (bugfix, poc, and workshop cap to
+`advisory`; classic and express cap to `none`), and this override — so
 `--review advisory` turns every remaining adversarial loop into a single
 normal-flow decision-support pass, `--review none` skips
-reviewer dispatch entirely, and `--review adversarial` clears the override
-(it cannot raise a class above the stage declaration or the scope cap).
-Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
-only pre-merge verification, so the declared class always applies there.
+gated stage reviewer dispatch, and `--review adversarial` clears the override
+by storing an empty `Review Override` field (it cannot raise a class above the
+stage declaration or the scope cap).
+Classic therefore has no reviewer in the gated flow. Explicit autonomous
+construction is exempt: it retains its single pre-merge reviewer, including
+under classic. Neither the scope cap nor the ceremony switches disable that review.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
 `REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
 created or alongside `--scope`; a same-as-current scope applies the review
@@ -939,13 +953,82 @@ request at the next ordinal.
 
 ```
 /aidlc --review advisory              Single normal-flow pass, findings at the gate
-/aidlc --review none                  No stage reviews this run
+/aidlc --review none                  No gated stage reviews this run
 /aidlc --review adversarial           Clear the override (stage defaults apply)
 ```
 
 ---
 
-### `/aidlc --change-control <value>` - Change Control for this piece of work
+### Workflow configuration — one atomic setter
+
+All seven intent settings share one setter, `config-change`. Slash flags remain
+available, and flags from different settings can be combined in **one command
+and one transaction**; do not split a combined request into successive setters.
+This is active-intent configuration, distinct from native project configuration
+through `aidlc config flags`.
+
+| Config key / slash flag | Values | State field |
+|-------------------------|--------|-------------|
+| `depth` / `--depth` | `minimal`, `standard`, `comprehensive` | Depth |
+| `test-strategy` / `--test-strategy` | `minimal`, `standard`, `comprehensive` | Test Strategy |
+| `review` / `--review` | `adversarial`, `advisory`, `none` | Review Override |
+| `change-control` / `--change-control` | `strict`, `relaxed` | Change Control |
+| `sensors` / `--sensors` | `on`, `off` | Sensors |
+| `learnings` / `--learnings` | `on`, `off` | Learnings |
+| `summary-confirmation` / `--summary-confirmation` | `on`, `off` | Summary Confirmation |
+
+For example, each line below is a single combined update:
+
+```
+/aidlc --depth minimal --review none --change-control relaxed --sensors off
+/aidlc config set depth standard --test-strategy minimal --review advisory --change-control strict --sensors on --learnings on --summary-confirmation off
+/aidlc --scope bugfix --change-control relaxed --sensors off --learnings on
+```
+
+The native dispatcher form is `aidlc engine config set <key> <value>` followed
+by the other setting flags. Every key routes to the same utility command; the
+first setting becomes `--<key> <value>`, with the remaining flags forwarded:
+
+```bash
+aidlc engine config set change-control relaxed --sensors off --intent login-fix --space platform
+bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --change-control relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
+```
+
+`config-change` accepts only the seven setting flags and the `--intent`,
+`--space`, and `--project-dir` selectors. At least one setting is required.
+Selectors pin the state file, memory policy, and audit shard to the same target;
+omitted intent/space selectors use the active workflow selection. They do not
+switch the active intent or space. Use `scope-change` (the `/aidlc --scope`
+route), not `config-change --scope`, when also changing the scope.
+
+All flags and values are validated before mutation. Invalid values and unknown
+flags refuse the entire request; an unknown flag is named in the error. If an
+explicit `--change-control relaxed` is refused by a memory layer's `Mode: strict`,
+none of the companion settings or scope changes are applied. The error names
+the memory file to edit. Explicit strict and unrelated settings remain allowed.
+One lock covers reading the target state, applying all
+settings, appending the audit batch, and writing state once. Audit failure leaves
+state untouched. Changes and output follow the key order in the table; `Last
+Updated` changes only when stored state changes. Repeating an already stored
+choice is a no-op, but changing a scope-sourced value to an explicit human
+override records that provenance even if the value is the same.
+
+`config get` accepts every key in the table, and `config list` returns all seven
+in that order. Change Control and ceremony reads include effective values and
+sources, just like status:
+
+```
+/aidlc config get change-control
+/aidlc config get summary-confirmation
+/aidlc config list
+/aidlc config list --json
+```
+
+Native read equivalents are `aidlc engine config get <key>` and
+`aidlc engine config list`. The following sections explain the Change Control
+and ceremony policies managed by this same setter.
+
+#### `/aidlc --change-control <value>` - Change Control for this piece of work
 
 Set the intent's Change Control value: what happens when something a human
 already approved or confirmed turns out to have changed underneath (source
@@ -963,18 +1046,24 @@ its review, an output saved without the current summary confirmation).
 sentence naming what changed and asks for the approval again. `relaxed` records
 the change once as a `CHANGE_ACCEPTED` audit row, tells you in one line, and
 continues. Neither value removes a gate: every approval question is still
-asked, and a reviewer's verdict is never changed. Runs
-`aidlc-utility.ts change-control <value>` behind the scenes, which rewrites
-the `Change Control` line in `aidlc-state.md` (so the value is committed with
-the intent, survives sessions, and teammates see it) and logs a
-`CHANGE_CONTROL_SET` audit event. The same command repairs an invalid line and
-records the old text. A plain-chat request ("stop asking me to re-approve when
-files change") runs the same command. An older intent without the line stays
-strict until this command sets it; a new intent starts from its scope's default.
-When a memory layer's `## Change Control` section says `Mode: strict`, the
-command refuses and names that file: edit the line there to change it for
-everyone. At creation the flag can be given with the scope (`/aidlc --scope poc
---change-control strict "..."`).
+asked, and a reviewer's verdict is never changed. The shared
+`config-change --change-control <value>` setter rewrites the `Change Control`
+line in `aidlc-state.md` as `<value> (set by you)` and adds a
+`CHANGE_CONTROL_SET` row to the command's audit batch. The value is committed
+with the intent, survives sessions, and is visible to teammates. The same
+setter repairs an invalid line and records the old text. A plain-chat request
+("stop asking me to re-approve when files change") uses the same route.
+For configuration and scope changes, the row's `Old Value` is the previously
+saved intent value (raw text if invalid; `strict` when no line existed), not
+the memory-effective value. Governed-checkpoint observations still record
+effective old/new values.
+An older intent without the line stays strict until it is set; a new intent
+starts from its scope's default. When a memory layer's `## Change Control`
+section says `Mode: strict`, an explicit relaxed override refuses the whole
+command, including any other supplied settings, and names that file: edit the
+memory line there to relax it for everyone. An explicit strict setting is still
+allowed. At creation the flag can be given with the scope
+(`/aidlc --scope poc --change-control strict "..."`).
 
 **Valid values:** `strict`, `relaxed`.
 
@@ -984,6 +1073,83 @@ everyone. At creation the flag can be given with the scope (`/aidlc --scope poc
 /aidlc --change-control relaxed        Record and announce input changes, keep going
 /aidlc --change-control strict         Approve again whenever an approved input changes
 ```
+
+#### `/aidlc --sensors`, `--learnings`, `--summary-confirmation` — Ceremony controls
+
+Set these three independent policies to `on` or `off` for the active intent:
+
+```
+/aidlc --sensors off
+/aidlc --learnings on
+/aidlc --summary-confirmation off
+```
+
+| Flag / config key | State and status row | What `off` skips |
+|-------------------|----------------------|------------------|
+| `--sensors` / `sensors` | Sensors | Automatic Sensor dispatch and blocking-sensor checks; explicit `sensor fire` remains available for diagnostics |
+| `--learnings` / `learnings` | Learnings | The learning diary and learning-gate ceremony |
+| `--summary-confirmation` / `summary-confirmation` | Summary Confirmation | Only the consolidated-summary `Looks correct` checkpoint declared by stage frontmatter; Assumption Confirmation in intent-capture remains a separate human decision, as do required questions and stage approvals |
+
+**Defaults and precedence:** a kill switch set to `1` forces its policy `off`;
+otherwise the explicit per-intent setting wins, then the current scope default,
+then `on` when the scope has no setting. In short: **environment → per-intent →
+scope → on**. Classic defaults all three to `off`; every other shipped scope
+defaults them to `on`. A new intent stores the scope defaults as, for example,
+`off (from scope classic)`. Changing scopes carries scope-sourced values to the
+new defaults while preserving values explicitly set by you. Older intents
+without these fields resolve from their scope, then `on`.
+An explicit ceremony flag alongside a scope choice writes a `set by you`
+override, rather than a scope-sourced default.
+These flags can be combined with each other and with depth, test strategy,
+review, and Change Control in one configuration transaction, with or without
+a scope change.
+An isolated `--single` run uses its selected scope's policy, recorded on its
+synthetic stage-start event, through completion; it does not inherit the main
+intent's ceremony overrides. An open isolated attempt cannot be resumed under
+a different scope: complete the attempt or resume with its recorded scope.
+Legacy isolated starts without a recorded scope retain summary confirmation
+and do not enforce this scope comparison.
+
+An explicit ceremony setting writes `<value> (set by you)` to the corresponding
+state line and adds a `CEREMONY_SET` row to the shared audit batch with `Key`,
+`Old`, `New`, and `Source`.
+`Old` is the previously saved value (raw text if invalid; the scope default
+when no line existed), not a value forced off by an environment kill switch.
+The audit keys are `sensors`, `learnings`, and `summary_confirmation`; an explicit
+setter records `Source: you`. The saved override is committed with the intent
+and survives sessions. An environment kill switch takes precedence without
+overwriting that saved choice. Turning a ceremony off does not uninstall or
+remove hooks, remove required stage gates, or disable the single pre-merge
+reviewer used when you explicitly choose autonomous construction.
+
+The configuration commands expose these same three keys alongside depth, test
+strategy, review, and Change Control. For example, the following sets all three
+ceremonies and Change Control together:
+
+```
+/aidlc config set change-control relaxed --sensors off --learnings on --summary-confirmation off
+```
+
+**Environment kill switches:**
+
+| Variable | Policy forced `off` when its value is exactly `1` |
+|----------|---------------------------------------------------|
+| `AIDLC_DISABLE_SENSORS` | Sensors |
+| `AIDLC_DISABLE_LEARNINGS` | Learnings |
+| `AIDLC_DISABLE_SUMMARY_CONFIRMATION` | Summary Confirmation |
+
+Any other value does not force the policy off. These switches can also be
+recorded explicitly through the native config bypass interface:
+
+```bash
+aidlc config flags --bypass AIDLC_DISABLE_SENSORS --local --yes
+aidlc config flags --bypass AIDLC_DISABLE_LEARNINGS --local --yes
+aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes
+aidlc config flags --show
+```
+
+Use `--project` instead of `--local` to share the recorded switch with the
+project. Real environment variables take precedence over recorded config flags.
 
 ---
 
@@ -1251,13 +1417,17 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 Sensors are deterministic checks that run after every `Write` or `Edit` to a stage output (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) and reference [Sensor System](../reference/07-sensor-system.md)). The PostToolUse hook fires them for you; this tool lets you list, describe, and manually fire one.
 
+With the Sensors ceremony `off`, automatic hook dispatch and blocking-sensor
+gate checks are skipped. The hook stays installed, and an explicit `fire`
+still runs the diagnostic described here.
+
 | Subcommand | What it does |
 |------------|--------------|
 | `list` | Print every framework Sensor (`id`, `kind`, `description`), alphabetically |
 | `describe <id>` | Print one Sensor's full manifest (command, default severity, `matches` glob, timeout) |
 | `fire <id> --stage <slug> --output-path <path>` | Run a Sensor against a file and emit a `SENSOR_FIRED` row plus its paired result row |
 
-A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`, followed by a compact JSON verdict line. A failure writes a detail file under `<record>/.aidlc-sensors/<stage>/` (in the intent's record dir). The fire command still exits 0 for sensor outcomes. Gate entry separately enforces `blocking` bindings and requires a verified pass; findings, unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts all stop it. The interactive override is a separate logged `Fix findings` / `Override blocking sensors` decision, followed by the exact human-backed answer and a retry using `--override-blocking-sensors --user-input "Override blocking sensors"`; autonomous mode cannot override. Write-fired results remain advisory. The six Sensors that ship with the framework are `claim-sources`, `required-sections`, `upstream-coverage`, `traceability`, `linter`, and `type-check`.
+A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`, followed by a compact JSON verdict line. A failure writes a detail file under `<record>/.aidlc-sensors/<stage>/` (in the intent's record dir). The fire command still exits 0 for sensor outcomes. With Sensors `on`, gate entry separately enforces `blocking` bindings and requires a verified pass; findings, unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts all stop it. The interactive override is a separate logged `Fix findings` / `Override blocking sensors` decision, followed by the exact human-backed answer and a retry using `--override-blocking-sensors --user-input "Override blocking sensors"`; autonomous mode cannot override. Write-fired results remain advisory. The six Sensors that ship with the framework are `claim-sources`, `required-sections`, `upstream-coverage`, `traceability`, `linter`, and `type-check`.
 
 ```
 bun .claude/tools/aidlc-sensor.ts list
@@ -1270,6 +1440,9 @@ bun .claude/tools/aidlc-sensor.ts fire required-sections \
 ### `aidlc-learnings` — the learning-gate tool
 
 This is the deterministic half of the §13 learning gate. After a stage is approved, the orchestrator uses it to turn your stage's `memory.md` diary into reviewable learning candidates, then to persist the ones you confirm. You normally never call it directly — the orchestrator drives both steps around an `AskUserQuestion` gate — but it is here so the audit rows it emits make sense.
+
+When the Learnings ceremony is `off`, the workflow omits its diary and learning
+gate instead of calling these steps automatically.
 
 | Subcommand | What it does |
 |------------|--------------|
@@ -1338,7 +1511,7 @@ All three are read-only — no stage advance, no audit emit — and source every
 
 ### `AWS_AIDLC_DEFAULT_SCOPE`
 
-Pre-set the default scope for a project. Read from `.claude/settings.json` `env` block at workflow initialization.
+Pre-set the implicit scope for a project. The resolver reads the real environment variable (including a value supplied by the `.claude/settings.json` `env` block), then the recorded `aidlc config flags --default-scope` value, then `classic`.
 
 **Syntax (in `.claude/settings.json`):**
 
@@ -1352,9 +1525,17 @@ Pre-set the default scope for a project. Read from `.claude/settings.json` `env`
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`.
 
-**Precedence:** explicit CLI flag > keyword detection > `AWS_AIDLC_DEFAULT_SCOPE` > hard-coded fallback.
+**Precedence:** explicit CLI flag > keyword detection > real `AWS_AIDLC_DEFAULT_SCOPE` environment variable > recorded default-scope flag > `classic`. Record a shared default with `aidlc config flags --default-scope feature --project --yes`, or use `--local` for this checkout. A real environment value, including the shipped settings env entry, wins over either record.
 
 **Scope of effect:** applies at workflow initialization only. Once the intent's `aidlc-state.md` exists, the state file is authoritative. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope) for the full walkthrough.
+
+### Ceremony kill switches
+
+`AIDLC_DISABLE_SENSORS`, `AIDLC_DISABLE_LEARNINGS`, and
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION` each force the matching ceremony `off`
+when set to exactly `1`. They override per-intent and scope settings without
+rewriting the state file. See [Ceremony controls](#aidlc-sensors-learnings-summary-confirmation-ceremony-controls)
+for the precedence, defaults, and recordable `aidlc config flags --bypass` forms.
 
 ---
 

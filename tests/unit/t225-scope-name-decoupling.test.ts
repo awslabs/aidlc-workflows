@@ -47,7 +47,6 @@ const CORE_SCOPE_NAMES = [
 ] as const;
 
 const SKELETON_ON_CORE_SCOPES = [
-  "classic",
   "enterprise",
   "feature",
   "infra",
@@ -324,7 +323,7 @@ describe("t225 skeleton scope metadata", () => {
     ).toThrow(new RegExp(`${join(invalidDir, "bad-skeleton.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*maybe`));
   });
 
-  test("core skeleton defaults preserve the previous scopes and Workshop", () => {
+  test("core skeleton defaults exclude the v1-style classic scope", () => {
     withEnvAndFreshCaches({ AIDLC_SCOPES_DIR: CORE_SCOPES }, () => {
       const metadata = loadScopeMetadata();
       const skeletonOn = Object.values(metadata)

@@ -42,9 +42,16 @@ The scope frontmatter fields are:
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
 | `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic`) is not enabled. |
 | `change_control` | No | The scope's Change Control default, `strict` or `relaxed`: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once, tells the human in one line, and continues). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, and `infra`, relaxed on the rest. A memory layer's `## Change Control` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Change Control](../guide/13-customization.md#change-control). |
+| `sensors` | No | `on` or `off`; controls sensor execution and sensor gate checks. Absence means on. Per-intent override: `/aidlc --sensors on\|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`. |
+| `learnings` | No | `on` or `off`; controls the stage learnings read/write ritual. Absence means on. Per-intent override: `/aidlc --learnings on\|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`. |
+| `summary_confirmation` | No | `on` or `off`; controls the separate pre-output summary confirmation, not stage approval. Absence means on. Per-intent override: `/aidlc --summary-confirmation on\|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. This scope scalar is distinct from a stage's `required` / `if-present` declaration. |
 
 The loader rejects duplicate scope `name` values across files and names both
-files in the error.
+files in the error. Invalid ceremony values are rejected with the file, key,
+and the two allowed values. Resolution is kill switch (`1`) → valid intent
+line → scope default → on. Classic declares all three off; its gated flow
+also disables reviewers and walking-skeleton ceremony, while explicit
+autonomy keeps the single pre-merge review.
 
 ### Freeform default
 
@@ -120,6 +127,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 ### Steps
 
 1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
+   Set `sensors`, `learnings`, and `summary_confirmation` to `off` only for ceremonies the scope should omit; absent keys stay on. Intent overrides and global kill switches use the table above.
 
 2. **Tag the stages that should run under `hotfix`.** In each stage you want `EXECUTE` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages must include it (they always run).
 
@@ -157,6 +165,7 @@ Tuning is a smaller edit, but it lands on the stage, not the scope. Two changes 
 
 - **Flip a stage in or out.** Add or remove the scope name from a stage's `scopes:` list. This is how you'd, say, add `mvp` to `observability-setup`'s `scopes:` because your team always wires monitoring even for a first cut. One tag, then regenerate with `bun scripts/package.ts` and run `--doctor`.
 - **Change a default depth, test strategy, or review ceiling.** Adjust `depth`, add/remove `testStrategy`, or add/remove `review_cap` in the scope's `core/scopes/aidlc-<name>.md` frontmatter. The first two recalibrate artifact and test volume; `review_cap` lowers stage review classes to `adversarial`, `advisory`, or `none` without ever raising them. Because each scope carries its own defaults, the change applies to every workflow that selects the scope. Per-run `--depth`, `--test-strategy`, and `--review` can lower the corresponding behavior further.
+- **Change a ceremony default.** Set `sensors`, `learnings`, or `summary_confirmation` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. No ceremony switch removes stage approval, Plan Approval, human-turn authority, audit, or team write protection.
 
 Either way, the regenerate-and-doctor pair from step 3 above applies. The edit is small; the verification is the same.
 
