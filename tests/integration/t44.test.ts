@@ -276,6 +276,32 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
     });
   }
 
+  for (const [slug, producers] of [
+    ["ci-pipeline", ["code-generation", "infrastructure-design"]],
+    ["deployment-pipeline", ["infrastructure-design", "nfr-design"]],
+    ["environment-provisioning", ["infrastructure-design", "nfr-requirements"]],
+    ["incident-response", ["nfr-design", "infrastructure-design"]],
+    ["observability-setup", ["nfr-design", "infrastructure-design"]],
+    ["performance-validation", ["nfr-requirements", "nfr-design"]],
+  ] as const) {
+    test(`consumer paths: ${slug} reads per-Unit and zero-Unit stage-level inputs`, () => {
+      const content = read(findStageFile(slug));
+      const inputs = parseStageFrontmatter(content).inputs;
+      expect(inputs).toContain("for every Unit under <record>/construction/units/");
+      expect(inputs).toMatch(/stage-level .* outputs for a zero-Unit scope/);
+      const stepOne = content.split("### Step 1:")[1]?.split("### Step 2:")[0] ?? "";
+      expect(stepOne).toContain("for a zero-Unit scope");
+      for (const producer of producers) {
+        expect(stepOne).toContain(`<record>/construction/units/<unit>/${producer}/`);
+        expect(stepOne).toContain(`<record>/construction/${producer}/`);
+      }
+      if (slug === "ci-pipeline") {
+        expect(content).toContain("<record>/construction/units/*/code-generation/traceability.json");
+        expect(content).toContain("<record>/construction/code-generation/traceability.json");
+      }
+    });
+  }
+
   // ============================================================
   // Tests 35-37: operation stages mention <record>/operation/
   // ============================================================

@@ -132,6 +132,34 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
   });
 
+  test("does not migrate the units axis when the DAG's units Unit has not started", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "api"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units", "api", "functional-design"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not migrate an empty units axis even when the DAG contains units", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "api"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not flag a migrated Unit named units", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "api"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units", "units", "functional-design"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not migrate the units axis when a started Unit has a stage slug as its name", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "functional-design"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units", "functional-design", "functional-design"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
   test("without a DAG, stage-shaped unit roots are detected but stage diaries and migrated roots are not", () => {
     const ws = migrationWorkspace();
     const construction = join(seededRecordDir(ws), "construction");

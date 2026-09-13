@@ -59,7 +59,12 @@ export function constructionUnitLayoutCheck(
         if (!entry.isDirectory() || existsSync(join(constructionDir, "units", entry.name))) {
           return false;
         }
-        if (units !== null) return units.has(entry.name);
+        if (units !== null) {
+          if (!units.has(entry.name)) return false;
+          // A Unit named "units" shares its legacy path with the new axis:
+          // DAG membership alone cannot distinguish the two layouts.
+          if (entry.name !== "units") return true;
+        }
         const children = readdirSync(join(constructionDir, entry.name), { withFileTypes: true });
         // A diary/artifact set is a stage, not a unit. Stage directories can be
         // empty, but another level of stage directories identifies a migrated

@@ -484,6 +484,45 @@ describe("v2 stage-graph compatibility", () => {
     ]);
   });
 
+  test("resolves infra infrastructure design on the stage axis and feature design on the Unit axis", () => {
+    const owner = loadGraph().find((stage) => stage.slug === "infrastructure-design");
+    if (!owner) throw new Error("live graph missing infrastructure-design");
+
+    for (const scope of ["infra", "feature"]) {
+      const projectDir = tempProject();
+      const state = stateContent([], scope);
+      const record = initializeProject(projectDir, state);
+      if (scope === "feature") {
+        writeArtifact(
+          record,
+          "inception",
+          "units-generation",
+          "unit-of-work-dependency.md",
+          "```yaml\nunits:\n  - name: api\n    kind: service\n    depends_on: []\n```\n",
+        );
+      }
+
+      const instances = resolveArtifactInstances(
+        projectDir,
+        "infrastructure-specification",
+        owner,
+        { stateContent: state },
+      );
+      expect(instances.map(({ absolutePath, unit }) => ({ absolutePath, unit }))).toEqual([
+        {
+          absolutePath: join(
+            record,
+            "construction",
+            ...(scope === "infra" ? [] : ["units", "api"]),
+            "infrastructure-design",
+            "infrastructure-specification.md",
+          ),
+          unit: scope === "infra" ? null : "api",
+        },
+      ]);
+    }
+  });
+
   test("ignores stale per-unit directories for an express stage-level owner", () => {
     const projectDir = tempProject();
     const state = stateContent(["code-generation"], "express");

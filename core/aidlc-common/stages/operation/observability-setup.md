@@ -40,7 +40,7 @@ scopes:
   - classic
   - workshop
   - express
-inputs: NFR and infrastructure design for every Unit under <record>/construction/units/, deployed application
+inputs: NFR and infrastructure design for every Unit under <record>/construction/units/, or stage-level nfr-design and infrastructure-design outputs for a zero-Unit scope, deployed application
 outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -50,10 +50,10 @@ outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config
 
 ### Step 1: Load Prior Context
 
-This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`:
+This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`, or read the stage-level equivalents for a zero-Unit scope:
 
-- Read NFR design (observability strategy) from `<record>/construction/units/<unit>/nfr-design/`
-- Read infrastructure design from `<record>/construction/units/<unit>/infrastructure-design/`
+- Read NFR design (observability strategy) from `<record>/construction/units/<unit>/nfr-design/`; for a zero-Unit scope (e.g. `infra`) read `<record>/construction/nfr-design/` directly
+- Read infrastructure design from `<record>/construction/units/<unit>/infrastructure-design/`; for a zero-Unit scope (e.g. `infra`) read `<record>/construction/infrastructure-design/` directly
 - Read deployment execution log from `<record>/operation/deployment-execution/`
 
 `express` skips NFR Design and Infrastructure Design by design. When those
