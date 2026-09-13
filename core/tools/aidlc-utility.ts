@@ -44,8 +44,10 @@ import {
   consumedArtifactProducerCollisions,
   findCycles,
   frameworkMemorySeedDir,
+  loadComposedScopeRecords,
   loadGraph,
   loadRules,
+  loadScopeGrid,
   memoryDirFor,
   selectionDroppedOrderingEdges,
   stageGraphDrift,
@@ -142,6 +144,7 @@ import {
   loadScopeMapping,
   loadStageGraph,
   loadStageGraphAll,
+  loadScopeMetadata,
   loadScopeMetadataAll,
   MERGE_SUCCEEDED_TAG_REGEX,
   migrateFlatLayout,
@@ -4757,6 +4760,122 @@ export async function collectDoctorReport(
     results.push({
       pass: false,
       label: "Scope validation: check failed",
+      fix: errorMessage(e),
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Composed scope durability
+  //
+  // A composer-authored scope is workflow data, but its harness projection lives
+  // in a GENERATED tree (scopes/aidlc-<name>.md + a scope-grid.json column). The
+  // durable copy is the aidlc/scopes/<name>.md record; compile projects it. Three
+  // ways that pairing can break, none of which any other check sees:
+  //
+  //   (a) PHANTOM — an identity file with no grid column. loadScopeMapping falls
+  //       back to `{}` for a missing column, so the scope stays "valid" and
+  //       resolves as an all-SKIP plan. Scope validation cannot catch it: an
+  //       all-SKIP grid walks no consumes, so it reports zero errors. This is the
+  //       shape a copy-channel reinstall leaves behind.
+  //   (b) UNPROJECTED — a durable record whose harness identity file is absent,
+  //       so `--scope <name>` does not resolve at all until the next compile.
+  //   (c) DANGLING — a RUNNABLE workflow whose recorded Scope has no definition
+  //       anywhere. Typically a collaborator's checkout missing aidlc/scopes/.
+  //
+  // All three FAIL rather than advise: every one of them silently changes which
+  // stages a workflow will run, which is the class of defect a health check
+  // exists to make loud. Plugin-owned scopes are excluded — a disabled plugin's
+  // scope legitimately has no grid column (the selection filter drops it), and
+  // the plugin checks own that state.
+  //
+  // What this does NOT check: whether a record's descriptive frontmatter (depth,
+  // description, keywords) still matches its projected file. The grid always comes
+  // from the record, so a divergence cannot change which stages run; and compile
+  // deliberately leaves an existing identity file alone rather than overwrite a
+  // hand-edit. Reconciling would mean choosing to clobber that edit, which is a
+  // behavior change, not a durability fix. The docs say so explicitly.
+  // ---------------------------------------------------------------------------
+  try {
+    const stockScopeNames = new Set<string>();
+    for (const stage of loadGraph()) {
+      for (const name of stage.scopes ?? []) stockScopeNames.add(name);
+    }
+    const grid = loadScopeGrid();
+    const records = loadComposedScopeRecords();
+    const enabled = loadScopeMetadata();
+    const compileFix = `run \`${aidlcToolInvocation("graph")} compile\``;
+
+    const phantoms: string[] = [];
+    for (const [name, meta] of Object.entries(enabled)) {
+      if (meta.plugin !== undefined || stockScopeNames.has(name)) continue;
+      const stages = grid[name]?.stages;
+      if (stages === undefined || Object.keys(stages).length === 0) phantoms.push(name);
+    }
+    const unprojected = Object.keys(records)
+      .filter((name) => enabled[name] === undefined)
+      .sort();
+    const dangling: string[] = [];
+    for (const space of listSpaces(projectDir)) {
+      for (const intent of listIntents(projectDir, space.name)) {
+        // Only workflows that can still run. A finished workflow needs no scope
+        // definition, and holding one to this standard would be unrecoverable:
+        // `intent archive` refuses a completed intent outright, so the only exit
+        // would be recreating a scope the user deliberately deleted. Mirrors the
+        // enumeration activeWorkflowDependencyViolations already uses in this file
+        // (which t224 pins), so completion releases this check the same way it
+        // releases the plugin-selection block.
+        if (isArchivedIntent(intent) || intent.status === "complete" || !intent.dirName) {
+          continue;
+        }
+        const sp = stateFilePath(projectDir, intent.dirName, space.name);
+        if (!existsSync(sp)) continue;
+        const content = readFileSync(sp, "utf-8");
+        const status = getField(content, "Status") ?? "";
+        if (status === "Completed" || status === "Archived") continue;
+        const scope = getField(content, "Scope");
+        if (scope && !validScopes().has(scope)) {
+          dangling.push(`${space.name}/${intent.dirName} → "${scope}"`);
+        }
+      }
+    }
+
+    const total = phantoms.length + unprojected.length + dangling.length;
+    if (total === 0) {
+      const count = Object.keys(records).length;
+      results.push({
+        pass: true,
+        label: count === 0
+          ? "Composed scope durability: no composed scopes"
+          : `Composed scope durability: ${count} composed scope(s) recorded and projected`,
+      });
+    } else {
+      const detail = [
+        phantoms.length > 0
+          ? `${phantoms.length} with no grid column (resolves as an empty all-SKIP plan) [${phantoms.join(", ")}]`
+          : "",
+        unprojected.length > 0
+          ? `${unprojected.length} recorded but not projected into ${harnessDir()}/scopes/ [${unprojected.join(", ")}]`
+          : "",
+        dangling.length > 0
+          ? `${dangling.length} workflow(s) reference an unresolvable scope [${dangling.join(", ")}]`
+          : "",
+      ].filter(Boolean).join("; ");
+      const fixes = [
+        phantoms.length > 0 || unprojected.length > 0 ? compileFix : "",
+        dangling.length > 0
+          ? `for an unresolvable scope, restore its \`aidlc/scopes/<name>.md\` record (a composed scope travels with the shared \`aidlc/\` tree, so pull it from the collaborator or checkout that composed it), then ${compileFix}`
+          : "",
+      ].filter(Boolean).join(". ");
+      results.push({
+        pass: false,
+        label: `Composed scope durability: ${total} problem(s) - ${detail}`,
+        fix: fixes,
+      });
+    }
+  } catch (e) {
+    results.push({
+      pass: false,
+      label: "Composed scope durability: check failed",
       fix: errorMessage(e),
     });
   }

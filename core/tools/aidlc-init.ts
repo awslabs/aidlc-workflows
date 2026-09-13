@@ -65,7 +65,11 @@ import {
   validateTransactionPlan,
   writeOperation,
 } from "./aidlc-transaction.ts";
-import { compileStageGraph, __resetGraphCache } from "./aidlc-graph.ts";
+import {
+  compileStageGraph,
+  materializeComposedScopeIdentities,
+  __resetGraphCache,
+} from "./aidlc-graph.ts";
 import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -3645,6 +3649,7 @@ function prepareRefreshSource(
     "AIDLC_STAGE_GRAPH",
     "AIDLC_SCOPE_GRID",
     "AIDLC_SCOPES_DIR",
+    "AIDLC_COMPOSED_SCOPES_DIR",
     "AIDLC_SENSORS_DIR",
     "AIDLC_AGENTS_DIR",
   ] as const;
@@ -3658,9 +3663,25 @@ function prepareRefreshSource(
     process.env.AIDLC_STAGE_GRAPH = join(stagedHarness, "tools", "data", "stage-graph.json");
     process.env.AIDLC_SCOPE_GRID = stagedGrid;
     process.env.AIDLC_SCOPES_DIR = join(stagedHarness, "scopes");
+    // Composed-scope records are the PROJECT's durable data, not part of the
+    // staged projection, so point the staged compile at the real ones. Without
+    // this the staged compile would fall back to the copied grid alone and could
+    // disagree with a later `graph compile` about a composed scope's cells. Paired
+    // with the materialize call below, this makes the record the source of record
+    // on this path too — reading the records is not sufficient on its own, because
+    // the fold-back also needs the identity file present.
+    process.env.AIDLC_COMPOSED_SCOPES_DIR = join(projectDir, "aidlc", "scopes");
     process.env.AIDLC_SENSORS_DIR = join(stagedHarness, "sensors");
     process.env.AIDLC_AGENTS_DIR = join(stagedHarness, "agents");
     resetProjectionCaches();
+    // Restore any composed scope whose identity file is missing from the staged
+    // projection BEFORE compiling, exactly as the `graph compile` CLI does. The
+    // fold-back only resurrects a grid column whose identity file exists, so
+    // without this a record whose projection is gone — which is precisely the
+    // reinstall this recovery exists for — would be filtered out and its column
+    // silently dropped into the tree about to be installed. `root` is the staged
+    // projection, so the write lands there and never in the live project.
+    if (materializeComposedScopeIdentities(root).length > 0) resetProjectionCaches();
     const compiled = compileStageGraph();
     writeFileSync(process.env.AIDLC_STAGE_GRAPH, compiled.json);
     writeFileSync(stagedGrid, compiled.gridJson);
