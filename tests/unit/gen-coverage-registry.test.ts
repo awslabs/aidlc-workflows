@@ -946,6 +946,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t314-plugin-reinstall-doctor.test.ts",
+    // t341 is t314's composed-scope twin: it spawns the shipped graph/doctor
+    // tools to walk a reinstall, so its body is a deterministic spawner even
+    // though its filename segment carries no mechanism.
+    "integration/t341-composed-scope-durability.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t325-team-unit-claims.test.ts",

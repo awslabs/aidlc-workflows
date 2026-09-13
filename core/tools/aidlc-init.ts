@@ -3645,6 +3645,7 @@ function prepareRefreshSource(
     "AIDLC_STAGE_GRAPH",
     "AIDLC_SCOPE_GRID",
     "AIDLC_SCOPES_DIR",
+    "AIDLC_COMPOSED_SCOPES_DIR",
     "AIDLC_SENSORS_DIR",
     "AIDLC_AGENTS_DIR",
   ] as const;
@@ -3658,6 +3659,12 @@ function prepareRefreshSource(
     process.env.AIDLC_STAGE_GRAPH = join(stagedHarness, "tools", "data", "stage-graph.json");
     process.env.AIDLC_SCOPE_GRID = stagedGrid;
     process.env.AIDLC_SCOPES_DIR = join(stagedHarness, "scopes");
+    // Composed-scope records are the PROJECT's durable data, not part of the
+    // staged projection, so point the staged compile at the real ones. Without
+    // this the staged compile would fall back to the copied grid alone and could
+    // disagree with a later `graph compile` about a composed scope's cells; the
+    // record is the source of record on both paths.
+    process.env.AIDLC_COMPOSED_SCOPES_DIR = join(projectDir, "aidlc", "scopes");
     process.env.AIDLC_SENSORS_DIR = join(stagedHarness, "sensors");
     process.env.AIDLC_AGENTS_DIR = join(stagedHarness, "agents");
     resetProjectionCaches();
