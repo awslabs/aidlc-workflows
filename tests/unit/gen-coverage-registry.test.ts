@@ -1172,6 +1172,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t11-halt-and-ask-retry-correlation.test.ts",
     "e2e/t12-bolt-runtime-graph-fork.test.ts",
     "e2e/t134-swarm-referee.test.ts",
+    "e2e/t138-scope-exclusion-counts.test.ts",
     // t-ide-kiro constructs its approval-gate fixture by spawning the real
     // shipped tools (runSetupTool), so its body is a deterministic spawner
     // even though its filename segment carries no mechanism.
