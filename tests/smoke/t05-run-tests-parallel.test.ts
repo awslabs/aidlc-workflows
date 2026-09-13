@@ -179,28 +179,25 @@ const PER_TEST_TIMEOUT = 120000;
 describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel.sh, plan 14 + MR8)", () => {
   test("preserves a caller-selected bun ahead of the home install", () => {
     const dir = mkdtempSync(join(tmpdir(), "aidlc-t05-pinned-bun-"));
-    const binDir = join(dir, "bin");
-    const fakeBun = join(binDir, "bun");
-    mkdirSync(binDir);
-    writeFileSync(
-      fakeBun,
-      [
-        "#!/bin/bash",
-        "printf 'PINNED_BUN_SELECTED\\n'",
-        'exec "$AIDLC_T05_REAL_BUN" "$@"',
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-    chmodSync(fakeBun, 0o755);
+    const homeBinDir = join(dir, ".bun", "bin");
+    const pathBinDir = join(dir, "path-bin");
     try {
+      for (const [binDir, sentinel] of [
+        [homeBinDir, "HOME-BUN-SENTINEL"],
+        [pathBinDir, "PATH-BUN-SENTINEL"],
+      ]) {
+        mkdirSync(binDir, { recursive: true });
+        const fakeBun = join(binDir, "bun");
+        writeFileSync(fakeBun, `#!/bin/bash\nprintf '${sentinel}\\n'\n`, "utf-8");
+        chmodSync(fakeBun, 0o755);
+      }
       const r = run(["--help"], {
-        AIDLC_T05_REAL_BUN: process.execPath,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        HOME: dir,
+        PATH: `${pathBinDir}:/usr/bin:/bin`,
       });
       expect(r.status).toBe(0);
-      expect(r.out).toContain("PINNED_BUN_SELECTED");
-      expect(r.out).toContain("Usage: bash tests/run-tests.sh");
+      expect(r.out).toContain("PATH-BUN-SENTINEL");
+      expect(r.out).not.toContain("HOME-BUN-SENTINEL");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
