@@ -413,9 +413,9 @@ beforeAll(() => {
 // ============================================================
 describe("t65 parse + schema validation (in-process)", () => {
   // .sh #1: "all 32 stage files parse via parseStageFrontmatter"
-  test("all 33 stage files parse via parseStageFrontmatter (total=33, no errors)", () => {
+  test("all 34 stage files parse via parseStageFrontmatter (total=34, no errors)", () => {
     expect(agg.parseErrors).toEqual([]);
-    expect(agg.totalParsed).toBe(33);
+    expect(agg.totalParsed).toBe(34);
   });
 
   // .sh #2: "non-init stages validate against milestone 5 schema with ctx.agents"
@@ -443,7 +443,7 @@ describe("t65 per-phase stage counts (in-process)", () => {
     ["initialization", 3],
     ["ideation", 7],
     ["inception", 9],
-    ["construction", 7],
+    ["construction", 8],
     ["operation", 7],
   ];
   for (const [phase, count] of expected) {
@@ -458,8 +458,8 @@ describe("t65 per-phase stage counts (in-process)", () => {
 // ============================================================
 describe("t65 for_each + mode (in-process)", () => {
   // .sh #9: "exactly 5 stages have for_each: unit-of-work, all in construction"
-  test("exactly 5 stages have for_each: unit-of-work, all in construction", () => {
-    expect(agg.forEachCount).toBe(5);
+  test("exactly 6 stages have for_each: unit-of-work, all in construction", () => {
+    expect(agg.forEachCount).toBe(6);
     expect(agg.forEachNonConstruction).toEqual([]);
     expect(agg.forEachValue).toEqual(["unit-of-work"]);
   });
@@ -561,7 +561,7 @@ describe("t65 shape guards (in-process)", () => {
 
   // .sh #20: "round-trip (parse → emit → parse) yields deep-equal object for
   // all 32 stages"
-  test("round-trip (parse -> emit -> parse) deep-equals original for all 33 stages", () => {
+  test("round-trip (parse -> emit -> parse) deep-equals original for all 34 stages", () => {
     expect(agg.roundTripMismatches).toEqual([]);
   });
 

@@ -193,6 +193,7 @@ import {
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
   unitDependencyPath,
+  unitLifecycleSnapshot,
   withAuditLock,
   validateBoltSlug,
   validScopes,
@@ -444,7 +445,8 @@ Scopes (set depth, test strategy, and stage count):
 
 const HELP_TEXT_TAIL = `
 Utilities:
-  --status          Show current workflow progress (read-only)
+  --status          Show current workflow progress and last-known PR integration state
+  --status --refresh  Refresh integrating PRs through the bounded GitHub sweep
   --config [section]  Configure models, runtime, providers, trust, flags, or project in-session
   --claim <unit>    Atomically claim a team-owned Unit in this checkout
   --release <unit>  Release a Unit claim from the unscoped main checkout
@@ -1547,6 +1549,168 @@ function pendingDuration(ageMs: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+interface IntegrationStatusRow {
+  unit: string;
+  repo: string;
+  number: string;
+  url: string;
+  state: string;
+  observedAt: string;
+  ageMs: number;
+}
+
+const PR_STATUS_REFRESH_TIMEOUT_MS = 60_000;
+
+function integrationStatusSection(
+  projectDir: string,
+  content: string,
+  flags: Record<string, string>,
+): string {
+  const auditRows = readAuditShardEvents(
+    projectDir,
+    flags.intent,
+    flags.space,
+  );
+  const lifecycle = unitLifecycleSnapshot(
+    projectDir,
+    "pr-integration",
+    auditRows,
+    content,
+  );
+  if (lifecycle.integrating.size === 0) return "";
+
+  const rows = new Map<string, IntegrationStatusRow>();
+  for (const event of auditRows) {
+    if (
+      event.event !== "PR_OPENED" &&
+      event.event !== "PR_FEEDBACK" &&
+      event.event !== "PR_MERGED"
+    ) {
+      continue;
+    }
+    const unit = auditBlockField(event.block, "Unit");
+    if (!unit || !lifecycle.integrating.has(unit)) continue;
+    const repo = auditBlockField(event.block, "Repo");
+    const number = auditBlockField(event.block, "PR Number");
+    const url = auditBlockField(event.block, "PR URL");
+    if (!repo || !number || !url) continue;
+    const key = `${unit}:${repo}#${number}`;
+    const current = rows.get(key);
+    if (current?.state === "MERGED" && event.event !== "PR_MERGED") continue;
+    const feedbackState = auditBlockField(event.block, "State");
+    const state =
+      event.event === "PR_MERGED"
+        ? "MERGED"
+        : event.event === "PR_OPENED"
+          ? "OPEN"
+          : feedbackState === "CHANGES_REQUESTED" ||
+              feedbackState === "APPROVED"
+            ? feedbackState
+            : current?.state ?? "OPEN";
+    const observedMs = Date.parse(event.timestamp);
+    rows.set(key, {
+      unit,
+      repo,
+      number,
+      url,
+      state,
+      observedAt: event.timestamp,
+      ageMs: Number.isFinite(observedMs) ? Math.max(0, Date.now() - observedMs) : 0,
+    });
+  }
+
+  let refreshNote =
+    "Refresh:        /aidlc --status --refresh (Codex: $aidlc --status --refresh)";
+  if (flags.refresh === "true" && rows.size > 0) {
+    const tool = resolveHarnessPath(["tools", "aidlc-pr.ts"], { projectDir });
+    const bun = basename(process.execPath).startsWith("bun")
+      ? process.execPath
+      : "bun";
+    const specs = [...rows.values()]
+      .map((row) => `${row.repo}#${row.number}`)
+      .filter((value, index, all) => all.indexOf(value) === index);
+    const refreshed = spawnSync(
+      bun,
+      [
+        tool,
+        "sweep",
+        ...specs.flatMap((spec) => ["--pr", spec]),
+        "--project-dir",
+        projectDir,
+      ],
+      {
+        cwd: projectDir,
+        encoding: "utf-8",
+        env: process.env,
+        timeout: PR_STATUS_REFRESH_TIMEOUT_MS,
+      },
+    );
+    if ((refreshed.status ?? 1) === 0) {
+      try {
+        const parsed = JSON.parse(refreshed.stdout) as {
+          online?: boolean;
+          error?: string;
+          pulls?: Array<{
+            repo?: string;
+            number?: number;
+            verdict?: string;
+            mergeability?: string;
+          }>;
+        };
+        if (parsed.online === false) {
+          refreshNote = `Refresh:        unavailable (${parsed.error ?? "GitHub unreachable"}); showing audit-known state`;
+        } else {
+          for (const pull of parsed.pulls ?? []) {
+            const prefix = `${pull.repo}#${pull.number}`;
+            for (const [key, row] of rows) {
+              if (!key.endsWith(`:${prefix}`)) continue;
+              row.state =
+                pull.verdict === "MERGED"
+                  ? "MERGED (finalize pending)"
+                  : `${pull.verdict ?? row.state}${
+                      pull.mergeability === "unknown"
+                        ? " / mergeability pending"
+                        : ""
+                    }`;
+              row.observedAt = new Date().toISOString();
+              row.ageMs = 0;
+            }
+          }
+          refreshNote = "Refresh:        complete";
+        }
+      } catch (error) {
+        refreshNote = `Refresh:        invalid sweep response (${errorMessage(error)}); showing audit-known state`;
+      }
+    } else {
+      const failure =
+        refreshed.error?.message ||
+        refreshed.stderr ||
+        refreshed.stdout ||
+        `exit ${refreshed.status ?? 1}`;
+      refreshNote =
+        `Refresh:        failed (${failure.trim()}); ` +
+        "showing audit-known state";
+    }
+  }
+
+  const rendered = [...lifecycle.integrating]
+    .map((unit) => {
+      const unitRows = [...rows.values()]
+        .filter((row) => row.unit === unit)
+        .sort((a, b) => a.repo.localeCompare(b.repo))
+        .map(
+          (row) =>
+            `    ${row.repo}#${row.number}  ${row.state}  ${pendingDuration(row.ageMs)}  ${row.url}`,
+        );
+      return [
+        `  ${unit}`,
+        ...(unitRows.length > 0 ? unitRows : ["    PR details unavailable in the current audit attempt"]),
+      ].join("\n");
+    })
+    .join("\n");
+  return `Integrating Units:\n${rendered}\n${refreshNote}`;
+}
+
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
@@ -1744,6 +1908,17 @@ To get started:
       `Warnings:       ${errorMessage(error)}\n`;
   }
 
+  let integrationOutput = "";
+  if (getField(content, "Integration Mode")?.trim() === "pr") {
+    try {
+      integrationOutput = integrationStatusSection(projectDir, content, flags);
+    } catch (error) {
+      integrationOutput =
+        `Integrating Units: unavailable (${errorMessage(error)})\n` +
+        "Refresh:        /aidlc --status --refresh";
+    }
+  }
+
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -1757,7 +1932,7 @@ Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skip
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput}
+${integrationOutput ? `${integrationOutput}\n` : ""}${validityOutput}
 Last Completed: ${lastCompleted}
 Next Stage:     ${nextStage}
 `;

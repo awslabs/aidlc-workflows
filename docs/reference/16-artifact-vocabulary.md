@@ -87,7 +87,7 @@ Things that are **not** artifacts in this registry:
    entry and `requires_stage[]` slug must resolve against the derived registry.
    Orphan consumers are reported as broken references.
 
-All 33 stage files declare `produces:`, so the derivation returns the full
+All 34 stage files declare `produces:`, so the derivation returns the full
 registry. The tool is well-defined on empty data too — a stage with no
 `produces:` simply contributes nothing — but in the shipped framework every
 stage is populated.
@@ -184,7 +184,7 @@ resolves to `traceability.json`. Two placement shapes apply:
   `<record>/construction/{unit-name}/functional-design/functional-spec.md`.
 
 Per-unit status is declared by the stage's `for_each: unit-of-work`
-frontmatter field — the five Construction stages that run once per Unit carry
+frontmatter field — the six Construction stages that run once per Unit carry
 it; the rest omit it. A future helper could compute the path mechanically from
 stage graph + canonical name.
 

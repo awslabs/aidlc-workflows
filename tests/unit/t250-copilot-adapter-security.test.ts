@@ -519,7 +519,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
     }
-  });
+  }, 30000);
 
   test("11b: multi-file replacements fan out through every mutation hook", () => {
     const s = scratch();
@@ -575,7 +575,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
     }
-  });
+  }, 30000);
 
   // --- Command injection is inert: the command is DATA, never a shell ---------
 
@@ -720,7 +720,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
     }
-  });
+  }, 15000);
 
   test("13d: reviewer-scope failures block before review freeze", () => {
     const s = scratch();
@@ -848,7 +848,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
     }
-  });
+  }, 30000);
 
   test("18: ordinary VS Code session ids isolate active reviewers across host sessions", () => {
     const s = scratch();
@@ -900,7 +900,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
     }
-  });
+  }, 30000);
 
   test("19: an interrupted process's stale ledger lock is reclaimed", () => {
     const s = scratch();

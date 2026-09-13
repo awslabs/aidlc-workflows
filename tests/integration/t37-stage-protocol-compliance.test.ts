@@ -143,8 +143,8 @@ describe("every stage references the stage protocol", () => {
   // — including the 3 init stages — reference stage-protocol, so this is the
   // STRONGER form: every stage must reference it (the .sh's only failing branch
   // was a non-init stage missing the reference).
-  test("the shipped tree has exactly 33 stage files [.sh TOTAL_STAGES]", () => {
-    expect(STAGE_FILES.length).toBe(33);
+  test("the shipped tree has exactly 34 stage files [.sh TOTAL_STAGES]", () => {
+    expect(STAGE_FILES.length).toBe(34);
   });
 
   for (const { slug, path } of STAGE_FILES) {

@@ -80,6 +80,7 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
   activeSpace,
   pipelineAttemptStartedAt,
@@ -188,13 +189,13 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
         );
-        // The init-done fixture marks reverse-engineering in progress but its
-        // seeded audit carries no STAGE_STARTED row for it; the real advance out
-        // of Initialization writes that row, and `aidlc-log.ts link` refuses a
-        // developer handoff "not written in the current stage attempt" without
-        // it. Seed the attempt floor the way t185 does so the journey depends on
-        // the conductor's stage work, not on whether it happens to re-emit the
-        // row before its first link.
+        // The seeded state bypasses intent creation and stage entry. Compile the
+        // fixture runtime so the current RE attempt has its tool-owned
+        // WORKFLOW_STARTED/STAGE_STARTED authority before pipeline receipts.
+        compileFixtureRuntimeGraph(proj);
+        // A readable runtime may already exist without the pipeline attempt row.
+        // Keep the explicit attempt-floor backstop so the journey depends on the
+        // conductor's stage work, not on a STAGE_STARTED replay before its link.
         ensurePipelineAttemptStarted(proj);
 
         const r = await driveAidlc("/aidlc", {

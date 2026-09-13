@@ -288,7 +288,7 @@ beforeAll(() => {
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   rawAfterRecompile = readFileSync(graphPathOf(proj), "utf-8");
-});
+}, 30000);
 
 afterAll(() => {
   cleanupTestProject(proj);

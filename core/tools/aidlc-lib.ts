@@ -144,6 +144,7 @@ export interface ScopeDefinition {
   /** The scope's Change Control default (`change_control:` frontmatter);
    *  absent means strict. Resolution lives in resolveChangeControl. */
   changeControl?: ChangeControl;
+  integration?: "pr" | "direct";
 }
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -25505,10 +25506,12 @@ function currentUnitLifecycleRows(
         .at(-1)?.timestamp ?? ""
     : latestMainWorkflowStageStarted(audit, slug);
   let teamOwnership = false;
+  let integrationActive = false;
   try {
-    teamOwnership = isTeamUnitOwnership(
-      stateContent ?? readStateFile(projectDir),
-    );
+    const lifecycleState = stateContent ?? readStateFile(projectDir);
+    teamOwnership = isTeamUnitOwnership(lifecycleState);
+    integrationActive =
+      getField(lifecycleState, "Integration Mode")?.trim() === "pr";
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
@@ -25533,6 +25536,7 @@ function currentUnitLifecycleRows(
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
   ]);
+  if (integrationActive) unitEvents.add("UNIT_INTEGRATING");
   const rows: UnitLifecycleRow[] = [];
   for (const row of sourceRows) {
     if (!unitEvents.has(row.event)) continue;
@@ -25617,6 +25621,7 @@ function unitMajorLifecycleMode(projectDir: string): boolean {
 
 export interface UnitLifecycleSnapshot {
   receipts: Set<string>;
+  integrating: Set<string>;
   checkpoint: {
     unit: string;
     state: "in-progress" | "paused";
@@ -25687,10 +25692,20 @@ export function unitLifecycleSnapshot(
   for (const row of rows) {
     latest.set(row.unit, { event: row.event, block: row.block });
   }
+  const integrating = new Set<string>();
+  for (const [unit, final] of latest) {
+    if (final.event === "UNIT_INTEGRATING") integrating.add(unit);
+  }
   let checkpoint: UnitLifecycleSnapshot["checkpoint"] = null;
   for (let i = rows.length - 1; i >= 0; i--) {
     const final = latest.get(rows[i].unit);
-    if (!final || final.event === "UNIT_COMPLETED") continue;
+    if (
+      !final ||
+      final.event === "UNIT_COMPLETED" ||
+      final.event === "UNIT_INTEGRATING"
+    ) {
+      continue;
+    }
     checkpoint = {
       unit: rows[i].unit,
       state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
@@ -25705,6 +25720,9 @@ export function unitLifecycleSnapshot(
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
   ]);
+  if (getField(stateContent, "Integration Mode")?.trim() === "pr") {
+    unitEvents.add("UNIT_INTEGRATING");
+  }
   const inUse = auditRows.some(
     (row) =>
       unitEvents.has(row.event) &&
@@ -25718,7 +25736,7 @@ export function unitLifecycleSnapshot(
         : sawSerial
           ? "serial"
           : "none";
-  return { receipts, checkpoint, inUse, mode };
+  return { receipts, integrating, checkpoint, inUse, mode };
 }
 
 export function unitCompletedReceipts(
@@ -25757,6 +25775,37 @@ export function unitCompletedReceipts(
     }
   }
   return done;
+}
+
+export function unitIntegratingReceipts(
+  projectDir: string,
+  slug: string,
+): Set<string> {
+  try {
+    if (
+      getField(readStateFile(projectDir), "Integration Mode")?.trim() !== "pr"
+    ) {
+      return new Set();
+    }
+  } catch {
+    return new Set();
+  }
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return new Set();
+  const latest = new Map<string, string>();
+  for (const row of currentUnitLifecycleRows(
+    projectDir,
+    audit,
+    slug,
+    unitMajorLifecycleMode(projectDir),
+  )) {
+    latest.set(row.unit, row.event);
+  }
+  return new Set(
+    [...latest.entries()]
+      .filter(([, event]) => event === "UNIT_INTEGRATING")
+      .map(([unit]) => unit),
+  );
 }
 
 export type UnitLifecycleMode = "none" | "serial" | "wave" | "mixed";
@@ -25800,6 +25849,15 @@ export function unitLifecycleReceiptsInUse(
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
   ]);
+  try {
+    if (
+      getField(readStateFile(projectDir), "Integration Mode")?.trim() === "pr"
+    ) {
+      unitEvents.add("UNIT_INTEGRATING");
+    }
+  } catch {
+    // Unreadable state keeps the pre-integration event set.
+  }
   for (const block of audit.replace(/\r\n/g, "\n").split(/\n---\n/)) {
     const event = auditBlockField(block, "Event");
     if (
@@ -25814,7 +25872,7 @@ export function unitLifecycleReceiptsInUse(
 }
 
 // The active unit-lifecycle checkpoint for a stage: the LATEST UNIT_STARTED /
-// UNIT_PAUSED / UNIT_RESUMED / UNIT_COMPLETED checkpoint per unit (current
+// UNIT_PAUSED / UNIT_RESUMED / UNIT_INTEGRATING / UNIT_COMPLETED checkpoint per unit (current
 // attempt only, same floor as unitCompletedReceipts), reduced to the unit whose
 // latest checkpoint is a non-terminal state. Same-shard ties retain append
 // order; unordered same-second cross-shard ties conservatively preserve pause,
@@ -25843,7 +25901,13 @@ export function activeUnitCheckpoint(
   for (let i = rows.length - 1; i >= 0; i--) {
     const { unit } = rows[i];
     const final = latest.get(unit);
-    if (!final || final.event === "UNIT_COMPLETED") continue;
+    if (
+      !final ||
+      final.event === "UNIT_COMPLETED" ||
+      final.event === "UNIT_INTEGRATING"
+    ) {
+      continue;
+    }
     return {
       unit,
       state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
@@ -25983,6 +26047,7 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  integration?: "pr" | "direct";
   /** Ceiling on how heavyweight stage reviews run under this scope:
    *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
    *  stages degrade to a single advisory pass), or "none" (no reviewer
@@ -26088,6 +26153,10 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.skeleton = skeleton === "on";
+    }
+    const integration = scalarField(fm, "integration");
+    if (integration === "pr" || integration === "direct") {
+      meta.integration = integration;
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
     const reviewCap = scalarField(fm, "review_cap");
@@ -26897,6 +26966,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "requires_stage",
     "sensors",
     "scopes",
+    "required_sections",
     "inputs",
     "outputs",
   ] as const;

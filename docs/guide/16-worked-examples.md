@@ -38,7 +38,7 @@ You respond:
 | 2.1 | Reverse Engineering | Inception | aidlc-developer-agent + aidlc-architect-agent | pipeline |
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
-| 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
+| 3.7 | Build and Test | Construction | aidlc-quality-agent | inline |
 | 4.1 | Deployment Pipeline | Operation | aidlc-pipeline-deploy-agent | inline |
 | 4.3 | Deployment Execution | Operation | aidlc-pipeline-deploy-agent + aidlc-developer-agent | inline |
 
@@ -128,7 +128,7 @@ You approve the plan. The subagent implements all 4 steps:
 
 **Approval gate:** You select **Approve**.
 
-### Stage 3.6 — Build and Test
+### Stage 3.7 — Build and Test
 
 The aidlc-quality-agent runs the build and tests:
 
@@ -191,7 +191,7 @@ Application code in workspace root:
 
 ## Feature Walkthrough
 
-This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases.
+This example builds a notification service for a task management application. The **feature** scope runs all 33 stock-scope stages at Standard depth; PR Integration joins only when practices affirm it. This walkthrough highlights key stages across all phases.
 
 ### Invocation
 
@@ -314,7 +314,7 @@ Planning only: Bolt 1 would ship notification-core (walking skeleton — proves 
 
 > Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
-### Construction Phase (stages 3.1-3.7)
+### Construction Phase (stages 3.1-3.8)
 
 Construction's **default walk is stage-major**. The 2.9 Bolt plan stays on disk as planning; the engine walks Units from `unit-of-work-dependency.md`. The first in-scope Construction EXECUTE stage (here 3.1) is the walking-skeleton gate; the ladder after it decides remaining *stage* gates.
 
@@ -345,7 +345,7 @@ notification-core generates first (it unblocks the others): event handler, notif
 - **notification-preferences** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
 - **notification-email** — Email renderer, SQS consumer, digest cron job. 4 source files, 5 test files. (3.2/3.4 artifacts for this Unit already exist from the earlier stage-major pass.)
 
-Both subagent Tasks return in the next turn. Under the swarm the engine presents **one** Code Generation stage gate after this final batch — not a gate per intermediate batch. Because you chose autonomous, that remaining stage gate is skipped and Construction proceeds to 3.6.
+Both subagent Tasks return in the next turn. Under the swarm the engine presents **one** Code Generation stage gate after this final batch — not a gate per intermediate batch. Because you chose autonomous, that remaining stage gate is skipped and Construction proceeds to the affirmed PR Integration pass.
 
 **What a failure would look like.** Suppose `notification-email`'s Code Generation had returned with a broken SES mock. The conductor would wait for `notification-preferences` to finish, preserve its artifacts on disk, and present:
 
@@ -361,11 +361,17 @@ Options:
 
 You'd pick **Retry**, fix the mock setup, and only notification-email re-runs. Preferences is already `[x]` complete.
 
-**Stage 3.6 — Build and Test** (aidlc-quality-agent, runs once after all Units)
+**Stage 3.6 — PR Integration** (aidlc-pipeline-deploy-agent, per Unit)
+
+Each Unit opens an evidence-rich PR. While notification-core is in review, the
+other Units continue. After all three PRs are verified merged, the tool folds
+their metadata and completes the Unit receipts.
+
+**Stage 3.7 — Build and Test** (aidlc-quality-agent, runs once after all Units)
 
 Generates build instructions, runs the full test suite across all 3 Units: 47 tests pass, 0 failures, 78% coverage.
 
-**Stage 3.7 — CI Pipeline** (aidlc-pipeline-deploy-agent)
+**Stage 3.8 — CI Pipeline** (aidlc-pipeline-deploy-agent)
 
 Configures CI pipeline with lint, build, test, and security scan stages. Quality gates: coverage >= 75%, no critical vulnerabilities.
 

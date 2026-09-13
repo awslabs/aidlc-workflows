@@ -1,6 +1,6 @@
 # Scopes
 
-A scope is the dial that decides *which* of the framework's 33 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or environment provisioning, but it still runs the deployment pipeline and execution stages; a regulated enterprise feature needs the full lifecycle. Rather than asking the user to hand-pick stages every time, AI-DLC ships eleven named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with workflow defaults such as depth, test strategy, and an optional review ceiling. Pick the scope and the rest cascades.
+A scope is the dial that decides *which* of the framework's 34 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or environment provisioning, but it still runs the deployment pipeline and execution stages; a regulated enterprise feature needs the full lifecycle. PR Integration ships SKIP in every stock grid and is promoted per intent after detection and affirmation. Rather than asking the user to hand-pick stages every time, AI-DLC ships eleven named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with workflow defaults such as depth, test strategy, and an optional review ceiling. Pick the scope and the rest cascades.
 
 For a harness engineer, a scope is pure data, authored the same way every other primitive is — as a file. It is two halves: one `core/scopes/aidlc-<name>.md` file (its identity, routing metadata, and workflow defaults) plus a per-stage membership tag (each stage's frontmatter `scopes:` list naming the scopes it runs under). Adding or tuning a scope requires no TypeScript. This chapter walks the workflow: what a scope is made of, how to add a team scope, how to tune an existing one, and what the tooling checks for you versus what it leaves to you.
 
@@ -85,6 +85,14 @@ refuses chat or flag flips by naming the file; a memory `relaxed` or an absent
 section has no effect. The validation error for anything other than the two
 values names the file and the allowed values; the per-intent command repairs an
 invalid state line.
+
+### Integration default
+
+The optional `integration:` field records the scope-dependent integration
+stance. Accepted values are `pr` and `direct`. It is parsed for core and plugin
+scopes alike; the PR-integration stage resolves it only after the team's
+detected and affirmed Way of Working has enabled PR integration. Absence does
+not activate PR routing.
 
 **2. The membership tag — each stage's `scopes:` frontmatter.** A stage names the scopes it runs under in its own frontmatter, in `core/aidlc-common/stages/<phase>/<slug>.md`:
 

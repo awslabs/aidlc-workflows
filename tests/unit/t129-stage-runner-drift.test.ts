@@ -200,11 +200,11 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
   // initialization stages). STRONGER: also assert NONE of the runnable stages is
   // an initialization-phase stage (the very exclusion that yields 29).
   // ===========================================================================
-  test("the compiled graph has 30 runnable (non-init) stages, one runner each [.sh test 2]", () => {
+  test("the compiled graph has 31 runnable (non-init) stages, one runner each [.sh test 2]", () => {
     const graph = JSON.parse(readFileSync(STAGE_GRAPH, "utf-8")) as RawStage[];
     const runnable = graph.filter((s) => s.phase !== "initialization");
-    expect(runnable.length).toBe(30);
-    // The exclusion is exactly the 3 init stages: 33 total - 30 runnable = 3.
+    expect(runnable.length).toBe(31);
+    // The exclusion is exactly the 3 init stages: 34 total - 31 runnable = 3.
     expect(graph.length - runnable.length).toBe(3);
     expect(runnable.some((s) => s.phase === "initialization")).toBe(false);
   });
@@ -218,7 +218,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     const r = runGen(GEN, ["check"]);
     expect(r.status).toBe(0);
     expect(r.out).toContain("in sync with the compiled stage graph");
-    expect(r.out).toContain("(30 runners)");
+    expect(r.out).toContain("(31 runners)");
   }, 30000);
 
   // ===========================================================================
@@ -310,7 +310,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     const r = runGen(gen, ["check"]);
     expect(r.status).toBe(0);
     expect(r.out).toContain("in sync with the compiled stage graph");
-    expect(r.out).toContain("(30 runners)");
+    expect(r.out).toContain("(31 runners)");
   }, 60000);
 
   // ===========================================================================
