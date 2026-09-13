@@ -18,6 +18,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 |---------|-----------|
 | No audit entries appearing | Run `aidlc doctor`; for a copy install, also verify `bun` is on the hook PATH |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
+| Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
@@ -128,6 +129,43 @@ Claude Code honours `"disableAllHooks": true` in any settings layer — enterpri
 - If it is **enterprise managed settings** — the highest-precedence layer — a project or user file cannot override it; IT policy must change it. If policy mandates disabled hooks, AI-DLC v2 is not compatible with that environment: its engine is hook-driven.
 
 The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
+
+---
+
+## Kiro IDE Read Denials
+
+### Kiro IDE denies every read under .kiro/ ("Rule: deny fs_read matching")
+
+**Symptom**: Every stage, agent, and protocol read is denied, blocking the workflow:
+
+```text
+Tool call denied by user's permissions. Rule: deny fs_read matching ".kiro/" Source: ~/.config/git/ignore
+```
+
+[Kiro IDE honours](https://kiro.dev/docs/kiroignore/) git's global excludes file
+(in git repositories) and `~/.kiro/settings/kiroignore` automatically. Workspace
+ignore files apply only when the IDE's `kiroAgent.agentIgnoreFiles` setting names
+them (the default includes `.gitignore`; `[]` disables workspace sources).
+It evaluates each ignore file on its own: a project `!.kiro/` negation does not
+undo a global `.kiro/` rule, even when `git check-ignore` reports the path as not
+ignored. A `permissions.yaml` `fs_read` allow does **not** clear the denial:
+[Kiro applies deny-overrides across scopes](https://kiro.dev/docs/permissions/).
+
+Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc.md` present), it
+reports the offending source as:
+
+```text
+Kiro IDE ignore sources: <file>:<line> "<pattern>" hides .kiro/
+```
+
+Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
+warn instead, because doctor cannot read the IDE setting that governs whether
+those workspace files apply.
+
+Remove or narrow the rule in the named file, then re-run `/aidlc --doctor`.
+Keep per-repo personal ignores in that repo's `.git/info/exclude`, which git
+honours and Kiro does not list as an ignore source. A negation in another file
+or a permissions allow is not a substitute for fixing the offending rule.
 
 ---
 
@@ -374,6 +412,8 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 ```
 
 It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+
+On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file, line, and pattern. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials).
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
 
