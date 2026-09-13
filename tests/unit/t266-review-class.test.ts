@@ -390,6 +390,26 @@ describe("t266 review class", () => {
       expect(src).toContain("On an `advisory` review, both verdicts are terminal here.");
       // The adversarial contract prose t234 pins must survive the class split.
       expect(src).toContain("refute the artifact, not to confirm it");
+      // The conductor half of the bookkeeping rule, and the sentence that draws the
+      // line a looser wording lost: an upstream finding is provenance, this stage's
+      // own finding is bookkeeping. The reviewer half is pinned in t279, on the
+      // dispatch list, because that is the only text a reviewer receives.
+      // Whitespace-normalised: the sentence wraps in the module and re-wrapping it
+      // must not silently drop the pin.
+      const flat = src.replace(/\s+/g, " ");
+      expect(flat).toContain("Review bookkeeping is not artifact content");
+      expect(flat).toContain(
+        "A tag naming this stage's own finding or review iteration is review bookkeeping and is prohibited.",
+      );
+      // The two forms a live run wrote straight past the looser wording: a header
+      // line stating the stage's own review state, and an applied-findings table
+      // under a heading of its own. Naming the form is what makes the list bite.
+      expect(flat).toContain(
+        "in any form - a header line, a heading, a table, or a section of its own",
+      );
+      expect(flat).toContain(
+        "not the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`)",
+      );
     }
   });
 
