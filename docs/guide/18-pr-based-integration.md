@@ -109,6 +109,19 @@ coordination membership must match. Unrelated merged PRs cannot settle a Unit.
 Retries resume from `PR_MERGED`, `UNIT_COMPLETED`, `BOLT_COMPLETED`,
 `STATE_MERGED` and `AUDIT_MERGED` receipts; successful steps do not emit twice.
 
+Normal `next` and active-intent status refresh also resume interrupted finalization,
+even after `UNIT_COMPLETED` has landed. A current-run `PR_MERGED` receipt remains
+pending while Unit completion, applicable Bolt metadata receipts, or worktree
+cleanup are outstanding. No new audit event is needed. Reconciliation retires the
+worktree after metadata consolidation; manual `finalize` without `--execute`
+preserves it until a subsequent reconciliation or explicit cleanup.
+
+If a resume step fails, `next` emits an `error` directive naming the Unit and
+step instead of routing ahead. Fix the reported cause, then run
+`aidlc engine pr finalize --unit <unit>` (add `--execute` to retire the worktree)
+or retry `next`. A merge hold must first resolve the failed-sibling decision;
+recovery never bypasses that hold.
+
 Publication records per-repository progress in `pr-record.md.publication.json`
 (`floor`, `targets`, and `repos` entries with `pushed`, `number`, `read_back`,
 `reviewers_requested`). An interrupted publication adopts and verifies the

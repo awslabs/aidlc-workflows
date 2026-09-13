@@ -5021,7 +5021,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // Branch 10 — the happy path. Read the workflow's position from state and map
   // it to the stage to run next.
   if (!isReadOnlyEngineProbe() && readIntegrationMode(stateContent) === "pr") {
-    reconcilePrIntegration(pd);
+    const results = reconcilePrIntegration(pd);
+    const failed = results.find((result) => typeof result.failed_step === "string");
+    if (failed) {
+      emit(errorDirective(
+        `PR finalization for Unit ${failed.unit} failed at ${failed.failed_step}: ${failed.error}. ` +
+          `Fix the cause, then run aidlc engine pr finalize --unit ${failed.unit} (or retry next).`,
+      ));
+      return;
+    }
     stateContent = loadStateFileIfPresent(pd) ?? stateContent;
   }
   const currentSlug = getField(stateContent, "Current Stage");

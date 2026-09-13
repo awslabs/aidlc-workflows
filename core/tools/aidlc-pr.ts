@@ -1879,10 +1879,20 @@ function handleOpen(args: ParsedArgs): void {
 }
 
 
+type FinalizationStep = "UNIT_COMPLETED" | "BOLT_COMPLETED" | "STATE_MERGED" |
+  "AUDIT_MERGED" | "FRAGMENT_MERGED" | "WORKTREE_DISCARDED";
+
+class FinalizationError extends Error {
+  constructor(readonly step: FinalizationStep, message: string) {
+    super(message);
+  }
+}
+
 function runSibling(
   projectDir: string,
   tool: "aidlc-state.ts" | "aidlc-bolt.ts" | "aidlc-worktree.ts" | "aidlc-audit.ts" | "aidlc-runtime.ts",
   args: string[],
+  step: FinalizationStep,
 ): void {
   const executable = compiledExecutable();
   const noun = tool.replace(/^aidlc-/, "").replace(/\.ts$/, "");
@@ -1892,19 +1902,28 @@ function runSibling(
     : [process.execPath, fileURLToPath(new URL(`./${tool}`, import.meta.url)), "--project-dir", projectDir, ...args];
   const result = runCommand(command[0], command.slice(1), projectDir, 30_000);
   if (!result.ok) {
-    throw new Error(
+    throw new FinalizationError(step,
       `${tool} ${args[0]} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`}`,
     );
   }
+}
+
+interface BoltFinalizationAttempt {
+  slug: string;
+  name: string;
+  batch: string;
+  timestamp: string;
+  metadataRequired: boolean;
 }
 
 function latestBoltStart(
   projectDir: string,
   slug: string | null,
   unit: string,
-): { slug: string; name: string; batch: string; timestamp: string } | null {
+): BoltFinalizationAttempt | null {
   const rows = findAllEvents(readAllAuditShards(projectDir), "BOLT_STARTED")
     .filter((row) => {
+      if (!eventMatchesClaimAttempt(projectDir, row.block, unit)) return false;
       const recordedSlug = auditBlockField(row.block, "Bolt slug");
       const names = auditBlockField(row.block, "Bolt names") ?? "";
       return (
@@ -1914,12 +1933,49 @@ function latestBoltStart(
     });
   const row = rows.at(-1);
   if (!row) return null;
+  const boltSlug = auditBlockField(row.block, "Bolt slug") ?? slugify(unit);
   return {
-    slug: auditBlockField(row.block, "Bolt slug") ?? slugify(unit),
+    slug: boltSlug,
     name: auditBlockField(row.block, "Bolt names") ?? unit,
     batch: auditBlockField(row.block, "Batch number") ?? "1",
     timestamp: row.timestamp,
+    metadataRequired: existsSync(worktreePath(projectDir, boltSlug)) ||
+      findAllEvents(readAllAuditShards(projectDir), "STATE_FORKED").some((fork) =>
+        fork.timestamp >= row.timestamp && auditBlockField(fork.block, "Bolt slug") === boltSlug &&
+        eventMatchesClaimAttempt(projectDir, fork.block, unit)),
   };
+}
+
+function completedFinalizationStep(
+  projectDir: string,
+  unit: string,
+  bolt: BoltFinalizationAttempt,
+  slug: string,
+  event: "BOLT_COMPLETED" | "STATE_MERGED" | "AUDIT_MERGED",
+): boolean {
+  return findAllEvents(readAllAuditShards(projectDir), event).some((row) =>
+    row.timestamp >= bolt.timestamp && eventMatchesClaimAttempt(projectDir, row.block, unit) &&
+    (auditBlockField(row.block, "Bolt slug") === slug ||
+      (event === "BOLT_COMPLETED" && auditBlockField(row.block, "Bolt names") === bolt.name &&
+        auditBlockField(row.block, "Batch number") === bolt.batch)));
+}
+
+function pendingFinalizationUnits(projectDir: string): Set<string> {
+  const pending = new Set<string>();
+  const completed = unitCompletedReceipts(projectDir, DEFAULT_STAGE);
+  const candidates = new Set(findAllEvents(readAllAuditShards(projectDir), "PR_MERGED")
+    .map((row) => auditBlockField(row.block, "Unit")).filter((unit): unit is string => unit !== null));
+  for (const unit of candidates) {
+    if (currentReceiptRows(projectDir, DEFAULT_STAGE, unit, "PR_MERGED").length === 0) continue;
+    const bolt = latestBoltStart(projectDir, null, unit);
+    // UNIT_COMPLETED settles stage evidence, not the remaining bolt metadata or cleanup.
+    if (!completed.has(unit) || existsSync(worktreePath(projectDir, bolt?.slug ?? slugify(unit))) ||
+        (bolt?.metadataRequired && (["BOLT_COMPLETED", "STATE_MERGED", "AUDIT_MERGED"] as const)
+          .some((event) => !completedFinalizationStep(projectDir, unit, bolt, bolt.slug, event)))) {
+      pending.add(unit);
+    }
+  }
+  return pending;
 }
 
 function retargetChildren(args: ParsedArgs): string[] {
@@ -2039,29 +2095,31 @@ function handleFinalize(args: ParsedArgs, observed?: PullSnapshot[]): Record<str
     ? slugify(requestedSlug)
     : bolt?.slug ?? slugify(unit);
   if (!unitCompletedReceipts(projectDir, stage).has(unit)) {
-    runSibling(projectDir, "aidlc-state.ts", ["unit", "complete", "--stage", stage, "--unit", unit]);
+    runSibling(projectDir, "aidlc-state.ts", ["unit", "complete", "--stage", stage, "--unit", unit], "UNIT_COMPLETED");
   }
   let metadataConsolidated = false;
+  if (bolt?.metadataRequired && !existsSync(worktreePath(projectDir, slug))) {
+    const missing = (["BOLT_COMPLETED", "STATE_MERGED", "AUDIT_MERGED"] as const)
+      .find((event) => !completedFinalizationStep(projectDir, unit, bolt, slug, event));
+    if (missing) throw new FinalizationError(missing, `Worktree for ${slug} is missing; restore it before retrying finalization`);
+  }
   if (bolt && existsSync(worktreePath(projectDir, slug))) {
     const forkedState = worktreeStateFilePath(worktreePath(projectDir, slug), relativeRecordDir(projectDir));
     if (existsSync(forkedState) && getField(readFileSync(forkedState, "utf-8"), "Merge-Held") === "true") {
-      throw new Error(`Merge held for ${slug}; resolve the failed-sibling decision before retrying finalization`);
+      throw new FinalizationError("STATE_MERGED", `Merge held for ${slug}; resolve the failed-sibling decision before retrying finalization`);
     }
-    const completedStep = (event: string) => findAllEvents(readAllAuditShards(projectDir), event).some((row) =>
-      row.timestamp >= bolt.timestamp && eventMatchesClaimAttempt(projectDir, row.block, unit) &&
-      (auditBlockField(row.block, "Bolt slug") === slug ||
-        (event === "BOLT_COMPLETED" && auditBlockField(row.block, "Bolt names") === bolt.name &&
-          auditBlockField(row.block, "Batch number") === bolt.batch)));
+    const completedStep = (event: "BOLT_COMPLETED" | "STATE_MERGED" | "AUDIT_MERGED") =>
+      completedFinalizationStep(projectDir, unit, bolt, slug, event);
     if (!completedStep("BOLT_COMPLETED")) {
-      runSibling(projectDir, "aidlc-bolt.ts", ["complete", "--name", bolt.name, "--batch", bolt.batch, "--slug", slug]);
+      runSibling(projectDir, "aidlc-bolt.ts", ["complete", "--name", bolt.name, "--batch", bolt.batch, "--slug", slug], "BOLT_COMPLETED");
     }
     if (!completedStep("STATE_MERGED")) {
-      runSibling(projectDir, "aidlc-state.ts", ["merge", "--slug", slug]);
+      runSibling(projectDir, "aidlc-state.ts", ["merge", "--slug", slug], "STATE_MERGED");
     }
     if (!completedStep("AUDIT_MERGED")) {
-      runSibling(projectDir, "aidlc-audit.ts", ["audit-merge", "--slug", slug]);
+      runSibling(projectDir, "aidlc-audit.ts", ["audit-merge", "--slug", slug], "AUDIT_MERGED");
     }
-    runSibling(projectDir, "aidlc-runtime.ts", ["fragment-merge", "--slug", slug]);
+    runSibling(projectDir, "aidlc-runtime.ts", ["fragment-merge", "--slug", slug], "FRAGMENT_MERGED");
     metadataConsolidated = true;
   }
   const worktreePresentBefore = existsSync(worktreePath(projectDir, slug));
@@ -2072,7 +2130,7 @@ function handleFinalize(args: ParsedArgs, observed?: PullSnapshot[]): Record<str
       slug,
       "--reason",
       "integrated-via-pr",
-    ]);
+    ], "WORKTREE_DISCARDED");
   }
   const worktreePresentAfter = existsSync(worktreePath(projectDir, slug));
   return {
@@ -2098,10 +2156,13 @@ export function reconcilePrIntegration(projectDir: string): Record<string, unkno
   const state = readStateFile(projectDir);
   if (getField(state, "Integration Mode")?.trim() !== "pr" || getField(state, "Status") === "Archived") return [];
   const results: Record<string, unknown>[] = [];
-  for (const unit of unitIntegratingReceipts(projectDir, DEFAULT_STAGE)) {
+  const pending = pendingFinalizationUnits(projectDir);
+  const units = new Set([...unitIntegratingReceipts(projectDir, DEFAULT_STAGE), ...pending]);
+  for (const unit of units) {
     const args = parseArgs(["--project-dir", projectDir, "--unit", unit]);
     const fixturePath = process.env.AIDLC_TEST_PR_FIXTURE;
     if (fixturePath && process.env.AIDLC_TEST_PR_FIXTURES === "1") args.flags.set("fixture", [fixturePath]);
+    let finalizing = pending.has(unit);
     try {
       requireReceiptFixtureAuthority(args, "reconciliation");
       const expected = openedPulls(projectDir, DEFAULT_STAGE, unit);
@@ -2139,10 +2200,15 @@ export function reconcilePrIntegration(projectDir: string): Record<string, unkno
           writeStateFile(projectDir, current);
         } else if (rows.length > 0) appendAuditEntries(rows, projectDir);
       });
+      finalizing ||= coordination.state === "merged";
+      // Only local post-merge cleanup is executed here; reconciliation never supplies child retargets.
+      args.booleans.add("execute");
       results.push({ unit, ...sweepResult(snapshots),
         ...(coordination.state === "merged" ? handleFinalize(args, snapshots) : {}) });
     } catch (error) {
-      results.push({ unit, online: false, error: errorMessage(error), last_known: latestKnown(projectDir, unit) });
+      results.push({ unit, online: !(error instanceof GitHubOfflineError), error: errorMessage(error),
+        ...(finalizing ? { finalized: false, failed_step: error instanceof FinalizationError ? error.step : "PR_VERIFICATION" } : {}),
+        last_known: latestKnown(projectDir, unit) });
       if (error instanceof GitHubOfflineError) break;
     }
   }

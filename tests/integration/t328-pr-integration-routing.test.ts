@@ -281,6 +281,26 @@ describe("t328-pr-integration-routing", () => {
     expect(findAllEvents(readAllAuditShards(proj), "PR_MERGED")).toHaveLength(1);
   });
 
+  test("next surfaces an initial finalize failure instead of routing past the Unit", () => {
+    const proj = project("pr");
+    seedBoltDag(proj, ["alpha"]);
+    integrating(proj, "alpha", 42);
+    const merged = { ...snapshot("alpha", 42), state: "MERGED", merged: true,
+      mergedAt: "2026-08-28T01:00:00Z", mergeCommit: { oid: "merge-42" } };
+    const env = fixtureEnv(proj, [merged]);
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const blocked = runOrchestrateNext(ORCH, proj, [], { env });
+    expect(blocked.directive).toMatchObject({ kind: "error" });
+    expect(blocked.out).toContain("Unit alpha");
+    expect(blocked.out).toContain("UNIT_COMPLETED");
+    expect(blocked.out).toContain("aidlc engine pr finalize --unit alpha");
+    expect(unitCompletedReceipts(proj, "pr-integration").has("alpha")).toBe(false);
+    record(proj, "alpha");
+    const resumed = runOrchestrateNext(ORCH, proj, [], { env });
+    expect(resumed.directive).toMatchObject({ kind: "run-stage", gate: true });
+    expect(unitCompletedReceipts(proj, "pr-integration").has("alpha")).toBe(true);
+  });
+
   test("formal changes request reactivates revision through normal next", () => {
     const proj = project("pr");
     seedBoltDag(proj, ["alpha"]);

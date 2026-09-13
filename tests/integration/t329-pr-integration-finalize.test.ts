@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -13,6 +13,10 @@ import {
   readAllAuditShards,
   readStateFile,
   unitCompletedReceipts,
+  relativeRecordDir,
+  setField,
+  worktreePath,
+  worktreeStateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   emitOpenReceipts,
@@ -56,6 +60,9 @@ function state(): string {
 ## Runtime State
 - **Revision Count**: 0
 - **Integration Mode**: pr
+- **Bolt Refs**:
+- **Worktree Path**:
+- **Merge-Held**: false
 
 ## Phase Progress
 - **Initialization**: Verified
@@ -151,6 +158,27 @@ function finalize(proj: string, pulls: PullSnapshot[], args: string[] = []) {
     "finalize", "--stage", "pr-integration", "--unit", "alpha",
     "--fixture", fixture, ...args,
   ]);
+}
+
+function projectWithWorktree(): { proj: string; forkedState: string } {
+  const proj = projectWithPulls();
+  for (const args of [
+    ["init", "--initial-branch=main"],
+    ["-c", "user.name=PR Fixture", "-c", "user.email=pr-fixture@example.invalid",
+      "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "fixture"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  for (const [tool, ...args] of [
+    ["aidlc-worktree.ts", "create", "--slug", "alpha", "--base", "main"],
+    ["aidlc-bolt.ts", "start", "--name", "alpha", "--batch", "1", "--slug", "alpha", "--worktree"],
+  ]) {
+    const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", tool), ...args, "--project-dir", proj],
+      { cwd: proj, encoding: "utf-8", env: process.env });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }
+  return { proj, forkedState: worktreeStateFilePath(worktreePath(proj, "alpha"), relativeRecordDir(proj)) };
 }
 
 function receipts(proj: string, event: string) {
@@ -583,6 +611,59 @@ describe("t329-pr-integration-finalize", () => {
     expect(JSON.parse(complete.stdout)).toMatchObject({ finalized: true, unit_completed: true });
     expect(receipts(proj, "PR_MERGED")).toHaveLength(1);
     expect(receipts(proj, "UNIT_COMPLETED")).toHaveLength(1);
+  }, 30_000);
+
+  test.each(["next", "manual finalize"])("%s resumes a finalize interrupted after UNIT_COMPLETED exactly once", (resume) => {
+    const { proj, forkedState } = projectWithWorktree();
+    // Remove only the forked state: PR_MERGED, UNIT_COMPLETED and BOLT_COMPLETED
+    // land before the real state merge command fails. No mocked receipt writers.
+    renameSync(forkedState, `${forkedState}.saved`);
+    const failed = finalize(proj, [mergedPull()], ["--execute"]);
+    expect(failed.status, failed.stderr).toBe(1);
+    expect(receipts(proj, "PR_MERGED")).toHaveLength(1);
+    expect(receipts(proj, "UNIT_COMPLETED")).toHaveLength(1);
+    expect(findAllEvents(readAllAuditShards(proj), "BOLT_COMPLETED")).toHaveLength(1);
+    expect(findAllEvents(readAllAuditShards(proj), "STATE_MERGED")).toHaveLength(0);
+    const env = { ...process.env, AIDLC_TEST_PR_FIXTURES: "1", AIDLC_TEST_PR_FIXTURE: join(proj, "finalize-pulls.json") };
+    const blocked = runOrchestrateNext(ORCH, proj, [], { env });
+    expect(blocked.directive).toMatchObject({ kind: "error" });
+    expect(blocked.out).toContain("Unit alpha");
+    expect(blocked.out).toContain("STATE_MERGED");
+    expect(blocked.out).toContain("aidlc engine pr finalize --unit alpha");
+    expect(existsSync(worktreePath(proj, "alpha"))).toBe(true);
+    renameSync(`${forkedState}.saved`, forkedState);
+    if (resume === "manual finalize") {
+      const retried = finalize(proj, [mergedPull()], ["--execute"]);
+      expect(retried.status, `${retried.stdout}\n${retried.stderr}`).toBe(0);
+      expect(JSON.parse(retried.stdout)).toMatchObject({ finalized: true, worktree_retired: true });
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const routed = runOrchestrateNext(ORCH, proj, [], { env });
+      expect(routed.status, routed.out).toBe(0);
+      expect(routed.directive).toMatchObject({ kind: "run-stage", stage: "pr-integration", unit: "alpha", gate: true });
+      expect(existsSync(worktreePath(proj, "alpha"))).toBe(false);
+      for (const event of ["PR_MERGED", "UNIT_COMPLETED", "BOLT_COMPLETED", "STATE_MERGED", "AUDIT_MERGED", "WORKTREE_DISCARDED"]) {
+        expect(findAllEvents(readAllAuditShards(proj), event), event).toHaveLength(1);
+      }
+    }
+  }, 30_000);
+
+  test("next exposes the merge-held decision before resuming finalization", () => {
+    const { proj, forkedState } = projectWithWorktree();
+    writeFileSync(forkedState, setField(readFileSync(forkedState, "utf-8"), "Merge-Held", "true"));
+    const failed = finalize(proj, [mergedPull()], ["--execute"]);
+    expect(failed.status, failed.stderr).toBe(1);
+    expect(receipts(proj, "UNIT_COMPLETED")).toHaveLength(1);
+    const env = { ...process.env, AIDLC_TEST_PR_FIXTURES: "1", AIDLC_TEST_PR_FIXTURE: join(proj, "finalize-pulls.json") };
+    const blocked = runOrchestrateNext(ORCH, proj, [], { env });
+    expect(blocked.directive).toMatchObject({ kind: "error" });
+    expect(blocked.out).toContain("Unit alpha");
+    expect(blocked.out).toContain("failed-sibling decision");
+    expect(findAllEvents(readAllAuditShards(proj), "STATE_MERGED")).toHaveLength(0);
+    writeFileSync(forkedState, setField(readFileSync(forkedState, "utf-8"), "Merge-Held", "false"));
+    const resumed = runOrchestrateNext(ORCH, proj, [], { env });
+    expect(resumed.directive).toMatchObject({ kind: "run-stage", gate: true });
+    expect(existsSync(worktreePath(proj, "alpha"))).toBe(false);
   }, 30_000);
 
   test("finalize derives every coordinated PR from current receipts when --pr is omitted", () => {

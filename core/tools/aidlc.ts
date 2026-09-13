@@ -2056,6 +2056,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-orchestrate.ts");
     case TOOLS.plugin:
       return import("./aidlc-plugin.ts");
+    case TOOLS.pr:
+      return import("./aidlc-pr.ts");
     case TOOLS.runnerGen:
       return import("./aidlc-runner-gen.ts");
     case TOOLS.runtime:
