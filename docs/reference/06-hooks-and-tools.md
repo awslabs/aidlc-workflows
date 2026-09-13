@@ -848,6 +848,9 @@ for debugging.
 
 ### `aidlc-review-brief.ts` — Decision-context renderer
 
+Native installs invoke this tool through `aidlc engine review-brief`, followed
+by `summary`, `review`, or `context` and the mode's flags, including `--stage <slug>`.
+
 `summary` renders the pre-generation confirmation context from the stage graph
 and questions-file path. `review` renders a reviewer-backed gate with hydrated
 finding dispositions and optional stale-path detail. `context` emits only the

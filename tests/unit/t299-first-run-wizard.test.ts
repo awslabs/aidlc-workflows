@@ -178,6 +178,15 @@ function runWizard(
   };
 }
 
+function wizardStderrMessage(stderr: string): string {
+  try {
+    const parsed = JSON.parse(stderr) as { error?: unknown };
+    return typeof parsed.error === "string" ? parsed.error : stderr;
+  } catch {
+    return stderr;
+  }
+}
+
 describe("t299 first-run setup wizard", () => {
   test("recommended defaults render detection, trichotomy, receipts, blocker, and next commands", () => {
     const result = runWizard("\n", { aidlc: false, runtimeIssue: true });
@@ -344,7 +353,7 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status).toBe(1);
     expect(readFileSync(join(result.project, "aidlc.settings.json"), "utf-8")).toBe(newer);
-    const output = `${result.stdout}${result.stderr}`;
+    const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
     expect(output).toContain("rollback was incomplete");
     const recovery = /recovery snapshot preserved at ([^\r\n]+)/.exec(output)?.[1];
     expect(recovery).toBeDefined();
@@ -394,7 +403,7 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(readFileSync(settings, "utf-8")).toBe(newer);
-    const output = `${result.stdout}${result.stderr}`;
+    const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
     expect(output).toContain("rollback was incomplete");
     const recovery = /recovery snapshot preserved at ([^\r\n]+)/.exec(output)?.[1];
     expect(recovery).toBeDefined();
@@ -464,7 +473,7 @@ describe("t299 first-run setup wizard", () => {
         timeout: 60_000,
       },
     );
-    const output = `${result.stdout}${result.stderr}`;
+    const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
     expect(result.status, output).toBe(0);
     expect(output).toContain("Choice [1]:");
     expect(output).not.toContain("Nothing written.");

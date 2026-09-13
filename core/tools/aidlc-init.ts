@@ -6582,7 +6582,7 @@ export async function main(
 
 if (import.meta.main) {
   main(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(`aidlc config: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}\n`);
     process.exitCode = EXIT.failure;
   });
 }

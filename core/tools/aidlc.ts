@@ -2005,79 +2005,56 @@ function runDelegateDev(tool: string, args: string[]): number {
   }
 }
 
+type ToolFile = (typeof TOOLS)[keyof typeof TOOLS];
+
 type DelegateModule = {
   main(argv: string[]): void | Promise<void>;
 };
 
-async function loadDelegate(tool: string): Promise<DelegateModule | null> {
-  switch (tool) {
-    case TOOLS.attest:
-      return import("./aidlc-attest.ts");
-    case TOOLS.audit:
-      return import("./aidlc-audit.ts");
-    case TOOLS.bolt:
-      return import("./aidlc-bolt.ts");
-    case TOOLS.graph:
-      return import("./aidlc-graph.ts");
-    case TOOLS.doctor:
-      return import("./aidlc-doctor.ts");
-    case TOOLS.init:
-      return import("./aidlc-init.ts");
-    case TOOLS.jump:
-      return import("./aidlc-jump.ts");
-    case TOOLS.knowledge:
-      return import("./aidlc-knowledge.ts");
-    case TOOLS.testingPosture:
-      return import("./aidlc-testing-posture.ts");
-    case TOOLS.learnings:
-      return import("./aidlc-learnings.ts");
-    case TOOLS.log:
-      return import("./aidlc-log.ts");
-    case TOOLS.lifecycle:
-      return import("./aidlc-lifecycle.ts");
-    case TOOLS.machineConfig:
-      return import("./aidlc-machine-config.ts");
-    case TOOLS.completions:
-      return import("./aidlc-completions.ts");
-    case TOOLS.orchestrate:
-      return import("./aidlc-orchestrate.ts");
-    case TOOLS.plugin:
-      return import("./aidlc-plugin.ts");
-    case TOOLS.runnerGen:
-      return import("./aidlc-runner-gen.ts");
-    case TOOLS.runtime:
-      return import("./aidlc-runtime.ts");
-    case TOOLS.sensor:
-      return import("./aidlc-sensor.ts");
-    case TOOLS.sensorClaimSources:
-      return import("./aidlc-sensor-claim-sources.ts");
-    case TOOLS.sensorLinter:
-      return import("./aidlc-sensor-linter.ts");
-    case TOOLS.sensorRequiredSections:
-      return import("./aidlc-sensor-required-sections.ts");
-    case TOOLS.sensorTraceability:
-      return import("./aidlc-sensor-traceability.ts");
-    case TOOLS.sensorTypeCheck:
-      return import("./aidlc-sensor-type-check.ts");
-    case TOOLS.sensorUpstreamCoverage:
-      return import("./aidlc-sensor-upstream-coverage.ts");
-    case TOOLS.state:
-      return import("./aidlc-state.ts");
-    case TOOLS.unit:
-      return import("./aidlc-unit.ts");
-    case TOOLS.swarm:
-      return import("./aidlc-swarm.ts");
-    case TOOLS.utility:
-      return import("./aidlc-utility.ts");
-    case TOOLS.validate:
-      return import("./aidlc-validate.ts");
-    case TOOLS.worktree:
-      return import("./aidlc-worktree.ts");
-    case TOOLS.workspaceSync:
-      return import("./aidlc-workspace-sync.ts");
-    default:
-      return null;
-  }
+// Issue #1070 shipped in 2.8.0-2.8.2 because reviewBrief was added to TOOLS and
+// routed, but this loader's switch never got its arm. Dev mode spawns
+// `bun <tool>`, so every test that ran the tool passed; only the compiled binary
+// walks this table. The Record<ToolFile, ...> annotation makes a missing loader
+// OR a delegate without `export main` a tsc error under `bun run check`. Keep
+// import specifiers literal so `bun build --compile` bundles every delegate.
+const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
+  "aidlc-attest.ts": () => import("./aidlc-attest.ts"),
+  "aidlc-audit.ts": () => import("./aidlc-audit.ts"),
+  "aidlc-bolt.ts": () => import("./aidlc-bolt.ts"),
+  "aidlc-completions.ts": () => import("./aidlc-completions.ts"),
+  "aidlc-doctor.ts": () => import("./aidlc-doctor.ts"),
+  "aidlc-graph.ts": () => import("./aidlc-graph.ts"),
+  "aidlc-init.ts": () => import("./aidlc-init.ts"),
+  "aidlc-jump.ts": () => import("./aidlc-jump.ts"),
+  "aidlc-knowledge.ts": () => import("./aidlc-knowledge.ts"),
+  "aidlc-learnings.ts": () => import("./aidlc-learnings.ts"),
+  "aidlc-lifecycle.ts": () => import("./aidlc-lifecycle.ts"),
+  "aidlc-log.ts": () => import("./aidlc-log.ts"),
+  "aidlc-machine-config.ts": () => import("./aidlc-machine-config.ts"),
+  "aidlc-orchestrate.ts": () => import("./aidlc-orchestrate.ts"),
+  "aidlc-plugin.ts": () => import("./aidlc-plugin.ts"),
+  "aidlc-review-brief.ts": () => import("./aidlc-review-brief.ts"),
+  "aidlc-runner-gen.ts": () => import("./aidlc-runner-gen.ts"),
+  "aidlc-runtime.ts": () => import("./aidlc-runtime.ts"),
+  "aidlc-sensor-claim-sources.ts": () => import("./aidlc-sensor-claim-sources.ts"),
+  "aidlc-sensor-linter.ts": () => import("./aidlc-sensor-linter.ts"),
+  "aidlc-sensor-required-sections.ts": () => import("./aidlc-sensor-required-sections.ts"),
+  "aidlc-sensor-traceability.ts": () => import("./aidlc-sensor-traceability.ts"),
+  "aidlc-sensor-type-check.ts": () => import("./aidlc-sensor-type-check.ts"),
+  "aidlc-sensor-upstream-coverage.ts": () => import("./aidlc-sensor-upstream-coverage.ts"),
+  "aidlc-sensor.ts": () => import("./aidlc-sensor.ts"),
+  "aidlc-state.ts": () => import("./aidlc-state.ts"),
+  "aidlc-swarm.ts": () => import("./aidlc-swarm.ts"),
+  "aidlc-testing-posture.ts": () => import("./aidlc-testing-posture.ts"),
+  "aidlc-unit.ts": () => import("./aidlc-unit.ts"),
+  "aidlc-utility.ts": () => import("./aidlc-utility.ts"),
+  "aidlc-validate.ts": () => import("./aidlc-validate.ts"),
+  "aidlc-workspace-sync.ts": () => import("./aidlc-workspace-sync.ts"),
+  "aidlc-worktree.ts": () => import("./aidlc-worktree.ts"),
+};
+
+function loadDelegate(tool: string): Promise<DelegateModule> | null {
+  return Object.hasOwn(DELEGATES, tool) ? DELEGATES[tool as ToolFile]() : null;
 }
 
 async function runDelegateInProcess(tool: string, args: string[]): Promise<number> {
@@ -2085,11 +2062,12 @@ async function runDelegateInProcess(tool: string, args: string[]): Promise<numbe
   const projectDir = delegatedProjectDir(args);
   if (projectDir) process.env.AIDLC_PROJECT_DIR = projectDir;
   try {
-    const mod = await loadDelegate(tool);
-    if (mod === null || typeof mod.main !== "function") {
-      text(2, `${JSON.stringify({ error: `${tool} does not export main(argv)` })}\n`);
+    const delegate = loadDelegate(tool);
+    if (delegate === null) {
+      text(2, `${JSON.stringify({ error: `${tool} has no in-process delegate; DELEGATES in aidlc.ts is out of step with TOOLS` })}\n`);
       return 1;
     }
+    const mod = await delegate;
     await mod.main(args);
     const code = process.exitCode;
     if (typeof code === "number") return code;
