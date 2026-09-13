@@ -371,6 +371,31 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("Before every dispatch, not only the first");
       expect(labelled).toContain("returns `requestId` and `reviewFile`");
       expect(labelled).toContain("aidlc-review-brief.ts context");
+      // The reviewer half of the bookkeeping rule lives in the dispatch list, the
+      // only text a dispatched reviewer receives. Every shipped copy must carry it.
+      // The reviewer half must be INSIDE the dispatch list, not merely somewhere in
+      // the module: that list is the only text a dispatched reviewer receives, so a
+      // copy that moved the clause out of it would ship a rule no reviewer reads.
+      // Scope the assertion to `Pass:` .. `Do NOT pass:` and normalise whitespace,
+      // so re-wrapping the bullet cannot break the pin and relocating it cannot pass.
+      const passStart = module.indexOf("\n   Pass:\n");
+      const passEnd = module.indexOf("Do NOT pass:", passStart);
+      expect(
+        `harness ${harness.name}: Pass: .. Do NOT pass: anchors\n${passStart} ${passEnd}`,
+      ).not.toContain("-1");
+      const dispatchList = module.slice(passStart, passEnd).replace(/\s+/g, " ");
+      const inList = `harness ${harness.name} dispatch list\n${dispatchList}`;
+      expect(inList).toContain("The review-content boundary: tell the reviewer");
+      expect(inList).toContain(
+        "a tag naming this stage's own finding is bookkeeping",
+      );
+      // The two forms a live run produced: a stage-review-state header line, and an
+      // applied-findings table. The reviewer half must name them too, or the pass
+      // that reads only this list still reports them.
+      expect(inList).toContain("to state the stage's own review state");
+      expect(inList).toContain(
+        "in any form including a table or a section of its own",
+      );
       expect(labelled).toContain(
         "durable human dispositions from the audit ledger",
       );
