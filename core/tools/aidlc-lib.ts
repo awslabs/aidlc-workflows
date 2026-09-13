@@ -12826,23 +12826,54 @@ export function parseReviewSection(
 ): { verdict: ReviewVerdict | null; findings: ReviewFinding[] } {
   const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
   const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
+  const normalizedReview = review.replace(/\r\n?/g, "\n");
+  const lines = normalizedReview.split("\n");
+  const visibleLines = visibleMarkdownLines(normalizedReview, { singleLineTableCells: true });
+  const heading = visibleLines.findIndex((line) => /^### Findings\s*$/.test(line));
   if (heading === -1) return { verdict, findings: [] };
   let end = lines.length;
   for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
+    if (/^### /.test(visibleLines[i])) {
       end = i;
       break;
     }
   }
-  const table = lines
+  // Select visible rows, but retain their original cell text. Examples inside
+  // code/comments are not findings; inline code in a real finding stays intact.
+  const table = visibleLines
     .slice(heading + 1, end)
-    .filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) return { verdict, findings: [] };
+    .flatMap((line, index) => line.trim().startsWith("|") ? [lines[heading + 1 + index]] : []);
+  if (table.length === 0) return { verdict, findings: [] };
+  if (table.length < 2) {
+    throw new Error(`${artifact}: findings table is missing its Markdown separator row`);
+  }
   const headers = splitMarkdownRow(table[0]);
-  for (const name of ["ID", "Severity", "Location", "Finding", "Required action", "Status"]) {
-    if (!headers.includes(name)) return { verdict, findings: [] };
+  const requiredColumns = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
+  const missingColumns = requiredColumns.filter((name) => !headers.includes(name));
+  if (missingColumns.length > 0) {
+    // A shortened table still contains findings. Refuse its completion instead
+    // of recording an empty array beside a body that describes real concerns.
+    throw new Error(
+      `${artifact}: findings table is missing required columns: ${missingColumns.join(", ")}. ` +
+        `Use columns: ${requiredColumns.join(" | ")}`,
+    );
+  }
+  const duplicateColumns = requiredColumns.filter((name) =>
+    headers.filter((header) => header === name).length !== 1
+  );
+  if (duplicateColumns.length > 0) {
+    throw new Error(
+      `${artifact}: findings table repeats required columns: ${duplicateColumns.join(", ")}`,
+    );
+  }
+  const separators = splitMarkdownRow(table[1]);
+  if (
+    separators.length !== headers.length ||
+    separators.some((cell) => !/^:?-+:?$/.test(cell))
+  ) {
+    throw new Error(
+      `${artifact}: findings table requires a Markdown separator row immediately after its header`,
+    );
   }
   const index = new Map(headers.map((name, position) => [name, position]));
   const findings: ReviewFinding[] = [];
@@ -30653,6 +30684,9 @@ export function visibleMarkdownLines(
   options: {
     preserveIndentedCode?: boolean;
     preserveCommentBoundaries?: boolean;
+    // GFM table cells have separate inline contexts. Review-table extraction
+    // must not pair a backtick or unfinished tag with a later finding row.
+    singleLineTableCells?: boolean;
   } = {},
 ): string[] {
   const lines = content
@@ -30689,6 +30723,9 @@ export function visibleMarkdownLines(
 
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
     const rawLine = lines[lineNumber];
+    const singleLineTableRow: boolean = options.singleLineTableCells === true &&
+      /^ {0,3}\|/.test(rawLine) && fence === null && rawHtmlBlock === null &&
+      !inComment && !htmlTagOpen && codeSpanEnd === null;
     const explicitContainerLine = markdownContainerLine(rawLine);
     let containerLine = explicitContainerLine;
     if (activeContainer !== null) {
@@ -30916,7 +30953,10 @@ export function visibleMarkdownLines(
         !htmlTagOpen &&
         !isEscapedAt(rawLine, cursor)
       ) {
-        const end = multilineInlineCodeSpanEnd(lines, lineNumber, cursor);
+        const inlineEnd = singleLineTableRow ? inlineCodeSpanEnd(rawLine, cursor) : null;
+        const end: { line: number; offset: number } | null = singleLineTableRow
+          ? inlineEnd === null ? null : { line: lineNumber, offset: inlineEnd }
+          : multilineInlineCodeSpanEnd(lines, lineNumber, cursor);
         if (end === null) {
           line += rawLine.slice(cursor);
           break;
@@ -30973,6 +31013,12 @@ export function visibleMarkdownLines(
       cursor++;
     }
 
+    if (singleLineTableRow) {
+      // An unfinished inline tag in one cell cannot hide the following row.
+      // Outer comments/fences/raw HTML did not enter this table-row path.
+      htmlTagOpen = false;
+      htmlAttributeQuote = null;
+    }
     visible.push(
       options.preserveCommentBoundaries
         ? line

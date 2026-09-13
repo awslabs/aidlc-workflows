@@ -419,6 +419,75 @@ describe("t304 executable review brief scenarios", () => {
     ).toThrow("row has 7 cells, header declares 6: 1 unexpected extra cell(s)");
   });
 
+  test.each([
+    [
+      "| ID | Severity | Finding | Recommendation |",
+      "|---|---|---|---|",
+      "| R-01 | Minor | Missing acceptance criterion | Add the criterion |",
+      "Location, Required action, Status",
+    ],
+    [
+      "| ID | Severity | Finding | Evidence | Recommendation |",
+      "|---|---|---|---|---|",
+      "| R-01 | Minor | Missing acceptance criterion | requirements.md > FR-1 | Add the criterion |",
+      "Location, Required action, Status",
+    ],
+  ])("shortened review columns cannot silently erase findings: %s", (header, separator, row, missing) => {
+    const body = reviewMarkdown("READY", [])
+      .replace("| ID | Severity | Location | Finding | Required action | Status |", header)
+      .replace("|---|---|---|---|---|---|", `${separator}\n${row}`);
+    expect(() => parseReviewArtifact(body, "aidlc/requirements.md"))
+      .toThrow(`findings table is missing required columns: ${missing}`);
+  });
+
+  test("a missing separator cannot silently consume the first finding", () => {
+    const body = reviewMarkdown("READY", [ROW_NEW])
+      .replace("|---|---|---|---|---|---|\n", "");
+    expect(() => parseReviewArtifact(body, "aidlc/requirements.md"))
+      .toThrow("requires a Markdown separator row immediately after its header");
+  });
+
+  test("duplicate required columns cannot shadow a finding's identity", () => {
+    const body = reviewMarkdown("READY", [])
+      .replace("| Status |", "| Status | ID |")
+      .replace("|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|");
+    expect(() => parseReviewArtifact(body, "aidlc/requirements.md"))
+      .toThrow("findings table repeats required columns: ID");
+  });
+
+  test("literal malformed table examples do not hide or invalidate the visible findings", () => {
+    const example = [
+      "### Findings", "| ID | Recommendation |", "|---|---|",
+      "| R-99 | This is only an example |",
+    ].join("\n");
+    const body = reviewMarkdown("READY", [ROW_NEW]).replace("### Findings", [
+      "```markdown", example, "```", "", "<!--", example, "-->", "", "### Findings",
+    ].join("\n"));
+    expect(parseReviewArtifact(body, "aidlc/requirements.md")!.findings.map((finding) => finding.id))
+      .toEqual(["R-01"]);
+  });
+
+  test.each(["`", "``"])("inline code delimiters cannot pair across finding rows: %s", (marker) => {
+    const body = reviewMarkdown("READY", [
+      `| R-01 | Minor | a.md | Literal ${marker} token is unclear | Clarify the token | New |`,
+      `| R-02 | Major | b.md | Another ${marker} token is unclear | Correct the contract | New |`,
+    ]);
+    const findings = parseReviewArtifact(body, "aidlc/requirements.md")!.findings;
+    expect(findings.map((finding) => finding.id)).toEqual(["R-01", "R-02"]);
+    expect(findings.map((finding) => finding.finding)).toEqual([
+      `Literal ${marker} token is unclear`, `Another ${marker} token is unclear`,
+    ]);
+  });
+
+  test("unfinished inline HTML in one finding cannot hide a later row", () => {
+    const body = reviewMarkdown("READY", [
+      "| R-01 | Minor | a.md | Literal <span token is unclear | Clarify it | New |",
+      '| R-02 | Major | b.md | Attribute title="x"> is unclear | Correct it | New |',
+    ]);
+    expect(parseReviewArtifact(body, "aidlc/requirements.md")!.findings.map((finding) => finding.id))
+      .toEqual(["R-01", "R-02"]);
+  });
+
   test("valid findings preserve escaped pipes and explicit empty cells", () => {
     expect(
       parseReviewArtifact(
@@ -477,6 +546,30 @@ describe("t304 executable review brief scenarios", () => {
     expect(
       readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
     ).toHaveLength(0);
+  });
+
+  test("review completion refuses shortened headers before recording empty structured findings", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const base = [
+      "review", "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent", "--iteration", "1",
+    ];
+    const requested = run(LOG, base, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, [
+      "**Verdict:** READY", "**Reviewer:** aidlc-product-lead-agent", "**Iteration:** 1",
+      "", "### Findings", "",
+      "| ID | Severity | Finding | Recommendation |", "|---|---|---|---|",
+      "| R-01 | Minor | Acceptance criterion is absent | Add one |",
+    ].join("\n"), "utf-8");
+    const completed = run(LOG, [...base, "--verdict", "READY"], proj);
+    expect(completed.status).not.toBe(0);
+    expect(completed.out).toContain("findings table is missing required columns");
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"))
+      .toHaveLength(0);
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
