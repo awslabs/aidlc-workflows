@@ -11074,8 +11074,17 @@ export function parseReviewSection(
     .filter((line) => line.trim().startsWith("|"));
   if (table.length < 2) return { verdict, findings: [] };
   const headers = splitMarkdownRow(table[0]);
-  for (const name of ["ID", "Severity", "Location", "Finding", "Required action", "Status"]) {
-    if (!headers.includes(name)) return { verdict, findings: [] };
+  // Every cell the record schema needs is addressed by column name, so a
+  // renamed or dropped column is refused rather than read as "no findings":
+  // returning an empty list here records the reviewer's verdict while dropping
+  // the rows it rests on. Name both headers so the review can be rewritten.
+  const expected = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
+  const missing = expected.filter((name) => !headers.includes(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `${artifact}: findings table header declares ${headers.join(" | ")}. ` +
+        `Expected columns: ${expected.join(" | ")}. Missing: ${missing.join(", ")}`,
+    );
   }
   const index = new Map(headers.map((name, position) => [name, position]));
   const findings: ReviewFinding[] = [];

@@ -2422,6 +2422,16 @@ function handleReview(args: string[]): void {
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
           );
         }
+        // A NOT-READY verdict names work to do, so it cannot record zero
+        // findings: the gate would render "No findings" over a rejection, and
+        // --reject-finding would have no row to select. Only the bounded
+        // incomplete fallback above may record NOT-READY without findings.
+        if (verdict === "NOT-READY" && findings.length === 0) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": a NOT-READY review ` +
+              "must record at least one finding in its `### Findings` table.",
+          );
+        }
       }
       const record: ReviewRecord = {
         version: 1,

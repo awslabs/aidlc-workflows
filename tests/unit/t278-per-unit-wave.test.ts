@@ -261,9 +261,14 @@ function review(
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
   }
+  // A NOT-READY verdict names the work it asks for, so the fixture carries one
+  // canonical findings row rather than prose alone.
+  const findings = verdict === "NOT-READY"
+    ? "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | fixture > FR-1 | Fixture finding | Fixture action | New |"
+    : "Fixture review.";
   appendFileSync(
     artifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\n${findings}\n`,
     "utf-8",
   );
   const completed = spawnSync(

@@ -478,6 +478,73 @@ describe("t304 executable review brief scenarios", () => {
     ).toHaveLength(0);
   });
 
+  test("a findings header the record schema cannot read is refused, not read as no findings", () => {
+    // A reviewer that documents its rows under its own column names still
+    // names every finding, so dropping the two columns the record addresses
+    // must not turn a rejection into an empty findings list.
+    const review = reviewMarkdown("NOT-READY", [
+      "| R-01 | Critical | aidlc/requirements.md > FR-1 | Cookie transport contradicts the bearer contract | contract-summary.md L10 | Reconcile the contract |",
+    ]).replace(
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "| ID | Severity | Location | Finding | Evidence | Recommendation |",
+    );
+    expect(() => parseReviewArtifact(review, "aidlc/requirements.md")).toThrow(
+      "aidlc/requirements.md: findings table header declares " +
+        "ID | Severity | Location | Finding | Evidence | Recommendation. " +
+        "Expected columns: ID | Severity | Location | Finding | Required action | Status. " +
+        "Missing: Required action, Status",
+    );
+  });
+
+  test.each([
+    [
+      "a noncanonical findings header",
+      reviewMarkdown("NOT-READY", [
+        "| R-01 | Critical | aidlc/requirements.md > FR-1 | Cookie transport contradicts the bearer contract | contract-summary.md L10 | Reconcile the contract |",
+      ]).replace(
+        "| ID | Severity | Location | Finding | Required action | Status |",
+        "| ID | Severity | Location | Finding | Evidence | Recommendation |",
+      ),
+      "Missing: Required action, Status",
+    ],
+    [
+      "a canonical header carrying no rows",
+      reviewMarkdown("NOT-READY", []),
+      "must record at least one finding",
+    ],
+  ] satisfies [string, string, string][])(
+    "review completion refuses a NOT-READY review with %s without recording a terminal receipt",
+    (_case, body, expected) => {
+      const { proj, artifact } = requirementProject([]);
+      writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+      const base = [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ];
+      const requested = run(LOG, base, proj);
+      expect(requested.status, requested.out).toBe(0);
+      const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+      mkdirSync(dirname(draft), { recursive: true });
+      writeFileSync(draft, body.replace(/^# Requirements\n\n/, ""), "utf-8");
+      const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+      expect(completed.status).not.toBe(0);
+      const diagnostic = JSON.parse(completed.stderr).error;
+      expect(diagnostic).toContain('Refusing REVIEW_COMPLETED for "requirements-analysis"');
+      expect(diagnostic).toContain(expected);
+      // The draft survives the refusal, so the one retry the reviewer protocol
+      // allows for an incomplete attempt has something to rewrite.
+      expect(existsSync(draft)).toBe(true);
+      expect(
+        readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+      ).toHaveLength(0);
+    },
+  );
+
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
     const { proj, artifacts } = perUnitReviewProject(
       "functional-design",
