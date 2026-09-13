@@ -3031,7 +3031,7 @@ function fireGateSensors(
         outputPath,
       ];
       const command = executable
-        ? [executable, "sensor", ...args]
+        ? [executable, "engine", "sensor", ...args]
         : [process.execPath, sensorTool, ...args];
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
