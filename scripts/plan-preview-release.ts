@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import {
   compareVersions,
+  nextPatchVersion,
   parseVersion,
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
@@ -322,7 +323,11 @@ export async function planPreviewRelease(options: {
   const releaseVersions = releases
     .map(previewReleaseVersion)
     .filter((version): version is string => version !== null);
-  const version = nextPreviewVersion([...tags, ...releaseVersions], AIDLC_VERSION, date);
+  const version = nextPreviewVersion(
+    [...tags, ...releaseVersions],
+    nextPatchVersion(AIDLC_VERSION),
+    date,
+  );
   const notes = previewReleaseNotes({
     cwd: options.cwd,
     version,

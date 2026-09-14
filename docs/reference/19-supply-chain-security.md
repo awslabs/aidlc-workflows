@@ -47,22 +47,26 @@ after the build and lifecycle jobs pass. GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
-The preview workflow schedules `main` daily and accepts manual dispatch, with
-publication at most once per UTC day for both triggers combined. Scheduled
-and manual runs serialize through the `release-preview` workflow concurrency
-group without cancelling the active run. Each later run re-reads the release
-list: the planner skips if a preview is already published for that UTC day,
-even if `main` has advanced, or if the source commit is unchanged since the
-latest published preview. The daily check counts both the date in a published
-preview's id and its GitHub `published_at` timestamp in UTC, so an overnight
-build also consumes the day on which it becomes public.
+The preview workflow schedules `main` daily at 22:00 in `Europe/Lisbon` and
+accepts manual dispatch, with publication at most once per UTC day for both
+triggers combined. Scheduled and manual runs serialize through the
+`release-preview` workflow concurrency group without cancelling the active
+run. Each later run re-reads the release list: the planner skips if a preview
+is already published for that UTC day, even if `main` has advanced, or if the
+source commit is unchanged since the latest published preview. The daily check
+counts both the date in a published preview's id and its GitHub `published_at`
+timestamp in UTC, so an overnight build also consumes the day on which it
+becomes public.
 
-The planner allocates `<x.y.z>-preview.<YYYYMMDD>.<N>` using the UTC date at
-planning and ids occupied by existing tags or release records. Drafts and
-orphan tags do not consume the daily publication allowance, so retry planning
-can advance `N` past their occupied ids. This counter permits retries, not
-multiple public daily releases. Leftover `aidlc-staging-*` drafts still require
-inspection and removal before the publisher stages another candidate.
+The planner reads the current stable `x.y.z` from
+`core/tools/aidlc-version.ts` and allocates
+`<x.y.(z+1)>-preview.<YYYYMMDD>.<N>` using the UTC date at planning and ids
+occupied by existing tags or release records. It calculates the next patch in
+memory and never edits release metadata. Drafts and orphan tags do not consume
+the daily publication allowance, so retry planning can advance `N` past their
+occupied ids. This counter permits retries, not multiple public daily releases.
+Leftover `aidlc-staging-*` drafts still require inspection and removal before
+the publisher stages another candidate.
 
 The planner renders notes from changes since the previous preview. Callable
 CI gates the authorized commit before the normal release build chain.
@@ -77,9 +81,9 @@ Stable and preview publication use the protected `release` and unattended
 `preview` environments respectively. The preview environment must keep the
 same `main` deployment policy but no required reviewers; merge approval plus
 callable CI are its human and deterministic gates. Stable runs use a separate
-concurrency group. Preview publication also requires immutable releases to be
-enabled for the repository; the preview workflow fails before the expensive
-gate and build jobs when that repository setting is disabled.
+concurrency group. The preview publisher stages and byte-verifies the complete
+candidate before publication and works with either mutable or immutable
+repository releases.
 
 When a compatible GitHub CLI is available, installers verify `checksums.txt`
 against that bundle and bind verification to:

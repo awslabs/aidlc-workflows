@@ -338,7 +338,7 @@ function assertReleaseIdentity(
   targetCommitish: string,
   notes: ReleaseNotes,
   expectedDraft: boolean,
-  expectedImmutable: boolean,
+  expectedImmutable: boolean | undefined,
   expectedPrerelease = false,
 ): void {
   if (
@@ -347,7 +347,7 @@ function assertReleaseIdentity(
     release.name !== notes.name ||
     release.body !== notes.body ||
     release.draft !== expectedDraft ||
-    release.immutable !== expectedImmutable ||
+    (expectedImmutable !== undefined && release.immutable !== expectedImmutable) ||
     release.prerelease !== expectedPrerelease
   ) {
     throw new Error(
@@ -726,7 +726,7 @@ export async function publishRelease(
         options.targetCommitish,
         notes,
         false,
-        true,
+        undefined,
         preview,
       );
       assertAssetInventory(candidate, local);
@@ -747,15 +747,16 @@ export async function publishRelease(
         options.token,
       );
     } catch (error) {
-      // The release is already public and immutable: it cannot be withdrawn,
-      // only superseded. Report it as a compromised publication.
+      // Publication already happened. Do not mutate evidence after a failed
+      // verification; report the release as compromised so it can be inspected
+      // and superseded or removed deliberately.
       throw new PublicationEvidenceError(
         `published release ${options.tag} differs from the verified candidate (${
           error instanceof Error ? error.message : String(error)
         }); treat it as compromised and supersede it with a corrective release`,
       );
     }
-    log(`published immutable release ${options.tag} with ${local.length} verified assets`);
+    log(`published release ${options.tag} with ${local.length} verified assets`);
     return {
       id: candidate.id,
       tag: candidate.tag_name,
@@ -779,11 +780,6 @@ export async function publishRelease(
       );
     }
     if (observed.draft) throw cause;
-    if (!observed.immutable) {
-      throw new Error(
-        `${cause.message}; publication outcome is neither a draft nor an immutable release`,
-      );
-    }
     return await completePublished(observed);
   };
 

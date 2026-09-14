@@ -708,11 +708,13 @@ skips when the source is unchanged since the latest published preview. An
 overnight build counts on the UTC date it is published as well as the date in
 its id.
 
-A preview id is `<x.y.z>-preview.<YYYYMMDD>.<N>`: the source tree's version,
-the UTC build date chosen during planning, and a retry counter (`1` initially).
-Drafts and tags left by failed attempts reserve ids without consuming the
-daily publication allowance. A retry can advance `N` past those occupied ids;
-it does not permit multiple public releases in one day.
+A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
+source tree's current stable version, the UTC build date chosen during
+planning, and a retry counter (`1` initially). The workflow calculates the
+preview version without editing the source version. Drafts and tags left by
+failed attempts reserve ids without consuming the daily publication allowance.
+A retry can advance `N` past those occupied ids; it does not permit multiple
+public releases in one day.
 
 Stable ids stay exactly `x.y.z`, and nothing else is accepted anywhere a
 version appears (installer flags, `use`, pins, `.aidlc-version`, retained

@@ -136,9 +136,9 @@ if (TIER_CAP) {
 
 // The version stamped into every projected aidlc-version.ts copy and projection
 // stamp. Unset means the source version. A release build sets AIDLC_BUILD_VERSION
-// to a preview id derived from the source version; the source tree is never
-// edited. Honoured in --check mode too, so the two-build determinism guard
-// measures the same stamped projection the release will ship.
+// to a next-patch preview id derived from the current source version; the source
+// tree is never edited. Honoured in --check mode too, so the two-build
+// determinism guard measures the same stamped projection the release will ship.
 const BUILD_VERSION = releaseBuildVersion();
 if (BUILD_VERSION !== AIDLC_VERSION) {
   console.error(`[version] stamping projections with ${BUILD_VERSION_ENV}=${BUILD_VERSION}`);

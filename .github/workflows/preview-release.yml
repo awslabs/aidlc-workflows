@@ -3,7 +3,8 @@ name: Preview Release
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "0 22 * * *"
+      timezone: "Europe/Lisbon"
 
 permissions:
   contents: read
@@ -71,14 +72,6 @@ jobs:
             printf 'preview_plan='
             jq -c . "$plan"
           } >> "$GITHUB_OUTPUT"
-      - name: Require immutable preview releases
-        if: steps.plan.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = true
-
   gate:
     needs: validate
     if: needs.validate.outputs.skip != 'true'
