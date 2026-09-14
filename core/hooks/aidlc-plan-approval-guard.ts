@@ -60,7 +60,6 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
-  type ClaudeCodeHookInput,
   docsRoot,
   errorMessage,
   getField,
@@ -68,13 +67,16 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  isWorkflowParticipant,
   readActiveDirectiveMarker,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
-  resolveProjectFlag,
   resolveProjectDirFromHook,
+  resolveProjectFlag,
+  resolveWorkflowSelection,
   stateFilePath,
+  type ClaudeCodeHookInput,
 } from "../tools/aidlc-lib.ts";
 import {
   beginCodeGeneration,
@@ -816,6 +818,13 @@ async function mutationIntent(
 function recordGuardDisabled(input: string): void {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   if (!existsSync(stateFilePath(projectDir))) return;
+  // Same participation rule as the decision path (#1116): the off-switch row
+  // must not land in a record this checkout never joined.
+  if (
+    !isWorkflowParticipant(projectDir, resolveWorkflowSelection(projectDir))
+  ) {
+    return;
+  }
   let toolName = "";
   try {
     const raw: unknown = JSON.parse(input);
@@ -908,6 +917,18 @@ export async function run(input: string): Promise<number> {
     detail: string | null;
   } | null = null;
   try {
+    // #1116: a clone that never joined resolves a teammate's committed record
+    // through the lone-record fallback, and this guard then refuses that
+    // session's unrelated writes. A non-participant has no workflow from this
+    // hook's perspective, so it fails open like any pre-workflow session.
+    if (
+      !isWorkflowParticipant(
+        projectDir,
+        resolveWorkflowSelection(projectDir),
+      )
+    ) {
+      return 0;
+    }
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return 0; // no workflow - fail open
     const state = readFileSync(statePath, "utf-8");

@@ -23,17 +23,20 @@ import {
   auditFilePath,
   auditShardName,
   auditShards,
+  cursorIntent,
   ensureActiveSpaceCursor,
   idSuffix,
   intentsDir,
+  isWorkflowParticipant,
   knowledgeDir,
   listIntentDirs,
-  migrateFlatLayout,
   migratedMarkerPath,
+  migrateFlatLayout,
   needsFlatMigration,
   readAllAuditShards,
   recordDir,
   relativeRecordDir,
+  resolveWorkflowSelection,
   slugify,
   stateFilePath,
   uuidv7,
@@ -160,6 +163,37 @@ describe("t160 selectors — space + intent resolution", () => {
     expect(activeIntent(proj, "default")).toBe("export-bbbbbbbb");
     // explicit arg overrides the cursor
     expect(activeIntent(proj, "default", "auth-aaaaaaaa")).toBe("auth-aaaaaaaa");
+  });
+
+  test("cursorIntent reads the cursor ALONE: no lone-intent fallback under it", () => {
+    seedShell(proj);
+    seedIntent(proj, "auth-aaaaaaaa");
+    // The lone-record fallback still resolves (worktrees depend on it) ...
+    expect(activeIntent(proj, "default")).toBe("auth-aaaaaaaa");
+    // ... while the cursor-only reader reports the absence the fallback hides.
+    expect(cursorIntent(proj, "default")).toBeNull();
+    writeFileSync(join(intentsDir(proj, "default"), "active-intent"), "auth-aaaaaaaa\n", "utf-8");
+    expect(cursorIntent(proj, "default")).toBe("auth-aaaaaaaa");
+    // A cursor naming a record that does not exist is not a cursor.
+    writeFileSync(join(intentsDir(proj, "default"), "active-intent"), "gone-cccccccc\n", "utf-8");
+    expect(cursorIntent(proj, "default")).toBeNull();
+  });
+
+  test("isWorkflowParticipant: a committed record alone never makes a participant", () => {
+    seedShell(proj);
+    seedIntent(proj, "auth-aaaaaaaa");
+    rmSync(join(intentsDir(proj, "default"), "active-intent"), { force: true });
+    const resolved = resolveWorkflowSelection(proj);
+    // Resolution follows the fallback; participation does not.
+    expect(resolved.intent).toBe("auth-aaaaaaaa");
+    expect(isWorkflowParticipant(proj, resolved)).toBe(false);
+    // The cursor is one of the four local signals.
+    writeFileSync(join(intentsDir(proj, "default"), "active-intent"), "auth-aaaaaaaa\n", "utf-8");
+    expect(isWorkflowParticipant(proj, resolveWorkflowSelection(proj))).toBe(true);
+    // A cold selection is never a participant.
+    expect(
+      isWorkflowParticipant(proj, { space: "default", intent: null, sessionId: null, binding: null }),
+    ).toBe(false);
   });
 
   test("listIntentDirs returns only dirs holding aidlc-state.md, sorted", () => {
