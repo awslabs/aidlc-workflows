@@ -2009,6 +2009,89 @@ describe("t243 release lifecycle", () => {
     }
   });
 
+  test("a packaged Unix preview installer downloads its own release without an explicit version", async () => {
+    if (process.platform === "win32") return;
+    const preview = `${NEXT_VERSION}-preview.20260914.7`;
+    const release = fixtureRelease(preview);
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    writeFileSync(
+      binaryPath,
+      [
+        "#!/bin/sh",
+        `if [ "$1" = "version" ]; then printf 'aidlc %s (runtime %s)\\n' '${preview}' '${preview}'; exit 0; fi`,
+        'if [ "$1" = "system" ] && [ "$2" = "lifecycle" ] && [ "$3" = "install-apply" ]; then',
+        '  mkdir -p "$AIDLC_BIN_DIR"',
+        '  cp "$0" "$AIDLC_BIN_DIR/aidlc"',
+        '  chmod 755 "$AIDLC_BIN_DIR/aidlc"',
+        "  exit 0",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      assets: Array<{ name: string; sha256: string; bytes: number }>;
+    };
+    const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+    expect(binaryAsset).toBeDefined();
+    if (!binaryAsset) return;
+    binaryAsset.sha256 = digest(binaryPath);
+    binaryAsset.bytes = statSync(binaryPath).size;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(
+      join(release, "checksums.txt"),
+      `${[
+        "version.json",
+        ...manifest.assets.map((asset) => asset.name),
+      ].map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+    );
+    const installer = join(temp("aidlc-t243-packaged-installer-"), "install.sh");
+    const marker = "PACKAGED_VERSION=''";
+    const source = readFileSync(INSTALLER, "utf-8");
+    expect(source.split(marker)).toHaveLength(2);
+    writeFileSync(
+      installer,
+      source.replace(marker, `PACKAGED_VERSION='${preview}'`),
+      { mode: 0o755 },
+    );
+    const server = serveReleaseFixture(release);
+    const machine = temp("aidlc-t243-packaged-installer-machine-");
+    try {
+      const child = Bun.spawn([
+        "sh",
+        installer,
+        "--release-base-url",
+        server.baseUrl,
+        "--quiet",
+      ], {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+          NO_PROXY: "127.0.0.1",
+          AIDLC_INSTALL_ROOT: machine,
+          AIDLC_BIN_DIR: join(machine, "bin"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect(status, `${stdout}${stderr}`).toBe(0);
+      expect(stdout).toContain(`installed AI-DLC ${preview}`);
+      expect(server.requests).toContain(`/download/v${preview}/version.json`);
+      expect(server.requests).not.toContain("/latest/download/version.json");
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
+
   test("route network policy blocks acquisition before opening a socket", async () => {
     const priorPolicy = process.env.AIDLC_ROUTE_NETWORK_POLICY;
     const priorId = process.env.AIDLC_ROUTE_ID;

@@ -8,7 +8,6 @@ import {
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
   requireVersion,
-  utcBuildDate,
 } from "../core/tools/aidlc-channel.ts";
 
 export type PreviewPlan = {
@@ -35,29 +34,6 @@ export function previewReleaseVersion(release: unknown): string | null {
   ) return null;
   const version = release.tag_name.slice(1);
   return PREVIEW_VERSION.test(version) ? version : null;
-}
-
-// The build date reserves the daily slot; published_at also counts an overnight
-// build on the UTC day it actually became public. Drafts never consume a slot.
-export function publishedPreviewOnDate(releases: readonly unknown[], date: string): string | null {
-  for (const release of releases) {
-    const version = previewReleaseVersion(release);
-    if (
-      !version ||
-      !release ||
-      typeof release !== "object" ||
-      !("draft" in release) ||
-      release.draft !== false ||
-      !("prerelease" in release) ||
-      release.prerelease !== true
-    ) continue;
-    if (parseVersion(version).date === date) return version;
-    if ("published_at" in release && typeof release.published_at === "string") {
-      const published = new Date(release.published_at);
-      if (Number.isFinite(published.getTime()) && utcBuildDate(published) === date) return version;
-    }
-  }
-  return null;
 }
 
 export function previewReleaseName(version: string): string {

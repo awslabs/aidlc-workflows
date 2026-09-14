@@ -768,6 +768,12 @@ describe("t238 build-binaries release builder", () => {
       expect(readdirSync(output).filter((name) => name === expectedName)).toEqual([
         expectedName,
       ]);
+      expect(readFileSync(join(output, "install.sh"), "utf-8")).toContain(
+        `PACKAGED_VERSION='${AIDLC_VERSION}'`,
+      );
+      expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
+        `$PackagedVersion = '${AIDLC_VERSION}'`,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

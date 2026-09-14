@@ -100,6 +100,12 @@ new sessions; it does not edit a PowerShell profile.
 PowerShell installer parameters use their native names, such as `-Version`, `-From`, `-Offline`,
 `-ReleaseBaseUrl`, `-CaBundle`, `-Yes`, `-Quiet`, `-Json`, and `-NoColor`.
 
+An installer downloaded from a versioned release URL defaults to that exact
+release, including previews. The `latest/download` installer continues to
+select the latest stable release. An explicit `--version` / `-Version`
+selection overrides the packaged default, while `--from` / `-From` reads the
+version from the local release manifest.
+
 ### Automation
 
 Installation asks no harness question. Human and non-interactive runs install
@@ -698,23 +704,21 @@ There is no public rollback or retained-version management command.
 
 `main` is the shared development branch. The **stable** channel publishes a
 selected commit as a GitHub release tagged `vX.Y.Z`. The **preview** channel
-lets users try changes from `main` before the next stable release, at most once
-per UTC day, as a GitHub prerelease that is never marked "latest". Source
-versions and changelog entries are updated during release preparation.
+lets users try changes from `main` before the next stable release as a GitHub
+prerelease that is never marked "latest". Source versions and changelog entries
+are updated during release preparation.
 
-Scheduled and manual runs share the same daily cap. A run skips if a preview
-is already published for that UTC day, even when `main` has advanced; it also
-skips when the source is unchanged since the latest published preview. An
-overnight build counts on the UTC date it is published as well as the date in
-its id.
+Scheduled and manual runs share one serialized publication queue. A run skips
+when the source is unchanged since the latest published preview. When `main`
+advances more than once on the same UTC date, each changed source can publish a
+new preview with the next build counter.
 
 A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
 source tree's current stable version, the UTC build date chosen during
 planning, and a retry counter (`1` initially). The workflow calculates the
 preview version without editing the source version. Drafts and tags left by
-failed attempts reserve ids without consuming the daily publication allowance.
-A retry can advance `N` past those occupied ids; it does not permit multiple
-public releases in one day.
+failed attempts reserve ids. A retry or another changed source on the same date
+advances `N` past those occupied ids.
 
 Stable ids stay exactly `x.y.z`, and nothing else is accepted anywhere a
 version appears (installer flags, `use`, pins, `.aidlc-version`, retained

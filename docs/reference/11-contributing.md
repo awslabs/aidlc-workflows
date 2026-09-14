@@ -94,17 +94,17 @@ Stable releases start from pushed version tags in `.github/workflows/release.yml
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through callable CI,
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
-never "latest". Previews publish at most once per UTC day. Scheduled and manual
-runs share `release-preview` workflow concurrency; each later run re-reads
-releases and skips if that day already has a published preview, even if `main`
-advanced. Unchanged sources also skip. Drafts and orphan tags do not consume
-the daily allowance: the planner can retry with an unoccupied id, whose `.N`
-counter does not authorize extra public releases that day.
+never "latest". Scheduled and manual runs share `release-preview` workflow
+concurrency; each later run re-reads releases and skips when the newest
+published preview already uses the same source commit. When `main` advances
+again on the same UTC date, the planner allocates the next unoccupied `.N`
+counter. Drafts and orphan tags reserve their ids, so retries also advance past
+them.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
-how overnight publication timestamps count toward the daily cap, is
-[Supply-Chain Security](19-supply-chain-security.md).
+same-day counter allocation, is [Supply-Chain
+Security](19-supply-chain-security.md).
 
 ## Testing
 

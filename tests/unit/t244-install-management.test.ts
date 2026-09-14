@@ -1477,6 +1477,10 @@ describe("t244 Windows and completion release surfaces", () => {
 
   test("PowerShell installer is authenticated release content and delegates placement", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
+    expect(script).toContain("$PackagedVersion = ''");
+    expect(script).toContain(
+      "if (-not $PSBoundParameters.ContainsKey('Version') -and -not $From)",
+    );
     expect(script).toContain("aidlc-windows-x64.exe");
     expect(script).toContain("'install-apply'");
     expect(script).toContain("Get-FileHash -Algorithm SHA256");
@@ -1540,6 +1544,21 @@ describe("t244 Windows and completion release surfaces", () => {
         new RegExp(`^\\s*${helper}\\s+(?!-|\`\\s*$)`, "m"),
       );
     }
+  });
+
+  test("release installers default to their packaged version without overriding explicit or offline selection", () => {
+    const unix = readFileSync(INSTALL_SH, "utf-8");
+    expect(unix.match(/^PACKAGED_VERSION=''$/gm)).toHaveLength(1);
+    expect(unix).toContain(
+      'if [ -z "$VERSION" ] && [ -z "$FROM" ]; then\n  VERSION=$PACKAGED_VERSION\nfi',
+    );
+
+    const powershell = readFileSync(INSTALL_PS1, "utf-8");
+    expect(powershell.match(/^\$PackagedVersion = ''$/gm)).toHaveLength(1);
+    expect(powershell).toContain(
+      "if (-not $PSBoundParameters.ContainsKey('Version') -and -not $From) {\n" +
+        "  $Version = $PackagedVersion\n}",
+    );
   });
 
   const powershellVersionCases = [

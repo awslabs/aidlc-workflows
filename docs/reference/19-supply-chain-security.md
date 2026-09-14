@@ -52,31 +52,28 @@ the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
 The preview workflow schedules `main` daily at 22:00 in `Europe/Lisbon` and
-accepts manual dispatch, with publication at most once per UTC day for both
-triggers combined. Scheduled and manual runs serialize through the
-`release-preview` workflow concurrency group without cancelling the active
-run. Each later run re-reads the release list: the planner skips if a preview
-is already published for that UTC day, even if `main` has advanced, or if the
-source commit is unchanged since the latest published preview. The daily check
-counts both the date in a published preview's id and its GitHub `published_at`
-timestamp in UTC, so an overnight build also consumes the day on which it
-becomes public.
+accepts manual dispatch. Scheduled and manual runs serialize through the
+`release-preview` workflow concurrency group without cancelling the active run.
+Each later run re-reads the release list: the planner skips if the source commit
+is unchanged since the latest published preview. If `main` advances again on
+the same UTC date, another preview can publish with the next build counter.
 
 The planner reads the current stable `x.y.z` from
 `core/tools/aidlc-version.ts` and allocates
 `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>` using the UTC date at planning and ids
 occupied by existing tags or release records. It calculates the next patch in
-memory and never edits release metadata. Drafts and orphan tags do not consume
-the daily publication allowance, so retry planning can advance `N` past their
-occupied ids. This counter permits retries, not multiple public daily releases.
-Leftover `aidlc-staging-*` drafts still require inspection and removal before
-the publisher stages another candidate.
+memory and never edits release metadata. Drafts and orphan tags reserve their
+ids, so retry planning and later same-day publications advance `N` past their
+occupied ids. Leftover `aidlc-staging-*` drafts still require inspection and
+removal before the publisher stages another candidate.
 
 The planner renders notes from changes since the previous preview. Callable
 CI gates the authorized commit before the normal release build chain.
 `AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,
-`version.json`, and both versioned runtime archives while the source tree keeps
-its stable `x.y.z` version. The preview publisher verifies a staging draft,
+`version.json`, both versioned runtime archives, and the packaged installers
+while the source tree keeps its stable `x.y.z` version. A packaged installer
+therefore defaults to the release that carried it instead of rediscovering
+`latest`. The preview publisher verifies a staging draft,
 creates an annotated tag that records the source repository and commit, then
 publishes the draft as a prerelease with `make_latest: false`; stable
 `latest/download` discovery therefore remains unchanged.
