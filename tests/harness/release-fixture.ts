@@ -37,7 +37,7 @@ import {
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import {
   digest,
-  releaseNativeRuntimeAsset,
+  releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   type ReleaseManifest,
 } from "../../core/tools/aidlc-release.ts";
@@ -180,7 +180,7 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
   const version = requireVersion(options.version ?? AIDLC_VERSION);
   const reportedVersion = requireVersion(options.reportedVersion ?? version);
   const runtimeAsset = releaseRuntimeAsset(version);
-  const nativeRuntimeAsset = releaseNativeRuntimeAsset(version);
+  const copyRuntimeAsset = releaseCopyRuntimeAsset(version);
   const target = options.target ?? targetTriple();
   const copyProjectionRoot = join(repoRoot, "dist");
   const releaseProjectionRoot = join(repoRoot, "dist-release");
@@ -225,8 +225,8 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
   );
 
   const distributionRows: Array<{ name: string; productName: string }> = [];
+  const copyRuntimeEntries: ArchiveEntry[] = [];
   const runtimeEntries: ArchiveEntry[] = [];
-  const nativeRuntimeEntries: ArchiveEntry[] = [];
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-release-fixture-"));
   try {
     for (const distribution of distributions) {
@@ -234,12 +234,12 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
         {
           source: join(copyProjectionRoot, distribution),
           root: join(scratch, "copy", distribution),
-          entries: runtimeEntries,
+          entries: copyRuntimeEntries,
         },
         {
           source: join(releaseProjectionRoot, distribution),
           root: join(scratch, "native", distribution),
-          entries: nativeRuntimeEntries,
+          entries: runtimeEntries,
         },
       ];
       let productName = "";
@@ -283,8 +283,8 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
             ...entry,
             path: `plugins/${plugin}/${harness}/${entry.path}`,
           }));
+          copyRuntimeEntries.push(...entries);
           runtimeEntries.push(...entries);
-          nativeRuntimeEntries.push(...entries);
         }
       }
     }
@@ -293,8 +293,12 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
       createTarGz(runtimeEntries),
     );
     writeFileSync(
-      join(options.root, nativeRuntimeAsset),
-      createTarGz(nativeRuntimeEntries),
+      join(options.root, copyRuntimeAsset),
+      createTarGz(copyRuntimeEntries),
+    );
+    writeFileSync(
+      join(options.root, `${copyRuntimeAsset}.sha256`),
+      `${digest(join(options.root, copyRuntimeAsset))}  ${copyRuntimeAsset}\n`,
     );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -302,7 +306,6 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
 
   const names = [
     binaryName,
-    nativeRuntimeAsset,
     runtimeAsset,
     "install.sh",
     "install.ps1",
@@ -311,14 +314,12 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     name,
     sha256: digest(join(options.root, name)),
     bytes: statSync(join(options.root, name)).size,
-    kind: name === runtimeAsset || name === nativeRuntimeAsset
+    kind: name === runtimeAsset
       ? "runtime" as const
       : name === "install.sh" || name === "install.ps1"
       ? "installer" as const
       : "binary" as const,
-    ...(name === "install.sh" || name === "install.ps1" || name === runtimeAsset
-      ? {}
-      : { target }),
+    ...(name === binaryName ? { target } : {}),
   }));
   const manifest: ReleaseManifest = {
     schemaVersion: 1,
@@ -500,7 +501,6 @@ export async function checkLiveReleaseContract(
   const expected = [
     "install.sh",
     "install.ps1",
-    releaseNativeRuntimeAsset(manifest.version),
     releaseRuntimeAsset(manifest.version),
   ];
   for (const name of expected) {
@@ -511,6 +511,11 @@ export async function checkLiveReleaseContract(
   }
   if (!assetNames.includes("aidlc-windows-x64.exe")) {
     throw new Error("live release has no Windows binary asset");
+  }
+  const copyRuntime = releaseCopyRuntimeAsset(manifest.version);
+  const copyChecksum = await fetchMetadata(`${copyRuntime}.sha256`);
+  if (!new RegExp(`^[a-f0-9]{64}  ${copyRuntime.replaceAll(".", "\\.")}\\n?$`).test(copyChecksum)) {
+    throw new Error(`live release has an invalid ${copyRuntime}.sha256`);
   }
   const checksumNames = new Set<string>();
   for (const line of checksumsText.trim().split(/\r?\n/)) {

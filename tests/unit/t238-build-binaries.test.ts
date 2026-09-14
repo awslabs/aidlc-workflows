@@ -24,7 +24,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractTarGz } from "../../core/tools/aidlc-archive.ts";
+import { walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
+import {
+  digest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
+} from "../../core/tools/aidlc-release.ts";
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
@@ -70,6 +76,41 @@ type BuildResults = {
   expectedVersion: string;
   results: TargetResult[];
 };
+
+function legacy28ManifestError(manifest: {
+  version: string;
+  assets: Array<{ name: string; kind: string; target?: string }>;
+}): string | undefined {
+  for (const asset of manifest.assets) {
+    const validBinary = asset.kind !== "binary" ||
+      Boolean(
+        asset.target &&
+          asset.name ===
+            `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`,
+      );
+    const validRuntime = asset.kind !== "runtime" ||
+      asset.name === `aidlc-runtime-${manifest.version}.tar.gz`;
+    const validInstaller = asset.kind !== "installer" ||
+      asset.name === "install.sh" ||
+      asset.name === "install.ps1";
+    if (
+      !["binary", "runtime", "installer"].includes(asset.kind) ||
+      !validBinary ||
+      !validRuntime ||
+      !validInstaller
+    ) {
+      return `${asset.name}: invalid asset metadata`;
+    }
+  }
+  return undefined;
+}
+
+function invocationSurfaceFiles(root: string): string[] {
+  return walkFiles(root).filter((path) => {
+    if (!/\.(?:hook|json|md|toml|ts)$/.test(path) || path === "install.ts") return false;
+    return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(path);
+  });
+}
 
 function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -314,7 +355,10 @@ describe("t238 build-binaries release builder", () => {
     const releaseManifest = JSON.parse(
       readFileSync(join(RELEASE_DIR, "version.json"), "utf-8"),
     ) as {
+      version: string;
+      distributions: Array<{ name: string }>;
       assets: Array<{
+        name: string;
         kind: string;
         verification?: { status: string; mode: string };
       }>;
@@ -326,22 +370,48 @@ describe("t238 build-binaries release builder", () => {
       mode: "full-runtime",
     }));
     expect(releaseManifest.assets.filter((asset) => asset.kind === "runtime")).toEqual([
-      expect.objectContaining({ name: `aidlc-native-runtime-${AIDLC_VERSION}.tar.gz` }),
-      expect.objectContaining({ name: `aidlc-runtime-${AIDLC_VERSION}.tar.gz` }),
+      expect.objectContaining({ name: releaseRuntimeAsset(AIDLC_VERSION) }),
     ]);
+    expect(legacy28ManifestError(releaseManifest)).toBeUndefined();
+    const copyRuntimeName = releaseCopyRuntimeAsset(AIDLC_VERSION);
+    const copyRuntimePath = join(RELEASE_DIR, copyRuntimeName);
+    expect(releaseManifest.assets.some((asset) => asset.name === copyRuntimeName)).toBe(false);
+    expect(readFileSync(join(RELEASE_DIR, "checksums.txt"), "utf-8"))
+      .not.toContain(copyRuntimeName);
+    expect(readFileSync(`${copyRuntimePath}.sha256`, "utf-8")).toBe(
+      `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`,
+    );
     expect(releaseManifest.assets.some((asset) => asset.kind === "data")).toBe(false);
     const runtimeChannels = mkdtempSync(join(tmpdir(), "aidlc-t238-runtime-channels-"));
     try {
       const copyRoot = join(runtimeChannels, "copy");
       const nativeRoot = join(runtimeChannels, "native");
       extractTarGz(
-        join(RELEASE_DIR, `aidlc-runtime-${AIDLC_VERSION}.tar.gz`),
+        copyRuntimePath,
         copyRoot,
       );
       extractTarGz(
-        join(RELEASE_DIR, `aidlc-native-runtime-${AIDLC_VERSION}.tar.gz`),
+        join(RELEASE_DIR, releaseRuntimeAsset(AIDLC_VERSION)),
         nativeRoot,
       );
+      for (const distribution of releaseManifest.distributions.map(({ name }) => name)) {
+        const copyHarnessRoot = join(copyRoot, "runtime", distribution);
+        const nativeHarnessRoot = join(nativeRoot, "runtime", distribution);
+        const copyFiles = invocationSurfaceFiles(copyHarnessRoot);
+        const nativeFiles = invocationSurfaceFiles(nativeHarnessRoot);
+        const copyText = copyFiles
+          .map((path) => readFileSync(join(copyHarnessRoot, path), "utf-8"))
+          .join("\n");
+        expect(copyText, distribution).toMatch(/\bbun\s+[^\n]*aidlc\.ts\b/);
+        for (const path of copyFiles) {
+          expect(readFileSync(join(copyHarnessRoot, path), "utf-8"), `${distribution}/${path}`)
+            .not.toMatch(/\baidlc engine\b/);
+        }
+        for (const path of nativeFiles) {
+          expect(readFileSync(join(nativeHarnessRoot, path), "utf-8"), `${distribution}/${path}`)
+            .not.toMatch(/\bbun\s+[^\n]*\.ts\b/);
+        }
+      }
       const copySettingsText = readFileSync(
         join(copyRoot, "runtime", "claude", ".claude", "settings.json"),
         "utf-8",

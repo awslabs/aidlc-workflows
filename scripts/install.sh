@@ -421,12 +421,7 @@ if [ -n "$requested_version" ] && [ "$requested_version" != "$candidate_version"
 fi
 VERSION=$candidate_version
 BINARY="aidlc-$TARGET"
-NATIVE_RUNTIME_ASSET="aidlc-native-runtime-$VERSION.tar.gz"
-if grep -q "  $NATIVE_RUNTIME_ASSET\$" "$TMP/checksums.txt"; then
-  RUNTIME_ASSET=$NATIVE_RUNTIME_ASSET
-else
-  RUNTIME_ASSET="aidlc-runtime-$VERSION.tar.gz"
-fi
+RUNTIME_ASSET="aidlc-runtime-$VERSION.tar.gz"
 ASSETS="$BINARY $RUNTIME_ASSET"
 [ -z "$FROM" ] || ASSETS="$ASSETS install.sh"
 

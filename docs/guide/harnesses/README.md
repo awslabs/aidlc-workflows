@@ -46,7 +46,7 @@ Pick your harness:
 AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**.
 
 For a manual copy, install Bun, download a specific release's
-`aidlc-runtime-X.Y.Z.tar.gz`, extract it, and copy the complete
+`aidlc-copy-runtime-X.Y.Z.tar.gz`, extract it, and copy the complete
 `runtime/<harness>/` directory; the native `aidlc` executable is not required.
 Do not copy generated trees from a repository checkout. Framework developers may instead run
 `bun scripts/package.ts` in a source checkout to materialize the ignored local

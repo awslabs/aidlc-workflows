@@ -1132,7 +1132,7 @@ describe("t332 preview publication pipeline", () => {
     expect(publish?.run).toContain("bun scripts/publish-release.ts");
     expect(publish?.run).toContain("--channel preview");
     expect(publish?.run).toContain("--preview-plan \"$plan\"");
-    expect(publish?.run).toContain("--expected-assets 13");
+    expect(publish?.run).toContain("--expected-assets 15");
     expect(previewText).toContain(
       "awslabs/aidlc-workflows/.github/workflows/preview-release.yml",
     );

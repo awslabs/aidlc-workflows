@@ -32,15 +32,17 @@ The workflow:
    PSScriptAnalyzer;
 3. builds native binaries for Linux, macOS, and Windows;
 4. runs native and installer smoke tests;
-5. creates the manual-copy `aidlc-runtime-X.Y.Z.tar.gz`, the installer-facing
-   `aidlc-native-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and
-   `checksums.txt`;
+5. creates the out-of-band manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` and
+   its `.sha256` sidecar, the manifest-listed native
+   `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
 6. verifies the staged release inventory and checksums.
 
 The release manifest records the tag ref and exact source commit. Both runtime
 archive names include the release version. Manual-copy users download
-`aidlc-runtime-X.Y.Z.tar.gz`; native installers select
-`aidlc-native-runtime-X.Y.Z.tar.gz`.
+`aidlc-copy-runtime-X.Y.Z.tar.gz`; native installers select
+`aidlc-runtime-X.Y.Z.tar.gz`. The copy archive stays outside the manifest and
+main checksum inventory so 2.8.x clients retain forward-compatible update
+discovery; its sidecar and release provenance authenticate it independently.
 
 ## Provenance
 
@@ -139,8 +141,9 @@ git push origin vX.Y.Z
 
 3. Monitor the `Release` workflow.
 4. Confirm that the GitHub Release contains the binaries, installers,
-   `aidlc-runtime-X.Y.Z.tar.gz`, `aidlc-native-runtime-X.Y.Z.tar.gz`,
-   `version.json`, `checksums.txt`, and the provenance bundle.
+   `aidlc-copy-runtime-X.Y.Z.tar.gz`, its `.sha256` sidecar,
+   `aidlc-runtime-X.Y.Z.tar.gz`, `version.json`, `checksums.txt`, and the
+   provenance bundle.
 
 If publication fails before the release is created, rerun the failed workflow.
 If a partial release exists, inspect and remove it before rerunning. Published

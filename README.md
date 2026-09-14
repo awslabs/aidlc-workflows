@@ -32,7 +32,7 @@ instruction printed by the installer or start a new shell.
 
 Cannot install a native executable, or prefer to manage the project files
 manually? Install [Bun](https://bun.sh/), download
-`aidlc-runtime-X.Y.Z.tar.gz` from the
+`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
 the complete `runtime/<harness>/` directory into your project. This path does
 not require the native `aidlc` command.

@@ -9,7 +9,7 @@ attestation verification; missing or older versions do not block installation.
 This chapter describes the native install lifecycle available in this release.
 The planned `aidlc setup` experience, npm package, and package-manager formulas
 are not available yet. Manual-copy users install Bun and take the versioned,
-Bun-invoking runtime from `aidlc-runtime-X.Y.Z.tar.gz`; they do not need the
+Bun-invoking runtime from `aidlc-copy-runtime-X.Y.Z.tar.gz`; they do not need the
 native `aidlc` command.
 
 ## Install
@@ -963,7 +963,7 @@ continuation before doing other work.
 
 ## Copy Channel
 
-The supported manual-copy payload is the versioned `aidlc-runtime-X.Y.Z.tar.gz`
+The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
 project-root files stay together. Bun is the runtime prerequisite; the native
@@ -972,19 +972,20 @@ project-root files stay together. Bun is the runtime prerequisite; the native
 ```bash
 tag=vX.Y.Z
 tmp="$(mktemp -d)"
-runtime_asset="aidlc-runtime-${tag#v}.tar.gz"
+runtime_asset="aidlc-copy-runtime-${tag#v}.tar.gz"
+runtime_checksum="${runtime_asset}.sha256"
 source_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
 release_workflow="${AIDLC_RELEASE_WORKFLOW:-$source_repo/.github/workflows/release.yml}"
 gh release download "$tag" --repo "$source_repo" --dir "$tmp" \
   --pattern "$runtime_asset" \
-  --pattern checksums.txt \
+  --pattern "$runtime_checksum" \
   --pattern aidlc-release.intoto.jsonl
-gh attestation verify "$tmp/checksums.txt" \
+gh attestation verify "$tmp/$runtime_asset" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo "$source_repo" \
   --signer-workflow "$release_workflow" \
   --source-ref "refs/tags/$tag"
-(cd "$tmp" && grep "  $runtime_asset\$" checksums.txt | sha256sum -c -)
+(cd "$tmp" && sha256sum -c "$runtime_checksum")
 tar -xzf "$tmp/$runtime_asset" -C "$tmp"
 RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
@@ -993,8 +994,13 @@ cp -R "$RUNTIME_ROOT/claude/." your-project/
 The archive is assembled from the freshly regenerated Bun projections under
 `dist/`. Its generated hooks and tools invoke the included TypeScript through
 Bun. The native installers and lifecycle commands instead consume
-`aidlc-native-runtime-X.Y.Z.tar.gz`, assembled from `dist-release/`; users do
+`aidlc-runtime-X.Y.Z.tar.gz`, assembled from `dist-release/`; users do
 not normally download that archive directly.
+
+The copy archive stays outside `version.json` and `checksums.txt` so existing
+2.8.x native clients can continue to parse release metadata and self-update.
+Its versioned `.sha256` sidecar authenticates the bytes directly, and the
+release provenance covers both files.
 
 When native executables are permitted, prefer `aidlc config`. It installs the
 native runtime transactionally and records ownership for later refreshes.

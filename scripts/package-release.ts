@@ -19,7 +19,7 @@ import { projectionFiles, walkFiles } from "../core/tools/aidlc-distribution.ts"
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
 import {
   digest,
-  releaseNativeRuntimeAsset,
+  releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   type ReleaseAsset,
   type ReleaseManifest,
@@ -269,8 +269,8 @@ function build(argv: string[]): void {
   const assets: ReleaseAsset[] = [];
   const distributions: ReleaseManifest["distributions"] = [];
 
+  const copyRuntimeEntries: ArchiveEntry[] = [];
   const runtimeEntries: ArchiveEntry[] = [];
-  const nativeRuntimeEntries: ArchiveEntry[] = [];
   for (const distribution of generated.harnesses) {
     const root = join(REPO_ROOT, "dist", distribution);
     const nativeRoot = join(REPO_ROOT, "dist-release", distribution);
@@ -286,11 +286,11 @@ function build(argv: string[]): void {
       name: projection.stamp.distribution,
       productName: projection.descriptor.productName,
     });
-    runtimeEntries.push(...entriesFor(root).map((entry) => ({
+    copyRuntimeEntries.push(...entriesFor(root).map((entry) => ({
       ...entry,
       path: `runtime/${distribution}/${entry.path}`,
     })));
-    nativeRuntimeEntries.push(...entriesFor(nativeRoot).map((entry) => ({
+    runtimeEntries.push(...entriesFor(nativeRoot).map((entry) => ({
       ...entry,
       path: `runtime/${distribution}/${entry.path}`,
     })));
@@ -307,8 +307,8 @@ function build(argv: string[]): void {
           ...entry,
           path: `plugins/${plugin}/${harness}/${entry.path}`,
         }));
+        copyRuntimeEntries.push(...entries);
         runtimeEntries.push(...entries);
-        nativeRuntimeEntries.push(...entries);
       }
     }
   }
@@ -321,15 +321,13 @@ function build(argv: string[]): void {
     bytes: statSync(runtimePath).size,
     kind: "runtime",
   });
-  const nativeRuntimeName = releaseNativeRuntimeAsset(BUILD_VERSION);
-  const nativeRuntimePath = join(output, nativeRuntimeName);
-  writeFileSync(nativeRuntimePath, createTarGz(nativeRuntimeEntries));
-  assets.push({
-    name: nativeRuntimeName,
-    sha256: digest(nativeRuntimePath),
-    bytes: statSync(nativeRuntimePath).size,
-    kind: "runtime",
-  });
+  const copyRuntimeName = releaseCopyRuntimeAsset(BUILD_VERSION);
+  const copyRuntimePath = join(output, copyRuntimeName);
+  writeFileSync(copyRuntimePath, createTarGz(copyRuntimeEntries));
+  writeFileSync(
+    `${copyRuntimePath}.sha256`,
+    `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`,
+  );
 
   for (const input of binaryInputs(binaries)) {
     const verification = buildVerification(

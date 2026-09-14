@@ -2002,9 +2002,6 @@ describe("t243 release lifecycle", () => {
       }
       expect(server.requests.some((path) => path.endsWith(`/${binaryName}`))).toBe(false);
       expect(server.requests.some((path) =>
-        path.endsWith(`/aidlc-native-runtime-${AIDLC_VERSION}.tar.gz`)
-      )).toBe(false);
-      expect(server.requests.some((path) =>
         path.endsWith(`/aidlc-runtime-${AIDLC_VERSION}.tar.gz`)
       )).toBe(false);
     } finally {
@@ -2227,7 +2224,7 @@ describe("t243 release lifecycle", () => {
     }
   });
 
-  test("release manifests reject retired per-distribution data assets", () => {
+  test("release readers tolerate unselected future assets but validate selected metadata", () => {
     const release = fixtureReleaseBytes();
     const manifestPath = join(release, "version.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
@@ -2241,7 +2238,63 @@ describe("t243 release lifecycle", () => {
       distribution: "claude",
     });
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    expect(() => readReleaseManifest(release)).toThrow("invalid asset metadata");
+    expect(readReleaseManifest(release).assets.at(-1)).toEqual(
+      expect.objectContaining({ name: "aidlc-data-claude.tgz", kind: "data" }),
+    );
+
+    const invalidSelected = fixtureReleaseBytes();
+    const invalidManifestPath = join(invalidSelected, "version.json");
+    const invalidManifest = JSON.parse(readFileSync(invalidManifestPath, "utf-8")) as {
+      assets: Array<Record<string, unknown>>;
+    };
+    const runtime = invalidManifest.assets.find((asset) => asset.kind === "runtime");
+    expect(runtime).toBeDefined();
+    if (!runtime || typeof runtime.name !== "string") return;
+    runtime.kind = "future-runtime";
+    writeFileSync(
+      invalidManifestPath,
+      `${JSON.stringify(invalidManifest, null, 2)}\n`,
+    );
+    const checksumsPath = join(invalidSelected, "checksums.txt");
+    writeFileSync(
+      checksumsPath,
+      readFileSync(checksumsPath, "utf-8").replace(
+        /^[a-f0-9]{64} {2}version\.json$/m,
+        `${digest(invalidManifestPath)}  version.json`,
+      ),
+    );
+    expect(() => verifyReleaseDirectory(invalidSelected, [runtime.name as string]))
+      .toThrow("invalid selected runtime metadata");
+
+    const invalidBinary = fixtureReleaseBytes();
+    const invalidBinaryManifestPath = join(invalidBinary, "version.json");
+    const invalidBinaryManifest = JSON.parse(
+      readFileSync(invalidBinaryManifestPath, "utf-8"),
+    ) as {
+      assets: Array<Record<string, unknown>>;
+    };
+    const binary = invalidBinaryManifest.assets.find((asset) => asset.kind === "binary");
+    expect(binary).toBeDefined();
+    if (!binary || typeof binary.name !== "string") return;
+    binary.verification = {
+      status: "TRUSTED",
+      mode: "full-runtime",
+      hostTarget: "test-host",
+    };
+    writeFileSync(
+      invalidBinaryManifestPath,
+      `${JSON.stringify(invalidBinaryManifest, null, 2)}\n`,
+    );
+    const binaryChecksumsPath = join(invalidBinary, "checksums.txt");
+    writeFileSync(
+      binaryChecksumsPath,
+      readFileSync(binaryChecksumsPath, "utf-8").replace(
+        /^[a-f0-9]{64} {2}version\.json$/m,
+        `${digest(invalidBinaryManifestPath)}  version.json`,
+      ),
+    );
+    expect(() => verifyReleaseDirectory(invalidBinary, [binary.name as string]))
+      .toThrow("invalid selected release asset metadata");
   });
 
   test("release client classifies HTTP failures, follows redirects, and enforces metadata timeout", async () => {

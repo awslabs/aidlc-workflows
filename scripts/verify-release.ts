@@ -10,7 +10,8 @@ import {
   PREVIEW_CHANNEL,
 } from "../core/tools/aidlc-channel.ts";
 import {
-  releaseNativeRuntimeAsset,
+  digest,
+  releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../core/tools/aidlc-release.ts";
@@ -36,7 +37,6 @@ function releaseAssets(version: string): Map<string, {
     ["aidlc-linux-arm64-musl", { kind: "binary", target: "linux-arm64-musl" }],
     ["aidlc-linux-x64", { kind: "binary", target: "linux-x64" }],
     ["aidlc-linux-x64-musl", { kind: "binary", target: "linux-x64-musl" }],
-    [releaseNativeRuntimeAsset(version), { kind: "runtime" }],
     [releaseRuntimeAsset(version), { kind: "runtime" }],
     ["aidlc-windows-x64.exe", { kind: "binary", target: "windows-x64" }],
     ["install.ps1", { kind: "installer" }],
@@ -198,8 +198,18 @@ function verifyCandidate(args: string[]): void {
   }
 
   const bundleName = "aidlc-release.intoto.jsonl";
+  const copyRuntimeName = releaseCopyRuntimeAsset(manifest.version);
+  const copyRuntimeChecksumName = `${copyRuntimeName}.sha256`;
+  const copyRuntimePath = join(directory, copyRuntimeName);
+  const copyRuntimeChecksumPath = join(directory, copyRuntimeChecksumName);
+  const expectedCopyRuntimeChecksum = `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`;
+  if (readFileSync(copyRuntimeChecksumPath, "utf-8") !== expectedCopyRuntimeChecksum) {
+    throw new Error(`${copyRuntimeChecksumName} does not authenticate ${copyRuntimeName}`);
+  }
   const expectedFiles = new Set([
     ...assetNames,
+    copyRuntimeName,
+    copyRuntimeChecksumName,
     "checksums.txt",
     "version.json",
     bundleName,

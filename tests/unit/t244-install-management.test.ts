@@ -94,7 +94,7 @@ const LIVE_PIN_VERSION = patchVersion(2);
 const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);
 const RUNTIME_ASSET = `aidlc-runtime-${AIDLC_VERSION}.tar.gz`;
-const NATIVE_RUNTIME_ASSET = `aidlc-native-runtime-${AIDLC_VERSION}.tar.gz`;
+const COPY_RUNTIME_ASSET = `aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz`;
 
 // Removing the whole suite's copied release trees needs its own bounded budget.
 afterAll(() => {
@@ -120,7 +120,6 @@ function writeVerifierCandidate(root: string): void {
     ["aidlc-linux-arm64-musl", "binary", "linux-arm64-musl"],
     ["aidlc-linux-x64", "binary", "linux-x64"],
     ["aidlc-linux-x64-musl", "binary", "linux-x64-musl"],
-    [NATIVE_RUNTIME_ASSET, "runtime", undefined],
     [RUNTIME_ASSET, "runtime", undefined],
     ["aidlc-windows-x64.exe", "binary", "windows-x64"],
     ["install.ps1", "installer", undefined],
@@ -160,6 +159,13 @@ function writeVerifierCandidate(root: string): void {
     assets,
   };
   writeFileSync(join(root, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(join(root, COPY_RUNTIME_ASSET), "copy runtime\n");
+  writeFileSync(
+    join(root, `${COPY_RUNTIME_ASSET}.sha256`),
+    `${
+      createHash("sha256").update(readFileSync(join(root, COPY_RUNTIME_ASSET))).digest("hex")
+    }  ${COPY_RUNTIME_ASSET}\n`,
+  );
   writeFileSync(
     join(root, "checksums.txt"),
     `${[
@@ -867,6 +873,17 @@ describe("t244 management lifecycle", () => {
 
   test("all harness runtimes install together and config selects one project harness", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const manifest = JSON.parse(
+      readFileSync(join(release, "version.json"), "utf-8"),
+    ) as {
+      assets: Array<{ name: string; kind: string; target?: string }>;
+    };
+    const runtimeAssets = manifest.assets.filter((asset) => asset.kind === "runtime");
+    expect(runtimeAssets.map((asset) => asset.name)).toEqual([RUNTIME_ASSET]);
+    expect(runtimeAssets[0]?.target).toBeUndefined();
+    expect(manifest.assets.some((asset) => asset.name === COPY_RUNTIME_ASSET)).toBe(false);
+    expect(existsSync(join(release, COPY_RUNTIME_ASSET))).toBe(true);
+    expect(existsSync(join(release, `${COPY_RUNTIME_ASSET}.sha256`))).toBe(true);
     const machine = temp("aidlc-t241-all-harness-");
     const project = temp("aidlc-t241-all-harness-project-");
     mkdirSync(join(project, ".git"));
@@ -878,6 +895,20 @@ describe("t244 management lifecycle", () => {
     for (const harness of RELEASE_HARNESSES) {
       expect(existsSync(join(machine, "versions", AIDLC_VERSION, "runtime", harness))).toBe(true);
     }
+    const installedClaudeSettings = readFileSync(
+      join(
+        machine,
+        "versions",
+        AIDLC_VERSION,
+        "runtime",
+        "claude",
+        ".claude",
+        "settings.json",
+      ),
+      "utf-8",
+    );
+    expect(installedClaudeSettings).toContain('"command": "aidlc engine statusline"');
+    expect(installedClaudeSettings).not.toContain('"command": "bun ');
     for (const file of ["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"]) {
       expect(existsSync(join(machine, "completions", file)), file).toBe(true);
     }
@@ -1750,7 +1781,7 @@ describe("t244 Windows and completion release surfaces", () => {
         sourceDigest: "1".repeat(40),
       })}\n`,
     );
-    writeFileSync(join(release, NATIVE_RUNTIME_ASSET), "runtime\n");
+    writeFileSync(join(release, RUNTIME_ASSET), "runtime\n");
     writeFileSync(
       join(release, "aidlc-release.intoto.jsonl"),
       "aidlc-test-release-provenance\n",
@@ -1759,7 +1790,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const assets = [
       "version.json",
       binaryName,
-      NATIVE_RUNTIME_ASSET,
+      RUNTIME_ASSET,
       "install.sh",
     ];
     writeFileSync(
@@ -1809,9 +1840,24 @@ describe("t244 Windows and completion release surfaces", () => {
       "--list-assets",
     ], REPO_ROOT);
     expect(verified.status, verified.stderr).toBe(0);
-    expect(verified.stdout.trim().split(/\r?\n/)).toHaveLength(11);
+    expect(verified.stdout.trim().split(/\r?\n/)).toHaveLength(10);
     expect(verified.stdout).toContain("install.sh");
     expect(verified.stdout).toContain("install.ps1");
+
+    const replacedCopyRuntime = temp("aidlc-t244-release-copy-runtime-");
+    writeVerifierCandidate(replacedCopyRuntime);
+    writeFileSync(join(replacedCopyRuntime, COPY_RUNTIME_ASSET), "replacement copy runtime\n");
+    const replacedCopyResult = run(RELEASE_VERIFIER, [
+      "candidate",
+      "--directory",
+      replacedCopyRuntime,
+      "--tag",
+      `v${AIDLC_VERSION}`,
+    ], REPO_ROOT);
+    expect(replacedCopyResult.status).toBe(1);
+    expect(replacedCopyResult.stderr).toContain(
+      `${COPY_RUNTIME_ASSET}.sha256 does not authenticate ${COPY_RUNTIME_ASSET}`,
+    );
 
     const replacedInstaller = temp("aidlc-t244-release-installer-");
     writeVerifierCandidate(replacedInstaller);

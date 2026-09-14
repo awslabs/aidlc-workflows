@@ -691,7 +691,7 @@ jobs:
             --target "$AUTHORIZED_SHA" \
             --repository "$GITHUB_REPOSITORY" \
             --changelog "$PWD/CHANGELOG.md" \
-            --expected-assets 13
+            --expected-assets 15
       - name: Verify uploaded asset inventory
         env:
           GH_TOKEN: ${{ github.token }}

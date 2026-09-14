@@ -364,12 +364,7 @@ try {
   }
   $Version = $manifest.version
 
-  $nativeRuntimeAsset = "aidlc-native-runtime-$Version.tar.gz"
-  $runtimeAsset = if (@($manifest.assets | Where-Object { $_.name -eq $nativeRuntimeAsset }).Count -eq 1) {
-    $nativeRuntimeAsset
-  } else {
-    "aidlc-runtime-$Version.tar.gz"
-  }
+  $runtimeAsset = "aidlc-runtime-$Version.tar.gz"
   $assets = @("aidlc-windows-x64.exe", $runtimeAsset)
   foreach ($name in $assets) {
     $asset = @($manifest.assets | Where-Object { $_.name -eq $name })

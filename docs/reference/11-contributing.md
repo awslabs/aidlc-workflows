@@ -69,9 +69,10 @@ must target an installed project harness. Any failed gate fails the build.
 
 After the target binaries are present, `bun scripts/package-release.ts`
 regenerates and verifies the local projections, packages `dist/` into the
-manual-copy `aidlc-runtime-X.Y.Z.tar.gz`, packages `dist-release/` into the
-installer-facing `aidlc-native-runtime-X.Y.Z.tar.gz`, and emits `version.json`,
-`checksums.txt`, `install.sh`, and `install.ps1`. The per-target `runtime/`
+out-of-band manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` plus its `.sha256`
+sidecar, packages `dist-release/` into the manifest-listed
+`aidlc-runtime-X.Y.Z.tar.gz`, and emits `version.json`, `checksums.txt`,
+`install.sh`, and `install.ps1`. The per-target `runtime/`
 directories are smoke-gate staging; release data archives are rebuilt from the
 freshly generated projections, not copied from those sidecars.
 `--require-release-matrix` requires all seven targets and a matching
