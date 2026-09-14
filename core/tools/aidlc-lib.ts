@@ -32,6 +32,10 @@ export {
   type ProjectFlagsRecord,
   type RecordableProjectBypass,
 } from "./aidlc-settings.ts";
+import type {
+  commitCarriesContentTransformation as CommitCarriesContentTransformation,
+  immutableGit as ImmutableGit,
+} from "./aidlc-guard-kernel.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -14432,19 +14436,20 @@ function readSyncBufferedBytes(
 function gitTreeLeafEntries(
   repoDir: string,
   commit: string,
+  immutableGit: typeof ImmutableGit,
 ): GitTreeLeafEntry[] | null {
-  const objectType = spawnSync(
-    "git",
-    ["-C", repoDir, "cat-file", "-t", commit],
+  const objectType = immutableGit(
+    repoDir,
+    ["cat-file", "-t", commit],
     { encoding: "utf-8", maxBuffer: 1024 * 1024 },
   );
-  if (objectType.status !== 0 || objectType.stdout.trim() !== "commit") {
+  if (objectType.status !== 0 || String(objectType.stdout).trim() !== "commit") {
     return null;
   }
-  const listed = spawnSync(
-    "git",
-    ["-C", repoDir, "ls-tree", "-r", "-z", "--full-tree", commit],
-    { maxBuffer: 512 * 1024 * 1024 },
+  const listed = immutableGit(
+    repoDir,
+    ["ls-tree", "-r", "-z", "--full-tree", commit],
+    { encoding: null, maxBuffer: 512 * 1024 * 1024 },
   );
   if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) return null;
   const maxEntries = sourceIdentityBudget(
@@ -14505,15 +14510,16 @@ function materializeRawGitTree(
   repoDir: string,
   root: string,
   entries: readonly GitTreeLeafEntry[],
+  immutableGit: typeof ImmutableGit,
 ): boolean {
   const blobs = entries.filter((entry) => entry.mode !== "160000");
   const batchPath = join(dirname(root), "cat-file.batch");
   let batchFd: number | undefined;
   try {
     batchFd = openSync(batchPath, "w+");
-    const batch = spawnSync(
-      "git",
-      ["-C", repoDir, "cat-file", "--batch"],
+    const batch = immutableGit(
+      repoDir,
+      ["cat-file", "--batch"],
       {
         input: Buffer.from(
           blobs.map((entry) => entry.oid).join("\n") +
@@ -14603,10 +14609,18 @@ export function gitCommitSourceListing(
   const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
   const checkoutDir = join(root, "checkout");
   try {
+    // Lazy load preserves standalone library fixtures until this proof seam.
+    const { immutableGit, commitCarriesContentTransformation } = require(
+      "./aidlc-guard-kernel.ts"
+    ) as {
+      immutableGit: typeof ImmutableGit;
+      commitCarriesContentTransformation:
+        typeof CommitCarriesContentTransformation;
+    };
     mkdirSync(checkoutDir, { recursive: true });
-    const entries = gitTreeLeafEntries(repoDir, commit);
+    const entries = gitTreeLeafEntries(repoDir, commit, immutableGit);
     if (entries === null) return null;
-    if (!materializeRawGitTree(repoDir, checkoutDir, entries)) return null;
+    if (!materializeRawGitTree(repoDir, checkoutDir, entries, immutableGit)) return null;
     const source = filesystemSourceIdentity(
       checkoutDir,
       carriesWorkspaceShell,
@@ -14615,6 +14629,26 @@ export function gitCommitSourceListing(
       false,
     );
     if (source === null) return null;
+    const regularTreePaths = new Set(
+      entries
+        .filter(
+          (entry) =>
+            entry.mode === "100644" || entry.mode === "100755",
+        )
+        .map((entry) => entry.path),
+    );
+    const regularSourcePaths = [...source.listing.keys()].filter((path) =>
+      regularTreePaths.has(path)
+    );
+    if (
+      commitCarriesContentTransformation(
+        repoDir,
+        commit,
+        regularSourcePaths,
+      ) !== false
+    ) {
+      return null;
+    }
     return prefixedSourceListing(source.listing);
   } finally {
     rmSync(root, { recursive: true, force: true });
