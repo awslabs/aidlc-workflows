@@ -132,8 +132,6 @@ The shipped Claude settings map these aliases:
 
 | Setting | Default |
 | --- | --- |
-| `model` | `opus[1m]` |
-| `effortLevel` | `medium` |
 | `CLAUDE_CODE_USE_BEDROCK` | `1` |
 | `AWS_REGION` | `us-east-1` |
 | `ANTHROPIC_DEFAULT_FABLE_MODEL` | `global.anthropic.claude-fable-5[1m]` |

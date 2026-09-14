@@ -10,17 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveDriveSdkSettings } from "../harness/sdk-drive.ts";
 
-const SHIPPED_MODEL = "opus[1m]";
+const HARNESS_DEFAULT_MODEL = "opus[1m]";
 const SHIPPED_OPUS = "global.anthropic.claude-opus-4-8[1m]";
-const SHIPPED_SETTINGS = join(
-  import.meta.dir,
-  "..",
-  "..",
-  "dist",
-  "claude",
-  ".claude",
-  "settings.json",
-);
 
 function withTempProject(assertions: (projectDir: string) => void): void {
   const projectDir = mkdtempSync(join(tmpdir(), "aidlc-sdk-model-"));
@@ -41,18 +32,18 @@ function writeProjectSettings(
 }
 
 describe("sdk-drive model resolution", () => {
-  test("bare project uses the shipped model and env", () => {
+  test("bare project uses the harness default model and shipped env", () => {
     withTempProject((projectDir) => {
       const resolved = resolveDriveSdkSettings(projectDir);
 
-      expect(resolved.model).toBe(SHIPPED_MODEL);
-      expect(resolved.modelSource).toBe(SHIPPED_SETTINGS);
+      expect(resolved.model).toBe(HARNESS_DEFAULT_MODEL);
+      expect(resolved.modelSource).toBe("harness-default");
       expect(resolved.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
       expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
     });
   });
 
-  test("shipped settings model and env beat project settings", () => {
+  test("project settings model beats the harness default while shipped env still wins", () => {
     withTempProject((projectDir) => {
       writeProjectSettings(projectDir, {
         model: "sonnet",
@@ -63,8 +54,8 @@ describe("sdk-drive model resolution", () => {
 
       const resolved = resolveDriveSdkSettings(projectDir);
 
-      expect(resolved.model).toBe(SHIPPED_MODEL);
-      expect(resolved.modelSource).toBe(SHIPPED_SETTINGS);
+      expect(resolved.model).toBe("sonnet");
+      expect(resolved.modelSource).toBe(join(projectDir, ".claude", "settings.json"));
       expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
     });
   });
