@@ -2140,6 +2140,13 @@ function inputPaths(input: Record<string, unknown>): string[] {
   add(input.path);
   add(input.file_path);
   add(input.filePath);
+  // `delete_file` spells its target `targetFile` and carries no other path field:
+  // 45 of 45 captured PreToolUse payloads (Kiro CLI 17, Kiro IDE 28) are exactly
+  // {explanation, targetFile}. Without this the delete reached every guard that
+  // matches it with an empty target, so review-freeze and reviewer-scope took
+  // their "nothing to judge" exits and plan-approval-guard classified the call as
+  // an opaque mutation - a delete was the one mutation none of them could decide.
+  add(input.targetFile);
   if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
   if (Array.isArray(input.operations)) {
     for (const operation of input.operations) {

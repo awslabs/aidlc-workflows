@@ -1476,6 +1476,18 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
+      // A delete names its target `targetFile`, not `path`, so the delete cases
+      // take the captured payload's own shape and override only the target.
+      // Spelled `path` these assertions passed while the adapter forwarded no
+      // target at all, claiming a refusal the host's own payload never received.
+      const capturedDelete = (FIXTURES.preToolUse_delete_file as {
+        tool_input: Record<string, unknown>;
+      }).tool_input;
+      const mutationInput = (tool_name: string, path: string) =>
+        tool_name === "delete_file"
+          ? { ...capturedDelete, targetFile: path }
+          : { path };
+
       for (const tool_name of [
         ...ADAPTER_TOOL_NAMES.writes,
         ...ADAPTER_TOOL_NAMES.deletes,
@@ -1488,7 +1500,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             hook_event_name: "preToolUse",
             cwd: dir,
             tool_name,
-            tool_input: { path: "construction/sibling-unit/design.md" },
+            tool_input: mutationInput(tool_name, "construction/sibling-unit/design.md"),
           },
         );
         expect(r.code, tool_name).toBe(2);
@@ -1506,7 +1518,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           hook_event_name: "preToolUse",
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: mutationInput(tool_name, "construction/todo-core/design.md"),
         });
         expect(r.code, tool_name).toBe(0);
         expect(existsSync(freezeHeartbeat), tool_name).toBe(true);
