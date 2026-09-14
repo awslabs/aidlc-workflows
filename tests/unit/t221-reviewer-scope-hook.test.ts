@@ -534,12 +534,12 @@ function scratchProject(): string {
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
-  mkdirSync(join(dir, "aidlc", "spaces", "default", "intents"), { recursive: true });
+  mkdirSync(join(dir, "aidlc", "spaces", "default", "intents", ".aidlc-engine"), { recursive: true });
   return dir;
 }
 
 function recordPath(proj: string): string {
-  return join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-reviewer-dispatch.json");
+  return join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/reviewer-dispatch.json");
 }
 
 function seedRecord(proj: string, overrides: Partial<ReviewerDispatch> = {}): void {
@@ -676,7 +676,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     const r = runHook(proj, SIBLING_SWEEP);
     expect(r.code).toBe(0);
     // The advisory drop is recorded for --doctor (conductor forgot step 1).
-    const drops = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health", "reviewer-scope.drops");
+    const drops = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health", "reviewer-scope.drops");
     expect(existsSync(drops)).toBe(true);
     expect(readFileSync(drops, "utf-8")).toContain("no reviewer dispatch record");
   });
@@ -963,14 +963,14 @@ describe("t221 (c) harness registration and protocol prose", () => {
       ),
       "utf-8",
     );
-    expect(body).toContain(".aidlc-reviewer-dispatch.json");
+    expect(body).toContain(".aidlc-engine/reviewer-dispatch.json");
     // Step 1: the write, per-unit only, exempt list carries the carve-out.
     expect(body).toMatch(/Dispatch record \(per-unit stages; enforcement-capable harnesses only\)/);
     expect(body).toMatch(/append its path to `exempt`/);
     expect(body).toContain("On a harness without reviewer-scope enforcement");
     expect(body).toContain("do not write the record");
     // Step 3: the delete on verdict read.
-    expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
+    expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/s);
   });
 
   test("harnesses with reviewer-scope enforcement point at the shared module", () => {
@@ -989,7 +989,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       "utf-8",
     );
     expect(body).toContain("stage-protocol-reviewer.md");
-    expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(body).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     expect(body).not.toContain("reviewer-scope PreToolUse hook enforces");
   });
 });

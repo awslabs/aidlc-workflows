@@ -230,7 +230,7 @@ function runNext(proj: string): Directive {
 function activeDirectiveMarker(proj: string): Record<string, unknown> {
   return JSON.parse(
     readFileSync(
-      join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+      join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
       "utf-8",
     ),
   ) as Record<string, unknown>;

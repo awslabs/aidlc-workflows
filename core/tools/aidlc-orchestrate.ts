@@ -204,6 +204,7 @@ import {
   singleStageAttemptIsOpen,
   defaultScope,
   defaultScopeResolution,
+  engineDirFor,
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
@@ -977,7 +978,7 @@ function roleInWords(agent: string): string {
 
 // Record that the engine was ADVANCED this turn, for the Stop hook's
 // conversational carve-out on transcript-free harnesses (Kiro, opencode). The
-// hook compares .aidlc-engine-touch's mtime against .aidlc-human-turn's: newer
+// hook compares .aidlc-engine/engine-touch's mtime against .aidlc-engine/human-turn's: newer
 // engine => the conductor engaged the workflow => a bail mid-loop must still be
 // nudged; older => the human's last prompt was answered as pure chat.
 //
@@ -3611,7 +3612,8 @@ type SteeringTokenEnvelope = {
 };
 
 const STEERING_TOKEN_KEY_BYTES = 32;
-const STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
+const STEERING_TOKEN_KEY_FILE = "steering-token-key";
+const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
 
 type SteeringTokenKeyResult = {
   key: Buffer | null;
@@ -3621,13 +3623,13 @@ type SteeringTokenKeyResult = {
 function steeringTokenKeyPath(projectDir: string): string {
   const statePath = engineStateFilePath(projectDir);
   if (existsSync(statePath)) {
-    return join(dirname(statePath), STEERING_TOKEN_KEY_FILE);
+    return join(engineDirFor(dirname(statePath)), STEERING_TOKEN_KEY_FILE);
   }
   return join(
     projectDir,
     "aidlc",
     ".aidlc-sessions",
-    STEERING_TOKEN_KEY_FILE,
+    LEGACY_SESSION_STEERING_TOKEN_KEY_FILE,
   );
 }
 

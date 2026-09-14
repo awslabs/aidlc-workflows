@@ -434,7 +434,7 @@ function confirmUnitSummary(proj: string, unit: string): void {
 }
 
 function guardRefusalCount(proj: string): number {
-  const dir = join(seededRecordDir(proj), ".aidlc-guard-refusals");
+  const dir = join(seededRecordDir(proj), ".aidlc-engine/guard-refusals");
   const file = readdirSync(dir).find((name) => name.endsWith(".json"));
   if (!file) throw new Error("guard refusal record missing");
   return (

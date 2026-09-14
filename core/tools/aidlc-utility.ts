@@ -3679,7 +3679,7 @@ export async function collectDoctorReport(
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
   // and evidence that the workflow advanced in the same intent-scoped ledger:
-  //   (a) .aidlc-hooks-health/ missing entirely, or present without .last files
+  //   (a) .aidlc-engine/hooks-health/ missing entirely, or present without .last files
   //       before workflow progress → hooks have not had a chance to fire. Pass.
   //       This preserves debug-only dirs and ignores doctor's HEALTH_CHECKED.
   //   (b) No readable heartbeat after progress, or unreadable .last files →
@@ -3811,13 +3811,13 @@ export async function collectDoctorReport(
       pass: true,
       label:
         dropsUnreadable === -1
-          ? "Hook drops: health dir unreadable (advisory) - check permissions on .aidlc-hooks-health/"
-          : `Hook drops: ${dropsUnreadable} .drops file(s) unreadable (advisory)${advisoryEntries.length > 0 ? `; readable: ${advisoryEntries.join(", ")}` : ""} - check permissions on .aidlc-hooks-health/`,
+          ? "Hook drops: health dir unreadable (advisory) - check permissions on .aidlc-engine/hooks-health/"
+          : `Hook drops: ${dropsUnreadable} .drops file(s) unreadable (advisory)${advisoryEntries.length > 0 ? `; readable: ${advisoryEntries.join(", ")}` : ""} - check permissions on .aidlc-engine/hooks-health/`,
     });
   } else if (advisoryEntries.length > 0) {
     results.push({
       pass: true,
-      label: `Hook drops recorded (advisory): ${advisoryEntries.join(", ")} - a hook swallowed a failure and fail-opened; inspect the named .drops file(s) under .aidlc-hooks-health/ for the reasons, then delete them once investigated`,
+      label: `Hook drops recorded (advisory): ${advisoryEntries.join(", ")} - a hook swallowed a failure and fail-opened; inspect the named .drops file(s) under .aidlc-engine/hooks-health/ for the reasons, then delete them once investigated`,
     });
   } else {
     results.push({
@@ -7089,7 +7089,7 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
   // The transport file carries ONE path line, so it gets a path-sized cap, not
   // the document cap. Without an explicit bound the whole file is allocated and
   // UTF-8 decoded BEFORE the one-line check, so a sparse multi-megabyte
-  // .aidlc-document-input-path kills the process with an out-of-memory error
+  // .aidlc-engine/document-input-path kills the process with an out-of-memory error
   // before any validation runs. 4096 bytes covers PATH_MAX on every supported
   // platform, plus the trailing newline.
   const requestFileByteCap = 4096;

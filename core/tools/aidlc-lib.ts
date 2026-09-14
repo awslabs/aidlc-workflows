@@ -38,6 +38,14 @@ export {
 // imports are erased at runtime so they don't create the cycle.
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 
+export const ENGINE_DIR = ".aidlc-engine";
+export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
+const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
+const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
+const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
+// Debris the pre-lock (#749-era) marker writer could leave at the record root.
+const LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE = ".aidlc-active-directive.json.transaction";
+
 // --- Types ---
 
 export interface StageEntry {
@@ -4776,7 +4784,7 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
 // interleave later stages while the durable cursor stays on the first block
 // stage. Persist that transient fact per intent so path-only PostToolUse hooks
 // can attribute diagnostics to the directive the conductor is actually running.
-const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
+const ACTIVE_DIRECTIVE_MARKER = "active-directive.json";
 
 export type ActiveDirectiveKind =
   | "load-steering" | "run-stage" | "ask" | "print" | "error"
@@ -4869,7 +4877,7 @@ export type CopilotStopEvidence =
       stateSha256: string; tokenSha256: string; resumeStatus: string; resumeAction: string; ownerSession: string; ownerEpoch: number };
 
 const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
-const ACTIVE_DIRECTIVE_LOCK = ".aidlc-active-directive.lock";
+const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 
 export interface ActiveDirectiveTarget {
   canonicalProjectDir: string; space: string; recordDirName: string | null;
@@ -5306,7 +5314,7 @@ function resolveActiveDirectiveTarget(
   const intentUuid = recordDirName === null
     ? null
     : listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
-  const markerPath = join(root, ACTIVE_DIRECTIVE_MARKER);
+  const markerPath = join(engineDirFor(root), ACTIVE_DIRECTIVE_MARKER);
   return {
     canonicalProjectDir,
     space: resolvedSpace,
@@ -5314,7 +5322,7 @@ function resolveActiveDirectiveTarget(
     intentUuid,
     statePath: join(root, "aidlc-state.md"),
     markerPath,
-    lockDir: join(root, ACTIVE_DIRECTIVE_LOCK),
+    lockDir: join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK),
     bucket: recordDirName === null ? `${resolvedSpace}/bare-space` : `${resolvedSpace}/${recordDirName}`,
   };
 }
@@ -8377,7 +8385,7 @@ export function removeRecordFileNoFollow(recordRoot: string, relativePath: strin
   rmSync(target, { force: true });
 }
 
-export const SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
+export const SUMMARY_AUTHORIZATION_DIR = toPosix(join(engineDirFor(""), "summary-authorization"));
 export const SUMMARY_AUTHORIZATION_FIELD = "Summary Authorization Id";
 const SUMMARY_AUTHORIZATION_ID_RE = /^[0-9a-f]{64}$/;
 
@@ -8432,7 +8440,7 @@ export function summaryAuthorizationRelativePath(stage: string, unit: string | n
     : `${SUMMARY_AUTHORIZATION_DIR}/${stage}/units/${unit}.json`;
 }
 
-/** The active authorization for one scope under `<record>/.aidlc-summary-authorization/`. */
+/** The active authorization for one scope under `<record>/.aidlc-engine/summary-authorization/`. */
 export function summaryAuthorizationRecordPath(
   recordRoot: string,
   stage: string,
@@ -8476,7 +8484,13 @@ export function clearSummaryAuthorization(
 ): void {
   const record = recordDir(projectDir);
   if (record === null) return;
-  removeRecordFileNoFollow(record, summaryAuthorizationRelativePath(stage, unit));
+  const relativePath = summaryAuthorizationRelativePath(stage, unit);
+  refuseEngineObserverWrite("clearSummaryAuthorization");
+  // Establish the new registry even on a clear, so an old authorization cannot
+  // reappear through the read fallback. Legacy files are never changed.
+  const registry = recordFileTargetOrThrow(record, SUMMARY_AUTHORIZATION_DIR);
+  mkdirSync(registry, { recursive: true });
+  removeRecordFileNoFollow(record, relativePath);
 }
 
 export function readSummaryAuthorization(
@@ -8490,7 +8504,15 @@ export function readSummaryAuthorization(
   try {
     // Reached through no symlinked component and read without following one:
     // a redirected registry is not this record's authorization.
-    const path = recordFileTargetOrThrow(record, summaryAuthorizationRelativePath(stage, unit));
+    const registry = recordFileTargetOrThrow(record, SUMMARY_AUTHORIZATION_DIR);
+    const readDir = engineReadDirFor(record, registry, LEGACY_SUMMARY_AUTHORIZATION_DIR);
+    const relativePath = summaryAuthorizationRelativePath(stage, unit);
+    const path = recordFileTargetOrThrow(
+      record,
+      readDir === registry
+        ? relativePath
+        : `${LEGACY_SUMMARY_AUTHORIZATION_DIR}${relativePath.slice(SUMMARY_AUTHORIZATION_DIR.length)}`,
+    );
     parsed = JSON.parse(readRegularFileNoFollowOrThrow(path, "summary authorization", 64 * 1024).toString("utf-8"));
   } catch {
     return null;
@@ -10956,7 +10978,7 @@ export function reviewCompletionMatchesRequest(
 // it: the request id, the artifact fingerprint the reviewer was dispatched on,
 // and the source fingerprints for workspace-writing stages.
 
-export const REVIEW_RECORDS_DIR = ".aidlc-reviews";
+export const REVIEW_RECORDS_DIR = toPosix(join(engineDirFor(""), "reviews"));
 const REVIEW_RECORD_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export type ReviewFindingStatus =
@@ -11182,11 +11204,12 @@ export function reviewDraftRelativePath(
 
 /** Whether `path` has exactly one supported stage or Unit record shape. */
 export function isReviewRecordRelativePath(path: string): boolean {
-  const parts = path.split("/");
-  if (
-    parts[0] !== REVIEW_RECORDS_DIR ||
-    !REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")
-  ) return false;
+  // Audit rows keep their original path and digest across an upgrade.
+  const prefix = [REVIEW_RECORDS_DIR, LEGACY_REVIEW_RECORDS_DIR]
+    .find((dir) => path.startsWith(`${dir}/`));
+  if (prefix === undefined) return false;
+  const parts = [prefix, ...path.slice(prefix.length + 1).split("/")];
+  if (!REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")) return false;
   if (parts[2] === "stage") {
     return parts.length === 5 &&
       /^[0-9a-f]{16}$/.test(parts[3]) &&
@@ -11752,7 +11775,7 @@ function hasDurableSourceBindingEvidence(
 ): boolean {
   const record = recordDir(projectDir, intent, space);
   if (record !== null) {
-    const snapshots = join(record, ".aidlc-source-review");
+    const snapshots = join(engineDirFor(record), "source-review");
     const hasSnapshot = (dir: string): boolean => {
       let entries: Dirent[];
       try {
@@ -13960,37 +13983,14 @@ export function repoDir(projectDir: string, repoName: string): string {
 // entries at the shell-carrying root.
 const AIDLC_SHELL_PATHS = ["aidlc", ".aidlc"];
 
-// The sensor-cache exclusion remains depth-tolerant for legacy and worktree
-// paths. Before 2.6.94, the type-check sensor anchored
-// `.aidlc-sensors/.tsbuildinfo` at the nearest tsconfig directory, so monorepo
-// package caches could appear anywhere under repoDir. Those stray trees persist
-// in upgraded repositories, and Bolt worktree record mirrors can also sit below
-// the workspace roof, while the shell names stay root-anchored.
-//
-// #646 review - the shell/any-depth split is deliberate, not an oversight: an
-// earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
-// nested-.aidlc-sensors leak, but that pathspec matches the literal directory
-// name at ANY depth - including a directory that is genuinely part of the
-// application, coincidentally named `aidlc`/`.aidlc` for reasons unrelated to
-// this framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
-// after the methodology). That silently dropped real source from the
-// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
-// adding tracked content under `src/aidlc/`.
-//
-// Depth tolerance is NOT permission to match the leaf name alone (#646 review,
-// later round): a bare `**/.aidlc-sensors/**` excludes ANY directory of that
-// name, so an application tracking source under a dot-prefixed,
-// framework-named directory (`src/.aidlc-sensors/shipped.ts`) could be edited
-// or deleted without moving the fingerprint. Match the cache by the path the
-// engine actually writes instead of by its leaf. Every writer resolves through
-// `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
-// cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
-// .aidlc-sensors/`. The `<anchor>` can be the roof, a Bolt worktree, or a
-// legacy pre-2.6.94 monorepo package tsconfig directory, which is exactly what
-// the leading `**/` absorbs. The inner `/**/` also matches zero directories,
-// covering the flat (no active record) form.
+// Framework-state exclusions are depth-tolerant for Bolt record mirrors and
+// package-local record trees. Match the engine's full aidlc/spaces/.../intents
+// path shape, never a bare dot-directory name: src/.aidlc-engine/ can be real
+// application source. The inner ** also covers the bare space intents root.
+// Legacy sensor caches remain excluded while upgraded intents can read them.
 const AIDLC_SENSOR_CACHE_GLOBS = [
-  ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+  `:(glob)**/aidlc/spaces/*/intents/**/${ENGINE_DIR}/**`,
+  `:(glob)**/aidlc/spaces/*/intents/**/${LEGACY_SENSORS_DIR}/**`,
 ];
 
 interface WorkspaceSourceExclusionContext {
@@ -15206,7 +15206,7 @@ function isAidlcSensorCachePath(path: string): boolean {
       parts[i] === "aidlc" &&
       parts[i + 1] === "spaces" &&
       parts[i + 3] === "intents" &&
-      parts.slice(i + 4).includes(".aidlc-sensors")
+      parts.slice(i + 4).some((part) => part === ENGINE_DIR || part === LEGACY_SENSORS_DIR)
     ) {
       return true;
     }
@@ -17024,7 +17024,7 @@ export function sourcePathIsExcluded(
   for (let i = 0; i + 4 < segments.length; i++) {
     if (segments[i] !== "aidlc" || segments[i + 1] !== "spaces" || segments[i + 3] !== "intents") continue;
     if (segments[i + 2].length === 0) continue;
-    if (segments.slice(i + 4).includes(".aidlc-sensors")) return true;
+    if (segments.slice(i + 4).some((part) => part === ENGINE_DIR || part === LEGACY_SENSORS_DIR)) return true;
   }
   return false;
 }
@@ -17945,7 +17945,24 @@ function sourceSnapshotDir(
 ): string | null {
   if (!/^[a-z][a-z0-9-]*$/.test(stageSlug)) return null;
   const record = recordDir(projectDir, intent, space);
-  return record === null ? null : join(record, ".aidlc-source-review", stageSlug);
+  return record === null ? null : join(engineDirFor(record), "source-review", stageSlug);
+}
+
+// Read side of the same directory. Snapshots are audit-referenced evidence, so a
+// stage that recorded its baseline before the engine-directory move must still
+// find it: per stage, the legacy directory is used only while the new one is
+// absent. Writers never use this.
+function sourceSnapshotReadDir(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  const current = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  if (current === null) return null;
+  const record = recordDir(projectDir, intent, space);
+  if (record === null) return null;
+  return engineReadDirFor(record, current, join(LEGACY_SOURCE_REVIEW_DIR, stageSlug));
 }
 
 function writeSourceSnapshot(path: string, serialized: string): string {
@@ -18068,7 +18085,7 @@ export function writeUnitSourceSnapshot(
   // source-manifest.json. The receipt's Unit Source Fingerprint is the sha256
   // of exactly these bytes, so the committed audit shards already tamper-bind
   // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
-  // (aidlc-attest.ts) without the machine-local .aidlc-source-review/ copy.
+  // (aidlc-attest.ts) without the machine-local .aidlc-engine/source-review/ copy.
   writeSourceSnapshot(
     reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
     serialized,
@@ -18096,7 +18113,7 @@ export function readBaselineSourceSnapshot(
   intent?: string,
   space?: string,
 ): WorkspaceSourceListing | null {
-  const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  const dir = sourceSnapshotReadDir(projectDir, stageSlug, intent, space);
   const hash = validSourceSnapshotFingerprint(fingerprint);
   if (dir === null || hash === null) return null;
   const serialized = readSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), fingerprint);
@@ -18312,7 +18329,7 @@ export function readUnitSourceSnapshot(
   unit: string,
   fingerprint: string,
 ): UnitSourceSnapshot | null {
-  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const dir = sourceSnapshotReadDir(projectDir, stageSlug);
   const hash = validSourceSnapshotFingerprint(fingerprint);
   if (dir === null || hash === null || validateUnitName(unit) !== null) return null;
   const serialized = readSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), fingerprint);
@@ -18504,6 +18521,35 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
   return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
 }
 
+// All record-local framework state lives here. Review audit references retain
+// their exact legacy paths; sensors and summary authorizations have read-only
+// directory fallbacks. Everything else is transient or derived and is rebuilt
+// at the new path without a fallback. These helpers never create directories.
+export function engineDir(projectDir: string, intent?: string, space?: string): string {
+  return engineDirFor(docsRoot(projectDir, intent, space));
+}
+
+export function engineDirFor(recordRoot: string): string {
+  return join(recordRoot, ENGINE_DIR);
+}
+
+function engineReadDirFor(recordRoot: string, current: string, legacyName: string): string {
+  const legacy = join(recordRoot, legacyName);
+  // An existing but malformed new entry is not absence. In particular, do not
+  // revive legacy data when the new entry is a dangling symlink.
+  try {
+    const engine = lstatSync(engineDirFor(recordRoot), { throwIfNoEntry: false });
+    if (engine !== undefined && !engine.isDirectory()) return current;
+    return lstatSync(current, { throwIfNoEntry: false }) === undefined && existsSync(legacy)
+      ? legacy
+      : current;
+  } catch {
+    // Unreadable parents are not absence either. Keep path-only hook guards
+    // total and let data readers report or reject the unavailable new path.
+    return current;
+  }
+}
+
 // The bare record-tree root (doctor's existence check, the init scaffolder's
 // base dir).
 export function docsDir(projectDir: string, intent?: string, space?: string): string {
@@ -18515,10 +18561,10 @@ export function runtimeGraphPath(projectDir: string, intent?: string, space?: st
   return join(docsRoot(projectDir, intent, space), "runtime-graph.json");
 }
 
-// `<root>/.aidlc-hooks-health` — per-hook heartbeat + drop counters surfaced by
+// `<root>/.aidlc-engine/hooks-health` - per-hook heartbeat + drop counters surfaced by
 // `--doctor`.
 export function hooksHealthDir(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-hooks-health");
+  return join(engineDir(projectDir, intent, space), "hooks-health");
 }
 
 // Hook heartbeats and audit rows are written in the same turn, normally
@@ -18617,21 +18663,21 @@ export function hookLiveness(
   };
 }
 
-// `<root>/.aidlc-recovery.md` — the validate-state breadcrumb the orchestrator
+// `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator
 // reads on resume.
 export function recoveryFilePath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-recovery.md");
+  return join(engineDir(projectDir, intent, space), "recovery.md");
 }
 
-// `<root>/.aidlc-plan.json` — `aidlc-graph resolve` output.
+// `<root>/.aidlc-engine/plan.json` - `aidlc-graph resolve` output.
 export function planFilePath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-plan.json");
+  return join(engineDir(projectDir, intent, space), "plan.json");
 }
 
-// `<root>/.aidlc-stop-hook` — the Stop hook's durable no-progress guard counter
+// `<root>/.aidlc-engine/stop-hook` - the Stop hook's durable no-progress guard counter
 // directory.
 export function stopHookDir(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
+  return join(engineDir(projectDir, intent, space), "stop-hook");
 }
 
 // --- The turn-shape markers (the transcript-free conversational carve-out) ----
@@ -18647,12 +18693,12 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 //
 // These two mtime markers reconstruct the same predicate from the filesystem:
 //
-//   .aidlc-human-turn   — touched by the UserPromptSubmit mint, once per human
+//   .aidlc-engine/human-turn   - touched by the UserPromptSubmit mint, once per human
 //                         prompt, alongside the HUMAN_TURN ledger event.
-//   .aidlc-engine-touch — touched by aidlc-orchestrate on every ADVANCING
+//   .aidlc-engine/engine-touch - touched by aidlc-orchestrate on every ADVANCING
 //                         invocation (`next` / `report` / `park`).
 //
-//   conversational  <=>  mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+//   conversational  <=>  mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
 //
 // Why markers and not the audit ledger: `next` is read-only and emits NO audit
 // event, so a ledger-only predicate is BLIND to the exact failure the forwarding
@@ -18666,15 +18712,15 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 // look implemented and do nothing. The probe is therefore marked with
 // STOP_HOOK_PROBE_ENV and the engine skips the touch when it sees it.
 //
-// Per-intent (under docsRoot), matching .aidlc-stop-hook/block-count.json — the
+// Per-intent (under docsRoot), matching .aidlc-engine/stop-hook/block-count.json - the
 // markers describe one workflow's turn shape, so they travel with the intent.
 // Already covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore
 // rule, so neither marker is ever committed.
 export function humanTurnMarkerPath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-human-turn");
+  return join(engineDir(projectDir, intent, space), "human-turn");
 }
 export function engineTouchMarkerPath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-engine-touch");
+  return join(engineDir(projectDir, intent, space), "engine-touch");
 }
 
 // The env marker that identifies the Stop hook's OWN read-only `next` probe.
@@ -18836,16 +18882,16 @@ export function turnMarkersShowConversational(
   }
 }
 
-// `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
+// `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
 // record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
 // exempt — the two facts no harness payload carries. Lives under the intent's
-// record root (the same transient family as .aidlc-stop-hook/), already
+// record root (the same transient family as .aidlc-engine/stop-hook/), already
 // covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore rule.
 export function reviewerDispatchPath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-reviewer-dispatch.json");
+  return join(engineDir(projectDir, intent, space), "reviewer-dispatch.json");
 }
 
 // Freshness window for the reviewer dispatch record. The scope hook honours a
@@ -20186,7 +20232,7 @@ export function inspectSubagentInflight(
   };
 }
 
-// `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
+// `<baseDir>/.aidlc-engine/sensors` - the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;
 // callers append a stage slug as needed. Before 2.6.94, type-check passed a
 // tsconfig directory instead, creating legacy package-local record trees. With
@@ -20194,10 +20240,13 @@ export function inspectSubagentInflight(
 // record) when one resolves, so caches and failure details share the manifest's
 // per-intent location; only pre-intent does it fall back to the flat space root.
 export function sensorsDir(baseDir: string, intent?: string, space?: string): string {
-  if (intent === undefined && space === undefined) {
-    return join(docsRoot(baseDir), ".aidlc-sensors");
-  }
-  return join(docsRoot(baseDir, intent, space), ".aidlc-sensors");
+  return join(engineDir(baseDir, intent, space), "sensors");
+}
+
+/** Read old findings only until the new sensors directory exists; writers use sensorsDir. */
+export function sensorsReadDir(projectDir: string, intent?: string, space?: string): string {
+  const record = docsRoot(projectDir, intent, space);
+  return engineReadDirFor(record, join(engineDirFor(record), "sensors"), LEGACY_SENSORS_DIR);
 }
 
 // `<root>/<phase>/<slug>` — a stage's per-run artifact directory (the Stop hook
@@ -20590,7 +20639,7 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
 }
 
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
-export const DOCUMENT_INPUT_REQUEST_FILE = ".aidlc-document-input-path";
+export const DOCUMENT_INPUT_REQUEST_FILE = "document-input-path";
 const LEGACY_PROJECT_DESCRIPTION_SOURCE = "aidlc-state.md#Project";
 
 export interface ProjectDescriptionAuthority {
@@ -20659,7 +20708,7 @@ export function documentInputRequestFilePath(
   intent?: string,
   space?: string,
 ): string {
-  return join(dirname(stateFilePath(projectDir, intent, space)), DOCUMENT_INPUT_REQUEST_FILE);
+  return join(engineDir(projectDir, intent, space), DOCUMENT_INPUT_REQUEST_FILE);
 }
 
 export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
@@ -21645,7 +21694,7 @@ function guardRefusalPath(
   const key = createHash("sha256")
     .update(`${stage}\0${unit ?? ""}`, "utf-8")
     .digest("hex");
-  return join(docsRoot(projectDir), ".aidlc-guard-refusals", `${key}.json`);
+  return join(engineDir(projectDir), "guard-refusals", `${key}.json`);
 }
 
 // The latest boundary after which a repetition is a new situation: a session
@@ -24081,7 +24130,7 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
     leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason, kind: "audit", cleared });
   };
   const probeActiveDirective = (bucketLabel: string, root: string): void => {
-    const lockDir = join(root, ACTIVE_DIRECTIVE_LOCK);
+    const lockDir = join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK);
     probeCoordinationGate(bucketLabel, lockDir);
     if (existsSync(lockDir)) {
       const inspected = inspectOwnerStamp(lockDir);
@@ -24115,7 +24164,7 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
           kind: "active-directive", cleared });
       }
     }
-    const legacy = join(root, `${ACTIVE_DIRECTIVE_MARKER}.transaction`);
+    const legacy = join(root, LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE);
     if (existsSync(legacy)) {
       leaks.push({ bucket: bucketLabel, lockDir: legacy, ownerPid: null, reason: "legacy-transaction",
         kind: "legacy-active-directive-transaction", cleared: false });

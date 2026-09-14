@@ -262,7 +262,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         "aidlc/spaces/*/intents/*/.aidlc-*",
       );
       expect(lines, `${h}: ignores engine-shaped sensor caches at any depth`).toContain(
-        "**/aidlc/spaces/*/intents/**/.aidlc-sensors/",
+        "**/aidlc/spaces/*/intents/**/.aidlc-engine/",
       );
       if (h === "cursor") {
         expect(lines, "cursor: ignores the primary subagent ledger").toContain(
@@ -278,7 +278,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status, `${h}: git init`).toBe(0);
       writeFileSync(join(repo, ".gitignore"), gi, "utf-8");
       const nestedSensorCache =
-        "packages/api/aidlc/spaces/default/intents/.aidlc-sensors/x";
+        "packages/api/aidlc/spaces/default/intents/.aidlc-engine/sensors/x";
       expect(
         spawnSync("git", ["check-ignore", "-q", nestedSensorCache], { cwd: repo }).status,
         `${h}: nested sensor cache is functionally ignored`,

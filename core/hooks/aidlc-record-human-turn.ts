@@ -16,7 +16,7 @@
 // safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
 // block the human's turn.
 //
-// The same seam also touches the .aidlc-human-turn marker (markHumanTurn). The
+// The same seam also touches the .aidlc-engine/human-turn marker (markHumanTurn). The
 // ledger event serves the human-presence GATE; the marker serves the Stop hook's
 // conversational carve-out, which needs a cheap "when was the last human prompt,
 // relative to the last engine advance?" comparison that works on harnesses

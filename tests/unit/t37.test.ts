@@ -532,7 +532,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
 
   test("16: heartbeat advisory on fresh install -> 'not yet fired'", () => {
     const p = track(createTestProject());
-    // No .aidlc-hooks-health/ dir -> fresh-install advisory branch.
+    // No .aidlc-engine/hooks-health/ dir -> fresh-install advisory branch.
     const r = doctor(p);
     expect(r.out).toContain("Hook heartbeats: not yet fired");
   });

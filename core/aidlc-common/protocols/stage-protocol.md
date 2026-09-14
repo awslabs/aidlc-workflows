@@ -1140,7 +1140,7 @@ is fixed or the human-backed override flow in §2 completes. Autonomous mode
 cannot override a blocking sensor.
 
 Failed checks emit a `SENSOR_FAILED` audit row and write findings to
-`<record>/.aidlc-sensors/<stage-slug>/<sensor>-<fire-id>.md`; use that detail
+`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`; use that detail
 file to correct the output and run the check again.
 
 `required-sections` applies to markdown outputs. Unless a stage declares a

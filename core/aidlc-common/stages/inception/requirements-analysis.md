@@ -80,7 +80,7 @@ outputs: requirements.md, requirements-analysis-questions.md (under this stage's
   the first basename match. If the request gives no path or more than one
   plausible path, stop, ask the user which exact path to use, and end the turn.
 - Write the selected path, with no quotes or surrounding prose, as the only line
-  of `<record>/.aidlc-document-input-path` using the harness's native file-write
+  of `<record>/.aidlc-engine/document-input-path` using the harness's native file-write
   tool. Never interpolate a customer-chosen path into a shell command.
 - Read the selected file only through the fixed command
   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input`.

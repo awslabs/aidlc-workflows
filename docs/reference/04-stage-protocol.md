@@ -717,7 +717,7 @@ If a stage needs re-run (changes requested after approval):
 ### Compaction Recovery
 
 `PreCompact` hook validates `aidlc-state.md` structure before compaction
-(informational-only, cannot block). Writes `.aidlc-recovery.md` breadcrumb
+(informational-only, cannot block). Writes `.aidlc-engine/recovery.md` breadcrumb
 with last validated state (stage, timestamp). On resume, the conductor compares
 breadcrumb with state file to detect compaction-related corruption.
 
@@ -1004,7 +1004,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    those bytes plus the workspace and per-Unit source fingerprints where
    applicable, mints a `Request Id`, and returns `requestId` and `reviewFile`
    in its JSON: the project-relative path under the intent record's
-   `.aidlc-reviews/` directory where this request's review is written. The
+   `.aidlc-engine/reviews/` directory where this request's review is written. The
    request opens that slot (a draft left by an earlier incomplete dispatch of
    the same iteration is removed). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
@@ -1049,8 +1049,8 @@ omits the reviewer block entirely and the stage runs reviewless.
    review from the request's `reviewFile` (or `--review-file <path>`),
    validates it, proves the dispatched artifact bytes and request-time source
    identity are unchanged, and writes the review record
-   `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` or
-   `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`
+   `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or
+   `<record>/.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`
    (verdict, findings, reviewer, request id, artifact and source fingerprints,
    review text) in the same locked transaction as the `REVIEW_COMPLETED` row
    that names it and pins its digest. Only this command writes a record; a

@@ -858,7 +858,7 @@ function handleAnswer(args: string[]): void {
       const positive = flags.details === "Looks correct";
       if (positive) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;
       // Registry first, receipt second, both under the audit lock. A registry
-      // that cannot be written (a redirected `.aidlc-summary-authorization`, a
+      // that cannot be written (a redirected `.aidlc-engine/summary-authorization`, a
       // file where the stage directory belongs, a full disk) refuses the answer
       // BEFORE any receipt exists, so the pending question and the human's turn
       // are still there for a retry once the cause is fixed. If the receipt
@@ -1666,7 +1666,7 @@ function handleReview(args: string[]): void {
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
       const slot = reviewSlot(floor, iteration);
-      // Never through a symlinked `.aidlc-reviews`: a redirected slot is not
+      // Never through a symlinked `.aidlc-engine/reviews`: a redirected slot is not
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
       try {

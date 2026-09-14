@@ -224,7 +224,7 @@ You will see a "Run Command Hook" line in chat each time one fires.
 
 If a hook isn't behaving as expected, turn on debug logging and each hook
 appends its decision path (which gate it took, the resolved paths, why it
-exited) to `<record>/.aidlc-hooks-health/hook-debug.log`. It is **off by
+exited) to `<record>/.aidlc-engine/hooks-health/hook-debug.log`. It is **off by
 default** — no log is written and there is no overhead on a normal run. Two
 ways to enable it, either works:
 

@@ -209,7 +209,7 @@ function project(): Project {
   appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: SESSION }, dir);
   const tool = (name: string) => join(dir, ".claude", "tools", `aidlc-${name}.ts`);
   const hook = (name: string) => join(dir, ".claude", "hooks", `aidlc-${name}.ts`);
-  const markerPath = join(record, ".aidlc-active-directive.json");
+  const markerPath = join(record, ".aidlc-engine/active-directive.json");
   const transcriptPath = join(dir, "..", `${dir.split("/").at(-1)}.transcript.jsonl`);
   const probeEnv: Record<string, string> = {
     ...(hookChildEnv(dir, SESSION, { AIDLC_STOP_HOOK_PROBE: "1" }) as Record<string, string>),

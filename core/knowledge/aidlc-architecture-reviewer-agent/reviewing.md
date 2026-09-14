@@ -52,7 +52,7 @@ If the stage definition lists validation tools, **run them via shell** before wr
 ## How to Lodge Review Comments
 
 Write your review to the review file the dispatch names (the `reviewFile` path
-the request returned, under the intent record's `.aidlc-reviews/` directory).
+the request returned, under the intent record's `.aidlc-engine/reviews/` directory).
 When the verdict is recorded, the engine writes a readable copy of your review
 beside the reviewed artifact for the people at the gate; you never write there.
 That file is the only thing you write: never edit the artifact you are

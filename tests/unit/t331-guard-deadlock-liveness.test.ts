@@ -969,7 +969,7 @@ describe("AttemptView projections and refusal streaks", () => {
       const auditBefore = readAllAuditShards(project);
       const streakDir = join(
         seededRecordDir(project),
-        ".aidlc-guard-refusals",
+        ".aidlc-engine/guard-refusals",
       );
       const previous = new Map<string, string | undefined>();
       for (const name of [
@@ -1159,7 +1159,7 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(attempted.status).not.toBe(0);
     const guardDir = join(
       seededRecordDir(project),
-      ".aidlc-guard-refusals",
+      ".aidlc-engine/guard-refusals",
     );
     const recordName = readdirSync(guardDir).find((name) =>
       name.endsWith(".json")
@@ -1760,7 +1760,7 @@ describe("AttemptView projections and refusal streaks", () => {
 
       expect(consumeSharedDirectiveAsk(project, scenario.response), scenario.name).toBe(true);
       const marker = JSON.parse(
-        readFileSync(join(seededRecordDir(project), ".aidlc-active-directive.json"), "utf-8"),
+        readFileSync(join(seededRecordDir(project), ".aidlc-engine/active-directive.json"), "utf-8"),
       ) as {
         guard_recovery_response?: { selected_op?: string | null };
       };
@@ -1873,7 +1873,7 @@ describe("AttemptView projections and refusal streaks", () => {
       "spaces",
       "default",
       "intents",
-      ".aidlc-guard-refusals",
+      ".aidlc-engine/guard-refusals",
     );
     const readSignature = (): string => {
       const file = readdirSync(guardDir).find((name) => name.endsWith(".json"));

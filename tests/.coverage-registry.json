@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 979,
+    "total": 984,
     "enumeratedByClass": {
-      "function": 669,
+      "function": 674,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 400,
+      "function": 403,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -2135,6 +2135,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t332-summary-authorization.test.ts",
           "mechanism": "cli"
         }
@@ -2304,6 +2308,10 @@
       "unitId": "function:completionCarriesVerifiedReview",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
@@ -2712,6 +2720,37 @@
         {
           "file": "tests/unit/t64.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ENGINE_DIR",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineDirFor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3973,6 +4012,13 @@
     {
       "unitClass": "function",
       "unitId": "function:LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:LEGACY_SENSORS_DIR",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5278,6 +5324,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t332-summary-authorization.test.ts",
           "mechanism": "cli"
         }
@@ -6446,6 +6496,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sensorsReadDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

@@ -199,7 +199,7 @@ function walkStage(proj: string, slug: string): void {
       );
     }
     // The verdict also leaves a readable copy for people beside the reviewed
-    // artifact; the JSON record under .aidlc-reviews stays the engine's review.
+    // artifact; the JSON record under .aidlc-engine/reviews stays the engine's review.
     const readableCopy = join(artifactDir, "reviews", "review-01.md");
     if (!existsSync(readableCopy)) {
       throw new Error(`readable review copy missing for ${slug}: ${readableCopy}`);

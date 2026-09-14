@@ -25,13 +25,13 @@
 // records its argv to T94_SPAWN_LOG. The hook's only spawn target is that path,
 // so the ABSENCE of the log file after a hook run is positive proof the per-entry
 // dispatch loop never fired. The heartbeat file (sensor-fire.last) under
-// aidlc-docs/.aidlc-hooks-health/ is checked directly on disk.
+// aidlc-docs/.aidlc-engine/hooks-health/ is checked directly on disk.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
 //   :53      TTY guard — process.stdin.isTTY -> exit 0.
 //   :59-67   stdin parse — malformed JSON / non-hook-shaped input -> exit 0.
 //   :73-74   empty tool_input.file_path -> exit 0.
-//   :81-86   recursion guard — path under aidlc-docs/.aidlc-sensors/ -> exit 0.
+//   :81-86   recursion guard - path under aidlc-docs/.aidlc-engine/sensors/ -> exit 0.
 //   :90      pre-init guard — no audit.md -> exit 0 (BEFORE heartbeat).
 //   :98      state-existence guard — no aidlc-state.md -> exit 0 (BEFORE heartbeat).
 //   :134-139 heartbeat (G3) — writes isoTimestamp() to sensor-fire.last. Placed
@@ -60,7 +60,7 @@
 //   .sh case 1  TTY/empty-stdin guard -> exit 0               -> "TTY/empty-stdin guard exits 0"
 //   .sh case 2  malformed JSON -> exit 0, no spawn            -> "malformed JSON stdin exits 0 with no spawn"
 //   .sh case 3  valid payload + applicable sensors -> spawn   -> "valid payload + applicable sensors fires the dispatcher"
-//   .sh case 4  recursion guard (.aidlc-sensors/) -> no spawn -> "recursion guard skips writes under .aidlc-sensors/"
+//   .sh case 4  recursion guard (.aidlc-engine/sensors/) -> no spawn -> "recursion guard skips writes under .aidlc-engine/sensors/"
 //   .sh case 5  empty file_path -> no spawn                   -> "empty file_path -> no spawn"
 //   .sh case 6  non-aidlc path -> no glob match -> no spawn   -> "non-aidlc path -> no glob match -> no spawn"
 //   .sh case 7  no audit.md -> exit 0, no heartbeat, no spawn -> "no audit.md -> exit 0, no heartbeat, no spawn"
@@ -89,7 +89,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -120,7 +120,7 @@ afterAll(() => {
 // fixture seeds state into the record (so the cursor resolves) and, for the
 // active-workflow projects, the resolved audit SHARD (pinned clone-id) so the
 // audit gate at :100 passes. The heartbeat/skipped files land under the record's
-// .aidlc-hooks-health/. The sensor `matches` glob in the FRAMEWORK graph is still
+// .aidlc-engine/hooks-health/. The sensor `matches` glob in the FRAMEWORK graph is still
 // `**/aidlc-docs/**` (core data, unchanged), so the artifact file_path the hook
 // fires on stays an aidlc-docs/ path — only the state/audit/health roots moved.
 const PINNED_CLONE_ID = "testcloneid94";
@@ -246,7 +246,7 @@ function spawnLogPath(proj: string): string {
   return join(proj, ".spawn.log");
 }
 function heartbeatPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
+  return join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "run-sensors.last");
 }
 
 interface HookRun {
@@ -379,7 +379,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(off.stderr).toBe("");
     expect(existsSync(spawnLogPath(proj))).toBe(false);
     expect(existsSync(heartbeatPath(proj))).toBe(false);
-    expect(existsSync(join(seededRecordDir(proj), ".aidlc-hooks-health", ".first-fired"))).toBe(false);
+    expect(existsSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", ".first-fired"))).toBe(false);
 
     seedState(
       proj,
@@ -458,8 +458,9 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
             state_sha256: stateDigest(state),
           })
           : marker;
+      mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
         body,
       );
       const filePath = join(
@@ -478,7 +479,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     }
   });
 
-  test("recursion guard skips writes under .aidlc-sensors/ [.sh case 4]", () => {
+  test("recursion guard retains the older flat sensor location [.sh case 4]", () => {
     const proj = makeProjectActive();
     const filePath = join(
       proj,
@@ -489,14 +490,26 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     );
     const r = runHook(proj, filePath);
     expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  test("recursion guard reads legacy record sensor paths when the new directory is absent", () => {
+    const proj = makeProjectActive();
+    const legacy = join(seededRecordDir(proj), ".aidlc-sensors");
+    mkdirSync(legacy, { recursive: true });
+    const r = runHook(proj, join(legacy, "requirements-analysis", "detail.md"));
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(join(seededRecordDir(proj), ".aidlc-engine", "sensors"))).toBe(false);
   });
 
   test("recursion guard catches project-relative writes under the active sensor detail dir", () => {
     const proj = makeProjectActive();
     const filePath = relative(
       proj,
-      join(seededRecordDir(proj), ".aidlc-sensors", "requirements-analysis", "detail.md"),
+      join(seededRecordDir(proj), ".aidlc-engine/sensors", "requirements-analysis", "detail.md"),
     );
     const r = runHook(proj, filePath);
     expect(r.status).toBe(0);

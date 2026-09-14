@@ -35,7 +35,7 @@
 //   3 the live hook fired and took the done->allow path
 //       -> GUARDED exactly like the .sh: the skill-scoped Stop hook does not
 //          fire on every headless turn, so when the heartbeat
-//          (aidlc-docs/.aidlc-hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
+//          (aidlc-docs/.aidlc-engine/hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
 //          absent we SKIP this sub-assertion (record the skip, never fail).
 //          When it IS present, the done branch ran resetGuard()
 //          (aidlc-continue-workflow.ts:241-248,357) which wrote block-count.json with
@@ -60,7 +60,7 @@
 //          aidlc-continue-workflow.ts:247) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
 //          appends the drop record "recursion guard released the stop"
-//          (aidlc-continue-workflow.ts:370) to .aidlc-hooks-health/continue-workflow.drops — a stuck loop
+//          (aidlc-continue-workflow.ts:370) to .aidlc-engine/hooks-health/continue-workflow.drops - a stuck loop
 //          can never trap the session even with the directive genuinely pending.
 //          Deterministically confirmed on this fixture with the real engine
 //          directive and matching composite signature.

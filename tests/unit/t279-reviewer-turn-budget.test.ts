@@ -259,10 +259,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // t221's ordering (read verdict AFTER deleting the dispatch record)
       // still holds around the record write.
       expect(labelled).toMatch(
-        /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validates it/s,
+        /Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`.*validates it/s,
       );
       expect(labelled).toContain(
-        "writes the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
+        "writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
       );
       expect(labelled).toContain("The record is the review; only this command writes one");
       // Partial and duplicated reviews are named incomplete, not guessed at.
@@ -402,7 +402,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
       expect(labelled).toContain("Writes NOTHING else");
       // The record write and canonical-verdict validation.
-      expect(labelled).toContain("writes the review record `<record>/.aidlc-reviews/");
+      expect(labelled).toContain("writes the review record `<record>/.aidlc-engine/reviews/");
       expect(labelled).toContain("The record is the review; only this command writes one");
       expect(labelled).toMatch(/no canonical verdict line/);
       // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
@@ -432,7 +432,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
   test("kiro-ide SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the module pointer)", () => {
     const body = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", SKILL), "utf-8");
     expect(body).toContain("stage-protocol-reviewer.md");
-    expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(body).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     // The shared module keeps the guard prose and grants kiro-ide its
     // no-dispatch-record carve-out explicitly.
     const module = readFileSync(

@@ -240,7 +240,7 @@ unmarked pre-2.6.115 record explicitly falls back to the legacy `Project` state
 field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
-`.aidlc-document-input-path` transport. Customer-chosen path bytes never enter
+`.aidlc-engine/document-input-path` transport. Customer-chosen path bytes never enter
 the shell command. The handler resolves one exact project-root path, records
 the contained file identity, and requires the opened descriptor to match it
 before reading; parent-directory replacement, redirects, and unsupported input

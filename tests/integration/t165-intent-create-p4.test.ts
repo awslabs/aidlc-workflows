@@ -170,7 +170,7 @@ function readIntentAudit(p: string, record: string): string {
 }
 
 function hookHeartbeat(p: string, record: string, name: string): string {
-  return join(intentsDir(p), record, ".aidlc-hooks-health", name);
+  return join(intentsDir(p), record, ".aidlc-engine/hooks-health", name);
 }
 
 // ============================================================

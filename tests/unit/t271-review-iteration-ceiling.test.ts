@@ -1071,7 +1071,7 @@ describe("t271 review iteration ceiling", () => {
     };
     expect(requestOutput.requestId).toMatch(/^review:[0-9a-f]{32}$/);
     expect(requestOutput.reviewFile).toMatch(
-      /\/\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
+      /\/\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
     );
     const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
     const requestFingerprint = auditBlockField(
@@ -1088,7 +1088,7 @@ describe("t271 review iteration ceiling", () => {
     expect(completedRun.status, completedRun.stderr).toBe(0);
     const completedOutput = JSON.parse(completedRun.stdout) as { reviewRecord: string };
     expect(completedOutput.reviewRecord).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     // The draft was consumed into the record; the artifact was never written.
     expect(existsSync(join(proj, requestOutput.reviewFile))).toBe(false);
@@ -1377,7 +1377,7 @@ describe("t271 review iteration ceiling", () => {
     // The tolerated appendix is copied into the universal completion record.
     expect(auditBlockField(completed, "Artifact Fingerprint")).not.toBe(requestFingerprint);
     expect(auditBlockField(completed, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     const stage = resolveStage("requirements-analysis");
     if (!stage) throw new Error("requirements-analysis missing from stage graph");
@@ -1595,13 +1595,14 @@ describe("t271 review iteration ceiling", () => {
     expect(readFileSync(artifact, "utf-8")).toBe(original);
   });
 
-  test("a symlinked .aidlc-reviews container refuses the request and the completion, touching nothing outside", () => {
+  test("a symlinked .aidlc-engine/reviews container refuses the request and the completion, touching nothing outside", () => {
     const proj = seedProject("feature");
     writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
     const outside = join(createTestProject(), "elsewhere");
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(outside, "keep.md"), "keep\n", "utf-8");
-    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-reviews"));
+    mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/reviews")), { recursive: true });
+    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const request = [
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
@@ -1615,15 +1616,16 @@ describe("t271 review iteration ceiling", () => {
     expect(readdirSync(outside)).toEqual(["keep.md"]);
     // With the link removed the request opens; re-linked, the completion cannot
     // write its record through it either.
-    unlinkSync(join(seededRecordDir(proj), ".aidlc-reviews"));
+    unlinkSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const opened = runReview(proj, request);
     expect(opened.status, opened.stderr).toBe(0);
     const { reviewFile } = JSON.parse(opened.stdout) as { reviewFile: string };
     const draft = join(proj, reviewFile);
     mkdirSync(dirname(draft), { recursive: true });
     writeFileSync(draft, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
-    renameSync(join(seededRecordDir(proj), ".aidlc-reviews"), join(proj, "detached-reviews"));
-    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-reviews"));
+    renameSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"), join(proj, "detached-reviews"));
+    mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/reviews")), { recursive: true });
+    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const completed = runReview(proj, [...request, "--verdict", "READY"], {
       AIDLC_TEST_NO_REVIEW_FILE: "1",
     });
@@ -1631,8 +1633,8 @@ describe("t271 review iteration ceiling", () => {
     expect(completed.stderr).toContain("is a symlink");
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
     expect(readdirSync(outside)).toEqual(["keep.md"]);
-    unlinkSync(join(seededRecordDir(proj), ".aidlc-reviews"));
-    renameSync(join(proj, "detached-reviews"), join(seededRecordDir(proj), ".aidlc-reviews"));
+    unlinkSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"));
+    renameSync(join(proj, "detached-reviews"), join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const recorded = runReview(proj, [...request, "--verdict", "READY"], {
       AIDLC_TEST_NO_REVIEW_FILE: "1",
     });
@@ -1750,7 +1752,7 @@ describe("t271 review iteration ceiling", () => {
     expect(auditBlockField(completed, "Verdict")).toBe("NOT-READY");
     const recordPath = auditBlockField(completed, "Review Record");
     expect(recordPath).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     const record = JSON.parse(
       readFileSync(join(seededRecordDir(proj), recordPath as string), "utf-8"),
@@ -2114,7 +2116,7 @@ describe("t271 review iteration ceiling", () => {
     });
     expect(completed.status, completed.stderr).toBe(0);
     expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
   });
 
@@ -2300,7 +2302,7 @@ describe("t271 review iteration ceiling", () => {
         "Artifact Fingerprint":
           auditBlockField(requested, "Artifact Fingerprint") ?? "",
         // Request Id intentionally omitted: the row cannot pair with the request.
-        "Review Record": ".aidlc-reviews/requirements-analysis/stage/0123456789abcdef/1.json",
+        "Review Record": ".aidlc-engine/reviews/requirements-analysis/stage/0123456789abcdef/1.json",
         // Review Record Digest intentionally omitted: a half-named record is no record.
       },
       proj,
@@ -2525,7 +2527,7 @@ describe("t271 review iteration ceiling", () => {
     const completion = auditBlocks(proj, "REVIEW_COMPLETED")[0];
     expect(auditBlockField(completion, "Request Id")).toBe(requestId);
     expect(auditBlockField(completion, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     expect(auditBlockField(completion, "Review Appendix Artifact")).toBe(
       snapshot.reviewArtifact,
@@ -2803,7 +2805,7 @@ describe("t271 review iteration ceiling", () => {
       requestedSnapshot.fingerprint,
     );
     expect(auditBlockField(completed, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     expect(auditBlockField(completed, "Review Record Digest")).toMatch(
       /^sha256:[0-9a-f]{64}$/,
@@ -2842,7 +2844,7 @@ describe("t271 review iteration ceiling", () => {
       "Review Record",
     );
     expect(attemptOneRecord).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
 
     // Attempt reset: ordinals restart at 1 while the attempt-1 section is
@@ -2910,7 +2912,7 @@ describe("t271 review iteration ceiling", () => {
     const completions = auditBlocks(proj, "REVIEW_COMPLETED");
     expect(completions).toHaveLength(2);
     expect(auditBlockField(completions[1], "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     // Two attempts, two records slots: the reset attempt's record does not
     // overwrite anything attempt 1 could have written.

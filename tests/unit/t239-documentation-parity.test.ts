@@ -283,7 +283,7 @@ describe("documentation parity derives current behavior from authored implementa
     expect(reviewerProtocol).toContain(
       "On a harness without reviewer-scope enforcement (Kiro IDE today)",
     );
-    expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(skill).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     expect(skill).not.toContain("kiro-cli");
     expect(questionRendering).toContain("Kiro IDE has no structured-question tool");
     expect(questionRendering).not.toContain("Kiro CLI");

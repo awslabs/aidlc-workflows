@@ -62,7 +62,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -89,7 +89,7 @@ const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE_FIXTURE = "state-mid-ideation.md";
 
 function activeDirectiveMarkerPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-active-directive.json");
+  return join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
 }
 
 const projects: string[] = [];
@@ -429,6 +429,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     seedStateFile(proj, STATE_FIXTURE);
     seedAuditFile(proj);
     const state = readFileSync(join(seededRecordDir(proj), "aidlc-state.md"), "utf-8");
+    mkdirSync(dirname(activeDirectiveMarkerPath(proj)), { recursive: true });
     writeFileSync(
       activeDirectiveMarkerPath(proj),
       `${JSON.stringify({

@@ -295,7 +295,7 @@ Choose the write behavior recorded in Step 1:
   `./`.
 
 The architect MUST write the candidate into
-`<record>/.aidlc-codekb-stage-<repo>/`, not into the
+`<record>/.aidlc-engine/codekb-stage-<repo>/`, not into the
 shared CodeKB. The staging directory contains exactly the nine filenames above
 and no other entries. It is temporary transaction input, not a durable stage
 artifact.
@@ -352,7 +352,7 @@ exact snapshot values captured immediately before Step 2:
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-publish \
   --repo <repo> \
-  --staged <record>/.aidlc-codekb-stage-<repo>/ \
+  --staged <record>/.aidlc-engine/codekb-stage-<repo>/ \
   --paths <snapshot paths> \
   --expect-store <snapshot store_generation> \
   --expect-source <snapshot source_fingerprint> \
@@ -378,7 +378,7 @@ rollback/recovery. No other step may write those nine shared files.
 
 Never bypass a refusal with direct writes or by substituting the newly observed
 generation into the old candidate. After a successful publish, delete that
-repo's `.aidlc-codekb-stage-<repo>/` directory. The final directory remains the
+repo's `.aidlc-engine/codekb-stage-<repo>/` directory. The final directory remains the
 durable per-repo code knowledge base shared across every intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are

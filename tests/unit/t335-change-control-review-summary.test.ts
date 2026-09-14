@@ -813,7 +813,7 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
       const blocked = runHook(FREEZE_HOOK, proj, {
         hook_event_name: "PreToolUse",
         tool_name: "Write",
-        tool_input: { file_path: join(stageDir(proj), ".aidlc-reviews", "forged.json") },
+        tool_input: { file_path: join(stageDir(proj), ".aidlc-engine/reviews", "forged.json") },
       });
       const write = runHook(FREEZE_HOOK, proj, {
         hook_event_name: "PreToolUse",
@@ -876,7 +876,7 @@ describe("t335 (6) the review command takes no workflow selector", () => {
       expect(
         readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_REQUESTED"),
       ).toHaveLength(0);
-      expect(existsSync(join(seededRecordDir(proj), ".aidlc-reviews"))).toBe(false);
+      expect(existsSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"))).toBe(false);
     });
   }
 });

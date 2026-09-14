@@ -54,7 +54,7 @@ const OPENCODE_INTENTS = join(
 );
 
 afterEach(() => {
-  rmSync(join(OPENCODE_INTENTS, ".aidlc-hooks-health"), {
+  rmSync(join(OPENCODE_INTENTS, ".aidlc-engine/hooks-health"), {
     recursive: true,
     force: true,
   });

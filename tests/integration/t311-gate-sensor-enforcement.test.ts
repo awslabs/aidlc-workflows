@@ -400,7 +400,7 @@ describe("t311 gate-bound sensor enforcement", () => {
       "- [-] probe",
     );
     expect(refused.out).toContain("gate-probe");
-    expect(refused.out).toContain(".aidlc-sensors/probe/gate-probe-");
+    expect(refused.out).toContain(".aidlc-engine/sensors/probe/gate-probe-");
     expect(refused.out).toContain("--override-blocking-sensors");
 
     const unauthorized = gate(blocking, overrideArgs());

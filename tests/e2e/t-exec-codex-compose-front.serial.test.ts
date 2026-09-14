@@ -206,7 +206,7 @@ const sessionIdOf = (stderr: string): string | undefined =>
 function intentRecords(proj: string): string[] {
   const dir = join(proj, "aidlc", "spaces", "default", "intents");
   if (!existsSync(dir)) return [];
-  // Dot-dirs are hook plumbing (the Stop hook's .aidlc-hooks-health
+  // Dot-dirs are hook plumbing (the Stop hook's .aidlc-engine/hooks-health
   // heartbeat lands here on every turn), not intent records.
   return readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && !e.name.startsWith("."))

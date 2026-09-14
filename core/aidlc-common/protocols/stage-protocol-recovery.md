@@ -153,7 +153,7 @@ never mark the checkbox by hand.
 The PreCompact hook validates state file structure in `aidlc-state.md` before compaction.
 After compaction, the orchestrator can re-read state and continue.
 
-**Note:** PreCompact hooks are informational-only and cannot block compaction. The hook writes a `.aidlc-recovery.md` breadcrumb file recording the last validated state (current stage, timestamp). On session resume, the orchestrator compares this breadcrumb with `aidlc-state.md` to detect possible compaction-related state corruption.
+**Note:** PreCompact hooks are informational-only and cannot block compaction. The hook writes a `.aidlc-engine/recovery.md` breadcrumb file recording the last validated state (current stage, timestamp). On session resume, the orchestrator compares this breadcrumb with `aidlc-state.md` to detect possible compaction-related state corruption.
 
 ### Corrupted state file recovery
 If `aidlc-state.md` exists but cannot be parsed (missing required sections, invalid checkbox syntax, contradictory state):

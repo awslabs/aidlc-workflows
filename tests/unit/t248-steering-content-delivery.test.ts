@@ -370,7 +370,7 @@ describe("t248 deterministic steering delivery", () => {
           "spaces",
           "default",
           "intents",
-          ".aidlc-steering-token-key",
+          ".aidlc-engine/steering-token-key",
         ),
       ),
     ).toBe(false);
@@ -431,12 +431,12 @@ describe("t248 deterministic steering delivery", () => {
     expect(teamProbe.kind).toBe("load-steering");
     expect(
       existsSync(
-        join(seededRecordDir(team), ".aidlc-steering-token-key"),
+        join(seededRecordDir(team), ".aidlc-engine/steering-token-key"),
       ),
     ).toBe(false);
     expect(
       existsSync(
-        join(seededRecordDir(team), ".aidlc-active-directive.json"),
+        join(seededRecordDir(team), ".aidlc-engine/active-directive.json"),
       ),
     ).toBe(false);
     const continued = invoke(
@@ -484,12 +484,12 @@ describe("t248 deterministic steering delivery", () => {
     expect(soloProbe.kind).toBe("load-steering");
     expect(
       existsSync(
-        join(seededRecordDir(solo), ".aidlc-steering-token-key"),
+        join(seededRecordDir(solo), ".aidlc-engine/steering-token-key"),
       ),
     ).toBe(false);
     expect(
       existsSync(
-        join(seededRecordDir(solo), ".aidlc-active-directive.json"),
+        join(seededRecordDir(solo), ".aidlc-engine/active-directive.json"),
       ),
     ).toBe(false);
     expect(
@@ -511,10 +511,10 @@ describe("t248 deterministic steering delivery", () => {
     ).directive;
     expect(routeCheck.kind).toBe("run-stage");
     expect(
-      existsSync(join(seededRecordDir(routed), ".aidlc-steering-token-key")),
+      existsSync(join(seededRecordDir(routed), ".aidlc-engine/steering-token-key")),
     ).toBe(false);
     expect(
-      existsSync(join(seededRecordDir(routed), ".aidlc-active-directive.json")),
+      existsSync(join(seededRecordDir(routed), ".aidlc-engine/active-directive.json")),
     ).toBe(false);
   });
 
@@ -536,7 +536,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(twice.kind).toBe("error");
     expect(twice.message).toContain("no longer current");
     const marker = JSON.parse(
-      readFileSync(join(seededRecordDir(proj), ".aidlc-active-directive.json"), "utf-8"),
+      readFileSync(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"), "utf-8"),
     ) as { cursor_harness?: string; owner_session?: string };
     expect(marker.cursor_harness).toBe("claude");
     expect(marker.owner_session).toStartWith("sessionless:");

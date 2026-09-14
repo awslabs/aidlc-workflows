@@ -163,7 +163,7 @@ conductor and filters cheaply:
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
-3. **Heartbeat** — write `<record>/.aidlc-hooks-health/rebuild-stage-graph.last`
+3. **Heartbeat** - write `<record>/.aidlc-engine/hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
 4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
    last 3 entries.

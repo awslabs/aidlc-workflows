@@ -15,12 +15,35 @@ looks like. Intent creation makes one folder per phase your scope runs (plus
 `verification/`); the rest appear as work happens, and a per-stage folder is
 created the first time that stage writes.
 
+Framework files share one `.aidlc-engine/` directory beside the human artifacts.
+After an upgrade, existing audit rows still verify reviews at their recorded
+paths. Sensor findings and summary authorizations use their older directories
+only while the corresponding new directory is absent. New writes use
+`.aidlc-engine/`; other transient or derived files are recreated there.
+
 ```
 aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   aidlc-state.md                    # Workflow state (commit)
   audit/                            # Audit trail — per-clone shards (commit)
     <host>-<clone>.md               # this clone's shard; readers glob + merge by timestamp
-  .aidlc-recovery.md                # Recovery breadcrumb (gitignore)
+  .aidlc-engine/                    # Framework state (gitignore)
+    sensors/                       # Advisory findings and type-check cache
+    reviews/                       # Digest-bound review records and drafts
+    summary-authorization/         # Active summary confirmations
+    source-review/                 # Local reviewed-source snapshots
+    hooks-health/                  # Hook heartbeats and drop counters
+    plan.json                      # Derived scope plan
+    recovery.md                    # Compaction recovery breadcrumb
+    stop-hook/                     # No-progress guard counters
+    human-turn                     # Last human prompt marker
+    engine-touch                   # Last engine advance marker
+    reviewer-dispatch.json         # Active per-unit reviewer scope
+    document-input-path            # Document input handoff
+    active-directive.json           # Transient execution cursor
+    active-directive.lock/          # Cursor coordination
+    guard-refusals/                 # Repeated refusal counters
+    steering-token-key             # Local continuation signing key
+    codekb-stage-<repo>/            # Temporary CodeKB candidates
   runtime-graph.json                # Execution telemetry view (gitignore)
 
   verification/                     # Phase boundary checks (commit)
@@ -253,11 +276,11 @@ cursors and machine-local derived state are ignored.
 | Commit | Gitignore |
 |--------|-----------|
 | `aidlc-state.md` | `aidlc/active-space`, `intents/active-intent` (per-user cursors) |
-| `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
+| `audit/*.md` (per-clone shards) | `.aidlc-engine/` (framework state, including recovery breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
 | Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
-| Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
+| Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-engine/hooks-health/`, `.aidlc-engine/sensors/` (heartbeats, advisory findings) |
 
 ---
 

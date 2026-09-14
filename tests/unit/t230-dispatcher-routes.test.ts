@@ -2619,8 +2619,8 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.stderr.toString("utf-8")).toBe("");
     const heartbeat = "validate-state.last";
     expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", heartbeat)) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", heartbeat)),
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", heartbeat)) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", heartbeat)),
     ).toBe(true);
   });
 
@@ -2632,8 +2632,8 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.stderr.toString("utf-8")).toBe("");
     const heartbeat = "review-freeze.last";
     expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", heartbeat)) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", heartbeat)),
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", heartbeat)) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", heartbeat)),
     ).toBe(true);
   });
 
@@ -2673,8 +2673,8 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.exitCode).toBe(0);
     expect(res.stderr.toString("utf-8")).toBe("");
     expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(true);
   });
 
@@ -2697,8 +2697,8 @@ describe("t230 dispatcher hook routing", () => {
       expect(res.exitCode, route.join(" ")).toBe(0);
       expect(res.stderr.toString("utf-8"), route.join(" ")).toBe("");
       expect(
-        existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+        existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last")),
         route.join(" "),
       ).toBe(true);
     }
@@ -2768,8 +2768,8 @@ describe("t230 dispatcher hook routing", () => {
       expect(res.exitCode).toBe(0);
       expect(res.stderr.toString("utf-8")).toBe("");
       expect(
-        existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+        existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last")),
       ).toBe(true);
     },
   );
@@ -2778,8 +2778,8 @@ describe("t230 dispatcher hook routing", () => {
     const projectDir = makeProject();
     const input = JSON.stringify({ hook_event_name: "PreCompact", cwd: projectDir });
     const health = () =>
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-      existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last"));
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+      existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last"));
 
     // Ordinary callers: still the public unknown-command error, no hook runs.
     const bare = viaDispatcher(["hook", "validate-state"], projectDir, {}, input);
@@ -2822,12 +2822,12 @@ describe("t230 dispatcher hook routing", () => {
     );
     expect(hook.exitCode).toBe(0);
     expect(
-      existsSync(join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(targetProject), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(true);
     expect(
-      existsSync(join(seededRecordDir(cwdProject), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(cwdProject)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(cwdProject), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(cwdProject)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(false);
 
     const statusline = viaDispatcher(
@@ -2845,11 +2845,11 @@ describe("t230 dispatcher hook routing", () => {
     expect(statusline.stdout.toString("utf-8")).not.toContain("Intent Capture");
 
     rmSync(
-      join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last"),
+      join(seededRecordDir(targetProject), ".aidlc-engine/hooks-health", "validate-state.last"),
       { force: true },
     );
     rmSync(
-      join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last"),
+      join(dirname(seededRecordDir(targetProject)), ".aidlc-engine/hooks-health", "validate-state.last"),
       { force: true },
     );
     cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(targetProject, ".codex"), {
@@ -2867,8 +2867,8 @@ describe("t230 dispatcher hook routing", () => {
     );
     expect(adapter.exitCode).toBe(0);
     expect(
-      existsSync(join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(targetProject), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(true);
   });
 });
