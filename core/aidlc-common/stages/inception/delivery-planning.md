@@ -93,7 +93,7 @@ skeleton. A term whose definition would not survive being compressed to a clause
 is a term to replace with plain words instead.
 - **Confidence hypothesis** — the observable behaviour that shipping the Bolt validates or falsifies (e.g., "latency stays under 200ms under 1k-rps load," "users complete signup without support tickets," "the event pipeline survives a 10x burst").
 - **WSJF** (Reinertsen / SAFe) — Weighted Shortest Job First. Sequence score = (user-business value + time criticality + risk-reduction value) ÷ job size. Higher score ships first.
-- **Walking skeleton** (Cockburn) — the first Bolt is a minimal end-to-end slice touching every architectural layer that proves the architecture works; features come in later Bolts.
+- **Walking skeleton** (Cockburn) — the first DAG Unit delivers the smallest working end-to-end slice through the relevant integration points. Its applicable design stages and Code Generation finish before later Units; a real integrated check and human checkpoint approval demonstrate the result.
 
 Create `<record>/inception/delivery-planning/delivery-planning-questions.md` with questions. Strategic questions (one answer per project):
 
@@ -112,7 +112,14 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - What will shipping this Bolt tell us that we do not know yet?
 - Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
 
-NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
+NOTE: Bolt sequencing records the economic rationale, while the engine consumes
+the actual Unit DAG and iteration choice. When skeleton-on applies, confirm that
+the first resolved DAG Unit is the smallest working integrated slice, name its
+expected demo and the real project check that will prove it end to end, and make
+its prerequisites explicit. If the decomposition cannot support that slice,
+revisit Units Generation before Construction. Reordering only `bolt-plan.md`
+does not change the Unit the engine builds first; never describe the first
+design-stage review as a shipped skeleton.
 
 NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages to run or at what depth — that is handled by the `/aidlc` skill's scope selection.
 
@@ -161,33 +168,37 @@ Hand completion to `stage-protocol.md` via
 `{{INVOKE}} engine orchestrate report --stage delivery-planning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-**Construction iteration.** Classify how the approved `bolt-plan.md` wants the
-per-unit construction stages (functional-design, nfr-requirements, nfr-design,
-infrastructure-design, code-generation) to iterate over Units of Work. A
-unit-at-a-time or walking-skeleton-first plan typically calls for designing AND
-building one unit completely before the next unit begins — the first working
-code lands after one unit's design, honoring a skeleton-first sequence; a plan
-that reasons stage-by-stage across all units does not. Only when the plan calls
-for the unit-first order, record it:
-`{{INVOKE}} engine state set-construction-iteration unit-major`.
-The default is `stage-major` (each design stage runs for every unit, then the
-next stage, with code-generation last), needs no write, and is byte-identical
-to prior behaviour. Under `unit-major` the same per-stage gates still fire, but
-late and in a cascade at the end of the block (one human approval per stage),
-and the autonomous Construction swarm never fires (the walk owns
-code-generation serially, in Bolt build order), so opt in when the plan
-justifies per-unit coherence and early working code over parallel batch
-builds.
+**Construction iteration.** Read the recorded choice before recommending a
+change. New workflows start with `Construction Checkpoints: enabled` and
+`Construction Iteration: unit-major` with `Construction Execution: serial`:
+each Unit's applicable design stages and Code Generation run serially, followed
+by its verified completion checkpoint.
+An explicit stage-major choice remains valid. To enable later Code Generation
+batches, obtain the human's execution choice, set iteration to stage-major, then
+run `{{INVOKE}} engine state set-construction-execution swarm`. This works with
+either gated or autonomous completion approval; the autonomy answer never changes
+execution order. Unit-major stays serial and refuses a contradictory swarm
+setting; select serial before returning to unit-major. For checkpoint-enabled work,
+skeleton-on always completes the first DAG Unit's full integrated slice before
+later Units, under either iteration order.
+
+Preserve an existing explicit choice. If the human approves changing iteration,
+record it with `{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>`.
+Do not silently migrate a legacy workflow: without the checkpoint field it keeps
+its prior first-stage review and late stage-gate cascade. Team-owned work keeps
+its own per-stage or unit-end `unit_gate` policy. Plan Approval and summary
+confirmation remain required under either order and autonomy choice.
 
 **Construction staffing.** After classifying iteration, ask:
 
-> "How do you want to staff Construction? I can build every unit right here,
-> one at a time, with you approving as we go - or, if you have several teams,
-> each team can own a unit and approve its work independently."
+> "How do you want to staff Construction? I can run the work from this session
+> using the execution settings you chose, or each of your teams can own a Unit
+> and approve its work independently."
 
 The several-teams choice requires the unit-first order above. If the plan is not
-already unit-major, explain that prerequisite and confirm switching before
-recording:
+already unit-major, explain that prerequisite and confirm switching. For an
+explicit swarm setting, first record
+`{{INVOKE}} engine state set-construction-execution serial`, then record
 `bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`,
 then
 `bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-ownership team`. Team ownership

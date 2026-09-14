@@ -1021,28 +1021,175 @@ public route. Prefer `aidlc` whenever a route is documented below.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
-During Construction, ask in a typed message to "run the rest autonomously" or
-"gate every stage from here". Both requests work with skeleton-on or
-`skeleton: off`; skeleton-off has no automatic ladder prompt. The conductor
-records the explicit choice through:
+During Construction, explicitly ask to continue automatically or review each
+checkpoint. The conductor records **Continue automatically** as `autonomous`
+and **Review each checkpoint** as `gated`:
 
 ```bash
 aidlc engine bolt set-autonomy --mode autonomous
 aidlc engine bolt set-autonomy --mode gated
 ```
 
-Both commands update `Construction Autonomy Mode` in `aidlc-state.md` and emit
-`AUTONOMY_MODE_SET`. Granting `autonomous` requires a fresh human turn; switching
-back to `gated` restores subsequent human approvals without requiring a fresh
-turn.
+Both update `Construction Autonomy Mode` and emit `AUTONOMY_MODE_SET`. Granting
+autonomy requires a fresh human turn; revocation does not. New checkpoint
+workflows offer the choice at Construction entry with skeleton-off, or after
+the first working integrated Unit has passed its skeleton checkpoint with
+skeleton-on. A known choice is not asked again; on-demand changes remain valid.
 
-On the default stage-major walk, autonomy skips later eligible Construction
-completion approvals. The first in-scope Construction stage still requires its
-own human approval, even if autonomy was granted earlier, and each Unit's Code
-Generation Plan Approval remains mandatory. Existing unit-major execution stays
-serial, suppresses swarm, and retains human stage gates for per-unit stages.
-See [Construction Execution](../reference/03-orchestrator.md#construction-execution)
-for the ladder and failure-handling rules.
+Autonomy controls ordinary completion approvals. Every Unit still needs Plan
+Approval, pre-generation summary confirmation still needs the human, and a
+skeleton checkpoint always needs human approval. Failures halt. Existing
+workflows without `Construction Checkpoints` retain their legacy first-stage
+and late stage approvals; team-owned Unit gates retain their own policy.
+
+### Construction order and execution
+
+New source-producing solo Unit workflows with Unit decomposition in scope record
+`Construction Checkpoints: enabled`, `Construction
+Iteration: unit-major`, and `Construction Execution: serial`. One Unit runs
+through its applicable design stages and Code Generation before the next.
+Design-only and no-Unit workflows keep their existing stage flow; team-owned
+Units keep their own gate rhythm. Existing workflows and explicit iteration
+choices are preserved. To choose swarm execution explicitly, select stage-major
+first:
+
+```bash
+aidlc engine state set-construction-iteration stage-major
+aidlc engine state set-construction-execution swarm
+```
+
+To opt an existing workflow into verified checkpoints, preferably before Unit
+work begins, use `aidlc engine state set-construction-checkpoints enabled`.
+`disabled` retains the legacy checkpoint flow. These typed setters update
+runtime preferences; generic `state set` remains engine-owned.
+During Construction, changing these preferences requires a fresh human request;
+an unattended run cannot disable checkpoints to get past a refusal.
+
+Execution is separate from approval: swarm works with guided (`gated`) or
+automatic (`autonomous`) completion. Unit-major stays serial and refuses a
+contradictory swarm setting; run `aidlc engine state set-construction-execution serial` before
+returning to unit-major. Preserve existing explicit choices. Workflows without
+the execution field retain legacy autonomy-based swarm routing.
+
+For checkpoint-enabled solo work with a real non-empty Unit DAG and an included
+source-producing stage, skeleton-on
+always builds the first DAG Unit as the smallest working integrated slice
+before later Units, even with stage-major selected. A first design-stage
+review alone does not prove a working skeleton. Already approved inline Units
+are excluded from later swarm batches.
+
+### `aidlc engine swarm prepare` - prepare a reproducible batch
+
+Before initial protected Code Generation prepare, commit the already-approved
+parent application source so the selected base can reproduce it. This includes
+approved inline skeleton source before switching to a parallel batch. The rule
+applies to legacy autonomy and new checkpoint workflows alike; an autonomy grant
+never authorizes an automatic commit.
+
+```bash
+aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"
+```
+
+The tool performs a read-only source/approval preflight for all Units before
+creating any child worktree. If the source is uncommitted, it returns a
+commit-and-retry instruction with no child left behind by that refusal. Commit
+only with explicit authorization, then retry with current approval evidence.
+If the application source or plan changed, re-present any required Plan Approval.
+The requirement concerns application source, not a blanket commit of unrelated
+framework records or other files.
+
+### `aidlc engine bolt checkpoint` - verify and approve a completed Unit
+
+The engine names the Unit and checkpoint kind (`unit` or `skeleton`). The body,
+reviews, and receipts already exist; follow the checkpoint instead of rebuilding:
+
+```bash
+aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
+aidlc engine bolt checkpoint --action verify --unit "<Unit>" --kind <unit|skeleton> --check-cmd '<real project check>'
+aidlc engine bolt checkpoint --action approve --unit "<Unit>" --kind <unit|skeleton> --user-input 'Approve'
+aidlc engine bolt checkpoint --action reject --unit "<Unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+Verification runs an actual project check and stores proof bound to current
+artifacts, source, and attempt. For a skeleton, prove the integrated slice end
+to end; for an ordinary Unit, check that Unit's result. Approval requires a
+current verified proof. Supply `--user-input` only for the real human's answer;
+a verified ordinary Unit with `human_required: false` is approved without it.
+A skeleton always requires the human. Missing or stale evidence is explained
+in `errors`: repair the named review/receipt or take human Request Changes,
+without inventing verification. Re-run `next` after each action, never report
+one Unit's checkpoint as approval of the whole Code Generation stage.
+
+### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
+
+After a swarm batch settles, the engine may return `swarm_checkpoint` before
+another batch starts. Use exactly its batch number and Unit list:
+
+```bash
+aidlc engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-separated Units>"
+aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --user-input 'Approve'
+aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+Guided completion waits for the human; automatic completion omits `--user-input`
+when `human_required: false`. Readiness comes from the completed batch's current
+evidence. Resolve `errors` rather than rebuilding the whole batch or inventing
+a pass. Re-run `next` after the action; a batch approval is not whole-stage
+approval. Later completion-only stage directives settle bookkeeping without
+another body, reviewer, or human learnings/approval question.
+
+After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
+uses the same batch and exact Unit set, after fresh Plan Approval for that
+rejection revision:
+
+```bash
+aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted Units>"
+```
+
+If a worktree survives, the tool preserves its source and archives old metadata.
+If native source landing removed it, the tool can create a fresh child from the
+already-landed parent source after validating that landing evidence. Both paths
+retain the rejection revision and require fresh Plan Approval. A missing child
+without that evidence is refused. Do not assume every merged child survives, or
+replace a refused resume with ordinary prepare. Source that differs from the
+approved starting point must be reconciled and approved before work resumes.
+
+### Grouped Code Generation Plan Approval
+
+For the exact live swarm Unit set, a single **Approve Plans** answer can record
+separate Plan Approval receipts for every named Unit. Prepare every plan and
+questions file, then create the batch manifest:
+
+```json
+{"batch":"<review name>","units":[{"unit":"<Unit>","questionsFile":"<project-relative questions path>"}]}
+```
+
+```bash
+aidlc engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
+aidlc engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --details "Approve Plans"
+```
+
+The decision precedes the prompt. Only after the actual **Approve Plans** answer,
+write `[Answer]: Approve Plan` into each named questions file and call `answer`.
+For **Request Changes**, record that choice in the files and use
+`--details "Request Changes"`, then revise and re-present. The batch binds the
+exact live Units, plan/questions fingerprints, and unchanged planned source.
+When some approved Units have landed, the remaining prepared workers retain
+their original approval as `next` narrows the pending set. Continue their
+existing worktrees after verifying the current approvals; a partial batch does
+not require another approval answer or a fresh `prepare`. This also applies
+after a checkpoint revision has been prepared. An interrupted revision setup
+can retry with its existing current approval; successful preparation removes
+the revision-preparation signal from subsequent `next` directives. Substantive
+plan or attempt changes still require the reported approval repair.
+When a human Retry explicitly discards a worker, its native discard can retain
+the committed approved baseline for recreation. The replacement can keep the
+same approval while other batch members continue or have already landed.
+Missing directories and unrelated old discard records do not authorize this
+recovery.
+Legacy protected-choice mediation, overrides, and unsupported harnesses use the
+single-Unit flow; per-Unit approval remains mandatory in either presentation.
+See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
 
 ### `aidlc engine workspace codekb` - resolve the code knowledge directory
 
@@ -1231,7 +1378,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 

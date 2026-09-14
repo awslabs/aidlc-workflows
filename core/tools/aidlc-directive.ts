@@ -182,6 +182,35 @@ export interface RunStageDirective {
   // Present only for team-owned unit-major approval beats. The stage body is
   // already settled; the conductor opens/reports this unit gate with --unit.
   unit_gate?: "per-stage" | "unit-end";
+  construction_policy?: {
+    iteration: "unit-major" | "stage-major";
+    execution: "serial" | "swarm";
+    autonomy: "unset" | "gated" | "autonomous";
+    offer_autonomy: boolean;
+    human_completion_required: boolean;
+    completion_only: boolean;
+  };
+  construction_checkpoint?: {
+    kind: "unit" | "skeleton";
+    unit: string;
+    stages: string[];
+    fingerprint: string;
+    ready: boolean;
+    verified: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+    proof_path: string;
+  };
+  swarm_checkpoint?: {
+    batch: number;
+    units: string[];
+    fingerprint: string;
+    ready: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
@@ -314,6 +343,8 @@ export interface InvokeSwarmDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   units: string[];
+  batch?: number;
+  resume_existing?: true;
   stage?: string;
   stage_file?: string;
   reviewer?: string;
@@ -566,6 +597,9 @@ const RUN_STAGE_FIELDS = [
   "context_warnings",
   "gate",
   "unit_gate",
+  "construction_policy",
+  "construction_checkpoint",
+  "swarm_checkpoint",
   "memory_path",
   "consumes",
   "produces",
@@ -613,6 +647,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
 const INVOKE_SWARM_FIELDS = [
   "kind",
   "units",
+  "batch",
+  "resume_existing",
   "stage",
   "stage_file",
   "reviewer",
@@ -758,6 +794,8 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "invoke-swarm":
       checkStringArray(o, "units", kind, errors);
+      checkOptionalPositiveInteger(o, "batch", kind, errors);
+      checkOptionalTrue(o, "resume_existing", kind, errors);
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
@@ -1045,12 +1083,68 @@ function checkRunStageShared(
   if ("unit_gate" in o && typeof o.unit !== "string") {
     errors.push(`${kind}: unit_gate requires unit`);
   }
+  if ("construction_policy" in o) {
+    const policy = o.construction_policy;
+    if (!isObject(policy) || o.phase !== "construction") {
+      errors.push(`${kind}: construction_policy requires a Construction policy object`);
+    } else {
+      checkEnum(policy, "iteration", ["unit-major", "stage-major"], kind, errors);
+      checkEnum(policy, "execution", ["serial", "swarm"], kind, errors);
+      checkEnum(policy, "autonomy", ["unset", "gated", "autonomous"], kind, errors);
+      for (const field of ["offer_autonomy", "human_completion_required", "completion_only"]) {
+        if (typeof policy[field] !== "boolean") errors.push(`${kind}: construction_policy.${field} must be boolean`);
+      }
+    }
+  }
+  if ("construction_checkpoint" in o) {
+    const checkpoint = o.construction_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || checkpoint.unit !== o.unit) {
+      errors.push(`${kind}: construction_checkpoint must name this Construction Unit`);
+    } else {
+      checkEnum(checkpoint, "kind", ["unit", "skeleton"], kind, errors);
+      for (const field of ["ready", "verified", "approved", "human_required"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: construction_checkpoint.${field} must be boolean`);
+      }
+      for (const field of ["fingerprint", "proof_path"]) {
+        if (typeof checkpoint[field] !== "string") errors.push(`${kind}: construction_checkpoint.${field} must be string`);
+      }
+      for (const field of ["stages", "errors"]) {
+        if (!Array.isArray(checkpoint[field]) || !checkpoint[field].every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
+  if ("swarm_checkpoint" in o) {
+    const checkpoint = o.swarm_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || o.stage !== "code-generation") {
+      errors.push(`${kind}: swarm_checkpoint requires Code Generation`);
+    } else {
+      if (!Number.isSafeInteger(checkpoint.batch) || (checkpoint.batch as number) < 1) {
+        errors.push(`${kind}: swarm_checkpoint.batch must be a positive integer`);
+      }
+      for (const field of ["ready", "approved", "human_required"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: swarm_checkpoint.${field} must be boolean`);
+      }
+      if (typeof checkpoint.fingerprint !== "string") errors.push(`${kind}: swarm_checkpoint.fingerprint must be string`);
+      for (const field of ["units", "errors"]) {
+        const values = checkpoint[field];
+        if (!Array.isArray(values) || !values.every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: swarm_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
   // consumes_absent: optional (present only when a declared consume's file is
   // missing at emit time). Each entry must be {path: string, expected: boolean}.
   checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 function describe(v: unknown): string {
   if (v === null) return "null";

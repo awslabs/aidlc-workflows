@@ -43,8 +43,17 @@ Authoritative generated views:
 
 ## Runtime State
 - **Revision Count**: [integer]
+- **Construction Checkpoints**: [enabled for new workflows; absent on legacy workflows]
+- **Construction Iteration**: [unit-major/stage-major; new workflows default to unit-major, preserve an explicit choice]
+- **Construction Execution**: [serial/swarm; new workflows default to serial, swarm requires stage-major]
 - **Unit Ownership**: [solo/team; optional, exact `team` activates the derived grid]
 - **Unit Gate Rhythm**: [per-stage/unit-end; optional, defaults to per-stage under team ownership]
+
+Checkpoint policy applies only to solo work with an actual non-empty Unit DAG.
+Existing workflows without the checkpoint field retain their legacy first-stage
+and late per-stage approvals. An absent execution field preserves legacy
+autonomy-based swarm routing. Execution selection is independent of approval;
+team ownership retains its `unit_gate` policy.
 
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->

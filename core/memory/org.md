@@ -28,19 +28,25 @@ event sequence anyway.
 
 ## Walking Skeleton
 
-When practices are scope-dependent, we run the walking-skeleton Bolt
-**first** only when the active scope file declares `skeleton: on`. Bolt 1
-is solo, gated, and the user explicitly approves before remaining Bolts
-run.
+When practices are scope-dependent, select the walking skeleton only when the
+active scope declares `skeleton: on`. In checkpoint-enabled solo work with a
+non-empty Unit DAG, the first Unit is the smallest working integrated slice.
+Run it through all applicable per-unit stages, including Code Generation, before
+later Units even if stage-major was selected. Verify it with the project's real
+end-to-end check, then require the human's skeleton checkpoint approval. A first
+design-stage review does not demonstrate a working skeleton.
 
-We **skip the skeleton ceremony** when the active scope file declares
-`skeleton: off`. The first Bolt runs like any other — there's nothing to
-bootstrap.
+For `skeleton: off`, skip the skeleton ceremony: no bootstrap checkpoint; offer
+the explicit Construction choice at entry. For skeleton-on, offer it after the verified,
+human-approved skeleton. Follow `construction_policy.offer_autonomy`; never
+repeat a recorded choice. **Continue automatically** records `autonomous`;
+**Review each checkpoint** records `gated`. On-demand requests can grant or
+revoke autonomy during Construction. Ordinary completion approvals follow that
+choice; Plan Approval, summary confirmation, and failures remain human stops.
 
-After Bolt 1 ships (when it runs), the orchestrator fires the **ladder
-prompt**: "How should the remaining Bolts run?" Options: continue
-autonomously, gate every Bolt. The team picks per project. The choice
-persists as `Construction Autonomy Mode` in `aidlc-state.md`.
+Existing workflows without `Construction Checkpoints` retain their legacy
+first-stage and late stage approvals. Team-owned Unit gates retain their own
+policy; no Unit DAG means no skeleton checkpoint ceremony.
 
 ## Testing Posture
 

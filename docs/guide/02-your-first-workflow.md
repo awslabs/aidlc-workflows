@@ -218,26 +218,48 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution in reviewable slices. A [Bolt](glossary.md) is the planned Construction delivery slice from Delivery Planning (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The **default walk is stage-major** (one stage for every Unit, then the next stage) and does not yet treat that plan as a runtime boundary. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage.
+For a new solo workflow that includes Unit decomposition and a source-producing
+Construction stage, the default is **unit-major, serial execution with verified
+Unit checkpoints**. One Unit goes through its applicable design stages and Code
+Generation before the next begins. A [Bolt](glossary.md) remains the delivery
+slice planned in 2.9; runtime order follows `unit-of-work-dependency.md` rather
+than the grouping in `bolt-plan.md`.
+
+With skeleton-on, the first DAG Unit is the smallest working integrated slice.
+It completes its design and code, including your Plan Approval and required
+summary confirmations. A real project check then demonstrates the slice end to
+end, and you approve that verified skeleton before later Units start. Reviewing
+only the first design stage does not demonstrate a working skeleton.
+
+If no autonomy choice is already recorded, the workflow then asks:
 
 ```
-Starting the first Bolt now: one build pass over the code, tests and
-checks for a piece of the work. First step is Functional Design.
+How should I continue building the remaining work?
+  ▸ Continue automatically
+  ▸ Review each checkpoint
 ```
 
-The walking skeleton is **always gated** — you review that first Construction stage before the rest of Construction runs. Immediately after approval, the **ladder prompt** fires exactly once:
+Skeleton-off offers this choice at Construction entry instead. Your answer is
+recorded as `Construction Autonomy Mode` and respected on resume; explicit
+on-demand requests can change it later. **Continue automatically** skips routine
+completion questions, while Plan Approval, summary confirmation, and failures
+still require your attention. **Review each checkpoint** waits for your approval
+at each completed Unit.
 
-```
-The walking skeleton shipped. How should the remaining Bolts run?
-  ▸ Continue autonomously
-  ▸ Gate every Bolt
-```
+Execution is a separate choice. Unit-major stays serial. If you explicitly choose
+stage-major and swarm execution, eligible Code Generation Units may run in
+parallel, with guided or automatic batch checkpoints. An inline Unit already
+approved at its checkpoint is not rebuilt in a later swarm batch.
+Before preparing that batch, explicitly commit the approved application source,
+including the inline skeleton's source; the conductor does not commit it
+implicitly. The tool checks the whole batch before creating children and names
+the commit-and-retry step if the source is not yet reproducible.
 
-Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs the remaining Construction *stage* gates in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit; the per-Unit completion gate in that stage file is suppressed — a single stage-level gate replaces it after the last Unit settles (under swarm, after the final DAG batch).
-
-Units whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
-
-After every Unit's per-unit stages settle, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
+Existing workflows without the checkpoint setting keep their legacy first-stage
+review and stage-gate behavior. Design-only workflows and flows without Units
+keep their existing stage approvals; team-owned Units keep their own gate rhythm.
+Preserve any explicit iteration choice. After all applicable Unit work, Build and
+Test and CI Pipeline run once across the solution.
 
 ---
 

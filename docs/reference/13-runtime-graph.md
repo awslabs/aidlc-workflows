@@ -103,7 +103,7 @@ fields and instance-array fields never coexist.
 The optional `bolt_dag` node is the machine-readable unit dependency
 graph the engine reads to compute a parallel build batch — "the DAG is
 the permission" for a swarm fan-out. It is also an engine input for the
-optional `directive.wave` on the default stage-major walk. Before emitting a
+optional `directive.wave` on a recorded stage-major path. Before emitting a
 wave, the engine validates this cache against the authored dependency artifact
 and uses the healed in-memory batches and kinds to resolve every per-Unit entry,
 including build, completion-receipt, paired-review, and Unit-memory paths. The
