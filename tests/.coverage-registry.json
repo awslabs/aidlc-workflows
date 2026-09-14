@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 978,
+    "total": 979,
     "enumeratedByClass": {
       "function": 669,
       "audit": 99,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 141,
+      "subcommand": 142,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 128,
+      "subcommand": 129,
       "render-surface": 7
     }
   },
@@ -10272,6 +10272,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-orchestrate wait",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-orchestrate-wait.test.ts",
           "mechanism": "cli"
         }
       ],

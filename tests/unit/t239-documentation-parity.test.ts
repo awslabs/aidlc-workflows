@@ -33,7 +33,7 @@ function filesBelow(root: string, suffix: string): string[] {
 }
 
 function numberWord(value: number): string {
-  const words = ["zero", "one", "two", "three", "four", "five"];
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
   return words[value] ?? String(value);
 }
 
@@ -434,6 +434,7 @@ describe("documentation parity derives current behavior from authored implementa
       "report",
       "park",
       "team-board",
+      "wait",
     ]);
     const expected =
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;

@@ -624,7 +624,7 @@ answer; only the human's next interaction may be followed by `answer`.
 
 State and audit updates use the CLI tools in `{{HARNESS_DIR}}/tools/`. These tools handle atomic read-modify-write, timestamp generation, and audit formatting internally. Do NOT use Edit or Write for these updates — those tools show diffs that create visual noise.
 
-**CWD drift warning**: If a stage runs `cd` in Bash (e.g., `cd todo-app/server && npm install`), subsequent `bun {{HARNESS_DIR}}/tools/...` calls using relative paths will fail with "Module not found". Always use absolute paths to the tools directory for tool calls (on Claude Code, `$CLAUDE_PROJECT_DIR/.claude/tools/`), or run `cd` commands in subshells: `(cd subdir && npm install)`.
+**CWD drift warning**: If a stage runs `cd` in Bash (e.g., `cd todo-app/server && npm install`), subsequent `bun {{HARNESS_DIR}}/tools/...` calls using relative paths will fail with "Module not found". Never change the working directory in the main shell: run `cd` commands in subshells, `(cd subdir && npm install)`, so every engine command keeps the bare relative form the harness pre-approves. An absolute-path form, a `cd ... &&` prefix, an environment-variable prefix, a pipe, or a `$(...)` capture around an engine command all fall outside that pre-approval and prompt the user.
 
 **Checkpoint updates** (aidlc-state.md):
 ```bash

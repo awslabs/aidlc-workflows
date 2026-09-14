@@ -306,13 +306,14 @@ The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code
 "permissions": {
   "allow": [
     "Read", "Edit", "Write",
-    "Bash(bun \"$CLAUDE_PROJECT_DIR/.claude/tools/\"*)",
-    "Bash", "Glob", "Grep", "Task", "WebSearch"
+    "Bash(bun .claude/tools/*)",
+    "Bash(date -u *)",
+    "Glob", "Grep", "Task", "WebSearch"
   ]
 }
 ```
 
-The scoped `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)` entry sits ahead of the bare `Bash` so the framework's own tool invocations always match the narrower rule first. `$CLAUDE_PROJECT_DIR` stays double-quoted (with the `*` outside the quotes) so the command survives word-splitting shells when the project path contains spaces while the permission matcher still globs.
+The copy channel pre-approves `Bash(bun .claude/tools/*)`; the native release rewrites that entry to `Bash(aidlc engine *)`. `Bash(date -u *)` covers the timestamps the protocol asks the conductor to take. There is no bare `Bash`: Claude Code matches every subcommand of a compound command on its own and strips only a fixed set of known-safe environment variables, so an engine command stays pre-approved only when it runs bare. A `cd ... &&` prefix, an absolute `$CLAUDE_PROJECT_DIR` path, a `VAR=1` prefix, a pipe into `jq`, or a `$(...)` capture all prompt. A project's own build and test commands sit outside the list and prompt once; answering "Yes, and don't ask again" saves a rule for them in `.claude/settings.local.json`.
 
 ### How permissions work
 

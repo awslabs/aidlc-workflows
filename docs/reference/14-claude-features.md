@@ -208,7 +208,8 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
 {
   "permissions": {
     "allow": [
-      "Read", "Edit", "Write", "Bash",
+      "Read", "Edit", "Write",
+      "Bash(bun .claude/tools/*)", "Bash(date -u *)",
       "Glob", "Grep", "Task", "WebSearch"
     ]
   }

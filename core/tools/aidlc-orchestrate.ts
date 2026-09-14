@@ -85,9 +85,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type AskDirective,
@@ -192,6 +193,7 @@ import {
   relativeCodekbDir,
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
+  reviewArtifactEntries,
   resolveBoltDag,
   type BoltDagResolution,
   resolveCeremony,
@@ -9343,6 +9345,140 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
 }
 
+// --- wait: a bounded, read-only wait for dispatched work ----------------------
+// A harness that returns from an Agent/Task dispatch before the worker finishes
+// leaves the conductor with nothing to read. This verb is the sanctioned wait:
+// it polls the same on-disk evidence the engine itself checks (collaborator
+// contribution files, the stage's required artifacts, or the reviewer's review
+// file) and always returns within the bound, so the conductor re-runs one bare
+// engine command instead of minting its own shell loop. Read-only: it publishes
+// no directive, touches no marker, and writes no audit row.
+interface WaitFlags {
+  stage?: string;
+  unit?: string;
+  for?: string;
+  reviewFile?: string;
+  timeout?: number;
+}
+
+const WAIT_TARGETS = ["collaborators", "artifacts", "review"] as const;
+const WAIT_USAGE =
+  "Usage: wait --stage <slug> --for collaborators|artifacts|review " +
+  "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
+const WAIT_DEFAULT_SECONDS = 90;
+const WAIT_MAX_SECONDS = 540;
+
+function parseWaitFlags(args: string[]): WaitFlags {
+  const flags: WaitFlags = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const v = i + 1 < args.length ? args[i + 1] : undefined;
+    if (v === undefined) continue;
+    if (a === "--stage") { flags.stage = v; i++; }
+    else if (a === "--unit") { flags.unit = v; i++; }
+    else if (a === "--for") { flags.for = v; i++; }
+    else if (a === "--review-file") { flags.reviewFile = v; i++; }
+    else if (a === "--timeout") { flags.timeout = Number(v); i++; }
+  }
+  return flags;
+}
+
+function fileHasBytes(path: string): boolean {
+  try {
+    return statSync(path).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function handleWait(args: string[], projectDir: string | undefined): void {
+  const flags = parseWaitFlags(args);
+  const pd = resolveProjectDir(projectDir);
+  const target = flags.for as (typeof WAIT_TARGETS)[number] | undefined;
+  const node = flags.stage ? nodeForSlug(flags.stage) : undefined;
+  if (!flags.stage || !target || !WAIT_TARGETS.includes(target)) {
+    console.error(WAIT_USAGE);
+    process.exit(1);
+  }
+  if (!node) {
+    console.error(`Unknown stage "${flags.stage}". ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  if (target === "review" && !flags.reviewFile) {
+    console.error(`--for review needs --review-file <path>. ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  const seconds =
+    flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
+      ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
+      : WAIT_DEFAULT_SECONDS;
+  const started = Date.now();
+  const deadline = started + seconds * 1000;
+  const relativeRecord = engineRelativeRecordDir(pd);
+  if (target === "artifacts" && relativeRecord === null) {
+    // Without an intent record there is no declared-artifact location to watch;
+    // settling silently here would tell the conductor its work had landed.
+    console.error(
+      "No active intent record resolves for this project, so there are no declared " +
+        "artifacts to wait for. Run this from the workflow's project (or pass --project-dir).",
+    );
+    process.exit(1);
+  }
+  const prefix = relativeRecord ?? relativeSpaceRecordPrefix();
+  const contributionsDir = flags.unit
+    ? join(pd, prefix, "construction", flags.unit, node.slug, "contributions")
+    : join(pd, prefix, node.phase, node.slug, "contributions");
+  const reviewPath =
+    flags.reviewFile === undefined
+      ? null
+      : isAbsolute(flags.reviewFile) ? flags.reviewFile : join(pd, flags.reviewFile);
+  const missingNow = (): string[] => {
+    const missing: string[] = [];
+    if (target === "review") {
+      if (reviewPath !== null && !fileHasBytes(reviewPath)) {
+        missing.push(`review file ${flags.reviewFile} (absent or empty)`);
+      }
+    } else if (target === "collaborators") {
+      for (const agent of node.support_agents ?? []) {
+        let firstLine = "";
+        try {
+          firstLine = readFileSync(join(contributionsDir, `${agent}.md`), "utf-8").split("\n", 1)[0].trim();
+        } catch {
+          missing.push(`${agent} (no contribution file)`);
+          continue;
+        }
+        if (firstLine !== `**Collaborator:** ${agent}`) {
+          missing.push(`${agent} (missing identity-marker first line)`);
+        }
+      }
+    } else {
+      for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
+        if (!entry.required || entry.path === null) continue;
+        if (!fileHasBytes(entry.path)) missing.push(`${entry.logicalPath} (absent or empty)`);
+      }
+    }
+    return missing;
+  };
+  let missing = missingNow();
+  while (missing.length > 0 && Date.now() < deadline) {
+    Bun.sleepSync(Math.min(2000, Math.max(50, deadline - Date.now())));
+    missing = missingNow();
+  }
+  const settled = missing.length === 0;
+  console.log(JSON.stringify({
+    status: settled ? "settled" : "waiting",
+    stage: node.slug,
+    ...(flags.unit ? { unit: flags.unit } : {}),
+    for: target,
+    ...(flags.reviewFile ? { review_file: flags.reviewFile } : {}),
+    waited_ms: Date.now() - started,
+    missing,
+    next: settled
+      ? "The dispatched work has landed: read its outputs and continue the stage body."
+      : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
+  }));
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -9410,11 +9546,14 @@ export function main(argv: string[]): void {
       case "team-board":
         handleTeamBoard(subArgs, projectDir);
         break;
+      case "wait":
+        handleWait(subArgs, projectDir);
+        break;
       default:
         // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
         // stderr-only usage shape the sibling tools use for a bad subcommand.
         console.error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park, team-board`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park, team-board, wait`,
         );
         process.exit(1);
     }
