@@ -1658,6 +1658,10 @@ describe("AttemptView projections and refusal streaks", () => {
       '"Request Changes"',
       "Request Changes.",
       "  Request   Changes  ",
+      // The question-rendering guide asks the conductor to append this to the
+      // recommended option's label, and the picker returns the decorated label.
+      "Request Changes (Recommended)",
+      "request changes (recommended)",
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }

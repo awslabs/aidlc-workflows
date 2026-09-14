@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.3] - 2026-09-11
+
+Accept the `(Recommended)` label decorator at stage approval gates. The question-rendering guide tells the conductor to append `(Recommended)` to the recommended option's label, and the picker returns that decorated label, but the gate-reply comparison matched offered choices verbatim. Answering a gate through the documented path therefore returned "did not match an offered choice", and re-presenting the gate reproduced the same label, so the gate could not be approved. The gate path now strips the one trailing decorator before matching, reusing the existing `stripRecommendedDecorator` helper that Plan Approval already uses. Error messages still show the reply exactly as received. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.3` / `install.ps1 -Version 2.8.3`; no workflow state migration is required. Closes #1126.
+
+* Answering an approval gate with `Approve (Recommended)` now approves the stage instead of being refused as an unoffered choice.
+* `Request Changes (Recommended)` is likewise recognized as the Request Changes choice, alongside the case, option-prefix, quote, and punctuation tolerance that choice already had.
+
 ## [2.8.2] - 2026-09-10
 
 Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
