@@ -385,11 +385,12 @@ export function inspectInstalledVersion(
   if (!existsSync(runtime)) {
     return { complete: false, distributions: [], reason: "runtime directory is missing" };
   }
-  const runtimeAssetDeclared = manifest.assets.some((asset) =>
-    Boolean(asset) &&
-    typeof asset === "object" &&
-    (asset as { name?: unknown }).name === `aidlc-runtime-${version}.tar.gz`
-  );
+  const runtimeAssetDeclared = manifest.assets.some((asset) => {
+    if (!asset || typeof asset !== "object") return false;
+    const name = (asset as { name?: unknown }).name;
+    return name === `aidlc-runtime-${version}.tar.gz` ||
+      name === `aidlc-native-runtime-${version}.tar.gz`;
+  });
   if (runtimeAssetDeclared || manifest.installedRuntime !== undefined) {
     const installedRuntime = manifest.installedRuntime as {
       schemaVersion?: unknown;

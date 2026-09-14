@@ -2002,6 +2002,9 @@ describe("t243 release lifecycle", () => {
       }
       expect(server.requests.some((path) => path.endsWith(`/${binaryName}`))).toBe(false);
       expect(server.requests.some((path) =>
+        path.endsWith(`/aidlc-native-runtime-${AIDLC_VERSION}.tar.gz`)
+      )).toBe(false);
+      expect(server.requests.some((path) =>
         path.endsWith(`/aidlc-runtime-${AIDLC_VERSION}.tar.gz`)
       )).toBe(false);
     } finally {

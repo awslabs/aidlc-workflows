@@ -37,6 +37,8 @@ import {
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import {
   digest,
+  releaseNativeRuntimeAsset,
+  releaseRuntimeAsset,
   type ReleaseManifest,
 } from "../../core/tools/aidlc-release.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
@@ -177,8 +179,10 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
   const repoRoot = options.repoRoot ?? REPO_ROOT;
   const version = requireVersion(options.version ?? AIDLC_VERSION);
   const reportedVersion = requireVersion(options.reportedVersion ?? version);
-  const runtimeAsset = `aidlc-runtime-${version}.tar.gz`;
+  const runtimeAsset = releaseRuntimeAsset(version);
+  const nativeRuntimeAsset = releaseNativeRuntimeAsset(version);
   const target = options.target ?? targetTriple();
+  const copyProjectionRoot = join(repoRoot, "dist");
   const releaseProjectionRoot = join(repoRoot, "dist-release");
   const distributions = [...(options.distributions ??
     readdirSync(releaseProjectionRoot)
@@ -222,27 +226,50 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
 
   const distributionRows: Array<{ name: string; productName: string }> = [];
   const runtimeEntries: ArchiveEntry[] = [];
+  const nativeRuntimeEntries: ArchiveEntry[] = [];
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-release-fixture-"));
   try {
     for (const distribution of distributions) {
-      const source = join(releaseProjectionRoot, distribution);
-      if (!existsSync(source)) throw new Error(`unknown release fixture distribution: ${distribution}`);
-      const projection = join(scratch, distribution);
-      cpSync(source, projection, { recursive: true });
-      const { stamp, descriptor } = projectionFiles(projection);
-      const stampPath = join(
-        projection,
-        stamp.harnessDir,
-        "tools",
-        "data",
-        "aidlc-stamp.json",
-      );
-      writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
-      runtimeEntries.push(...archiveEntries(projection).map((entry) => ({
-        ...entry,
-        path: `runtime/${distribution}/${entry.path}`,
-      })));
-      distributionRows.push({ name: distribution, productName: descriptor.productName });
+      const projections = [
+        {
+          source: join(copyProjectionRoot, distribution),
+          root: join(scratch, "copy", distribution),
+          entries: runtimeEntries,
+        },
+        {
+          source: join(releaseProjectionRoot, distribution),
+          root: join(scratch, "native", distribution),
+          entries: nativeRuntimeEntries,
+        },
+      ];
+      let productName = "";
+      for (const item of projections) {
+        if (!existsSync(item.source)) {
+          throw new Error(`unknown release fixture distribution: ${distribution}`);
+        }
+        cpSync(item.source, item.root, { recursive: true });
+        const { stamp, descriptor } = projectionFiles(item.root);
+        const stampPath = join(
+          item.root,
+          stamp.harnessDir,
+          "tools",
+          "data",
+          "aidlc-stamp.json",
+        );
+        writeFileSync(
+          stampPath,
+          `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`,
+        );
+        item.entries.push(...archiveEntries(item.root).map((entry) => ({
+          ...entry,
+          path: `runtime/${distribution}/${entry.path}`,
+        })));
+        if (productName && productName !== descriptor.productName) {
+          throw new Error(`${distribution}: copy and native product names differ`);
+        }
+        productName = descriptor.productName;
+      }
+      distributionRows.push({ name: distribution, productName });
     }
     const pluginsRoot = join(repoRoot, "dist", "plugins");
     if (existsSync(pluginsRoot)) {
@@ -252,10 +279,12 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
         for (const harness of readdirSync(pluginRoot).sort()) {
           const harnessRoot = join(pluginRoot, harness);
           if (!statSync(harnessRoot).isDirectory()) continue;
-          runtimeEntries.push(...archiveEntries(harnessRoot).map((entry) => ({
+          const entries = archiveEntries(harnessRoot).map((entry) => ({
             ...entry,
             path: `plugins/${plugin}/${harness}/${entry.path}`,
-          })));
+          }));
+          runtimeEntries.push(...entries);
+          nativeRuntimeEntries.push(...entries);
         }
       }
     }
@@ -263,12 +292,17 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
       join(options.root, runtimeAsset),
       createTarGz(runtimeEntries),
     );
+    writeFileSync(
+      join(options.root, nativeRuntimeAsset),
+      createTarGz(nativeRuntimeEntries),
+    );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 
   const names = [
     binaryName,
+    nativeRuntimeAsset,
     runtimeAsset,
     "install.sh",
     "install.ps1",
@@ -277,7 +311,7 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     name,
     sha256: digest(join(options.root, name)),
     bytes: statSync(join(options.root, name)).size,
-    kind: name === runtimeAsset
+    kind: name === runtimeAsset || name === nativeRuntimeAsset
       ? "runtime" as const
       : name === "install.sh" || name === "install.ps1"
       ? "installer" as const
@@ -466,7 +500,8 @@ export async function checkLiveReleaseContract(
   const expected = [
     "install.sh",
     "install.ps1",
-    `aidlc-runtime-${manifest.version}.tar.gz`,
+    releaseNativeRuntimeAsset(manifest.version),
+    releaseRuntimeAsset(manifest.version),
   ];
   for (const name of expected) {
     if (!assetNames.includes(name)) throw new Error(`live release is missing ${name}`);

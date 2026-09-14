@@ -94,6 +94,7 @@ const LIVE_PIN_VERSION = patchVersion(2);
 const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);
 const RUNTIME_ASSET = `aidlc-runtime-${AIDLC_VERSION}.tar.gz`;
+const NATIVE_RUNTIME_ASSET = `aidlc-native-runtime-${AIDLC_VERSION}.tar.gz`;
 
 // Removing the whole suite's copied release trees needs its own bounded budget.
 afterAll(() => {
@@ -119,6 +120,7 @@ function writeVerifierCandidate(root: string): void {
     ["aidlc-linux-arm64-musl", "binary", "linux-arm64-musl"],
     ["aidlc-linux-x64", "binary", "linux-x64"],
     ["aidlc-linux-x64-musl", "binary", "linux-x64-musl"],
+    [NATIVE_RUNTIME_ASSET, "runtime", undefined],
     [RUNTIME_ASSET, "runtime", undefined],
     ["aidlc-windows-x64.exe", "binary", "windows-x64"],
     ["install.ps1", "installer", undefined],
@@ -1748,7 +1750,7 @@ describe("t244 Windows and completion release surfaces", () => {
         sourceDigest: "1".repeat(40),
       })}\n`,
     );
-    writeFileSync(join(release, RUNTIME_ASSET), "runtime\n");
+    writeFileSync(join(release, NATIVE_RUNTIME_ASSET), "runtime\n");
     writeFileSync(
       join(release, "aidlc-release.intoto.jsonl"),
       "aidlc-test-release-provenance\n",
@@ -1757,7 +1759,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const assets = [
       "version.json",
       binaryName,
-      RUNTIME_ASSET,
+      NATIVE_RUNTIME_ASSET,
       "install.sh",
     ];
     writeFileSync(
@@ -1807,7 +1809,7 @@ describe("t244 Windows and completion release surfaces", () => {
       "--list-assets",
     ], REPO_ROOT);
     expect(verified.status, verified.stderr).toBe(0);
-    expect(verified.stdout.trim().split(/\r?\n/)).toHaveLength(10);
+    expect(verified.stdout.trim().split(/\r?\n/)).toHaveLength(11);
     expect(verified.stdout).toContain("install.sh");
     expect(verified.stdout).toContain("install.ps1");
 

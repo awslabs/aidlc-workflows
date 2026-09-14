@@ -8,9 +8,9 @@ attestation verification; missing or older versions do not block installation.
 
 This chapter describes the native install lifecycle available in this release.
 The planned `aidlc setup` experience, npm package, and package-manager formulas
-are not available yet. Manual-copy users take the versioned runtime from
-`aidlc-runtime-X.Y.Z.tar.gz`; framework developers may separately generate the
-Bun-invoking `dist/` projection from source.
+are not available yet. Manual-copy users install Bun and take the versioned,
+Bun-invoking runtime from `aidlc-runtime-X.Y.Z.tar.gz`; they do not need the
+native `aidlc` command.
 
 ## Install
 
@@ -966,7 +966,8 @@ continuation before doing other work.
 The supported manual-copy payload is the versioned `aidlc-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-project-root files stay together:
+project-root files stay together. Bun is the runtime prerequisite; the native
+`aidlc` executable is not required:
 
 ```bash
 tag=vX.Y.Z
@@ -989,9 +990,14 @@ RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
 ```
 
-The archive is assembled from freshly regenerated native projections and uses
-the matching `aidlc` command. Prefer `aidlc config`, which applies the same
-runtime transactionally and records ownership for later refreshes.
+The archive is assembled from the freshly regenerated Bun projections under
+`dist/`. Its generated hooks and tools invoke the included TypeScript through
+Bun. The native installers and lifecycle commands instead consume
+`aidlc-native-runtime-X.Y.Z.tar.gz`, assembled from `dist-release/`; users do
+not normally download that archive directly.
+
+When native executables are permitted, prefer `aidlc config`. It installs the
+native runtime transactionally and records ownership for later refreshes.
 
 Framework developers may instead clone the source, install dependencies, and
 materialize ignored local outputs:

@@ -254,7 +254,7 @@ describe("t331 preview release channel", () => {
     expect(installedData.channelSwitch).toBeUndefined();
     expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(PREVIEW_2);
     expect(preview.requests).toContain(
-      `/download/v${PREVIEW_2}/aidlc-runtime-${PREVIEW_2}.tar.gz`,
+      `/download/v${PREVIEW_2}/aidlc-native-runtime-${PREVIEW_2}.tar.gz`,
     );
 
     const noop = await run(LIFECYCLE, [

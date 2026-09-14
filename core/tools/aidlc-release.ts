@@ -47,6 +47,10 @@ export function releaseRuntimeAsset(version: string): string {
   return `aidlc-runtime-${requireVersion(version)}.tar.gz`;
 }
 
+export function releaseNativeRuntimeAsset(version: string): string {
+  return `aidlc-native-runtime-${requireVersion(version)}.tar.gz`;
+}
+
 export class ReleaseUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -301,7 +305,9 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
       !verificationValid ||
       (asset.kind === "binary" &&
         (!asset.target || asset.name !== `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`)) ||
-      (asset.kind === "runtime" && asset.name !== releaseRuntimeAsset(manifest.version)) ||
+      (asset.kind === "runtime" &&
+        asset.name !== releaseRuntimeAsset(manifest.version) &&
+        asset.name !== releaseNativeRuntimeAsset(manifest.version)) ||
       (asset.kind === "installer" &&
         asset.name !== "install.sh" &&
         asset.name !== "install.ps1")

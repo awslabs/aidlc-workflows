@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractTarGz } from "../../core/tools/aidlc-archive.ts";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
@@ -324,9 +325,45 @@ describe("t238 build-binaries release builder", () => {
       mode: "full-runtime",
     }));
     expect(releaseManifest.assets.filter((asset) => asset.kind === "runtime")).toEqual([
+      expect.objectContaining({ name: `aidlc-native-runtime-${AIDLC_VERSION}.tar.gz` }),
       expect.objectContaining({ name: `aidlc-runtime-${AIDLC_VERSION}.tar.gz` }),
     ]);
     expect(releaseManifest.assets.some((asset) => asset.kind === "data")).toBe(false);
+    const runtimeChannels = mkdtempSync(join(tmpdir(), "aidlc-t238-runtime-channels-"));
+    try {
+      const copyRoot = join(runtimeChannels, "copy");
+      const nativeRoot = join(runtimeChannels, "native");
+      extractTarGz(
+        join(RELEASE_DIR, `aidlc-runtime-${AIDLC_VERSION}.tar.gz`),
+        copyRoot,
+      );
+      extractTarGz(
+        join(RELEASE_DIR, `aidlc-native-runtime-${AIDLC_VERSION}.tar.gz`),
+        nativeRoot,
+      );
+      const copySettingsText = readFileSync(
+        join(copyRoot, "runtime", "claude", ".claude", "settings.json"),
+        "utf-8",
+      );
+      const nativeSettingsText = readFileSync(
+        join(nativeRoot, "runtime", "claude", ".claude", "settings.json"),
+        "utf-8",
+      );
+      const copySettings = JSON.parse(copySettingsText) as {
+        statusLine: { command: string };
+      };
+      const nativeSettings = JSON.parse(nativeSettingsText) as {
+        statusLine: { command: string };
+      };
+      expect(copySettings.statusLine.command).toBe(
+        'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+      );
+      expect(copySettingsText).not.toContain('"command": "aidlc engine');
+      expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
+      expect(nativeSettingsText).not.toContain('"command": "bun ');
+    } finally {
+      rmSync(runtimeChannels, { recursive: true, force: true });
+    }
     writeFileSync(
       join(RELEASE_DIR, "aidlc-release.intoto.jsonl"),
       "aidlc-test-release-provenance\n",

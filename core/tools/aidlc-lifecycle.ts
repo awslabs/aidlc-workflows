@@ -87,9 +87,11 @@ import {
 import {
   acquireRelease,
   digest,
+  releaseNativeRuntimeAsset,
   releaseRuntimeAsset,
   ReleaseUnavailableError,
   resolvePreviewVersion,
+  type ReleaseManifest,
 } from "./aidlc-release.ts";
 import {
   executePlan,
@@ -273,6 +275,15 @@ const COMPLETION_FILES: Readonly<Record<Shell, string>> = {
 
 function binaryAsset(target = targetTriple()): string {
   return `aidlc-${target}${target.startsWith("windows-") ? ".exe" : ""}`;
+}
+
+function installRuntimeAsset(manifest: ReleaseManifest): string {
+  const native = releaseNativeRuntimeAsset(manifest.version);
+  return manifest.assets.some((asset) =>
+      asset.kind === "runtime" && asset.name === native
+    )
+    ? native
+    : releaseRuntimeAsset(manifest.version);
 }
 
 function installedDistributions(version: string): string[] {
@@ -1246,14 +1257,14 @@ async function installVersion(options: {
     from: options.from,
     names: (manifest) => [
       binaryAsset(target),
-      releaseRuntimeAsset(manifest.version),
+      installRuntimeAsset(manifest),
     ],
     offline: options.offline,
     baseUrl: options.baseUrl,
     caBundle: options.caBundle,
   });
   const version = release.manifest.version;
-  const runtimeAsset = releaseRuntimeAsset(version);
+  const runtimeAsset = installRuntimeAsset(release.manifest);
   const required = [binaryAsset(target), runtimeAsset];
   const releaseReservation = options.dryRun ? null : reserveVersion(version);
   const temporary = mkdtempSync(join(tmpdir(), `aidlc-version-${version}-`));

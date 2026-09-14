@@ -10,6 +10,7 @@ import {
   PREVIEW_CHANNEL,
 } from "../core/tools/aidlc-channel.ts";
 import {
+  releaseNativeRuntimeAsset,
   releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../core/tools/aidlc-release.ts";
@@ -35,6 +36,7 @@ function releaseAssets(version: string): Map<string, {
     ["aidlc-linux-arm64-musl", { kind: "binary", target: "linux-arm64-musl" }],
     ["aidlc-linux-x64", { kind: "binary", target: "linux-x64" }],
     ["aidlc-linux-x64-musl", { kind: "binary", target: "linux-x64-musl" }],
+    [releaseNativeRuntimeAsset(version), { kind: "runtime" }],
     [releaseRuntimeAsset(version), { kind: "runtime" }],
     ["aidlc-windows-x64.exe", { kind: "binary", target: "windows-x64" }],
     ["install.ps1", { kind: "installer" }],
