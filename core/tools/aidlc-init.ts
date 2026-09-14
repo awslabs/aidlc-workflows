@@ -59,6 +59,8 @@ import { RELEASE_CHANNELS } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
+  TransactionLockError,
+  assertTransactionFilesystem,
   executePlan,
   transactionSourceHash,
   transactionState,
@@ -66,6 +68,7 @@ import {
   writeOperation,
 } from "./aidlc-transaction.ts";
 import { compileStageGraph, __resetGraphCache } from "./aidlc-graph.ts";
+import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -3780,7 +3783,9 @@ function mergeBlock(
       adoptedLegacy: true,
     };
   }
-  if (/\baidlc\b|AI-DLC/i.test(current)) {
+  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
+  // our marked block without claiming or rewriting that existing prefix.
+  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
     return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
   }
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
@@ -4275,6 +4280,25 @@ type FirstRunMutationSnapshot = {
   cleanup: () => void;
 };
 
+class ConfigChildError extends Error {
+  constructor(message: string, readonly remediation?: string) {
+    super(message);
+    this.name = "ConfigChildError";
+  }
+}
+
+function renderFirstRunFailure(error: unknown): void {
+  process.stdout.write(
+    `\n  Setup stopped: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  if (
+    (error instanceof ConfigChildError || error instanceof TransactionLockError) &&
+    error.remediation
+  ) {
+    process.stdout.write(`  fix: ${error.remediation}\n`);
+  }
+}
+
 function runConfigChild(
   args: string[],
   cwd: string,
@@ -4294,7 +4318,24 @@ function runConfigChild(
     timeout: 120_000,
   });
   if (result.status !== 0) {
-    throw new Error((result.stdout || result.stderr || "configuration failed").trim());
+    let failure: Record<string, unknown> | undefined;
+    try {
+      const value: unknown = JSON.parse(result.stdout);
+      if (value && typeof value === "object") {
+        failure = value as Record<string, unknown>;
+      }
+    } catch {
+      // Startup/runtime errors may not use the command-result envelope.
+    }
+    if (failure?.ok === false && typeof failure.message === "string") {
+      throw new ConfigChildError(
+        failure.message,
+        typeof failure.remediation === "string" ? failure.remediation : undefined,
+      );
+    }
+    throw new Error(
+      (result.error?.message || result.stderr || result.stdout || "configuration failed").trim(),
+    );
   }
   const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
   snapshot.recordCommitted(parsed);
@@ -4816,6 +4857,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
   const candidates = installedSourceCandidates();
   if (candidates.length === 0) return false;
+  assertTransactionFilesystem(projectDir);
   const detection = detectFirstRun(projectDir, candidates);
   const detected = detectedCandidateChoices(candidates, detection);
   let candidate: InstalledSourceCandidate;
@@ -4926,9 +4968,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         `setup failed and rollback was incomplete; recovery snapshot preserved at ${snapshot.recoveryPath}`,
       );
     }
-    process.stdout.write(
-      `\n  Setup stopped: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    renderFirstRunFailure(error);
     process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
   } finally {
@@ -4936,6 +4976,12 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   }
   return true;
   } catch (error) {
+    if (error instanceof TransactionLockError) {
+      renderFirstRunFailure(error);
+      process.stdout.write("  Nothing written.\n");
+      process.exitCode = EXIT.failure;
+      return true;
+    }
     if (error instanceof FirstRunCancelled) {
       process.stdout.write("\n  Nothing written.\n");
       process.exitCode = EXIT.usage;
@@ -5126,9 +5172,27 @@ function planRootIntegrations(
       });
       continue;
     }
-    const current = targetRegular ? readFileSync(targetPath, "utf-8") : "";
+    const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
+    const current = currentBytes.toString("utf-8");
+    if (integration.path === ".gitignore" && !Buffer.from(current, "utf-8").equals(currentBytes)) {
+      actions.push({
+        path: integration.path,
+        action: "conflict",
+        detail: "gitignore is not valid UTF-8; convert its encoding before config",
+      });
+      continue;
+    }
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
+      if (integration.path === ".gitignore") {
+        // The managed block has no re-inclusions, so the on-disk rules also
+        // describe the merged result. Checking here keeps dry-run read-only.
+        const conflicts = committedRecordIgnoreConflicts(projectDir);
+        if (conflicts.length > 0) {
+          actions.push({ path: integration.path, action: "conflict", detail: conflicts.join("; ") });
+          continue;
+        }
+      }
       const merged = mergeBlock(
         integration.path,
         current,
@@ -6304,7 +6368,9 @@ export async function main(
         ...failure(
           `${conflicts.length} config conflict(s): ${conflicts.map((item) => `${item.path} (${item.detail})`).join(", ")}`,
           EXIT.integrity,
-          configCommand("--dry-run --verbose"),
+          `Back up the conflicting files and reconcile the listed ownership or marker problems while preserving your custom content; then rerun ${
+            configCommand("--dry-run --verbose")
+          }.`,
         ),
         data: { projectDir, distribution: stamp.distribution, counts, actions },
       }, options);
@@ -6566,7 +6632,9 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource
+      error instanceof TransactionLockError
+        ? error.remediation
+        : copiedRefreshWithoutSource
         ? "re-copy the matching dist/<harness>/ tree, then rerun this command"
         : from
         ? configCommand("--from <valid-release-data>")

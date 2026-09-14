@@ -44,12 +44,14 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
 | `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. |
 | `unowned whole file` from `aidlc config` | Move or merge the existing file manually before config. Whole-file integrations such as OpenCode's `opencode.json` cannot be claimed with `--force`. |
-| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc config`. This release intentionally refuses to guess ownership. |
+| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Reconcile the unmarked AI-DLC content in the named root file (such as `AGENTS.md`), preserving project-owned text, then rerun `aidlc config`. Unmarked `.gitignore` content that does not hide committed records is preserved and a fresh managed block appended; no rename or deletion is needed. See [Root Integrations and Ownership](18-install-and-lifecycle.md#root-integrations-and-ownership). |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
+| `gitignore is not valid UTF-8` | Back up `.gitignore` and convert it from its current encoding to UTF-8, preserving the ignore patterns, then rerun config. AI-DLC leaves the original bytes untouched when decoding would lose information. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
 | `this project requires <version>, which is not installed completely` | Install or reinstall the exact strict-semver pin with `aidlc config --pin <version>`. The dispatcher fails closed instead of falling back to the active machine version; use `aidlc config --unpin` only when the team intends to stop pinning the project. |
 | An update was interrupted and `aidlc version` still shows the prior release | This is the safe restored state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc update --version <version>` command. |
 | `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
+| `EMLINK` (`too many links`) or `Cannot create an AI-DLC transaction lock` during config | Use project storage that supports the required filesystem operations; see [Config fails with a hard-link error](#config-fails-with-a-hard-link-error). |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
 | `update cache is invalid` or machine settings are rejected | Run `aidlc system config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\aidlc.settings.json` (Windows) or `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/aidlc.settings.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
 | `HTTPS_PROXY must use HTTP or HTTPS` or a release URL is rejected | Use an HTTP(S) proxy URL and an HTTPS release mirror without credentials, query, or fragment. The native client reads `HTTPS_PROXY` and `NO_PROXY`, not `HTTP_PROXY`, and redacts secret-like URL parts in errors. |
@@ -63,6 +65,39 @@ Native `aidlc doctor` also checks the active command pointer, rollback
 eligibility, retained pin completeness, stale pin registrations, abandoned
 transaction staging, project version skew, and whether binary-channel host
 hooks and permission/trust entries consistently select the native command.
+
+### Config reports an ignore rule hiding committed records
+
+In a Git repository, config refuses a user-owned ignore rule such as `aidlc/`
+with exit 4 before writing the managed block, including on `--dry-run` and
+with `--force`. The conflict names `<file>:<line>: <pattern>` and the hidden
+record paths (`memory/**`, `codekb/**`, `intents.json`, `aidlc-state.md`, and
+`audit/*.md`). Narrow the named rule, preserving unrelated ignores, then
+rerun config so teammates receive the shared records. The original bytes
+remain untouched. Outside Git, or without the Git executable, preservation
+proceeds without this check.
+
+### Config fails with a hard-link error
+
+`aidlc config` creates a hard link to acquire its transaction lock. An
+`EMLINK` (`too many links`), `ENOTSUP`, `EOPNOTSUPP`, or `ENOSYS` error at this
+step means the filesystem rejected that operation. Compatibility depends on
+the mount's capabilities: S3-backed and FUSE mounts vary, so their names alone
+do not establish support.
+
+The first-run wizard checks lock creation before offering setup choices. It
+removes its temporary probe files and stops without persistent setup changes
+if the check fails. Human output names the failure and remediation;
+`--quiet` prints the remediation, and `--json` returns a structured failure.
+
+Move or clone the project onto storage that supports hard links, exclusive
+file creation, `fsync`, and atomic rename, then rerun `aidlc config` there.
+On EC2, ext4 or XFS on an EBS volume is a suitable choice. For a failing
+S3-backed workspace, use a project directory outside that mount. An alias or
+symlink to the same mount does not change its capabilities. Neither `--force`
+nor `--from` repairs the destination filesystem, and deleting transaction locks
+does not fix this error. Config requires the lock and does not fall back to
+unlocked writes. See [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
 
 ---
 
@@ -374,6 +409,13 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 ```
 
 It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+
+The **Workspace record visibility** advisory, beside the uncommitted-records
+row, catches user ignore rules added after config. It names the rule's file,
+line, pattern, and hidden committed record paths; narrow the rule rather than
+force-adding individual records. This warning does not change doctor's exit
+code. The row is absent when the records are visible, outside a Git repository,
+or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
 
