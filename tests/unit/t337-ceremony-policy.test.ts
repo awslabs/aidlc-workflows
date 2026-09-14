@@ -49,25 +49,33 @@ afterEach(() => {
 describe("t337 ceremony resolution", () => {
   for (const key of CEREMONY_KEYS) {
     test(`${key}: kill switch beats intent, scope, and fallback`, () => {
-      withEnvAndFreshCaches(POLICY_ENV, () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const scopes = join(proj, "scopes");
+      mkdirSync(scopes);
+      writeFileSync(join(scopes, "aidlc-quiet.md"), [
+        "---", "name: quiet", "depth: Standard",
+        "sensors: off", "learnings: off", "summary_confirmation: off", "---", "",
+      ].join("\n"));
+      withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
         const intent = `- **${CEREMONY_FIELDS[key]}**: on (set by you)\n`;
-        expect(resolveCeremony(key, "classic", "")).toMatchObject({
+        expect(resolveCeremony(key, "quiet", "")).toMatchObject({
           value: "off",
-          source: "scope classic",
+          source: "scope quiet",
         });
-        expect(resolveCeremony(key, "classic", intent)).toMatchObject({
+        expect(resolveCeremony(key, "quiet", intent)).toMatchObject({
           value: "on",
           source: "you",
           scopeDefault: "off",
         });
         process.env[CEREMONY_ENV[key]] = "1";
-        expect(resolveCeremony(key, "classic", intent)).toMatchObject({
+        expect(resolveCeremony(key, "quiet", intent)).toMatchObject({
           value: "off",
           source: `env ${CEREMONY_ENV[key]}`,
           intent: { value: "on", source: "you" },
         });
         process.env[CEREMONY_ENV[key]] = "0";
-        expect(resolveCeremony(key, "classic", intent).value).toBe("on");
+        expect(resolveCeremony(key, "quiet", intent).value).toBe("on");
         expect(resolveCeremony(key, "feature", "")).toMatchObject({
           value: "on",
           source: "default",
@@ -80,9 +88,9 @@ describe("t337 ceremony resolution", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(resolveCeremony("sensors", "classic", "- **Sensors**: maybe (set by you)\n")).toEqual({
         key: "sensors",
-        value: "off",
+        value: "on",
         source: "scope classic",
-        scopeDefault: "off",
+        scopeDefault: "on",
         intent: null,
         rawStateValue: "maybe (set by you)",
       });
@@ -96,7 +104,7 @@ describe("t337 ceremony resolution", () => {
 
   test("independent switches preserve mixed per-intent choices", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
-      const state = "- **Learnings**: on (set by you)\n";
+      const state = "- **Sensors**: off (set by you)\n- **Learnings**: on (set by you)\n";
       expect(ceremonyPolicyValues("classic", state)).toEqual({
         sensors: "off",
         learnings: "on",
@@ -134,15 +142,17 @@ describe("t337 ceremony grammar", () => {
 });
 
 describe("t337 scope ceremony metadata", () => {
-  test("classic supplies the v1 defaults while missing scope settings stay on", () => {
+  test("classic enables sensors and learnings while missing scope settings stay on", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(loadScopeMetadataAll().classic).toMatchObject({
         skeleton: false,
-        reviewCap: "none",
+        reviewCap: "advisory",
         changeControl: "relaxed",
-        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
+        ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off" },
       });
-      expect(scopeCeremonyDefault("sensors", "classic")).toBe("off");
+      expect(scopeCeremonyDefault("sensors", "classic")).toBe("on");
+      expect(scopeCeremonyDefault("learnings", "classic")).toBe("on");
+      expect(scopeCeremonyDefault("summary_confirmation", "classic")).toBe("off");
       expect(scopeCeremonyDefault("sensors", null)).toBe("on");
     });
   });

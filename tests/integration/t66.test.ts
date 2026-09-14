@@ -553,7 +553,7 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 11 scopes)",
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 11 scopes (classic/workshop ~26 steps)
+  }, 120000); // many sequential CLI spawns across 11 scopes (workshop ~26 steps, classic 18)
 });
 
 // =============================================================================

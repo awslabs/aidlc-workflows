@@ -392,10 +392,10 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         // #13 Test Strategy = Standard (classic inherits from Standard depth).
         expect(stateMd).toMatch(/^-\s*\*\*Test Strategy\*\*:\s*Standard$/m);
 
-        // #14 completion cannot exceed the 19-stage classic grid.
+        // #14 completion cannot exceed the 18-stage classic grid.
         const completed = completedCount(proj);
         expect(completed).toBeGreaterThanOrEqual(5);
-        expect(completed).toBeLessThanOrEqual(19);
+        expect(completed).toBeLessThanOrEqual(18);
 
         // #15 audit log exists with substantial content (> 200 bytes), and the
         //     deterministic state-init emission landed (stronger than the .sh's

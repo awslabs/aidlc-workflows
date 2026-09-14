@@ -186,19 +186,19 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(m).not.toContain("per unit of work");
   });
 
-  test("classic creation preview honors explicit ceremony opt-ins", () => {
+  test("classic creation preview omits the off clause when summary confirmation is enabled", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
     const result = runNext(proj, [
-      "--scope", "classic", "--sensors", "on", "--learnings", "on",
-      "--summary-confirmation", "on", "add login support",
+      "--scope", "classic", "--summary-confirmation", "on", "add login support",
     ]);
     expect(result.rc, result.out).toBe(0);
     const d = directiveOf(result.out);
     expect(d.kind).toBe("print");
     const message = String(d.message);
-    expect(message).toContain("--sensors on --learnings on --summary-confirmation on");
-    expect(message.match(/; no [^)]*/)?.[0]).toBe("; no reviewers");
+    expect(message).toContain("--summary-confirmation on");
+    // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
+    expect(message).not.toContain("; no ");
   });
 
   test("feature creation preview discloses the environment sensor kill switch", () => {
@@ -225,7 +225,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(String(d.message)).toContain("per unit of work");
       if (scope === "classic") {
         expect(String(d.message)).toContain(
-          "; no reviewers, sensors, learnings ritual, or summary confirmation",
+          "; no summary confirmation",
         );
       } else {
         expect(String(d.message)).not.toContain("; no ");

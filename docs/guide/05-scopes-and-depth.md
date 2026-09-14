@@ -82,14 +82,14 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** You want v1-style ceremony: Inception and Construction, with one human approval per stage. Conditional stages adapt to the project at runtime; Operation remains a placeholder. Stage-declared execution modes and support agents are unchanged.
 
-- **Stages:** 19 of 33
+- **Stages:** 18 of 33
 - **Default depth:** Standard
 - **Default test strategy:** Standard
-- **Skips:** All Ideation stages (1.1-1.7) and Operation stages (4.1-4.7)
+- **Skips:** All Ideation stages (1.1-1.7), CI Pipeline (3.7), and all Operation stages (4.1-4.7)
 - **Keywords:** None; selected explicitly or used as the implicit default
-- **Ceremony:** Walking skeleton, sensors, learnings ritual, and summary confirmation off. Reviewers are off in the gated flow; explicit autonomy keeps the single pre-merge review.
+- **Ceremony:** Walking skeleton and summary confirmation off. Sensors run and the learnings ritual runs. Reviews are advisory (one pass per stage, findings at the approval gate); explicit autonomy keeps the single pre-merge review.
 
-Turn ceremonies on for an intent with `/aidlc --sensors on`, `/aidlc --learnings on`, or `/aidlc --summary-confirmation on` (each also accepts `off`). The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force them off. Approval gates, Plan Approval, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
+Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or `/aidlc --summary-confirmation on|off`. The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force them off. Approval gates, Plan Approval, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
 
 #### Upgrading an in-flight classic intent
 
@@ -97,18 +97,21 @@ The saved stage plan is preserved: an older classic intent whose Operation
 stages are recorded as `EXECUTE` still runs them, and routing, next-stage lookup,
 and status follow that recorded plan. New classic intents use the smaller grid.
 Ceremony defaults change immediately when the old intent has no saved ceremony
-fields: Sensors, Learnings, and Summary Confirmation resolve to `off` from classic.
-Restore all three in one transaction with
-`bun .claude/tools/aidlc-utility.ts config-change --sensors on --learnings on --summary-confirmation on`
-(native: `aidlc engine config set sensors on --learnings on --summary-confirmation on`).
+fields: Sensors and Learnings resolve to `on`, while Summary Confirmation
+resolves to `off` from classic. Enable summary confirmation with
+`bun .claude/tools/aidlc-utility.ts config-change --summary-confirmation on`
+(native: `aidlc engine config set summary-confirmation on`).
+Saved per-intent ceremony choices remain in effect.
 Environment kill switches still take precedence.
 
-Classic's reviewer cap also changes immediately. Setting `--review advisory`
-cannot raise its `none` cap. To restore advisory stage reviewers, change the
-intent to workshop with `aidlc engine scope change --scope workshop`; workshop
-retains the full Inception-through-Operation plan and uses a Minimal test
-strategy by default. Preserve a production Standard test strategy if needed
-by adding `--test-strategy standard` to that scope change.
+Classic's reviewer cap also changes immediately: every reviewer-bearing stage
+runs one advisory pass, and `--review adversarial` cannot raise that cap
+(`--review none` still lowers it). To run the previous classic graph, with CI
+Pipeline and the Operation stages, change the intent to workshop with
+`aidlc engine scope change --scope workshop`; workshop retains the full
+Inception-through-Operation plan and uses a Minimal test strategy by default.
+Preserve a production Standard test strategy if needed by adding
+`--test-strategy standard` to that scope change.
 
 ### workshop
 
@@ -147,14 +150,14 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
-| `classic` | 19 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
+| `classic` | 18 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs all 33 stages with 29 gates and five design stages that fan out per Unit of Work in Construction. The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
 
-The confirmation also lists what the effective policy turns off, including creation flags and environment kill switches. Classic defaults add `; no reviewers, sensors, learnings ritual, or summary confirmation`; opting all three ceremonies in leaves only `; no reviewers`. Scopes with every ceremony enabled and no review cap omit that clause.
+The confirmation also lists what the effective policy turns off, including creation flags and environment kill switches. Classic defaults add `; no summary confirmation`; opting summary confirmation in removes the clause, because an advisory review cap is not a disabled ceremony. Scopes with every ceremony enabled and no `none` review cap omit that clause.
 
 > **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json`. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
@@ -190,7 +193,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
 | 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
 | 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
-| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
+| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |  |
 | 4.1 | Deployment Pipeline | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
 | 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  |  | ✓ |  |
 | 4.3 | Deployment Execution | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
@@ -198,7 +201,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **19** | **26** | **10** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **18** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.

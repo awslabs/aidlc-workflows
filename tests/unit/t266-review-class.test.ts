@@ -231,10 +231,14 @@ describe("t266 review class", () => {
     // Capped scope lowers adversarial to advisory (bugfix/poc/workshop).
     expect(resolveReviewClass("adversarial", "bugfix")).toBe("advisory");
     expect(resolveReviewClass("adversarial", "express")).toBe("none");
-    // Classic's gated flow has no reviewers, even with a raising override.
-    expect(resolveReviewClass("advisory", "classic")).toBe("none");
+    // Classic caps at advisory: adversarial lowers, advisory stays.
+    expect(resolveReviewClass("adversarial", "classic")).toBe("advisory");
+    expect(resolveReviewClass("advisory", "classic")).toBe("advisory");
     expect(
       resolveReviewClass("adversarial", "classic", "- **Review Override**: adversarial\n"),
+    ).toBe("advisory");
+    expect(
+      resolveReviewClass("adversarial", "classic", "- **Review Override**: none\n"),
     ).toBe("none");
     // Override lowers further...
     expect(

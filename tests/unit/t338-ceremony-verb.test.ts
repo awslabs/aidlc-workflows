@@ -82,33 +82,36 @@ function directive(stdout: string): { kind: string; message: string } {
 }
 
 describe("t338 atomic per-intent settings", () => {
-  test("creation records scope defaults and explicit intent choices with visible sources", () => {
-    const { proj, state } = project("classic", ["--learnings", "on"]);
+  test.each([
+    { extra: [], learnings: "on (from scope classic)" },
+    { extra: ["--learnings", "off"], learnings: "off (set by you)" },
+  ])("creation records scope defaults and explicit intent choices with visible sources: $learnings", ({ extra, learnings }) => {
+    const { proj, state } = project("classic", [...extra]);
     const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Sensors")).toBe("off (from scope classic)");
-    expect(getField(content, "Learnings")).toBe("on (set by you)");
+    expect(getField(content, "Sensors")).toBe("on (from scope classic)");
+    expect(getField(content, "Learnings")).toBe(learnings);
     expect(getField(content, "Summary Confirmation")).toBe("off (from scope classic)");
     const status = run(UTILITY, ["status"], proj);
     expect(status.status, status.stderr).toBe(0);
-    expect(status.stdout).toContain("Sensors: off (from scope classic)\n");
-    expect(status.stdout).toContain("Learnings: on (set by you)\n");
+    expect(status.stdout).toContain("Sensors: on (from scope classic)\n");
+    expect(status.stdout).toContain(`Learnings: ${learnings}\n`);
     expect(status.stdout).toContain("Summary Confirmation: off (from scope classic)\n");
   });
 
   test("config-change records a changed setting once and leaves the repeat unchanged", () => {
     const { proj, state } = project();
-    const changed = run(UTILITY, ["config-change", "--sensors", "on"], proj);
+    const changed = run(UTILITY, ["config-change", "--sensors", "off"], proj);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBe("on (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBe("off (set by you)");
     const audit = rows(proj);
     expect(audit).toHaveLength(1);
     expect(auditBlockField(audit[0].block, "Key")).toBe("sensors");
-    expect(auditBlockField(audit[0].block, "Old")).toBe("off");
-    expect(auditBlockField(audit[0].block, "New")).toBe("on");
+    expect(auditBlockField(audit[0].block, "Old")).toBe("on");
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
     expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-    expect(run(UTILITY, ["status"], proj).stdout).toContain("Sensors: on (set by you)\n");
+    expect(run(UTILITY, ["status"], proj).stdout).toContain("Sensors: off (set by you)\n");
     const before = readFileSync(state, "utf-8");
-    const repeated = run(UTILITY, ["config-change", "--sensors", "on"], proj);
+    const repeated = run(UTILITY, ["config-change", "--sensors", "off"], proj);
     expect(repeated.status, repeated.stderr).toBe(0);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(rows(proj)).toHaveLength(1);
@@ -143,8 +146,8 @@ describe("t338 atomic per-intent settings", () => {
     writeFileSync(state, setField(readFileSync(state, "utf-8"), "Last Updated", timestamp));
     const args = [
       "config-change", "--summary-confirmation", "on", "--review", "advisory",
-      "--sensors", "on", "--depth", "minimal", "--change-control", "strict",
-      "--learnings", "on", "--test-strategy", "comprehensive",
+      "--sensors", "off", "--depth", "minimal", "--change-control", "strict",
+      "--learnings", "off", "--test-strategy", "comprehensive",
     ];
     const changed = run(UTILITY, args, proj);
     expect(changed.status, changed.stderr).toBe(0);
@@ -154,8 +157,8 @@ describe("t338 atomic per-intent settings", () => {
       "Test Strategy": "Comprehensive",
       "Review Override": "advisory",
       "Change Control": "strict (set by you)",
-      Sensors: "on (set by you)",
-      Learnings: "on (set by you)",
+      Sensors: "off (set by you)",
+      Learnings: "off (set by you)",
       "Summary Confirmation": "on (set by you)",
     })) expect(getField(content, field)).toBe(value);
     expect(getField(content, "Last Updated")).not.toBe(timestamp);
@@ -170,8 +173,8 @@ describe("t338 atomic per-intent settings", () => {
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
       { "Old Override": "none set", "New Override": "advisory" },
       { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
-      { Key: "sensors", Old: "off", New: "on", Source: "you" },
-      { Key: "learnings", Old: "off", New: "on", Source: "you" },
+      { Key: "sensors", Old: "on", New: "off", Source: "you" },
+      { Key: "learnings", Old: "on", New: "off", Source: "you" },
       { Key: "summary_confirmation", Old: "off", New: "on", Source: "you" },
     ];
     for (const [index, expected] of fields.entries()) {
@@ -220,13 +223,13 @@ describe("t338 atomic per-intent settings", () => {
 
   test("same-scope changes apply explicit settings without a scope-change row", () => {
     const { proj, state } = project();
-    const args = ["scope-change", "--scope", "classic", "--change-control", "strict", "--sensors", "on"];
+    const args = ["scope-change", "--scope", "classic", "--change-control", "strict", "--sensors", "off"];
     const changed = run(UTILITY, args, proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Scope")).toBe("classic");
     expect(getField(content, "Change Control")).toBe("strict (set by you)");
-    expect(getField(content, "Sensors")).toBe("on (set by you)");
+    expect(getField(content, "Sensors")).toBe("off (set by you)");
     const audit = settingRows(proj);
     expect(audit.map((row) => row.event)).toEqual(["CHANGE_CONTROL_SET", "CEREMONY_SET"]);
     expect(auditBlockField(audit[0].block, "Source")).toBe("you");
@@ -255,7 +258,7 @@ describe("t338 atomic per-intent settings", () => {
   test("concurrent different-key changes preserve both settings and audit each once", async () => {
     const { proj, state, intent } = project("classic");
     const children = ["sensors", "learnings"].map((key) => Bun.spawn({
-      cmd: [process.execPath, UTILITY, "config-change", `--${key}`, "on", "--project-dir", proj, "--intent", intent, "--space", "default"],
+      cmd: [process.execPath, UTILITY, "config-change", `--${key}`, "off", "--project-dir", proj, "--intent", intent, "--space", "default"],
       cwd: proj,
       env: {
         ...process.env,
@@ -275,8 +278,8 @@ describe("t338 atomic per-intent settings", () => {
     }));
     for (const result of results) expect(result.status, result.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Sensors")).toBe("on (set by you)");
-    expect(getField(content, "Learnings")).toBe("on (set by you)");
+    expect(getField(content, "Sensors")).toBe("off (set by you)");
+    expect(getField(content, "Learnings")).toBe("off (set by you)");
     const audit = rows(proj);
     expect(audit).toHaveLength(2);
     expect(audit.map((row) => auditBlockField(row.block, "Key")).sort()).toEqual(["learnings", "sensors"]);
@@ -313,7 +316,9 @@ describe("t338 atomic per-intent settings", () => {
     writeFileSync(state, legacy);
     const status = run(UTILITY, ["status"], proj);
     expect(status.status, status.stderr).toBe(0);
-    expect(status.stdout).toContain("Sensors: off (from scope classic)\n");
+    expect(status.stdout).toContain("Sensors: on (from scope classic)\n");
+    expect(status.stdout).toContain("Learnings: on (from scope classic)\n");
+    expect(status.stdout).toContain("Summary Confirmation: off (from scope classic)\n");
     expect(readFileSync(state, "utf-8")).toBe(legacy);
     const changed = run(UTILITY, ["config-change", "--summary-confirmation", "on"], proj);
     expect(changed.status, changed.stderr).toBe(0);
@@ -348,12 +353,12 @@ describe("t338 atomic per-intent settings", () => {
     const expressSummary = express.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
     expect(expressSummary?.split("; no ")[1]).toBe("reviewers or sensors");
 
-    // Only classic defaults learnings off; returning to it must retain the human override.
+    // Returning to classic must retain the human provenance even when the value matches its default.
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
     expect(classic.status, classic.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by you)");
     const classicSummary = classic.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(classicSummary?.split("; no ")[1]).toBe("reviewers, sensors, or summary confirmation");
+    expect(classicSummary?.split("; no ")[1]).toBe("summary confirmation");
   });
 
   test("environment disable wins in status and config reads without replacing the saved choice", () => {
@@ -376,8 +381,8 @@ describe("t338 atomic per-intent settings", () => {
     const before = readFileSync(state, "utf-8");
     const routed = run(ORCHESTRATE, [
       "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "advisory",
-      "--sensors", "on", "--depth", "minimal", "--change-control", "strict",
-      "--learnings", "on", "--test-strategy", "comprehensive",
+      "--sensors", "off", "--depth", "minimal", "--change-control", "strict",
+      "--learnings", "off", "--test-strategy", "comprehensive",
     ], proj);
     expect(routed.status, routed.stderr).toBe(0);
     expect(routed.stdout.trim().split("\n")).toHaveLength(1);
@@ -389,8 +394,8 @@ describe("t338 atomic per-intent settings", () => {
     const args = command![1].split(/\s+/);
     expect(args).toEqual([
       "engine", "config", "set", "depth", "minimal", "--test-strategy", "comprehensive",
-      "--review", "advisory", "--change-control", "strict", "--sensors", "on",
-      "--learnings", "on", "--summary-confirmation", "on",
+      "--review", "advisory", "--change-control", "strict", "--sensors", "off",
+      "--learnings", "off", "--summary-confirmation", "on",
     ]);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(settingRows(proj)).toHaveLength(0);
@@ -400,8 +405,8 @@ describe("t338 atomic per-intent settings", () => {
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
       depth: "Minimal", "test-strategy": "Comprehensive", review: "advisory",
-      "change-control": "strict (set by you)", sensors: "on (set by you)",
-      learnings: "on (set by you)", "summary-confirmation": "on (set by you)",
+      "change-control": "strict (set by you)", sensors: "off (set by you)",
+      learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
     });
     expect(settingRows(proj)).toHaveLength(7);
   });
@@ -422,9 +427,9 @@ describe("t338 atomic per-intent settings", () => {
     expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const fresh = emptyProject();
     writeFileSync(join(fresh, "aidlc", "spaces", "default", "intents", "intents.json"), "[]\n");
-    const creation = directive(run(ORCHESTRATE, ["next", "--scope", "classic", "--sensors", "on"], fresh).stdout);
+    const creation = directive(run(ORCHESTRATE, ["next", "--scope", "classic", "--sensors", "off"], fresh).stdout);
     expect(creation.kind).toBe("print");
-    expect(creation.message).toContain("--sensors on");
+    expect(creation.message).toContain("--sensors off");
     expect(directive(run(ORCHESTRATE, ["next", "compose", "--sensors", "off"], proj).stdout).kind).toBe("error");
     expect(directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout).kind).toBe("error");
   });

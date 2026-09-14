@@ -49,9 +49,9 @@ The scope frontmatter fields are:
 The loader rejects duplicate scope `name` values across files and names both
 files in the error. Invalid ceremony values are rejected with the file, key,
 and the two allowed values. Resolution is kill switch (`1`) → valid intent
-line → scope default → on. Classic declares all three off; its gated flow
-also disables reviewers and walking-skeleton ceremony, while explicit
-autonomy keeps the single pre-merge review.
+line → scope default → on. Classic declares sensors and learnings on and summary confirmation off; its gated flow
+also caps reviews to one advisory pass and disables walking-skeleton
+ceremony, while explicit autonomy keeps the single pre-merge review.
 
 ### Freeform default
 

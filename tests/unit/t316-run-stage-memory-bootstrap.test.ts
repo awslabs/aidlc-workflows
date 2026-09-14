@@ -88,7 +88,7 @@ describe("t316 run-stage memory bootstrap", () => {
     expect(readFileSync(memory)).toEqual(expected);
   });
 
-  test("classic creates no diary until learnings is enabled", () => {
+  test.each([false, true])("classic creates a diary unless explicitly disabled, then supports re-enabling: off override=%s", (disabled) => {
     const project = installedProject(false);
     const env = {
       ...process.env,
@@ -98,6 +98,7 @@ describe("t316 run-stage memory bootstrap", () => {
     };
     const created = Bun.spawnSync({
       cmd: [process.execPath, UTILITY, "intent-create", "--scope", "classic",
+        ...(disabled ? ["--learnings", "off"] : []),
         "--arguments", "diary ceremony fixture", "--label", "diary", "--project-dir", project],
       cwd: project,
       env,
@@ -108,9 +109,13 @@ describe("t316 run-stage memory bootstrap", () => {
 
     const first = emitRunStage(project, env);
     expect(typeof first.memory_path).toBe("string");
-    expect(first.ceremony).toMatchObject({ learnings: "off" });
+    expect(first.ceremony).toMatchObject({ learnings: disabled ? "off" : "on" });
     const memory = join(project, first.memory_path as string);
-    expect(existsSync(memory)).toBe(false);
+    expect(existsSync(memory)).toBe(!disabled);
+    if (!disabled) {
+      expect(readFileSync(memory)).toEqual(readFileSync(TEMPLATE));
+      return;
+    }
 
     const enabled = Bun.spawnSync({
       cmd: [process.execPath, UTILITY, "config-change", "--learnings", "on", "--project-dir", project],
@@ -124,6 +129,7 @@ describe("t316 run-stage memory bootstrap", () => {
     expect(second.ceremony).toMatchObject({ learnings: "on" });
     expect(second.memory_path).toBe(first.memory_path);
     expect(existsSync(memory)).toBe(true);
+    expect(readFileSync(memory)).toEqual(readFileSync(TEMPLATE));
   });
 
   test("the Stop hook's internal next probe remains write-free", () => {

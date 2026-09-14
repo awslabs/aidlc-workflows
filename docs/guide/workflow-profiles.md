@@ -21,7 +21,7 @@ and gate counts.
 
 | Workflow profile | Best for | Stages | Depth | Test strategy | Start with |
 |------------------|----------|--------|-------|---------------|------------|
-| **Classic** | V1-style ceremony through Inception and Construction | 19 / 33 | Standard | Standard | `/aidlc classic` |
+| **Classic** | V1-style ceremony through Inception and Construction, ending at Build and Test | 18 / 33 | Standard | Standard | `/aidlc classic` |
 | **Express** | The lightest requirements-to-code-and-test path | 10 / 33 | Minimal | Minimal | `/aidlc express` |
 | **Feature** | A production feature using the complete lifecycle | 33 / 33 | Standard | Standard | `/aidlc feature` |
 | **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 33 | Comprehensive | Comprehensive | `/aidlc enterprise` |
@@ -48,9 +48,9 @@ Classic is the implicit engine default when neither you nor
 `AWS_AIDLC_DEFAULT_SCOPE` names another profile. In the conversational cold-start
 flow, a rich task description may still receive an adaptive compose offer before
 anything is created. Classic uses Standard artifacts and tests. Walking-skeleton
-ceremony, sensors, the learnings ritual, and summary confirmation are off.
-Reviewers are off in the gated flow; explicit autonomy keeps the single
-pre-merge review. Approval gates, Plan Approval, human-turn authority, audit,
+ceremony and summary confirmation are off. Sensors run and the learnings ritual runs.
+Reviews are advisory (one pass per stage, findings at the approval gate);
+explicit autonomy keeps the single pre-merge review. Approval gates, Plan Approval, human-turn authority, audit,
 and team cross-unit write protection remain in force.
 
 Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or

@@ -98,7 +98,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { setField, stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -337,8 +337,8 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
-  test("valid payload + applicable sensors fires the dispatcher [.sh case 3]", () => {
-    const proj = makeProjectActive();
+  test("classic defaults fire the dispatcher for a valid payload + applicable sensors [.sh case 3]", () => {
+    const proj = makeProjectActive("classic");
     const graph = writeDispatchGraph(proj);
     const filePath = join(
       proj,
@@ -368,10 +368,11 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     ]);
   });
 
-  test("classic suppresses automatic sensors silently until the intent opts in", () => {
+  test("an explicit off override suppresses classic sensors silently until the intent opts back in", () => {
     const proj = makeProjectActive("classic");
     const graph = writeDispatchGraph(proj);
     const filePath = inceptionMd(proj);
+    seedState(proj, `${readFileSync(seededStateFile(proj), "utf-8")}\n- **Sensors**: off (set by you)\n`);
     const off = runHook(proj, filePath, graph);
     expect(off.status).toBe(0);
     expect(off.stdout).toBe("");
@@ -382,7 +383,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
 
     seedState(
       proj,
-      `${readFileSync(seededStateFile(proj), "utf-8")}\n- **Sensors**: on (set by you)\n`,
+      setField(readFileSync(seededStateFile(proj), "utf-8"), "Sensors", "on (set by you)"),
     );
     expect(runHook(proj, filePath, graph).status).toBe(0);
     const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];

@@ -114,14 +114,17 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(readFileSync(path, "utf-8")).toBe(content);
   });
 
-  test("missing ceremony rows adopt new defaults and one config update restores ceremonies", () => {
+  test("missing ceremony rows enable sensors and learnings and a config update enables summary confirmation", () => {
     const { project, path } = legacyClassic();
     const status = run(UTILITY, project, ["status"]);
     for (const field of ["Sensors", "Learnings", "Summary Confirmation"]) {
-      expect(status).toContain(`${field}: off (from scope classic)\n`);
+      expect(status).toContain(`${field}: ${field === "Summary Confirmation" ? "off" : "on"} (from scope classic)\n`);
       expect(getField(readFileSync(path, "utf-8"), field)).toBeNull();
     }
-    expect(next(project).ceremony).toEqual({ sensors: "off", learnings: "off", summary_confirmation: "off" });
+    const defaults = next(project);
+    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off" });
+    expect(defaults.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
+    expect(defaults.protocol_modules).toContain("learnings");
 
     run(UTILITY, project, ["config-change", "--sensors", "on", "--learnings", "on", "--summary-confirmation", "on"]);
     for (const field of ["Sensors", "Learnings", "Summary Confirmation"]) {
@@ -134,10 +137,11 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(restored.protocol_modules).toContain("learnings");
   });
 
-  test("classic reviewer cap wins over an advisory override until scope changes to workshop", () => {
+  test("classic caps an adversarial override to advisory, while a none override still silences the reviewer", () => {
     const { project, path } = legacyClassic();
-    run(UTILITY, project, ["config-change", "--review", "advisory"]);
-    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("advisory");
+    run(UTILITY, project, ["config-change", "--review", "adversarial"]);
+    // "adversarial" is no per-run ceiling, so the field stays empty (stage defaults).
+    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("");
     // Revisit a reviewer-bearing stage without asking an isolated runner, which
     // deliberately ignores the active intent's saved overrides.
     let content = setCheckbox(readFileSync(path, "utf-8"), "requirements-analysis", "in-progress");
@@ -148,16 +152,25 @@ describe("t339 upgrading an in-flight classic intent", () => {
       ["Next Stage", "user-stories"],
     ]) content = setField(content, field, value);
     writeFileSync(path, content);
-    const classic = next(project);
-    expect(classic.stage).toBe("requirements-analysis");
-    expect(classic.reviewer).toBeUndefined();
-    expect(classic.review_class).toBeUndefined();
+    // Low wins: the scope's advisory cap lowers the adversarial override.
+    const capped = next(project);
+    expect(capped.stage).toBe("requirements-analysis");
+    expect(capped.reviewer).toBe("aidlc-product-lead-agent");
+    expect(capped.review_class).toBe("advisory");
+    expect(capped.reviewer_max_iterations).toBe(1);
 
+    // An explicit none override sits below the cap and removes the reviewer block.
+    run(UTILITY, project, ["config-change", "--review", "none"]);
+    const silenced = next(project);
+    expect(silenced.stage).toBe("requirements-analysis");
+    expect(silenced.reviewer).toBeUndefined();
+    expect(silenced.review_class).toBeUndefined();
+
+    // The saved override survives a scope change to workshop (same advisory cap).
     run(UTILITY, project, ["scope-change", "--scope", "workshop"]);
     const workshop = next(project);
     expect(workshop.stage).toBe("requirements-analysis");
-    expect(workshop.reviewer).toBe("aidlc-product-lead-agent");
-    expect(workshop.review_class).toBe("advisory");
-    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("advisory");
+    expect(workshop.reviewer).toBeUndefined();
+    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("none");
   });
 });

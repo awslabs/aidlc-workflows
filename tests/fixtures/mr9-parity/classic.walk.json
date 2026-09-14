@@ -16,6 +16,5 @@
   "nfr-design",
   "infrastructure-design",
   "code-generation",
-  "build-and-test",
-  "ci-pipeline"
+  "build-and-test"
 ]

@@ -306,11 +306,10 @@ pre-revision review can never be misread as covering new work. Reviews recorded
 by earlier releases as a `## Review` section inside the artifact stay readable
 at the gate until the next review replaces them.
 
-The scope can cap the class (`bugfix`, `poc`, and `workshop` cap
-every stage to advisory; `classic` and `express` cap reviews to none) and
-`/aidlc --review <class>` caps it per run. Classic reviewers are off in the
-gated flow; explicit autonomy keeps the single pre-merge review, exempt from
-scope caps and per-run overrides. Either way the reviewer never blocks —
+The scope can cap the class (`bugfix`, `poc`, `classic`, and `workshop` cap
+every stage to advisory; `express` caps reviews to none) and
+`/aidlc --review <class>` caps it per run. Explicit autonomy keeps the single
+pre-merge review, exempt from scope caps and per-run overrides. Either way the reviewer never blocks —
 the human always has final say.
 
 (IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)

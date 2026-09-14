@@ -127,7 +127,7 @@
   {
     "slug": "ci-pipeline",
     "phase": "construction",
-    "action": "EXECUTE"
+    "action": "SKIP"
   },
   {
     "slug": "deployment-pipeline",

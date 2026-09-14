@@ -485,7 +485,7 @@ preserved. Explicit Change Control and ceremony flags store `<value> (set by
 you)`. A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 
-Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. `classic` defaults all three to `off`; other scopes default them to `on`. An explicit setting writes `on (set by you)` or `off (set by you)` to the selected intent. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
+Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. `classic` defaults sensors and learnings to `on` and summary confirmation to `off`; other scopes default all three to `on`. An explicit setting writes `on (set by you)` or `off (set by you)` to the selected intent. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
 
 Ceremony precedence is environment kill switch (`1`) → valid per-intent field
 → scope default → `on`. A kill switch never rewrites the saved override. An

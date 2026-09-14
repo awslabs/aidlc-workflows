@@ -42,6 +42,7 @@ function directiveFor(
   stage: string,
   scope: string,
   withMainWorkflow = false,
+  env: Record<string, string> = {},
 ): Record<string, unknown> {
   project = createOrchestrationTestProject();
   if (withMainWorkflow) {
@@ -58,7 +59,7 @@ function directiveFor(
     ["--stage", stage, "--single", "--scope", scope],
     {
       cwd: project,
-      env: { ...process.env, AWS_AIDLC_DEFAULT_SCOPE: undefined },
+      env: { ...process.env, AWS_AIDLC_DEFAULT_SCOPE: undefined, ...env },
     },
   );
   expect(result.status).toBe(0);
@@ -189,15 +190,30 @@ describe("t302 conditional protocol modules", () => {
     }
   });
 
-  test("classic requirements-analysis omits reviewer and learnings ceremonies", () => {
+  test("classic requirements-analysis keeps the advisory reviewer, learnings, and sensors", () => {
     const directive = directiveFor("requirements-analysis", "classic");
-    expect(moduleList(directive)).toEqual([]);
-    expect(directive.reviewer).toBeUndefined();
+    expect(moduleList(directive)).toEqual(["reviewer", "learnings"]);
+    expect(directive.reviewer).toBe("aidlc-product-lead-agent");
+    expect(directive.review_class).toBe("advisory");
+    expect(directive.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
+    expect(directive.ceremony).toEqual({
+      sensors: "on",
+      learnings: "on",
+      summary_confirmation: "off",
+    });
+  });
+
+  test("kill switches omit learnings and sensors while retaining the classic advisory reviewer", () => {
+    const directive = directiveFor("requirements-analysis", "classic", false, {
+      AIDLC_DISABLE_SENSORS: "1",
+      AIDLC_DISABLE_LEARNINGS: "1",
+    });
+    expect(moduleList(directive)).toEqual(["reviewer"]);
+    expect(directive.reviewer).toBe("aidlc-product-lead-agent");
+    expect(directive.review_class).toBe("advisory");
     expect(directive.sensors_applicable).toEqual([]);
     expect(directive.ceremony).toEqual({
-      sensors: "off",
-      learnings: "off",
-      summary_confirmation: "off",
+      sensors: "off", learnings: "off", summary_confirmation: "off",
     });
   });
 
@@ -296,16 +312,16 @@ describe("t302 conditional protocol modules", () => {
     expect(modules).not.toContain("reviewer");
   });
 
-  test("user-stories mob lists ensemble", () => {
+  test("user-stories mob lists the reviewer, ensemble, and learnings", () => {
     const directive = directiveFor("user-stories", "classic");
-    expect(moduleList(directive)).toEqual(["ensemble"]);
-    expect(directive.reviewer).toBeUndefined();
+    expect(moduleList(directive)).toEqual(["reviewer", "ensemble", "learnings"]);
+    expect(directive.review_class).toBe("advisory");
   });
 
-  test("classic code-generation lists construction", () => {
+  test("classic code-generation lists the reviewer, ensemble, construction, and learnings", () => {
     const directive = directiveFor("code-generation", "classic");
-    expect(moduleList(directive)).toEqual(["ensemble", "construction"]);
-    expect(directive.reviewer).toBeUndefined();
+    expect(moduleList(directive)).toEqual(["reviewer", "ensemble", "construction", "learnings"]);
+    expect(directive.review_class).toBe("advisory");
   });
 
   test("feature inline stage includes learnings without an ordinary reviewer", () => {

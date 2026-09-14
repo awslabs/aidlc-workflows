@@ -837,7 +837,7 @@ and problem complexity.
 | refactor | Minimal | Minimal | 10 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
-| classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |
+| classic | Standard | Standard | 18 | Default v1-style lifecycle without Ideation, ending at Build and Test |
 | workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
 | express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
 

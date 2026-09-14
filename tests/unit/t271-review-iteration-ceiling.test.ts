@@ -699,18 +699,23 @@ describe("t271 review iteration ceiling", () => {
     expect(refused.stderr).toContain("allows 0 review passes");
   });
 
-  test("a resumed classic intent retains its autonomous pre-merge reviewer", () => {
+  test("a resumed classic intent keeps one advisory pass gated and the cap-exempt pre-merge reviewer", () => {
     const proj = seedProject("classic");
     try {
-      const request = [
+      const first = [
         "--stage", "code-generation",
         "--reviewer", "aidlc-architecture-reviewer-agent",
         "--unit", "unit-alpha",
         "--iteration", "1",
       ];
+      // Classic's advisory cap allows exactly one gated pass; spend it first so
+      // the refusal below is about the budget, not a wrong ordinal.
+      expect(runReview(proj, first).status).toBe(0);
+      expect(runReview(proj, [...first, "--verdict", "NOT-READY"]).status).toBe(0);
+      const request = [...first.slice(0, -1), "2"];
       const gated = runReview(proj, request);
       expect(gated.status).not.toBe(0);
-      expect(gated.stderr).toContain("allows 0 review passes");
+      expect(gated.stderr).toContain("allows 1 review pass");
 
       const sf = seededStateFile(proj);
       writeFileSync(
@@ -724,9 +729,11 @@ describe("t271 review iteration ceiling", () => {
         "Bolt slug": "unit-alpha",
       }, proj);
       writeSourceManifest(proj, "unit-alpha");
-      const resumed = runReview(proj, request);
+      // The autonomous pre-merge review is exempt from the scope cap and opens
+      // its own attempt, so its ordinal starts again at 1.
+      const resumed = runReview(proj, first);
       expect(resumed.status, resumed.stderr).toBe(0);
-      const completed = runReview(proj, [...request, "--verdict", "READY"]);
+      const completed = runReview(proj, [...first, "--verdict", "READY"]);
       expect(completed.status, completed.stderr).toBe(0);
       const audit = readAllAuditShards(proj);
       expect(audit).toContain("**Event**: REVIEW_REQUESTED");

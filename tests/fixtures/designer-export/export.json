@@ -2591,7 +2591,6 @@
         "feature",
         "mvp",
         "infra",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3374,7 +3373,7 @@
         "infrastructure-design": "EXECUTE",
         "code-generation": "EXECUTE",
         "build-and-test": "EXECUTE",
-        "ci-pipeline": "EXECUTE",
+        "ci-pipeline": "SKIP",
         "deployment-pipeline": "SKIP",
         "environment-provisioning": "SKIP",
         "deployment-execution": "SKIP",
@@ -3388,8 +3387,8 @@
       "skeleton": false,
       "changeControl": "relaxed",
       "ceremony": {
-        "sensors": "off",
-        "learnings": "off",
+        "sensors": "on",
+        "learnings": "on",
         "summary_confirmation": "off"
       }
     },

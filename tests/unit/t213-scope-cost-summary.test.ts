@@ -154,20 +154,28 @@ describe("t213 scope policy cost clauses", () => {
   test("effective ceremony labels respect supplied policy without changing scope defaults", () => {
     expect(ceremonyOffList("classic", {
       sensors: "on", learnings: "on", summary_confirmation: "on",
+    })).toEqual([]);
+    expect(ceremonyOffList("express", {
+      sensors: "on", learnings: "on", summary_confirmation: "on",
     })).toEqual(["reviewers"]);
     expect(ceremonyOffList("feature", {
       sensors: "off", learnings: "on", summary_confirmation: "off",
     })).toEqual(["sensors", "summary confirmation"]);
-    expect(scopeCostSummary("classic")?.off).toEqual([
-      "reviewers", "sensors", "learnings ritual", "summary confirmation",
-    ]);
+    expect(scopeCostSummary("classic")?.off).toEqual(["summary confirmation"]);
+    const disabled = ceremonyOffList("classic", {
+      sensors: "off", learnings: "off", summary_confirmation: "off",
+    });
+    expect(disabled).toEqual(["sensors", "learnings ritual", "summary confirmation"]);
+    expect(ceremonyOffClause({ ...scopeCostSummary("classic")!, off: disabled })).toBe(
+      "; no sensors, learnings ritual, or summary confirmation",
+    );
   });
 
   test("classic previews every omitted ceremony without hiding stage approvals", () => {
     const summary = scopeCostSummary("classic")!;
     expect(summary.gates).toBeGreaterThan(0);
     expect(ceremonyOffClause(summary)).toBe(
-      "; no reviewers, sensors, learnings ritual, or summary confirmation",
+      "; no summary confirmation",
     );
   });
 

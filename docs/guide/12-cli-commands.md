@@ -413,7 +413,7 @@ Display current workflow progress without modifying anything.
 **Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), and the stage progress list. An invalid Change Control field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
-rows with each effective value and its source, for example `Sensors: off (from
+rows with each effective value and its source, for example `Sensors: on (from
 scope classic)`, `Learnings: on (set by you)`, or `Summary Confirmation: off (from
 env AIDLC_DISABLE_SUMMARY_CONFIRMATION)`. A missing saved setting falls back to
 the current scope, then `on (from default)`; see the ceremony controls below.
@@ -932,16 +932,17 @@ frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
 (one normal-flow review pass; findings are quoted verbatim at the approval gate
 for you to triage). The effective class per stage is the LOWEST of the stage's
-declaration, the scope's `review_cap` (bugfix, poc, and workshop cap to
-`advisory`; classic and express cap to `none`), and this override — so
+declaration, the scope's `review_cap` (bugfix, poc, classic, and workshop cap
+to `advisory`; express caps to `none`), and this override — so
 `--review advisory` turns every remaining adversarial loop into a single
 normal-flow decision-support pass, `--review none` skips
 gated stage reviewer dispatch, and `--review adversarial` clears the override
 by storing an empty `Review Override` field (it cannot raise a class above the
 stage declaration or the scope cap).
-Classic therefore has no reviewer in the gated flow. Explicit autonomous
-construction is exempt: it retains its single pre-merge reviewer, including
-under classic. Neither the scope cap nor the ceremony switches disable that review.
+Classic therefore runs one advisory pass per reviewer-bearing stage in the
+gated flow, with the findings presented at the approval gate. Explicit
+autonomous construction is exempt: it retains its single pre-merge reviewer,
+including under classic. Neither the scope cap nor the ceremony switches disable that review.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
 `REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
 created or alongside `--scope`; a same-as-current scope applies the review
@@ -1095,9 +1096,10 @@ Set these three independent policies to `on` or `off` for the active intent:
 **Defaults and precedence:** a kill switch set to `1` forces its policy `off`;
 otherwise the explicit per-intent setting wins, then the current scope default,
 then `on` when the scope has no setting. In short: **environment → per-intent →
-scope → on**. Classic defaults all three to `off`; every other shipped scope
-defaults them to `on`. A new intent stores the scope defaults as, for example,
-`off (from scope classic)`. Changing scopes carries scope-sourced values to the
+scope → on**. Classic defaults sensors and learnings to `on` and summary confirmation
+to `off`; every other shipped scope defaults all three to `on`. A new intent stores
+the scope defaults as, for example, `on (from scope classic)` for Sensors.
+Changing scopes carries scope-sourced values to the
 new defaults while preserving values explicitly set by you. Older intents
 without these fields resolve from their scope, then `on`.
 An explicit ceremony flag alongside a scope choice writes a `set by you`

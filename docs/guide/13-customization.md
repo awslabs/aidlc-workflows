@@ -182,7 +182,8 @@ empty string, so stage declarations and scope review caps still apply.
 ### Ceremony Switches
 
 Scopes own three independent ceremony defaults. Each accepts `on` or `off`;
-an omitted scope key means `on`. Classic sets all three to `off`.
+an omitted scope key means `on`. Classic sets sensors and learnings to `on`
+and summary confirmation to `off`.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|
@@ -194,14 +195,14 @@ Precedence is global kill switch (`1`) → valid intent field → scope default 
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
 `Change Control` in `aidlc-state.md`, each with a source label such as
-`off (from scope classic)`. A flag changes the label to `set by you` and
+`on (from scope classic)`. A flag changes the label to `set by you` and
 records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
 These switches do not remove approval gates, Plan Approval, human-turn
-authority, audit, or team cross-unit write protection. Classic also turns off
-walking-skeleton ceremony and gated-flow reviewers; explicit autonomy retains
+authority, audit, or team cross-unit write protection. Classic turns off
+walking-skeleton ceremony and caps gated-flow reviews at advisory; explicit autonomy retains
 the single pre-merge review.
 
 An isolated `--single` attempt uses its selected scope's policy rather than

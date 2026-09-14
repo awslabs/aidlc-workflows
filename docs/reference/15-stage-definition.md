@@ -459,8 +459,8 @@ not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
 class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, and `workshop` scopes cap to
-`advisory`, while `classic` and `express` cap to `none`), and the per-run override — a cap
+`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap
+to `advisory`, while `express` caps to `none`), and the per-run override — a cap
 or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
@@ -474,7 +474,8 @@ the scope/intent policy decides whether that checkpoint applies at all.
 `/aidlc --summary-confirmation on|off` override an intent's scope default.
 `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
 `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off.
-Classic disables all three; stage approvals, Plan Approval, human-turn
+Classic enables sensors and learnings and disables summary confirmation;
+stage approvals, Plan Approval, human-turn
 authority, audit, and team write protection remain in force.
 
 ---

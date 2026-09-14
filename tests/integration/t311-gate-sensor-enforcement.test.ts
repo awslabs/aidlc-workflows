@@ -34,6 +34,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  setField,
 } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -326,9 +327,11 @@ function dispatcherStub(
 
 describe("t311 gate-bound sensor enforcement", () => {
   for (const transition of ["gate-start", "revise", "approve"] as const) {
-    test(`classic skips sensors at ${transition}; a resumed intent can opt back in`, () => {
+    test(`an explicit off override skips classic sensors at ${transition}; a resumed intent can opt back in`, () => {
       for (const enabled of [false, true]) {
         const fixture = setupFixture("blocking", "**/*", false, "classic");
+        const path = seededStateFile(fixture.project);
+        appendFileSync(path, "- **Sensors**: off (set by you)\n");
         if (transition !== "gate-start") {
           expect(gate(fixture).status).toBe(0);
           expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(0);
@@ -345,11 +348,7 @@ describe("t311 gate-bound sensor enforcement", () => {
           }
         }
         if (enabled) {
-          appendFileSync(
-            seededStateFile(fixture.project),
-            "- **Sensors**: on (set by you)\n",
-            "utf-8",
-          );
+          writeFileSync(path, setField(readFileSync(path, "utf-8"), "Sensors", "on (set by you)"));
         }
         const result = stateCommand(
           fixture,
@@ -377,8 +376,8 @@ describe("t311 gate-bound sensor enforcement", () => {
     }, 30_000);
   }
 
-  test("a global sensor kill switch permits a feature gate without synthesizing a verdict", () => {
-    const fixture = setupFixture("blocking", "**/*", false, "feature");
+  test.each(["classic", "feature"])("a global sensor kill switch permits a %s gate without synthesizing a verdict", (scope) => {
+    const fixture = setupFixture("blocking", "**/*", false, scope);
     expect(gate(fixture, [], { AIDLC_DISABLE_SENSORS: "1" }).status).toBe(0);
     const offAudit = audit(fixture.project);
     expect(eventCount(offAudit, "SENSOR_FIRED")).toBe(0);
