@@ -9,5 +9,5 @@
     "AWS_AIDLC_DEFAULT_SCOPE": "classic"
   },
   "model": "opus[1m]",
-  "effortLevel": "xhigh"
+  "effortLevel": "medium"
 }

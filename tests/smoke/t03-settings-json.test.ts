@@ -3,7 +3,7 @@
 // In-process port of tests/smoke/t03-settings-json.sh (TAP plan 16 + Fable pin),
 // mechanism = none. The .sh is a schema-validation check on the SHIPPED
 // dist/claude/.claude/settings.json: it `jq`-parsed the file and asserted the
-// presence/value of permission entries, the statusLine command, inherited
+// presence/value of permission entries, the statusLine command, pinned
 // session model/effort, and the Bedrock env block (enable flag, region, four
 // model IDs).
 //
@@ -37,7 +37,7 @@
 //   dist/claude/.claude/settings.json
 //     .permissions.allow[]                 — pre-approved tool list
 //     .statusLine.command                  — references aidlc-statusline.ts
-//     .model / .effortLevel                -- ABSENT (session values inherit)
+//     .model / .effortLevel                -- opus[1m] / medium
 //     .env.CLAUDE_CODE_USE_BEDROCK         — "1" (Bedrock enabled)
 //     .env.AWS_REGION                      — non-empty (Bedrock requires it)
 //     .env.ANTHROPIC_DEFAULT_FABLE_MODEL   — "global.anthropic.claude-fable-5[1m]"
@@ -55,7 +55,7 @@
 //   .sh 2-9    permissions.allow contains <8 tools>        -> one test() per tool,
 //                Read/Edit/Write/Bash/Glob/Grep/Task/WebSearch (8 tests)
 //   .sh 10     statusLine.command -> aidlc-statusline.ts   -> "statusLine.command references aidlc-statusline.ts"
-//   .sh 11     legacy model pin                            -> "model and effortLevel are absent"
+//   .sh 11     session model pin                           -> "model and effortLevel are pinned"
 //   .sh 12     env.CLAUDE_CODE_USE_BEDROCK == 1            -> "env.CLAUDE_CODE_USE_BEDROCK is 1"
 //   .sh 13     env.AWS_REGION non-empty                    -> "env.AWS_REGION is set"
 //   extra      env.ANTHROPIC_DEFAULT_FABLE_MODEL pinned    -> "env.ANTHROPIC_DEFAULT_FABLE_MODEL is pinned"
@@ -127,10 +127,10 @@ describe("statusLine [.sh test 10]", () => {
   });
 });
 
-describe("session model and effort inheritance [.sh test 11]", () => {
-  test("model and effortLevel keys are absent", () => {
-    expect(Object.hasOwn(settings, "model")).toBe(false);
-    expect(Object.hasOwn(settings, "effortLevel")).toBe(false);
+describe("session model and effort pin [.sh test 11]", () => {
+  test("model and effortLevel pin Opus 4.8 at medium effort", () => {
+    expect(settings.model).toBe("opus[1m]");
+    expect(settings.effortLevel).toBe("medium");
   });
 });
 

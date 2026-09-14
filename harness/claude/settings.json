@@ -19,6 +19,8 @@
     "type": "command",
     "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine statusline"
   },
+  "model": "opus[1m]",
+  "effortLevel": "medium",
   "env": {
     "AWS_AIDLC_DEFAULT_SCOPE": "classic",
     "CLAUDE_CODE_USE_BEDROCK": "1",
