@@ -161,7 +161,7 @@ function writeUnitArtifact(
 ): string {
   return writeArtifact(
     record,
-    join("construction", unit),
+    join("construction", "units", unit),
     stage,
     artifactFile,
     content,
@@ -435,6 +435,9 @@ describe("v2 stage-graph compatibility", () => {
     expect(instances.map((instance) => instance.unit)).toEqual([
       "payments-api",
     ]);
+    expect(instances[0]?.relativePath).toContain(
+      "/construction/units/payments-api/kind-aware-stage/service-contract.md",
+    );
   });
 
   test("resolves an express per-unit output as one stage-level fingerprint", () => {
@@ -479,6 +482,45 @@ describe("v2 stage-graph compatibility", () => {
         presentCount: 1,
       }),
     ]);
+  });
+
+  test("resolves infra infrastructure design on the stage axis and feature design on the Unit axis", () => {
+    const owner = loadGraph().find((stage) => stage.slug === "infrastructure-design");
+    if (!owner) throw new Error("live graph missing infrastructure-design");
+
+    for (const scope of ["infra", "feature"]) {
+      const projectDir = tempProject();
+      const state = stateContent([], scope);
+      const record = initializeProject(projectDir, state);
+      if (scope === "feature") {
+        writeArtifact(
+          record,
+          "inception",
+          "units-generation",
+          "unit-of-work-dependency.md",
+          "```yaml\nunits:\n  - name: api\n    kind: service\n    depends_on: []\n```\n",
+        );
+      }
+
+      const instances = resolveArtifactInstances(
+        projectDir,
+        "infrastructure-specification",
+        owner,
+        { stateContent: state },
+      );
+      expect(instances.map(({ absolutePath, unit }) => ({ absolutePath, unit }))).toEqual([
+        {
+          absolutePath: join(
+            record,
+            "construction",
+            ...(scope === "infra" ? [] : ["units", "api"]),
+            "infrastructure-design",
+            "infrastructure-specification.md",
+          ),
+          unit: scope === "infra" ? null : "api",
+        },
+      ]);
+    }
   });
 
   test("ignores stale per-unit directories for an express stage-level owner", () => {

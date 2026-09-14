@@ -74,14 +74,14 @@ function safeStageUnitDirectories(
 ): ArtifactRuntimeUnit[] {
   const record = recordDir(projectDir);
   if (record === null) return [];
-  const construction = join(record, "construction");
-  if (!existsSync(construction)) return [];
+  const unitsDir = join(record, "construction", "units");
+  if (!existsSync(unitsDir)) return [];
 
   const units: ArtifactRuntimeUnit[] = [];
   try {
-    for (const entry of readdirSync(construction, { withFileTypes: true })) {
+    for (const entry of readdirSync(unitsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const stageDir = join(construction, entry.name, stageSlug);
+      const stageDir = join(unitsDir, entry.name, stageSlug);
       try {
         if (existsSync(stageDir) && statSync(stageDir).isDirectory()) {
           units.push({ name: entry.name, kind: null });
@@ -261,6 +261,7 @@ export function resolveArtifactInstances(
       const absolutePath = join(
         record,
         "construction",
+        "units",
         unit.name,
         owner.slug,
         filename,

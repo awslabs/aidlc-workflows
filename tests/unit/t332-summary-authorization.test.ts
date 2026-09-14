@@ -571,7 +571,7 @@ describe("t332 authorization scope resolution", () => {
       stage: "requirements-analysis",
       unit: null,
     });
-    expect(summaryScopeForRecordPath("construction/api/functional-design/entities.md", stageGraph)).toEqual({
+    expect(summaryScopeForRecordPath("construction/units/api/functional-design/entities.md", stageGraph)).toEqual({
       stage: "functional-design",
       unit: "api",
     });
@@ -586,7 +586,7 @@ describe("t332 authorization scope resolution", () => {
     });
     expect(summaryScopeForRecordPath("audit/host-clone.md", stageGraph)).toBeNull();
     expect(summaryScopeForRecordPath(
-      "construction/build-and-test/functional-design/entities.md",
+      "construction/units/build-and-test/functional-design/entities.md",
       stageGraph,
     )).toEqual({
       stage: "functional-design",
@@ -640,7 +640,7 @@ describe("t332 authorization scope resolution", () => {
       unit,
       workflow: null,
       attempt: "unstarted",
-      questions_file: `construction/${unit}/${stage}/${stage}-questions.md`,
+      questions_file: `construction/units/${unit}/${stage}/${stage}-questions.md`,
       questions_sha256: "a".repeat(64),
       choice: "Looks correct",
       recorded_at: "2026-09-04T00:00:00Z",
@@ -648,6 +648,7 @@ describe("t332 authorization scope resolution", () => {
     const artifact = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit,
       stage,
       "entities.md",
@@ -670,14 +671,14 @@ describe("t332 authorization scope resolution", () => {
       unit: null,
       workflow: "single-stage:functional-design",
       attempt: "STAGE_COMPLETED:2026-09-02T10:00:00Z:host:1",
-      questions_file: "construction/api/functional-design/functional-design-questions.md",
+      questions_file: "construction/units/api/functional-design/functional-design-questions.md",
       questions_sha256: "c".repeat(64),
       choice: "Looks correct",
       recorded_at: "2026-09-02T10:00:01Z",
     };
     writeSummaryAuthorization(proj, stageLevel);
     expect(existsSync(summaryAuthorizationRecordPath(record, "functional-design", null))).toBe(true);
-    const path = "construction/api/functional-design/entities.md";
+    const path = "construction/units/api/functional-design/entities.md";
     expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe(stageLevel.id);
     writeSummaryAuthorization(proj, { ...stageLevel, id: "2".repeat(64), unit: "api", workflow: null });
     expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe("2".repeat(64));
@@ -685,13 +686,13 @@ describe("t332 authorization scope resolution", () => {
     // authorizes a Unit's outputs: the Unit owes its own confirmation.
     writeSummaryAuthorization(proj, { ...stageLevel, id: "3".repeat(64), workflow: null });
     expect(
-      activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageGraph),
+      activeSummaryAuthorizationForRecordPath(proj, "construction/units/web/functional-design/entities.md", stageGraph),
     ).toBeNull();
     expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe("2".repeat(64));
     // Nor does another stage's isolated run.
     writeSummaryAuthorization(proj, { ...stageLevel, id: "4".repeat(64), workflow: "single-stage:build-and-test" });
     expect(
-      activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageGraph),
+      activeSummaryAuthorizationForRecordPath(proj, "construction/units/web/functional-design/entities.md", stageGraph),
     ).toBeNull();
     // A stage-level path reads the stage-level record whatever its workflow.
     expect(

@@ -40,7 +40,7 @@ scopes:
   - classic
   - workshop
   - express
-inputs: ALL code generation outputs across all units
+inputs: ALL code generation outputs for every Unit under <record>/construction/units/, or stage-level code-generation outputs for a zero-Unit scope
 outputs: build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -50,15 +50,19 @@ outputs: build-instructions.md, integration-test-instructions.md, performance-te
 
 ### Step 1: Analyze Testing Requirements
 
-Read code generation outputs across all units from
-`<record>/construction/*/code-generation/code-summary.md` and per-unit test
+Read code generation outputs for every Unit under `<record>/construction/units/` from
+`<record>/construction/units/*/code-generation/code-summary.md` and per-unit test
 instructions from
-`<record>/construction/*/code-generation/unit-test-instructions.md`. For a
+`<record>/construction/units/*/code-generation/unit-test-instructions.md`. For a
 zero-Unit scope such as `express`, read the stage-level equivalents under
 `<record>/construction/code-generation/`.
 
 Build a source-complete inventory of every measurable quality target before
 generating instructions. Read all applicable stage-level and per-unit sources:
+For per-unit inputs, read every Unit's `nfr-requirements/`, `nfr-design/`, and
+`code-generation/` directories under `<record>/construction/units/<unit>/`;
+for applicable zero-Unit inputs, use the stage-level equivalents directly
+under `<record>/construction/`.
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
@@ -128,7 +132,7 @@ Attempt to execute the build and test commands documented in the instruction fil
 2. **Unit tests**: Collect the run commands from both the stage-level
    `<record>/construction/code-generation/unit-test-instructions.md` file (when
    present, including Express) and all per-unit
-   `<record>/construction/*/code-generation/unit-test-instructions.md` files.
+   `<record>/construction/units/*/code-generation/unit-test-instructions.md` files.
    Deduplicate identical commands and run each distinct command ONCE via Bash.
    Per-unit commands should already be scoped to their Unit. A stage-level or
    malformed per-unit file may carry a project-wide command; run that command
@@ -236,7 +240,7 @@ This is a stage-level gate, not the Construction phase boundary. Enumerate:
 Read both the stage-level
 `<record>/construction/code-generation/traceability.json` file (when present,
 including Express) and every per-unit
-`<record>/construction/*/code-generation/traceability.json` file. Verify each
+`<record>/construction/units/*/code-generation/traceability.json` file. Verify each
 enumerated ID is covered with status `OK` in at least one stage-level or Unit
 entry and that its target file exists. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` with a

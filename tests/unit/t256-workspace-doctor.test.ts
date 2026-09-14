@@ -18,10 +18,21 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
+import {
+  constructionUnitLayoutCheck,
+  workspaceManifestChecks,
+} from "../../core/tools/aidlc-workspace-doctor.ts";
+import { createTestProject, seedBoltDag, seededRecordDir } from "../harness/fixtures.ts";
+
+function migrationWorkspace(): string {
+  const project = createTestProject();
+  tmpRoots.push(project);
+  writeFileSync(join(seededRecordDir(project), "aidlc-state.md"), "# State\n");
+  return project;
+}
 
 const tmpRoots: string[] = [];
 afterAll(() => {
@@ -66,6 +77,122 @@ const MANIFEST = `{
 `;
 
 describe("t256 workspace-doctor - advisory manifest rows", () => {
+  test.each(["checkout-api", "units", "code-generation"])(
+    "runs the printed migration command from the project root for legacy unit %s, twice",
+    (unit) => {
+      const ws = migrationWorkspace();
+      seedBoltDag(ws, [unit]);
+      const construction = join(seededRecordDir(ws), "construction");
+      const legacy = join(construction, unit, "functional-design");
+      mkdirSync(legacy, { recursive: true });
+      writeFileSync(join(legacy, "functional-spec.md"), "approved design\n");
+      const row = constructionUnitLayoutCheck(ws, ["functional-design", "code-generation"]);
+      expect(row?.pass).toBe(true);
+      expect(row?.label).toContain(`[${unit}]`);
+      const commands = [...(row?.label ?? "").matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+      expect(commands).toHaveLength(1);
+      const migrated = join(construction, "units", unit, "functional-design", "functional-spec.md");
+      const before = readdirSync(construction, { recursive: true }).sort();
+      const first = spawnSync("bash", ["-c", commands[0]], { cwd: ws, encoding: "utf-8" });
+      expect({ status: first.status, stderr: first.stderr }).toEqual({ status: 0, stderr: "" });
+      expect(existsSync(migrated)).toBe(true);
+      expect(readFileSync(migrated, "utf-8")).toBe("approved design\n");
+      expect(existsSync(legacy)).toBe(false);
+      const after = readdirSync(construction, { recursive: true }).sort();
+      expect(after).not.toEqual(before);
+      const second = spawnSync("bash", ["-c", commands[0]], { cwd: ws, encoding: "utf-8" });
+      expect({ status: second.status, stderr: second.stderr }).toEqual({ status: 0, stderr: "" });
+      expect(readdirSync(construction, { recursive: true }).sort()).toEqual(after);
+      expect(readFileSync(migrated, "utf-8")).toBe("approved design\n");
+      expect(constructionUnitLayoutCheck(ws, ["functional-design", "code-generation"])).toBeNull();
+    },
+  );
+
+  test("migrates the units collision before ordinary units in one advisory", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["checkout-api", "units"]);
+    const construction = join(seededRecordDir(ws), "construction");
+    for (const unit of ["checkout-api", "units"]) {
+      mkdirSync(join(construction, unit, "functional-design"), { recursive: true });
+      writeFileSync(join(construction, unit, "functional-design", "functional-spec.md"), unit);
+    }
+    const row = constructionUnitLayoutCheck(ws, ["functional-design"]);
+    const commands = [...(row?.label ?? "").matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+    expect(commands).toHaveLength(2);
+    for (let run = 0; run < 2; run++) {
+      for (const command of commands) {
+        const result = spawnSync("bash", ["-c", command], { cwd: ws, encoding: "utf-8" });
+        expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+      }
+      for (const unit of ["checkout-api", "units"]) {
+        expect(readFileSync(join(construction, "units", unit, "functional-design", "functional-spec.md"), "utf-8")).toBe(unit);
+      }
+      expect(existsSync(join(construction, ".units-legacy"))).toBe(false);
+    }
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not migrate the units axis when the DAG's units Unit has not started", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "api"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units", "api", "functional-design"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not migrate an empty units axis even when the DAG contains units", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "api"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not flag a migrated Unit named units", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "api"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units", "units", "functional-design"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("does not migrate the units axis when a started Unit has a stage slug as its name", () => {
+    const ws = migrationWorkspace();
+    seedBoltDag(ws, ["units", "functional-design"]);
+    mkdirSync(join(seededRecordDir(ws), "construction", "units", "functional-design", "functional-design"), { recursive: true });
+    expect(constructionUnitLayoutCheck(ws, ["functional-design"])).toBeNull();
+  });
+
+  test("without a DAG, stage-shaped unit roots are detected but stage diaries and migrated roots are not", () => {
+    const ws = migrationWorkspace();
+    const construction = join(seededRecordDir(ws), "construction");
+    const diary = join(construction, "code-generation");
+    mkdirSync(diary, { recursive: true });
+    writeFileSync(join(diary, "memory.md"), "shared diary\n");
+    expect(constructionUnitLayoutCheck(ws, ["functional-design", "code-generation"])).toBeNull();
+    const legacy = join(construction, "units", "functional-design");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "functional-spec.md"), "approved design\n");
+    const row = constructionUnitLayoutCheck(ws, ["functional-design", "code-generation"]);
+    expect(row?.label).toContain("[units]");
+    for (const [, command] of (row?.label ?? "").matchAll(/`([^`]+)`/g)) {
+      const result = spawnSync("bash", ["-c", command], { cwd: ws, encoding: "utf-8" });
+      expect(result.status).toBe(0);
+    }
+    expect(readFileSync(join(diary, "memory.md"), "utf-8")).toBe("shared diary\n");
+    expect(constructionUnitLayoutCheck(ws, ["functional-design", "code-generation"])).toBeNull();
+  });
+
+  test("the authored DAG identifies empty colliding unit roots and excludes non-Unit directories", () => {
+    const ws = migrationWorkspace();
+    const record = seededRecordDir(ws);
+    const dependency = join(record, "inception", "units-generation");
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(join(dependency, "unit-of-work-dependency.md"), "```yaml\nunits:\n  - name: code-generation\n    depends_on: []\n```\n");
+    mkdirSync(join(record, "construction", "code-generation"), { recursive: true });
+    mkdirSync(join(record, "construction", "not-a-unit", "functional-design"), { recursive: true });
+    const row = constructionUnitLayoutCheck(ws, ["functional-design", "code-generation"]);
+    expect(row?.label).toContain("[code-generation]");
+    expect(row?.label).not.toContain("not-a-unit");
+  });
+
   test("no repos.json → only the W1 records row, and it is advisory", () => {
     const ws = freshGitWorkspace();
     const rows = workspaceManifestChecks(ws);

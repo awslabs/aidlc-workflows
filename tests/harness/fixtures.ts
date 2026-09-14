@@ -737,6 +737,7 @@ export function setupIntegrationProject(
     const dest = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "todo-core",
       "functional-design",
     );

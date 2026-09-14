@@ -90,6 +90,7 @@ function seedOutputs(proj: string, unit: string): void {
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     STAGE,
   );
@@ -336,7 +337,7 @@ function forgeUnitReceipt(proj: string, unit: string): void {
     Iteration: "1",
     "Artifact Fingerprint": fingerprint,
     "Review Appendix Artifact":
-      `construction/${unit}/${STAGE}/functional-spec.md`,
+      `construction/units/${unit}/${STAGE}/functional-spec.md`,
     "Review Appendix Offset": "0",
   };
   appendAuditEntry("REVIEW_REQUESTED", fields, proj);

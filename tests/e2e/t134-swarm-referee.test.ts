@@ -191,7 +191,7 @@ function runRef(
 
 function logWorktreeReview(proj: string, unit: string): void {
   const worktree = wtPath(proj, unit);
-  const dir = join(seededRecordDir(worktree), "construction", unit, "functional-design");
+  const dir = join(seededRecordDir(worktree), "construction", "units", unit, "functional-design");
   mkdirSync(dir, { recursive: true });
   for (const name of ["entities", "rules", "functional-spec", "traceability"]) {
     const artifact = join(dir, artifactFilename(name));
@@ -399,6 +399,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
         join(
           seededRecordDir(proj),
           "construction",
+          "units",
           "alpha",
           "functional-design",
           "entities.md",
@@ -676,6 +677,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const unitRecord = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit,
       "functional-design",
     );
@@ -749,6 +751,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       const unitRecord = join(
         seededRecordDir(wt),
         "construction",
+        "units",
         unit,
         "functional-design",
       );
@@ -799,6 +802,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       const unitRecord = join(
         seededRecordDir(wt),
         "construction",
+        "units",
         unit,
         "functional-design",
       );
@@ -865,6 +869,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const unitRecord = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit,
       "functional-design",
     );
@@ -878,7 +883,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     writeFileSync(entities, "old entities\n");
     writeFileSync(rules, "old rules\n");
     const failPath =
-      `construction/${unit}/functional-design/${artifactFilename("rules")}`;
+      `construction/units/${unit}/functional-design/${artifactFilename("rules")}`;
     const refused = runRef(
       proj,
       [
@@ -931,6 +936,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       const construction = join(
         seededRecordDir(proj),
         "construction",
+        "units",
         unit,
       );
       const outside = join(proj, "outside-record");

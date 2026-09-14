@@ -35,7 +35,7 @@ scopes:
   - feature
   - classic
   - workshop
-inputs: NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage
+inputs: NFR requirements and design for every Unit under <record>/construction/units/, or stage-level nfr-requirements and nfr-design outputs for a zero-Unit scope, deployed application, observability data from observability-setup stage
 outputs: load-test-plan.md, test-results.md, nfr-validation-matrix.md, performance-validation-questions.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -45,8 +45,10 @@ outputs: load-test-plan.md, test-results.md, nfr-validation-matrix.md, performan
 
 ### Step 1: Load Prior Context
 
-- Read NFR requirements from `<record>/construction/nfr-requirements/`
-- Read NFR design from `<record>/construction/nfr-design/`
+This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`, or read the stage-level equivalents for a zero-Unit scope:
+
+- Read NFR requirements from `<record>/construction/units/<unit>/nfr-requirements/`; for a zero-Unit scope (e.g. `infra`) read `<record>/construction/nfr-requirements/` directly
+- Read NFR design from `<record>/construction/units/<unit>/nfr-design/`; for a zero-Unit scope (e.g. `infra`) read `<record>/construction/nfr-design/` directly
 - Read observability configuration from `<record>/operation/observability-setup/`
 
 ### Step 2: Generate Clarifying Questions

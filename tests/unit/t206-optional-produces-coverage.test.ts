@@ -61,6 +61,7 @@ function logReviewReady(proj: string, stage: string, reviewer: string, unit?: st
     join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit ?? "alpha",
       stage,
       "functional-spec.md",
@@ -167,9 +168,9 @@ function constructionState(current: string, skeletonStance = "on"): string {
 }
 
 /** Mark `unit` covered for `slug` by writing each named artifact under the
- *  resolved per-unit dir construction/<unit>/<slug>/. */
+ *  resolved per-unit dir construction/units/<unit>/<slug>/. */
 function coverUnit(proj: string, unit: string, slug: string, names: string[]): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, slug);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of names) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -230,7 +231,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
       review_state: "outstanding",
       required_produces: FD_REQUIRED.map(
         (name) =>
-          `${RP}/construction/alpha/functional-design/${artifactFilename(name)}`,
+          `${RP}/construction/units/alpha/functional-design/${artifactFilename(name)}`,
       ),
     });
     expect(
@@ -347,11 +348,11 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("alpha");
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/functional-design/${FD_OPTIONAL}.md`,
+      `${RP}/construction/units/alpha/functional-design/${FD_OPTIONAL}.md`,
     );
     // and still lists a required one.
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/functional-design/functional-spec.md`,
+      `${RP}/construction/units/alpha/functional-design/functional-spec.md`,
     );
   }, 30000);
 });

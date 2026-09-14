@@ -33,7 +33,7 @@ scopes:
   - infra
   - classic
   - workshop
-inputs: Code generation output from code-generation stage, build/test results from build-and-test stage
+inputs: Code generation output and infrastructure design for every Unit under <record>/construction/units/, or stage-level code-generation and infrastructure-design outputs for a zero-Unit scope, build/test results from the stage-level build-and-test directory
 outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -43,9 +43,11 @@ outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this st
 
 ### Step 1: Load Prior Context
 
+This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`, or read the stage-level equivalents for a zero-Unit scope:
+
 - Read build/test results from `<record>/construction/build-and-test/` (if exists)
-- Read code summary from `<record>/construction/{unit-name}/code-generation/` (if exists)
-- Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
+- Read code summaries from `<record>/construction/units/<unit>/code-generation/` (if they exist); for a zero-Unit scope (e.g. `infra`) read `<record>/construction/code-generation/` directly
+- Read infrastructure design from `<record>/construction/units/<unit>/infrastructure-design/` (if it exists); for a zero-Unit scope (e.g. `infra`) read `<record>/construction/infrastructure-design/` directly
 - Read workspace profile for existing CI configuration
 
 Incremental scopes (infra) skip code-generation and build-and-test by design; when those inputs are absent, base the pipeline stages on the workspace's existing build/test setup (detected from the repo itself) instead — never invent the content of a missing artifact.
@@ -74,7 +76,9 @@ Run Construction → Operation verification check:
 - Read
   `<record>/construction/build-and-test/cross-unit-traceability.md`.
 - Read every
-  `<record>/construction/*/code-generation/traceability.json`.
+  `<record>/construction/units/*/code-generation/traceability.json`; for a
+  zero-Unit scope (e.g. `infra`) read
+  `<record>/construction/code-generation/traceability.json` directly.
 - Confirm all Units built and tested, all code-generation tables have no
   unresolved findings, and the cross-Unit FR/NFR/AC gate passed.
 - Confirm the CI quality gates enforce the build and test commands recorded by

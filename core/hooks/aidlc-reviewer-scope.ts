@@ -2,7 +2,7 @@
 // read-scope bound (stage-protocol-reviewer.md §12a).
 //
 // The prose bound says a reviewer dispatched for one unit must not read other
-// units' construction/<other-unit>/ content through any tool - not by opening
+// units' construction/units/<other-unit>/ content through any tool - not by opening
 // files, and not via grep, glob, or shell patterns that span sibling unit
 // paths. Field transcripts showed prose losing that contest: a diligent
 // reviewer swept siblings through recursive greps with cross-unit globs, and
@@ -80,7 +80,7 @@ export interface ReviewerDispatch {
   reviewer: string;
   /** Stage slug the review belongs to, e.g. nfr-requirements. */
   stage: string;
-  /** The unit under review - the one construction/<unit>/ subtree in scope. */
+  /** The unit under review - the one construction/units/<unit>/ subtree in scope. */
   unit: string;
   /** Resolved paths the reviewer may touch beyond the current unit: the
    *  directive.consumes contracts, the stage file, the Q&A file, and (when the
@@ -109,7 +109,7 @@ export interface ScopeContext {
 }
 
 // Glob metacharacters. A sibling segment carrying any of these spans units
-// (a `construction/*/` glob is a sibling read, not a search).
+// (a `construction/units/*/` glob is a sibling read, not a search).
 const WILDCARD_RE = /[*?[\]{}]/;
 
 // Path-shaped tools contribute their path fields; Bash contributes the whole
@@ -161,8 +161,8 @@ function candidateStrings(
 
 // Split a path into components, dropping empty and "." segments and
 // COLLAPSING ".." against its parent. Without the collapse,
-// construction/U03/../U01/design.md would be judged on U03 (the first
-// segment after construction/) and allowed even though the filesystem
+// construction/units/U03/../U01/design.md would be judged on U03 (the first
+// segment after construction/units/) and allowed even though the filesystem
 // resolves it into sibling U01. A leading ".." with no parent to consume is
 // kept as-is (it climbs above the visible string; the sweep/wildcard rules
 // in judgeOccurrence apply to whatever remains).
@@ -223,21 +223,29 @@ function exemptSuffixOf(entry: string): string | null {
   return canonicalSuffix(comps.slice(i));
 }
 
-// Judge one construction/ occurrence: the first path segment after the
-// construction component decides. Current unit -> allow; wildcard or missing
-// (a sweep root) -> block; a concrete sibling -> allow only on an exact
-// exempt-suffix match (the single owning file of a named integration point),
-// else block. Exactness is deliberate: browsing an exempt file's parent
-// directory is still a sibling browse.
+// Judge one construction/ occurrence. The only unit axis is
+// construction/units/<unit>: current unit -> allow; wildcard or missing (a
+// sweep root) -> block; a concrete sibling -> allow only on an exact
+// exempt-suffix match (the single owning file of a named integration point).
+// Any other construction/<segment> stays block-unless-exempt so legacy per-unit
+// paths fail closed and stage-level directories are not browsable by a
+// unit-scoped reviewer. Exactness is deliberate: browsing an exempt file's
+// parent directory is still a sibling browse.
 function judgeOccurrence(
   suffixComps: string[],
   unit: string,
   exemptSuffixes: ReadonlySet<string>,
 ): boolean {
   const unitFolded = fold(unit);
-  const seg = suffixComps[1];
-  if (seg === undefined || seg.length === 0) return true; // bare construction/ sweep root
-  if (WILDCARD_RE.test(seg)) return true; // a pattern spanning siblings
+  const axis = suffixComps[1];
+  if (axis === undefined || axis.length === 0) return true; // bare construction/ sweep root
+  if (WILDCARD_RE.test(axis)) return true; // a pattern spanning construction children
+  if (fold(axis) !== "units") {
+    return !exemptSuffixes.has(canonicalSuffix(suffixComps));
+  }
+  const seg = suffixComps[2];
+  if (seg === undefined || seg.length === 0) return true; // bare construction/units/ sweep root
+  if (WILDCARD_RE.test(seg)) return true; // a pattern spanning sibling units
   if (fold(seg) === unitFolded) return false; // the dispatched unit
   return !exemptSuffixes.has(canonicalSuffix(suffixComps));
 }
@@ -289,7 +297,9 @@ function prepareScope(
 
   const recordRoot = context?.recordRoot ? resolve(context.recordRoot) : undefined;
   const constructionRoot = recordRoot ? resolve(recordRoot, "construction") : undefined;
-  const unitRoot = constructionRoot ? resolve(constructionRoot, dispatch.unit) : undefined;
+  const unitRoot = constructionRoot
+    ? resolve(constructionRoot, "units", dispatch.unit)
+    : undefined;
   const cwd = context?.cwd ? resolve(context.cwd) : undefined;
   const bases = uniqueStrings([cwd ?? "", recordRoot ?? "", unitRoot ?? ""]);
 
@@ -378,7 +388,13 @@ function patternLimitsToCurrentUnit(text: string, scope: PreparedScope): boolean
     if (constructionIndex([comps[i]], true) !== 0) continue;
     sawConstruction = true;
     const suffix = comps.slice(i);
-    const seg = suffix[1];
+    const axis = suffix[1];
+    if (axis === undefined || WILDCARD_RE.test(axis)) return false;
+    if (fold(axis) !== "units") {
+      if (!scope.exemptSuffixes.has(canonicalSuffix(suffix))) return false;
+      continue;
+    }
+    const seg = suffix[2];
     if (seg === undefined || WILDCARD_RE.test(seg)) return false;
     if (fold(seg) !== scope.unitFolded && !scope.exemptSuffixes.has(canonicalSuffix(suffix))) {
       return false;
@@ -726,7 +742,7 @@ function judgeCommandText(text: string, scope: PreparedScope): ScopeVerdict | nu
 /**
  * The reviewer read-scope decision. Pure: no I/O, no environment.
  * Returns block=true with the offending target when the tool call reaches
- * into a sibling unit's construction/ subtree (or spans siblings via a
+ * into a sibling unit's construction/units/ subtree (or spans siblings via a
  * wildcard) and the target is not on the exempt list.
  */
 export function evaluateReviewerScope(
@@ -800,7 +816,7 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
   return (
     `This review cannot open "${target}"${defaultNote} because it belongs to another unit; the current ` +
     `review covers ${dispatch.unit}. Use the files supplied with the review and the files ` +
-    `under this unit's construction path. If the design depends on another unit, note that ` +
+    `under construction/units/${dispatch.unit}/. If the design depends on another unit, note that ` +
     `integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
     `literally in shell paths because variables cannot be checked, and keep searches inside ` +
     `the current unit.`

@@ -14,7 +14,7 @@
 // layout. A stage's produces[] artifacts now live under the ACTIVE intent's
 // per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/
 // <stage>/), per-unit Construction artifacts under that record's
-// construction/<unit>/<stage>/, and codekb stages (reverse-engineering) under
+// construction/units/<unit>/<stage>/, and codekb stages (reverse-engineering) under
 // the space-level aidlc/spaces/<space>/codekb/<repo>/. This test seeds those
 // live seams via seededRecordDir, NOT a flat aidlc-docs/ tree.
 //
@@ -23,7 +23,7 @@
 //     1. producesArtifactsExist - a normal stage that declares produces[] must
 //        have at least one declared .md on disk under
 //        <record>/<phase>/<slug>/ (or
-//        <record>/construction/<unit>/<slug>/ for per-unit stages). Codekb
+//        <record>/construction/units/<unit>/<slug>/ for per-unit stages). Codekb
 //        stages require every declared artifact in every registered repo's
 //        canonical <space>/codekb/<repo>/ directory. Empty-produces stages
 //        vacuously pass.
@@ -114,7 +114,7 @@ function reviewStage(
       : join(
           seededRecordDir(proj),
           "construction",
-          ...(unit ? [unit] : []),
+          ...(unit ? ["units", unit] : []),
           stage,
           "code-generation-plan.md",
         );
@@ -147,6 +147,7 @@ function reviewStage(
     const dir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit,
       "code-generation",
     );
@@ -1807,15 +1808,15 @@ X. Other (please specify)
     const UNIT = "user-auth";
 
     // Move the pointer to code-generation, in-progress, and write its three
-    // per-unit produces[] docs under the record's construction/<unit>/ subtree
+    // per-unit produces[] docs under the record's construction/units/<unit>/ subtree
     // (satisfies layer 1) but NO source code.
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/code-generation-plan.md`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/unit-test-instructions.md`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/traceability.json`);
     }
 
     test("REFUSES code-generation with planning docs but no source code", () => {
@@ -1981,9 +1982,9 @@ X. Other (please specify)
       );
       const boundarySecond = Math.floor(Date.now() / 1000);
       while (Math.floor(Date.now() / 1000) === boundarySecond) {}
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
-      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/code-generation-plan.md`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/units/${UNIT}/code-generation/traceability.json`);
     }
     function approveCodeGen(): { rc: number; out: string } {
       reviewCodeGen(proj, UNIT);

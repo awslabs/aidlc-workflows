@@ -67,7 +67,7 @@ function slugPattern(slug: string): RegExp {
 
 // A producing-stage directory citation counts as coverage for every
 // artifact that stage produces: artifacts cite upstream by provenance
-// path (`construction/<unit>/nfr-requirements/`), not by re-naming each
+// path (`construction/units/<unit>/nfr-requirements/`), not by re-naming each
 // slug. The producer slug must appear as a whole path segment - leading
 // (`nfr-requirements/`) or trailing (`.../nfr-requirements`) - so a
 // longer sibling slug (`some-nfr-requirements/`) never satisfies it.

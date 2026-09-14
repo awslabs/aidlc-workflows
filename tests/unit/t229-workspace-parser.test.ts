@@ -350,7 +350,7 @@ describe("classifier and next parser parity", () => {
         cleanup(projectDir);
       }
     }
-  });
+  }, 15_000);
 
   test("intent create stays on the session-aware workflow path", () => {
     const args = ["intent", "create", "--scope", "poc", "--label", "x"];

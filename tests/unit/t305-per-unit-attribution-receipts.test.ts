@@ -109,7 +109,7 @@ function fixture(repos: string[] = []): { project: string; record: string } {
 }
 
 function manifest(record: string, unit: string, value: unknown): string {
-  const dir = join(record, "construction", unit, "code-generation"); mkdirSync(dir, { recursive: true });
+  const dir = join(record, "construction", "units", unit, "code-generation"); mkdirSync(dir, { recursive: true });
   const path = join(dir, "source-manifest.json"); writeFileSync(path, `${JSON.stringify(value)}\n`); return path;
 }
 
@@ -958,7 +958,7 @@ function runtimeFixture(): { project: string; record: string } {
 }
 
 function seedArtifacts(record: string, unit: string): string {
-  const dir = join(record, "construction", unit, "code-generation");
+  const dir = join(record, "construction", "units", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"])
     if (!existsSync(join(dir, name))) writeFileSync(join(dir, name), name.endsWith(".json") ? "{}\n" : `# ${name}\n`);
@@ -967,7 +967,7 @@ function seedArtifacts(record: string, unit: string): string {
 
 function reviewArtifact(record: string, unit?: string): string {
   const dir = unit
-    ? join(record, "construction", unit, "code-generation")
+    ? join(record, "construction", "units", unit, "code-generation")
     : join(record, "construction", "code-generation");
   return join(dir, "code-generation-plan.md");
 }
@@ -1309,6 +1309,7 @@ describe("t305 real receipt and guard flows", () => {
     const path = join(
       record,
       "construction",
+      "units",
       "alpha",
       "code-generation",
       "source-manifest.json",
@@ -1517,6 +1518,7 @@ describe("t305 real receipt and guard flows", () => {
         join(
           legacy.record,
           "construction",
+          "units",
           unit,
           "code-generation",
           "source-manifest.json",
@@ -1589,13 +1591,14 @@ describe("t305 real receipt and guard flows", () => {
       "other\n",
     );
     mkdirSync(
-      join(other, "construction", "other", "code-generation"),
+      join(other, "construction", "units", "other", "code-generation"),
       { recursive: true },
     );
     writeFileSync(
       join(
         other,
         "construction",
+        "units",
         "other",
         "code-generation",
         "source-manifest.json",

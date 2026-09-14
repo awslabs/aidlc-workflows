@@ -144,7 +144,7 @@ Cover the unit's requirements with isolated fixtures and stub external services.
 }
 
 function coverUnit(proj: string, unit: string, names: readonly string[]): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, "code-generation");
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of names) {
     writeFileSync(join(dir, artifactFilename(name)), realisticArtifact(name, unit));
@@ -176,7 +176,7 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
       expect(directive.stage).toBe("code-generation");
       expect(directive.unit).toBe("alpha");
       expect(directive.produces).toContain(
-        `${RP}/construction/alpha/code-generation/unit-test-instructions.md`,
+        `${RP}/construction/units/alpha/code-generation/unit-test-instructions.md`,
       );
     }, 30000);
 
@@ -285,13 +285,13 @@ ${process.execPath} -e 'await Bun.write("${marker}", "passed")'
       "<record>/construction/code-generation/unit-test-instructions.md",
     );
     expect(buildAndTest).toContain(
-      "<record>/construction/*/code-generation/unit-test-instructions.md",
+      "<record>/construction/units/*/code-generation/unit-test-instructions.md",
     );
     expect(buildAndTest).toContain(
       "<record>/construction/code-generation/traceability.json",
     );
     expect(buildAndTest).toContain(
-      "<record>/construction/*/code-generation/traceability.json",
+      "<record>/construction/units/*/code-generation/traceability.json",
     );
 
     const command = readFileSync(instructionsPath, "utf-8")

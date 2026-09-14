@@ -483,7 +483,7 @@ Change Control decides the consequence of an input change after a human approval
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
 | `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
-| `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the reviewer-module read-scope bound); one row per refusal |
+| `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/units/` paths (the reviewer-module read-scope bound); one row per refusal |
 | `REVIEW_FREEZE_BLOCKED` | `hooks/aidlc-review-freeze.ts` | A file-tool or shell `produces[]` write refused because it would invalidate a fresh terminal review receipt before the gate (READY or terminal NOT-READY under the effective class); one row per refusal |
 | `PLAN_APPROVAL_BLOCKED` | `hooks/aidlc-plan-approval-guard.ts` | A code-generation developer-agent dispatch or workspace mutation refused because the active unit or zero-Unit stage target lacked a current fingerprinted plan, test instructions, Testing Contract, explicit approval, or matching worker-brief marker; one row per refusal |
 | `GUARD_DISABLED` | `hooks/aidlc-plan-approval-guard.ts` | A tool call passed the Plan Approval guard because its deterministic off-switch environment variable was set while a workflow existed. Carries `Guard` (`plan-approval-guard`) and `Tool`; one row per streak, appended only when the newest row in the active shard is not already this event for the same guard |
@@ -847,6 +847,7 @@ When Units Generation is skipped, including express and recomposed zero-Unit
 plans, validity resolves one stage-level artifact instance under
 `<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
 per-Unit directories. When Units Generation executes, normal Bolt DAG expansion
-and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
+and the no-DAG directory fallback both resolve Units under
+`<record>/construction/units/`. Missing or ambiguous
 plan state makes receipt capture or inspection unavailable with a non-blocking
 warning rather than reporting false drift.

@@ -148,6 +148,7 @@ function seedCodeGenerationOutputs(proj: string, unit: string): string {
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "code-generation",
   );

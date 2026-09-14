@@ -346,6 +346,7 @@ describe("t320 review/summary deadlock prevention", () => {
     const dir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "alpha",
       "code-generation",
     );
@@ -384,6 +385,7 @@ describe("t320 review/summary deadlock prevention", () => {
     const dir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "alpha",
       "code-generation",
     );

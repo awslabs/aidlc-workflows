@@ -665,6 +665,7 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       const stageDir = join(
         recordDir,
         "construction",
+        "units",
         "auth",
         "code-generation",
       );

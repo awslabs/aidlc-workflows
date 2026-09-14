@@ -165,7 +165,7 @@ function recordReview(
   const artifactDir =
     definition.for_each === "unit-of-work"
       ? reviewUnit
-        ? join(seededRecordDir(proj), "construction", reviewUnit, stage)
+        ? join(seededRecordDir(proj), "construction", "units", reviewUnit, stage)
         : join(seededRecordDir(proj), "construction", stage)
       : join(seededRecordDir(proj), definition.phase, stage);
   mkdirSync(artifactDir, { recursive: true });
@@ -1873,6 +1873,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const artifactDir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "unit-alpha",
       "code-generation",
     );
@@ -1958,6 +1959,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const artifactDir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "unit-alpha",
       "code-generation",
     );
@@ -2143,6 +2145,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       const artifactDir = join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "late-unit",
         "code-generation",
       );

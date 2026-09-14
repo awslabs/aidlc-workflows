@@ -9,7 +9,7 @@
 // that lands on an in-flight per-unit Construction stage (off the swarm path),
 // the engine reads the ordered unit list (the compiled Bolt DAG, flattened),
 // finds the FIRST unit whose `produces[]` artifacts are not all on disk under
-// `<recordPrefix>/construction/<unit>/<slug>/`, and emits a run-stage for THAT
+// `<recordPrefix>/construction/units/<unit>/<slug>/`, and emits a run-stage for THAT
 // concrete unit with `directive.unit` set. The gate is suppressed (false) on
 // every unit except the last uncovered one (which carries the real gate). When
 // no unit DAG exists the engine degrades to today's single `{unit-name}`
@@ -103,6 +103,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     stage,
     artifactFilename(reviewArtifact),
@@ -245,7 +246,7 @@ function setAutonomous(proj: string): void {
 
 /**
  * Mark `unit` COVERED for `slug` by writing each artifact in `producesNames`
- * under the resolved per-unit dir construction/<unit>/<slug>/ in the record.
+ * under the resolved per-unit dir construction/units/<unit>/<slug>/ in the record.
  */
 function coverUnit(
   proj: string,
@@ -253,7 +254,7 @@ function coverUnit(
   slug: string,
   producesNames: string[],
 ): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, slug);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -316,7 +317,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/functional-design/functional-spec.md`,
+      `${RP}/construction/units/alpha/functional-design/functional-spec.md`,
     );
     // The literal placeholder is gone, the real unit was substituted.
     expect(d.produces?.some((p) => p.includes("{unit-name}"))).toBe(false);
@@ -380,7 +381,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
+      `${RP}/construction/units/{unit-name}/functional-design/functional-spec.md`,
     );
   }, 30000);
 
@@ -611,7 +612,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe("unresolved");
     expect(d.unit).toBeUndefined();
     expect(d.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
+      `${RP}/construction/units/{unit-name}/functional-design/functional-spec.md`,
     );
   }, 30000);
 
@@ -629,7 +630,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/code-generation/code-generation-plan.md`,
+      `${RP}/construction/units/alpha/code-generation/code-generation-plan.md`,
     );
   }, 30000);
 

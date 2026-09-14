@@ -329,6 +329,7 @@ function seedApprovedCodeGenerationPlan(
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "code-generation",
   );
@@ -393,7 +394,13 @@ function logWorktreeReview(
   iteration = 1,
 ): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
-  const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
+  const dir = join(
+    seededRecordDir(wt),
+    "construction",
+    "units",
+    unit,
+    "code-generation",
+  );
   mkdirSync(dir, { recursive: true });
   const reviewArtifact = join(dir, "code-generation-plan.md");
   if (!existsSync(reviewArtifact)) {
@@ -467,7 +474,7 @@ function logWorktreeReview(
   mkdirSync(dirname(draft), { recursive: true });
   writeFileSync(
     draft,
-    `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\n| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | construction/${unit}/code-generation/code-generation-plan.md > Step 2 | Fixture finding for ${unit} | Fixture action | New |\n`,
+    `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\n| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | construction/units/${unit}/code-generation/code-generation-plan.md > Step 2 | Fixture finding for ${unit} | Fixture action | New |\n`,
   );
   const completed = spawnSync(
     BUN,
@@ -497,6 +504,7 @@ function finalizeWithNotReady(iteration: number): {
       join(
         seededRecordDir(worktree),
         "construction",
+        "units",
         unit,
         "code-generation",
         "code-summary.md",
@@ -592,6 +600,7 @@ function setupStaleReviewRefusal(): void {
   const artifact = join(
     seededRecordDir(wt),
     "construction",
+    "units",
     "stale",
     "code-generation",
     "code-summary.md",
@@ -820,6 +829,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const unitRecord = join(
       seededRecordDir(wtproj),
       "construction",
+      "units",
       "win",
       "code-generation",
     );
@@ -869,6 +879,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const wtUnitRecord = join(
       seededRecordDir(wt),
       "construction",
+      "units",
       unit,
       "code-generation",
     );
@@ -904,6 +915,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const promotedEvidence = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit,
       "code-generation",
       evidenceName,

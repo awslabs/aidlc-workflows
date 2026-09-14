@@ -1124,6 +1124,7 @@ function completeReview(args: string[], p: string): CliResult {
       ? join(
           seededRecordDir(p),
           "construction",
+          "units",
           unit ?? "unit-alpha",
           stage,
         )

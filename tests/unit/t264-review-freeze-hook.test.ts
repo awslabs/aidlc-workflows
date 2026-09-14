@@ -308,8 +308,8 @@ describe("t264 (a) judgeFreeze decision table", () => {
   });
 
   test("per-unit: freezes only the reviewed unit", () => {
-    const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
-    const u4 = "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const u3 = "/p/aidlc/spaces/default/intents/i1/construction/units/U03/nfr-requirements/nfr-requirements.md";
+    const u4 = "/p/aidlc/spaces/default/intents/i1/construction/units/U04/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "READY", unitVerdicts: new Map([["U03", "READY"]]) };
     const v3 = judgeFreeze(NFR, u3, NONE, receipts);
     expect(v3.block).toBe(true);
@@ -319,7 +319,7 @@ describe("t264 (a) judgeFreeze decision table", () => {
   });
 
   test("per-unit: a terminal NOT-READY receipt freezes that unit", () => {
-    const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
+    const u3 = "/p/aidlc/spaces/default/intents/i1/construction/units/U03/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "NOT-READY", unitVerdicts: new Map([["U03", "NOT-READY"]]) };
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
   });
@@ -353,11 +353,11 @@ describe("t264 (a) judgeFreeze decision table", () => {
     ).toBe(false);
 
     const u3 =
-      "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
+      "/p/aidlc/spaces/default/intents/i1/construction/units/U03/nfr-requirements/nfr-requirements.md";
     const u4 =
-      "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+      "/p/aidlc/spaces/default/intents/i1/construction/units/U04/nfr-requirements/nfr-requirements.md";
     const u5 =
-      "/p/aidlc/spaces/default/intents/i1/construction/U05/nfr-requirements/nfr-requirements.md";
+      "/p/aidlc/spaces/default/intents/i1/construction/units/U05/nfr-requirements/nfr-requirements.md";
     const receipts = {
       stageVerdict: null,
       unitVerdicts: new Map([["U04", "READY"]]),

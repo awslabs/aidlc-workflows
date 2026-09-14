@@ -229,6 +229,7 @@ function perUnitReviewProject(
     const dir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       unit,
       stageSlug,
     );
@@ -954,6 +955,7 @@ describe("t304 executable review brief scenarios", () => {
     const functionalDir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "widget-checkout",
       "functional-design",
     );

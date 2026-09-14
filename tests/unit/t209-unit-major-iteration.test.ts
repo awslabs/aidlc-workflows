@@ -205,7 +205,7 @@ ${iterationLine}
 
 /** Mark `unit` COVERED for `slug` by writing each of its produces artifacts. */
 function coverUnit(proj: string, unit: string, slug: string): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, slug);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES[slug]) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -329,6 +329,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     stage,
     artifactFilename(reviewArtifact),
@@ -433,7 +434,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/nfr-requirements/performance-requirements.md`,
+      `${RP}/construction/units/alpha/nfr-requirements/performance-requirements.md`,
     );
   }, 30000);
 
@@ -451,7 +452,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/code-generation/code-generation-plan.md`,
+      `${RP}/construction/units/alpha/code-generation/code-generation-plan.md`,
     );
   }, 30000);
 
@@ -510,7 +511,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     coverFullGrid(proj, ["alpha", "beta"]);
     // Remove one produces artifact of nfr-design/alpha (overwrite the dir with a
     // partial set): rewrite it with all but the first artifact missing.
-    const dir = join(seededRecordDir(proj), "construction", "alpha", "nfr-design");
+    const dir = join(seededRecordDir(proj), "construction", "units", "alpha", "nfr-design");
     // Delete one file by rewriting the directory contents minus one artifact.
     const { rmSync } = require("node:fs") as typeof import("node:fs");
     rmSync(join(dir, `${PRODUCES["nfr-design"][0]}.md`));
@@ -560,10 +561,10 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     // not the UI-only frontend artifact. The kind comes from the dependency
     // artifact because the cached graph deliberately has no DAG.
     expect(d.produces).toContain(
-      `${RP}/construction/contract/functional-design/rules.md`,
+      `${RP}/construction/units/contract/functional-design/rules.md`,
     );
     expect(d.produces).toContain(
-      `${RP}/construction/contract/functional-design/entities.md`,
+      `${RP}/construction/units/contract/functional-design/entities.md`,
     );
     expect(d.produces?.some((path) => path.endsWith("/functional-spec.md"))).toBe(true);
     expect(d.produces?.some((path) => path.endsWith("/frontend-components.md"))).toBe(false);
