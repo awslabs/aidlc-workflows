@@ -119,6 +119,7 @@ export const TOOLS = {
   attest: "aidlc-attest.ts",
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
+  devContext: "aidlc-dev-context.ts",
   graph: "aidlc-graph.ts",
   doctor: "aidlc-doctor.ts",
   init: "aidlc-init.ts",
@@ -709,6 +710,27 @@ export const ROUTES: readonly Route[] = [
     verbs: ["compile", "read", "summary", "fragment-fork", "fragment-merge"],
     tool: TOOLS.runtime,
     ...HIDDEN_ENGINE,
+  },
+  {
+    // Contributor introspection: "what already applies to this piece of the
+    // framework?" The verbs are the target kinds, so the grammar reads
+    // `aidlc engine dev-context stage requirements-analysis`.
+    //
+    // Engine-namespaced rather than a public top-level verb: the public surface is
+    // deliberately six install-lifecycle commands, pinned by an exact-list
+    // assertion in t230, and widening the product's front door is a maintainer
+    // call. It overrides two HIDDEN_ENGINE defaults because it reads the shipped
+    // graph, not a workflow: no configured project is required, and it mutates
+    // nothing.
+    id: "dev-context",
+    group: "dev-context",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["stage", "hook", "tool", "agent", "test"],
+    tool: TOOLS.devContext,
+    ...HIDDEN_ENGINE,
+    projectRequirement: "none",
+    mutationScope: "none",
   },
   {
     id: "sensor",
@@ -2022,6 +2044,7 @@ const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
   "aidlc-audit.ts": () => import("./aidlc-audit.ts"),
   "aidlc-bolt.ts": () => import("./aidlc-bolt.ts"),
   "aidlc-completions.ts": () => import("./aidlc-completions.ts"),
+  "aidlc-dev-context.ts": () => import("./aidlc-dev-context.ts"),
   "aidlc-doctor.ts": () => import("./aidlc-doctor.ts"),
   "aidlc-graph.ts": () => import("./aidlc-graph.ts"),
   "aidlc-init.ts": () => import("./aidlc-init.ts"),
