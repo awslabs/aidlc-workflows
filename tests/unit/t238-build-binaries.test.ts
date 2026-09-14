@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -361,6 +362,31 @@ describe("t238 build-binaries release builder", () => {
       expect(copySettingsText).not.toContain('"command": "aidlc engine');
       expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
       expect(nativeSettingsText).not.toContain('"command": "bun ');
+
+      const manualProject = join(runtimeChannels, "manual-project");
+      cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });
+      const manualStatusline = spawnSync(BUN, [
+        join(manualProject, ".claude", "tools", "aidlc.ts"),
+        "engine",
+        "statusline",
+      ], {
+        cwd: manualProject,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: manualProject,
+          PATH: "",
+        },
+        timeout: 30_000,
+      });
+      expect(
+        manualStatusline.status,
+        `${manualStatusline.stdout ?? ""}${manualStatusline.stderr ?? ""}`,
+      ).toBe(0);
+      expect(manualStatusline.stdout ?? "").toBe("[AIDLC] ready\n");
+      expect(`${manualStatusline.stdout ?? ""}${manualStatusline.stderr ?? ""}`).not.toMatch(
+        /uv_spawn ['"]aidlc['"]|aidlc: (?:command )?not found|ENOENT.*aidlc/,
+      );
     } finally {
       rmSync(runtimeChannels, { recursive: true, force: true });
     }
