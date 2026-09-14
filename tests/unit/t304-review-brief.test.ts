@@ -496,6 +496,47 @@ describe("t304 executable review brief scenarios", () => {
     );
   });
 
+  test("a NOT-READY review whose findings section is prose is still recorded", () => {
+    // The narrowing that keeps this seam out of the reviewer-protocol's
+    // incomplete-review territory: a body with no findings TABLE is not refused
+    // here, so bodies that predate the table contract still record.
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const base = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, base, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      [
+        "**Verdict:** NOT-READY",
+        "**Reviewer:** aidlc-product-lead-agent",
+        "**Date:** 2026-08-25T12:00:00Z",
+        "**Iteration:** 1",
+        "",
+        "### Findings",
+        "",
+        "Fixture review.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    expect(
+      readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+    ).toHaveLength(1);
+  });
+
   test.each([
     [
       "a noncanonical findings header",

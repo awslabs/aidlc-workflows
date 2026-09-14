@@ -11056,12 +11056,19 @@ export function parseReviewSection(
   review: string,
   artifact: string,
   unit?: string,
-): { verdict: ReviewVerdict | null; findings: ReviewFinding[] } {
+): {
+  verdict: ReviewVerdict | null;
+  findings: ReviewFinding[];
+  // Whether a findings TABLE was present at all. A reviewer that wrote prose
+  // under the heading is a different case from one that wrote the canonical
+  // table and no rows, and the caller refuses only the second.
+  tablePresent: boolean;
+} {
   const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
   const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
   const lines = review.replace(/\r\n/g, "\n").split("\n");
   const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) return { verdict, findings: [] };
+  if (heading === -1) return { verdict, findings: [], tablePresent: false };
   let end = lines.length;
   for (let i = heading + 1; i < lines.length; i++) {
     if (/^### /.test(lines[i])) {
@@ -11072,7 +11079,7 @@ export function parseReviewSection(
   const table = lines
     .slice(heading + 1, end)
     .filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) return { verdict, findings: [] };
+  if (table.length < 2) return { verdict, findings: [], tablePresent: false };
   const headers = splitMarkdownRow(table[0]);
   // Every cell the record schema needs is addressed by column name, so a
   // renamed or dropped column is refused rather than read as "no findings":
@@ -11137,7 +11144,7 @@ export function parseReviewSection(
     finding.fingerprint = reviewFindingFingerprint(finding);
     findings.push(finding);
   }
-  return { verdict, findings };
+  return { verdict, findings, tablePresent: true };
 }
 
 /** A stable, path-safe name for a review attempt, derived from its floor identity. */

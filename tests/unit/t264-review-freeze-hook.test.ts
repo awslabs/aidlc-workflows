@@ -571,14 +571,9 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     reviewFile: string;
   };
   mkdirSync(dirname(join(p, reviewFile)), { recursive: true });
-  // A NOT-READY verdict names the work it asks for, so the fixture carries one
-  // canonical findings row rather than prose alone.
-  const findings = verdict === "NOT-READY"
-    ? "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | fixture > FR-1 | Fixture finding | Fixture action | New |"
-    : "Fixture review.";
   writeFileSync(
     join(p, reviewFile),
-    `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\n${findings}\n`,
+    `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", verdict], {

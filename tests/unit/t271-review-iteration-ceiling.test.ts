@@ -353,14 +353,9 @@ function reviewAppendix(
   reviewer: string,
   iteration: number,
   verdict: "READY" | "NOT-READY",
-  suppliedFindings?: string,
+  findings = "No blocking findings.",
   reviewChallenge?: string,
 ): string {
-  // A NOT-READY verdict names the work it asks for, so its default fixture body
-  // carries one canonical findings row rather than prose alone.
-  const findings = suppliedFindings ?? (verdict === "NOT-READY"
-    ? "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | fixture > FR-1 | Fixture finding | Fixture action | New |"
-    : "No blocking findings.");
   return (
     "\n## Review\n\n" +
     `**Verdict:** ${verdict}\n` +

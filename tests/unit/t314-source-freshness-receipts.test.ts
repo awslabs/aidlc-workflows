@@ -280,18 +280,9 @@ function recordReview(
       `recordReview request failed: ${requested.stdout ?? ""}${requested.stderr ?? ""}`,
     );
   }
-  // A NOT-READY verdict names the work it asks for, so the fixture carries one
-  // canonical findings row rather than prose alone.
-  const findings = verdict === "NOT-READY"
-    ? [
-      "| ID | Severity | Location | Finding | Required action | Status |",
-      "|---|---|---|---|---|---|",
-      "| R-01 | Minor | fixture > FR-1 | Fixture finding | Fixture action | New |",
-    ].join("\n")
-    : "Fixture review.";
   appendFileSync(
     reviewArtifactPath,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\n${findings}\n`,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
   const args = [...baseArgs, "--verdict", verdict];
