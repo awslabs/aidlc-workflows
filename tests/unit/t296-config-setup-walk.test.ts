@@ -178,7 +178,7 @@ describe("t296 first-run config setup walk", () => {
       scaffoldArgs(path),
       path,
       env,
-      "\n\nus-west-2\ndev\ny\n",
+      "\n2\nus-west-2\ndev\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Setup check - 1 of 7 sections need you.");

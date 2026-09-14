@@ -239,12 +239,14 @@ customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
 
-Recommended defaults state the bundle on the option line. Customization walks
-Harness, Model provider, Model effort preset, Plugins, MCP servers, and settings
-layer. Every numbered prompt has a bracketed default, invalid input re-asks in
-place, and each answer is echoed. A check-your-answers table accepts Enter to
-apply or a step number to edit. No files are written before that final gate.
-After apply, gerund receipts name the project files and settings layer,
+Recommended defaults preserve the harness's current model provider.
+Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
+servers, and the model-preset settings layer. The provider step offers keeping
+the current provider first and Amazon Bedrock second. Every numbered prompt has
+a bracketed default, invalid input re-asks in place, and each answer is echoed.
+A check-your-answers table accepts Enter to apply or a step number to edit. No
+files are written before that final gate. After apply, gerund receipts name the
+project files and model-preset settings layer,
 genuinely blocking actions follow, then the wizard prints the exact harness
 launch and first workflow command.
 
@@ -404,10 +406,11 @@ Kiro IDE has no required separate CLI.
 ### Provider Diagnostics
 
 `aidlc config providers` records provider answers for this project install.
-Amazon Bedrock is the default answer, but the shipped fallback bytes remain
-valid when this section has never run.
+Keeping the provider already configured in the harness is the default answer.
+Amazon Bedrock is an explicit opt-in.
 
 ```bash
+aidlc config providers --provider current --yes
 aidlc config providers --provider amazon-bedrock \
   --region us-east-1 --profile default --yes
 aidlc config providers --show --json
@@ -425,8 +428,8 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 
 | Harness | Recorded answer application |
 |---------|-----------------------------|
-| Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
-| Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
+| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
+| Codex CLI | Records the choice and instructs the user to keep provider, credentials, and model in `~/.codex/config.toml` |
 | Kiro CLI | Writes the AWS MCP URL and metadata in `.kiro/settings/mcp.json` |
 | Kiro IDE | Records and instructs only; the chat model must be selected manually in the IDE |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
@@ -437,9 +440,16 @@ Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
 `--mark-done <id>` records completion. Kiro IDE also carries the
-`kiro-ide-chat-model` action. A non-Bedrock opt-out is supported with
-`--provider other --acknowledge`; it records the choice without silently
-editing provider bytes.
+`kiro-ide-chat-model` action. Codex provider setup remains explicitly
+self-attested after completion because the effective user configuration and
+alternate credential channels cannot be resolved offline; `--check` returns
+success with that warning instead of describing the setup as verified.
+`--provider current` preserves the harness's configured provider and removes
+the exact legacy AI-DLC Bedrock defaults from Claude, Codex, or opencode
+project files while preserving user-authored Codex model and provider keys.
+`--provider other` records a manually
+configured non-Bedrock provider and reports that setup as pending until
+`--acknowledge` is supplied.
 
 ### Trust Diagnostics
 

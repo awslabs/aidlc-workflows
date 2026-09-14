@@ -349,6 +349,7 @@ describe("t294 provider diagnostics", () => {
     const settings = JSON.parse(
       readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
     ) as { env: Record<string, string> };
+    expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
     expect(settings.env.AWS_REGION).toBe("eu-west-1");
     expect(settings.env.AWS_PROFILE).toBe("dev");
     const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
@@ -365,14 +366,8 @@ describe("t294 provider diagnostics", () => {
       emptyRecords(record),
     );
     const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    expect(codexAfter).toContain('profile = "dev"');
-    expect(codexAfter).toContain('region = "eu-west-1"');
-    expect(codexAfter.match(/^model\s*=.*$/m)?.[0]).toBe(
-      codexBefore.match(/^model\s*=.*$/m)?.[0],
-    );
-    expect(codexAfter.match(/^model_reasoning_effort\s*=.*$/m)?.[0]).toBe(
-      codexBefore.match(/^model_reasoning_effort\s*=.*$/m)?.[0],
-    );
+    expect(codexAfter).toBe(codexBefore);
+    expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
 
     const kiro = temp("aidlc-t294-provider-kiro-");
     cpSync(join(DIST, "kiro"), kiro, { recursive: true });
@@ -429,6 +424,96 @@ describe("t294 provider diagnostics", () => {
       );
       expect(readFileSync(path), harness).toEqual(original);
     }
+  });
+
+  test("current detects and removes stale project Bedrock overrides", () => {
+    const record: ProvidersRecord = {
+      schemaVersion: 1,
+      provider: "current",
+    };
+
+    const claude = temp("aidlc-t294-other-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    const claudePath = join(claude, ".claude", "settings.json");
+    const claudeSettings = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeSettings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    claudeSettings.env.AWS_REGION = "us-east-1";
+    claudeSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "stale-bedrock-model";
+    writeFileSync(claudePath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
+    expect(providerIssues(claude, ".claude", "claude", record)
+      .map((issue) => issue.id)).toContain("provider-claude-project-override");
+    applyConfigDiagnosticRecords(
+      claude,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    expect(providerIssues(claude, ".claude", "claude", record)).toEqual([]);
+
+    const codex = temp("aidlc-t294-other-codex-");
+    cpSync(join(DIST, "codex"), codex, { recursive: true });
+    const codexPath = join(codex, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n` +
+        readFileSync(codexPath, "utf-8"),
+    );
+    expect(providerIssues(codex, ".codex", "codex", record)
+      .map((issue) => issue.id)).toContain("provider-codex-project-override");
+    applyConfigDiagnosticRecords(
+      codex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(providerIssues(codex, ".codex", "codex", record)).toEqual([]);
+
+    const customCodex = temp("aidlc-t294-custom-codex-");
+    cpSync(join(DIST, "codex"), customCodex, { recursive: true });
+    const customCodexPath = join(customCodex, ".codex", "config.toml");
+    const customConfig =
+      `model = "gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n` +
+      readFileSync(customCodexPath, "utf-8");
+    writeFileSync(customCodexPath, customConfig);
+    expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([]);
+    applyConfigDiagnosticRecords(
+      customCodex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(readFileSync(customCodexPath, "utf-8")).toBe(customConfig);
+
+    const opencode = temp("aidlc-t294-other-opencode-");
+    cpSync(join(DIST, "opencode"), opencode, { recursive: true });
+    const opencodePath = join(opencode, "opencode.json");
+    const opencodeSettings = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    opencodeSettings.provider = {
+      "amazon-bedrock": {
+        options: { region: "us-east-1" },
+      },
+    };
+    writeFileSync(
+      opencodePath,
+      `${JSON.stringify(opencodeSettings, null, 2)}\n`,
+    );
+    expect(providerIssues(opencode, ".aidlc", "opencode", record)
+      .map((issue) => issue.id)).toContain("provider-opencode-project-override");
+    applyConfigDiagnosticRecords(
+      opencode,
+      ".aidlc",
+      "opencode",
+      emptyRecords(record),
+    );
+    expect(providerIssues(opencode, ".aidlc", "opencode", record)).toEqual([]);
   });
 
   test("pending actions drive check and doctor until marked done", () => {
@@ -891,7 +976,9 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(reset.status, reset.stdout + reset.stderr).toBe(0);
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "us-east-1"');
+      .not.toContain('"AWS_REGION"');
+    expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
+      .not.toContain('"CLAUDE_CODE_USE_BEDROCK"');
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
       .toBeNull();
 
@@ -911,6 +998,177 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, 60_000);
+
+  test("legacy Codex Bedrock records acquire new required actions on load and refresh", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    expect(
+      readConfigDiagnosticRecords(join(project, ".codex")).providers
+        ?.pendingActions,
+    ).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("codex-provider-configuration");
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, runtimeEnv());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const persisted = JSON.parse(readFileSync(dataPath, "utf-8"));
+    expect(persisted.providers.pendingActions).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+  }, 60_000);
+
+  test("completed Codex Bedrock setup stays visibly self-attested", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+        { id: "codex-provider-configuration", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const issues = providerIssues(
+      project,
+      ".codex",
+      "codex",
+      readConfigDiagnosticRecords(join(project, ".codex")).providers,
+      {
+        hasCredentials: true,
+        sources: [],
+        profiles: [],
+        regions: [],
+        files: [],
+      },
+    );
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-codex-self-attested",
+      severity: "warn",
+    }));
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+      "--json",
+    ], project, runtimeEnv());
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-codex-self-attested");
+  }, 60_000);
+
+  test("Claude local provider overrides are reported as warnings", () => {
+    const project = temp("aidlc-t294-claude-local-provider-");
+    cpSync(join(DIST, "claude"), project, { recursive: true });
+    writeFileSync(
+      join(project, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "eu-west-1",
+        },
+      }, null, 2)}\n`,
+    );
+    const issues = providerIssues(project, ".claude", "claude", {
+      schemaVersion: 1,
+      provider: "current",
+    });
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-claude-local-override",
+      severity: "warn",
+    }));
+  });
+
+  test("reapplying an unchanged provider answer repairs stale project overrides", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    settings.env.AWS_REGION = "us-east-1";
+    settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "stale-bedrock-model";
+    settings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(1);
+
+    const repaired = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+    expect(repaired.stdout).not.toContain("configuration unchanged");
+    const repairedSettings = readFileSync(settingsPath, "utf-8");
+    expect(repairedSettings).not.toContain("CLAUDE_CODE_USE_BEDROCK");
+    expect(repairedSettings).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL");
+    expect(repairedSettings).toContain('"MY_TEAM_SETTING": "preserved"');
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
   }, 60_000);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {
@@ -1265,7 +1523,7 @@ describe("t294 config diagnostics CLI", () => {
     });
 
     const cursor = install("cursor");
-    const missingOtherAck = run([
+    const pendingOther = run([
       "config",
       "providers",
       "--project-dir",
@@ -1274,8 +1532,17 @@ describe("t294 config diagnostics CLI", () => {
       "other",
       "--yes",
     ], cursor, env);
-    expect(missingOtherAck.status).toBe(2);
-    expect(missingOtherAck.stdout).toContain("pass --acknowledge");
+    expect(pendingOther.status, pendingOther.stdout + pendingOther.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(cursor, ".cursor")).providers)
+      .toEqual(expect.objectContaining({
+        provider: "other",
+        pendingActions: expect.arrayContaining([
+          {
+            id: "non-bedrock-provider-configuration",
+            status: "pending",
+          },
+        ]),
+      }));
     const cursorApplied = run([
       "config",
       "providers",

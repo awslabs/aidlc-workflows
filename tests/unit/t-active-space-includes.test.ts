@@ -265,7 +265,7 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
     return root;
   }
 
-  test("re-points AIDLC_RULES_DIR to the requested space; preserves model/sandbox/statusline", () => {
+  test("re-points AIDLC_RULES_DIR to the requested space; preserves provider neutrality, sandbox, and statusline", () => {
     const root = setup();
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".codex/config.toml"]);
@@ -273,7 +273,8 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
     expect(cfg).toContain('AIDLC_RULES_DIR = "aidlc/spaces/teamB/memory"');
     expect(cfg).not.toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
     // Engine config preserved (the load-bearing reason config.toml stays committed).
-    expect(cfg).toContain("model_provider");
+    expect(cfg).toContain("Model/provider: intentionally omitted");
+    expect(cfg).not.toMatch(/^(?:model|model_provider)\s*=/m);
     expect(cfg).toContain("sandbox_mode");
     expect(cfg).toContain("status_line");
   });

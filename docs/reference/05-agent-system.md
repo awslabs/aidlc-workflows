@@ -90,7 +90,7 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 | Tier | Agents | Meaning |
 |------|--------|---------|
 | `judgment` | architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality | Multi-constraint reasoning under ambiguity; output cascades downstream. Never downgraded: inherits the session's model AND effort |
-| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. The measured baseline pins a mid-size model at medium effort on Claude Code, Codex, and opencode |
+| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Claude Code uses the measured Sonnet/medium baseline; Codex and opencode inherit the session model while applying medium reasoning effort |
 | `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). The tier remains the Writing up models-dial group, but its shipped baseline inherits the session model and effort |
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
@@ -98,7 +98,7 @@ The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of 
 | Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI agent JSON / Kiro IDE `.md` | Kiro CLI cli.json `chat.modelDefaults` | opencode (.md frontmatter) | Copilot (.md frontmatter) | Cursor (.md frontmatter) |
 |------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|-----------------------------|--------------------------|
 | `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (inherits the session model) |
-| `balanced` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
+| `balanced` | `model: sonnet`, `effort: medium` | model omitted, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | model omitted, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
 | `templated` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (see below) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (see below) |
 
 Key facts behind the table:

@@ -138,15 +138,10 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       expect(fm, `${f}: no raw tier: leak`).not.toMatch(/^tier:/m);
       expect(fm, `${f}: no inert disallowedTools leak`).not.toMatch(/^disallowedTools:/m);
       expect(fm, `${f}: native task denial`).toMatch(/^permission:\n {2}task: deny$/m);
-      // Balanced pins the Bedrock sonnet id; judgment and templated inherit by
-      // omission. Any present bare non-provider-prefixed model value would be
-      // an authoring bug on this harness.
+      // Every tier inherits the session model by omission.
       const model = fm.match(/^model: (.*)$/m)?.[1];
-      if (model !== undefined) {
-        expect(model, `${f}: opencode model carries a provider prefix`).toMatch(/^amazon-bedrock\//);
-      }
+      expect(model, `${f}: opencode model must inherit`).toBeUndefined();
       if (f === "aidlc-product-lead-agent.md") {
-        expect(model).toBe("amazon-bedrock/global.anthropic.claude-sonnet-4-6");
         expect(fm).toMatch(/^variant: medium$/m);
       }
       if (f === "aidlc-delivery-agent.md") {

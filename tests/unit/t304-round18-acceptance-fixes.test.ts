@@ -489,19 +489,21 @@ describe("t304 first-run prompt and detection safety", () => {
       .toContain('export PATH="$HOME/.local/bin:$PATH"');
   });
 
-  test("recommended defaults without credentials leave provider setup manual", () => {
+  test("recommended defaults preserve the current provider without credentials", () => {
     const result = runWizard("1\n\n", { hasCredentials: false });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "provider recorded as other; manual provider setup remains",
+      "current model provider preserved",
     );
-    expect(result.stdout).toContain("Choose and configure a model provider");
+    expect(result.stdout).not.toContain("Choose and configure a model provider");
     expect(result.stdout).not.toContain("Run: ");
     expectCopyChannelPurity(result.stdout);
     const harness = JSON.parse(
       readFileSync(join(result.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
-    expect(harness.providers).toBeUndefined();
+    expect(harness.providers).toEqual(expect.objectContaining({
+      provider: "current",
+    }));
   }, 120_000);
 });
 
