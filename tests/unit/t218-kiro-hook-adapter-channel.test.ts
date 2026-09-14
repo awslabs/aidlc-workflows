@@ -2798,6 +2798,45 @@ describe("t218 Kiro legacy plan-approval enforcement", () => {
     }
   }, 30000);
 
+  test("memory reads pass before approval while memory writes stay guarded", () => {
+    // One tool name multiplexes both: the roster cannot answer for `memory`, so
+    // the command decides. Measured live: a pending Plan Approval refused two
+    // `memory get` calls, and an adapter-local refusal writes no audit row.
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      for (const command of ["get", "list"]) {
+        const modern = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: "ide-memory-read-regression",
+            tool_name: "memory",
+            tool_input: { command },
+          }),
+        );
+        expect(modern.code, `memory ${command}: ${modern.stderr}`).toBe(0);
+        const legacy = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "memory", toolArgs: { command } }),
+        );
+        expect(legacy.code, `legacy memory ${command}: ${legacy.stderr}`).toBe(0);
+      }
+      for (const command of ["update", "remove", ""]) {
+        const guarded = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "memory", toolArgs: { command } }),
+        );
+        expect(guarded.code, `legacy memory ${command || "(absent)"}`).toBe(2);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("IDE read aliases remain available before approval without admitting writes or unknown tools", () => {
     const dir = scratchProject(true);
     try {
@@ -2806,7 +2845,7 @@ describe("t218 Kiro legacy plan-approval enforcement", () => {
       for (const toolName of [
         "read", "fs_read", "read_file", "read_files", "read_code",
         "list_directory", "file_search", "glob", "grep_search", "grep",
-        "web_fetch", "web_search", "disclose_context",
+        "web_fetch", "web_search", "disclose_context", "tool_search",
       ]) {
         const modern = runIdeStdin(
           dir,

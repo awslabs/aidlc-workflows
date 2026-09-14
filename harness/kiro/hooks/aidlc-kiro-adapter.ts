@@ -324,6 +324,7 @@ const LEGACY_PLANNING_WRITE_TOOLS = new Set([
 ]);
 const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
   "read",
+  "tool_search",
   "fs_read",
   "read_file",
   "read_files",
@@ -2102,10 +2103,31 @@ function canonicalWriteTool(
   return "";
 }
 
-function mutationCapableTool(name: string): boolean {
+// Kiro's `memory` tool multiplexes reads and writes behind ONE tool name, so a
+// name-level roster cannot answer for it: `get` and `list` read, every other
+// command mutates. Measured on a live run: a pending Plan Approval refused two
+// `memory get` calls, one of them a recall the conductor needed in order to
+// answer the gate. A refusal here never reaches the core hook, so it leaves no
+// PLAN_APPROVAL_BLOCKED row; the capture's Pre/PostToolUse pairing is what shows it.
+const MEMORY_READ_COMMANDS = new Set(["get", "list"]);
+
+function planApprovalSafeReadTool(
+  name: string,
+  args: Record<string, unknown> = {},
+): boolean {
+  if (PLAN_APPROVAL_SAFE_READ_TOOLS.has(name)) return true;
+  if (name !== "memory") return false;
+  const command = typeof args.command === "string" ? args.command : "";
+  return MEMORY_READ_COMMANDS.has(command);
+}
+
+function mutationCapableTool(
+  name: string,
+  args: Record<string, unknown> = {},
+): boolean {
   return (
     name.length > 0 &&
-    !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name) &&
+    !planApprovalSafeReadTool(name, args) &&
     !DISPATCH_AUXILIARY_TOOLS.has(name)
   );
 }
@@ -2468,7 +2490,7 @@ function buildForward(): Forward {
       const activeWriteWindows = readPlanApprovalLegacyWindows(projectDir);
       if (
         activeWriteWindows.length > 0 &&
-        (toolName === "" || mutationCapableTool(toolName))
+        (toolName === "" || mutationCapableTool(toolName, toolArgs))
       ) {
         let recoverySession = resolvedPlanApprovalSessionId(ide);
         try {
@@ -2511,7 +2533,7 @@ function buildForward(): Forward {
         toolName === "" ||
         (
           !dispatching &&
-          mutationCapableTool(toolName) &&
+          mutationCapableTool(toolName, toolArgs) &&
           (
             Object.keys(toolArgs).length === 0 ||
             (
@@ -2659,7 +2681,7 @@ function buildForward(): Forward {
           state.active &&
           state.approved &&
           state.target !== null &&
-          (toolName === "" || mutationCapableTool(toolName))
+          (toolName === "" || mutationCapableTool(toolName, toolArgs))
         ) {
           try {
             beginCodeGeneration(projectDir, state.target);
@@ -2694,7 +2716,7 @@ function buildForward(): Forward {
         }
         if (
           toolName === "" ||
-          mutationCapableTool(toolName)
+          mutationCapableTool(toolName, toolArgs)
         ) {
           if (
             state.active &&
@@ -2754,7 +2776,7 @@ function buildForward(): Forward {
         }
       }
       if (toolName === "") return null;
-      if (PLAN_APPROVAL_SAFE_READ_TOOLS.has(toolName)) return null;
+      if (planApprovalSafeReadTool(toolName, toolArgs)) return null;
       if (writeTool) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
