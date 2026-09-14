@@ -7,8 +7,8 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -2176,6 +2176,7 @@ function handleReview(args: string[]): void {
   fields.Verdict = verdict;
   const reviewFileFlag = flags["review-file"];
   let recordPath: string | null = null;
+  let reviewMarkdown: string | null = null;
 
   try {
     withAuditLock(pd, () => {
@@ -2470,6 +2471,26 @@ function handleReview(args: string[]): void {
       if (body !== null && reviewFileFlag === undefined) {
         removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
       }
+      // A readable copy for people, beside the artifact the review is about:
+      // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.
+      // The JSON record stays the engine's source of truth; nothing reads the
+      // copy back, so a failure to write it never withholds the verdict.
+      if (recordBody.length > 0) {
+        try {
+          const recordRoot = recordDir(pd) as string;
+          const reviewsDirRelative = posix.join(posix.dirname(artifactKey), "reviews");
+          const reviewsDir = join(recordRoot, ...reviewsDirRelative.split("/"));
+          const existing = existsSync(reviewsDir)
+            ? readdirSync(reviewsDir).filter((name) => /^review-\d+\.md$/.test(name)).length
+            : 0;
+          const copyRelative =
+            `${reviewsDirRelative}/review-${String(existing + 1).padStart(2, "0")}.md`;
+          writeRecordFileNoFollow(recordRoot, copyRelative, recordBody);
+          reviewMarkdown = copyRelative;
+        } catch (e) {
+          console.error(`warning: the readable review copy was not written: ${errorMessage(e)}`);
+        }
+      }
     }, intent, space);
   } catch (e) {
     if (e instanceof ReviewRefusal) error(e.message);
@@ -2480,6 +2501,7 @@ function handleReview(args: string[]): void {
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
+    ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
   }));
 }
 

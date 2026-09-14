@@ -278,8 +278,9 @@ artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then writes its review (a verdict of **READY** or **NOT-READY** plus
 a findings table) to the review file the conductor names. The reviewer never
 edits the artifact it reviews; the engine records the review as a framework-owned
-record under the intent's `.aidlc-reviews/` directory and refuses a verdict whose
-artifacts changed. How the verdict is handled depends on the stage's review class:
+record under the intent's `.aidlc-reviews/` directory, writes a readable copy of
+the review for people at `<stage dir>/reviews/review-NN.md` beside the reviewed
+artifact, and refuses a verdict whose artifacts changed. How the verdict is handled depends on the stage's review class:
 
 - **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
   review pass, whatever the verdict. The findings are quoted verbatim at the
