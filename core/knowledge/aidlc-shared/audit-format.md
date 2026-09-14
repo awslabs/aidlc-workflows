@@ -224,8 +224,13 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `ERROR_LOGGED` | Tool CLI exited non-zero via `error()` | Timestamp, Tool, Command, Error | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) |
+| `ERROR_LOGGED` | Tool CLI exited non-zero via `error()`, or the Stop hook first delivered a distinct engine error directive | Timestamp, Tool, Command, Error; optional Source, Exit Code, Observed By, Error Fingerprint | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) and `hooks/aidlc-continue-workflow.ts` |
 | `RECOVERY_COMPLETED` | User answered the compaction-awareness prompt | Timestamp, Choice, Current Stage | `tools/aidlc-state.ts acknowledge-compaction` |
+
+Stop-hook delivery deduplicates the most recent 32 fingerprints in FIFO order,
+including intent, session, state, stage, and the diagnostic bounded to 2,000 UTF-8
+bytes. Repeats do not refresh retention; a diagnostic evicted by 32 newer errors
+can produce another `ERROR_LOGGED` on delivery.
 
 ### Construction Bolt Events (4 events)
 
