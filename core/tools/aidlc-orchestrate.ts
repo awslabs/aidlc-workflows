@@ -111,6 +111,7 @@ import {
 } from "./aidlc-directive.ts";
 import {
   ActiveDirectiveLockContendedError,
+  activeDirectiveStorageDir,
   advanceContinuationCursor,
   activeUnitCheckpoint,
   artifactFilename,
@@ -204,7 +205,6 @@ import {
   singleStageAttemptIsOpen,
   defaultScope,
   defaultScopeResolution,
-  engineDirFor,
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
@@ -3623,7 +3623,11 @@ type SteeringTokenKeyResult = {
 function steeringTokenKeyPath(projectDir: string): string {
   const statePath = engineStateFilePath(projectDir);
   if (existsSync(statePath)) {
-    return join(engineDirFor(dirname(statePath)), STEERING_TOKEN_KEY_FILE);
+    const record = dirname(statePath);
+    const storage = activeDirectiveStorageDir(projectDir);
+    return storage === record
+      ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
+      : join(storage, STEERING_TOKEN_KEY_FILE);
   }
   return join(
     projectDir,
@@ -9455,7 +9459,11 @@ function handleWait(args: string[], projectDir: string | undefined): void {
       }
     } else {
       for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
-        if (!entry.required || entry.path === null) continue;
+        if (!entry.required) continue;
+        if (entry.path === null) {
+          missing.push(`${entry.logicalPath} (location unresolved)`);
+          continue;
+        }
         if (!fileHasBytes(entry.path)) missing.push(`${entry.logicalPath} (absent or empty)`);
       }
     }

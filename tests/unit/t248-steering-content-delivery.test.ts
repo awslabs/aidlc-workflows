@@ -1,4 +1,5 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-deliver-stage-rules
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
+// function:activeDirectiveStorageDir, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules cross the engine boundary through
 // bounded load-steering directives before run-stage; optional persona/knowledge
@@ -14,6 +15,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -392,6 +394,55 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     ).trim();
     expect(otherKey).not.toBe(encodedKey);
+  });
+
+  test("a continuation issued before the engine-directory migration remains valid", () => {
+    const proj = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(proj);
+    const orgPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    appendFileSync(
+      orgPath,
+      Array.from(
+        { length: 180 },
+        (_, i) => `\n## Upgrade ${i}\n\n${"x".repeat(320)}\n`,
+      ).join(""),
+    );
+
+    const issued = invoke(proj, "next", []).directive;
+    expect(issued.kind).toBe("load-steering");
+    const record = seededRecordDir(proj);
+    renameSync(
+      join(record, ".aidlc-engine", "active-directive.json"),
+      join(record, ".aidlc-active-directive.json"),
+    );
+    renameSync(
+      join(record, ".aidlc-engine", "steering-token-key"),
+      join(record, ".aidlc-steering-token-key"),
+    );
+
+    const continued = invoke(
+      proj,
+      "continue",
+      [issued.continue_token ?? ""],
+    ).directive;
+    expect(continued.kind).not.toBe("error");
+    expect(existsSync(join(record, ".aidlc-active-directive.json"))).toBe(true);
+    expect(
+      existsSync(join(record, ".aidlc-engine", "active-directive.json")),
+    ).toBe(false);
+    expect(existsSync(join(record, ".aidlc-steering-token-key"))).toBe(true);
+    expect(
+      existsSync(join(record, ".aidlc-engine", "steering-token-key")),
+    ).toBe(false);
   });
 
   test("engine observers are read-only for team and solo, and route checks bypass transport", () => {

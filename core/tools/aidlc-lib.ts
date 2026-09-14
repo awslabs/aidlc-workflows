@@ -43,6 +43,8 @@ export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
 const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
 const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
+const LEGACY_ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
+const LEGACY_ACTIVE_DIRECTIVE_LOCK = ".aidlc-active-directive.lock";
 // Debris the pre-lock (#749-era) marker writer could leave at the record root.
 const LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE = ".aidlc-active-directive.json.transaction";
 
@@ -5314,7 +5316,33 @@ function resolveActiveDirectiveTarget(
   const intentUuid = recordDirName === null
     ? null
     : listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
-  const markerPath = join(engineDirFor(root), ACTIVE_DIRECTIVE_MARKER);
+  const currentMarkerPath = join(engineDirFor(root), ACTIVE_DIRECTIVE_MARKER);
+  const currentLockDir = join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK);
+  const legacyMarkerPath = join(root, LEGACY_ACTIVE_DIRECTIVE_MARKER);
+  const legacyLockDir = join(root, LEGACY_ACTIVE_DIRECTIVE_LOCK);
+  let markerPath = currentMarkerPath;
+  let lockDir = currentLockDir;
+  try {
+    const engineEntry = lstatSync(engineDirFor(root), { throwIfNoEntry: false });
+    if (engineEntry === undefined || engineEntry.isDirectory()) {
+      const currentMarkerEntry = lstatSync(currentMarkerPath, { throwIfNoEntry: false });
+      const currentLockEntry = lstatSync(currentLockDir, { throwIfNoEntry: false });
+      if (currentMarkerEntry === undefined && currentLockEntry === undefined) {
+        const legacyMarkerEntry = lstatSync(legacyMarkerPath, { throwIfNoEntry: false });
+        const legacyLockEntry = lstatSync(legacyLockDir, { throwIfNoEntry: false });
+        if (
+          legacyMarkerEntry?.isFile() === true ||
+          legacyLockEntry?.isDirectory() === true
+        ) {
+          markerPath = legacyMarkerPath;
+          lockDir = legacyLockDir;
+        }
+      }
+    }
+  } catch {
+    // An unreadable or malformed new location is not absence. Stay on the new
+    // paths and fail closed instead of reviving legacy state through it.
+  }
   return {
     canonicalProjectDir,
     space: resolvedSpace,
@@ -5322,7 +5350,7 @@ function resolveActiveDirectiveTarget(
     intentUuid,
     statePath: join(root, "aidlc-state.md"),
     markerPath,
-    lockDir: join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK),
+    lockDir,
     bucket: recordDirName === null ? `${resolvedSpace}/bare-space` : `${resolvedSpace}/${recordDirName}`,
   };
 }
@@ -5333,6 +5361,14 @@ function activeDirectiveMarkerPath(
   space?: string,
 ): string {
   return resolveActiveDirectiveTarget(projectDir, intent, space).markerPath;
+}
+
+export function activeDirectiveStorageDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return dirname(activeDirectiveMarkerPath(projectDir, intent, space));
 }
 
 // Bare sha256 of a UTF-8 string. Used for continuation tokens and cursor

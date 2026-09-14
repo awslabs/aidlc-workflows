@@ -551,4 +551,3 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     );
   });
 });
-

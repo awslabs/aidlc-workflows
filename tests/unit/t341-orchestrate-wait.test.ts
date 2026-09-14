@@ -34,9 +34,11 @@ afterEach(() => {
 });
 
 /** A project whose seeded intent carries a state file, so the active intent resolves. */
-function activeIntentProject(): string {
+function activeIntentProject(
+  fixture = "state-mid-inception.md",
+): string {
   const proj = createOrchestrationTestProject();
-  seedStateFile(proj, "state-mid-inception.md");
+  seedStateFile(proj, fixture);
   return proj;
 }
 
@@ -147,6 +149,38 @@ describe("t341 orchestrate wait", () => {
     ]);
     expect(settled.json?.status).toBe("settled");
     expect(settled.json?.missing).toEqual([]);
+  });
+
+  test("artifacts: unresolved CodeKB and per-unit locations never settle", () => {
+    project = activeIntentProject("state-brownfield-feature.md");
+    const codekb = wait([
+      "--stage", "reverse-engineering", "--for", "artifacts", "--timeout", "1",
+    ]);
+    expect(codekb.status, codekb.stderr).toBe(0);
+    expect(codekb.json?.status).toBe("waiting");
+    expect(codekb.json?.missing).toEqual([
+      "codekb/*/business-overview.md (location unresolved)",
+      "codekb/*/architecture.md (location unresolved)",
+      "codekb/*/code-structure.md (location unresolved)",
+      "codekb/*/api-documentation.md (location unresolved)",
+      "codekb/*/component-inventory.md (location unresolved)",
+      "codekb/*/technology-stack.md (location unresolved)",
+      "codekb/*/dependencies.md (location unresolved)",
+      "codekb/*/code-quality-assessment.md (location unresolved)",
+      "codekb/*/reverse-engineering-timestamp.md (location unresolved)",
+    ]);
+
+    const perUnit = wait([
+      "--stage", "functional-design", "--for", "artifacts", "--timeout", "1",
+    ]);
+    expect(perUnit.status, perUnit.stderr).toBe(0);
+    expect(perUnit.json?.status).toBe("waiting");
+    expect(perUnit.json?.missing).toEqual([
+      "construction/*/functional-design/entities.md (location unresolved)",
+      "construction/*/functional-design/rules.md (location unresolved)",
+      "construction/*/functional-design/functional-spec.md (location unresolved)",
+      "construction/*/functional-design/traceability.json (location unresolved)",
+    ]);
   });
 
   test("review: settles when the named review file has bytes, resolved against the project", () => {

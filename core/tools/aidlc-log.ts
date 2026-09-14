@@ -2480,11 +2480,19 @@ function handleReview(args: string[]): void {
           const recordRoot = recordDir(pd) as string;
           const reviewsDirRelative = posix.join(posix.dirname(artifactKey), "reviews");
           const reviewsDir = join(recordRoot, ...reviewsDirRelative.split("/"));
-          const existing = existsSync(reviewsDir)
-            ? readdirSync(reviewsDir).filter((name) => /^review-\d+\.md$/.test(name)).length
-            : 0;
+          let next = 1;
+          if (existsSync(reviewsDir)) {
+            for (const name of readdirSync(reviewsDir)) {
+              const match = /^review-(\d+)\.md$/.exec(name);
+              if (match === null) continue;
+              const suffix = Number.parseInt(match[1], 10);
+              if (Number.isSafeInteger(suffix) && suffix >= next) {
+                next = suffix + 1;
+              }
+            }
+          }
           const copyRelative =
-            `${reviewsDirRelative}/review-${String(existing + 1).padStart(2, "0")}.md`;
+            `${reviewsDirRelative}/review-${String(next).padStart(2, "0")}.md`;
           writeRecordFileNoFollow(recordRoot, copyRelative, recordBody);
           reviewMarkdown = copyRelative;
         } catch (e) {

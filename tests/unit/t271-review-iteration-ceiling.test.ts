@@ -2120,6 +2120,37 @@ describe("t271 review iteration ceiling", () => {
     );
   });
 
+  test("readable review numbering does not overwrite an existing copy across a gap", () => {
+    const proj = seedProject("feature");
+    const reviews = join(
+      seededRecordDir(proj),
+      "inception",
+      "requirements-analysis",
+      "reviews",
+    );
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "review-01.md"), "first review\n", "utf-8");
+    writeFileSync(join(reviews, "review-03.md"), "keep this review\n", "utf-8");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    const completed = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(completed.status, completed.stderr).toBe(0);
+    const output = JSON.parse(
+      completed.stdout.trim().split("\n").at(-1) ?? "{}",
+    ) as { reviewMarkdown?: string };
+    expect(output.reviewMarkdown).toEndWith("/reviews/review-04.md");
+    expect(readFileSync(join(reviews, "review-03.md"), "utf-8")).toBe(
+      "keep this review\n",
+    );
+    expect(readFileSync(join(reviews, "review-04.md"), "utf-8")).toContain(
+      "**Verdict:** READY",
+    );
+  });
+
   test("review_artifact, not produces order, names the plugin, kind-filtered, and no-DAG reviewed artifact", () => {
     const noDag = createTestProject();
     seedStateFile(noDag, "state-mid-inception.md");
