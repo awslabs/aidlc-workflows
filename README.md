@@ -30,10 +30,12 @@ The installer adds the native `aidlc` command and every harness runtime. Bun
 and Node.js are not required. If your shell cannot find `aidlc`, follow the PATH
 instruction printed by the installer or start a new shell.
 
-Prefer to manage the project files manually? Install the matching native
-`aidlc` command, download `aidlc-runtime-X.Y.Z.tar.gz` from the
+Cannot install a native executable, or prefer to manage the project files
+manually? Install [Bun](https://bun.sh/), download
+`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-`runtime/<harness>/` into your project.
+the complete `runtime/<harness>/` directory into your project. This path does
+not require the native `aidlc` command.
 
 ### 2. Configure a project
 

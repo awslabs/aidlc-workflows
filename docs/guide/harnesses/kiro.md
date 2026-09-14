@@ -86,7 +86,7 @@ before the first workflow.
 
 ### Versioned manual-copy alternative
 
-Download and extract a specific release's `aidlc-runtime-X.Y.Z.tar.gz` as described in
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
 [Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
 then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 

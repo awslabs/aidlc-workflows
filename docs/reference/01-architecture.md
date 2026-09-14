@@ -513,8 +513,10 @@ the complete native/final-layout gate set; a cross artifact is explicitly
 
 `scripts/package-release.ts` first regenerates the local projections, runs the
 two-build package determinism guard, validates those records (and the complete
-seven-target matrix in release mode), archives each
-`dist-release/<harness>/`, and emits the flat `version.json` plus
+seven-target matrix in release mode), archives each `dist/<harness>/` into the
+out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
+`dist-release/<harness>/` into the manifest-listed native
+`aidlc-runtime-X.Y.Z.tar.gz`, and emits the flat `version.json` plus
 `checksums.txt`, both installers, and binaries. The staging job re-verifies and
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
 its checksums and test it. `publish` downloads the same candidate, re-verifies

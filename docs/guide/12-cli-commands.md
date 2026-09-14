@@ -222,8 +222,10 @@ If no state file exists, the framework treats this as a new workflow and asks fo
 ### Workflow Initialization — automatic
 
 For manual-copy installs, there is no scaffold command. The versioned
-`runtime/<harness>/` shell from `aidlc-runtime-X.Y.Z.tar.gz` arrives pre-built (the
-`.claude/` engine plus `aidlc/spaces/default/memory/`),
+`runtime/<harness>/` shell from the Bun-shaped
+`aidlc-copy-runtime-X.Y.Z.tar.gz` arrives pre-built and does not require the native
+`aidlc` executable (the `.claude/` engine plus
+`aidlc/spaces/default/memory/`),
 and the engine **auto-creates** the first intent on your first `/aidlc` (or when
 you describe what to build). Creation runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic

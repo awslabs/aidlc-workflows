@@ -118,7 +118,8 @@ events and `statusLine`. For a native project, complete active workflows and
 run `aidlc config` to reconcile framework-owned wiring. For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive while preserving project root integrations; do
-not patch one hook command in isolation.
+not patch one hook command in isolation. The manual archive is Bun-shaped and
+does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
 
