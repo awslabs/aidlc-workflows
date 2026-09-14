@@ -88,9 +88,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -107,7 +109,10 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { writeSessionPidEntry, stateDigest,
+import {
+  writePlanApprovalChallenge,
+  writeSessionPidEntry,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
@@ -1718,6 +1723,60 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  // =========================================================================
+  // (f) PRE-PROBE PLAN APPROVAL CARVE-OUT — when a pending Plan Approval
+  //     challenge exists for the current session, the Stop hook allows the
+  //     stop WITHOUT running the engine's `next` probe (which could delete the
+  //     challenge via resetPlanApprovalRuntime). The carve-out is inside the
+  //     `if (!copilotSession)` block, after the resume-wait check and before
+  //     runEngineNextDirective (aidlc-continue-workflow.ts:1394-1404).
+  // =========================================================================
+  test("(f) pending Plan Approval challenge allows the stop before the probe (carve-out)", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      autonomy: "gated",
+      questions: "# Plan Approval\n\nApprove this plan?\n[Answer]:\n",
+    });
+    const session = "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9";
+    writePlanApprovalChallenge(proj, {
+      version: 1,
+      session,
+      challengeId: "test-challenge-pa",
+      options: ["Approve Plan", "Request Changes"],
+      requireExactOptionLabels: false,
+      hashedOptionLabels: false,
+      targetId: "stage:code-generation",
+      intentId: "00000000-0000-7000-8000-000000000001",
+      directiveEpoch: "revision:0",
+      runFloor: "test-run",
+      fingerprint: "a".repeat(64),
+      questionsFile: "construction/code-generation/code-generation-questions.md",
+      promptSha256: "b".repeat(64),
+      sourceFloor: "c".repeat(64),
+      markerRevision: 0,
+      plannedSourceSha256: "d".repeat(64),
+    });
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, session_id: session }),
+      "run-stage",
+      "",
+      "",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+    // The challenge file must survive the hook (the probe did not delete it).
+    const runtimeDir = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
+    const challengeFiles = readdirSync(runtimeDir).filter(
+      (n) => n.startsWith("challenge-") && n.endsWith(".json"),
+    );
+    expect(challengeFiles.length).toBe(1);
   }, 30000);
 
   // =========================================================================

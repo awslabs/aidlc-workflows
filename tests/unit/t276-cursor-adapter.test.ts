@@ -182,14 +182,16 @@ function runAdapter(
     // REAL pager environment and global git config when classifying `git`
     // commands, so a developer host with PAGER=less or a global core.pager
     // (e.g. delta) flips the safe-git allow cases to deny. Point the global
-    // scope at an absent file and drop pager variables; command-text
-    // assignments inside individual test payloads are unaffected.
-    PAGER: undefined,
-    GIT_PAGER: undefined,
+    // scope at an absent file and pin pager variables to cat; command-text
+    // assignments inside individual test payloads are unaffected. The
+    // adapter's gitStatusUsesExternalCommand treats a non-cat PAGER as
+    // "pager enabled" and denies `git status` under delegated-agent attribution.
     GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
     GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
     AIDLC_HARNESS_DIR: ".cursor",
+    PAGER: "cat",
+    GIT_PAGER: "cat",
     ...options.env,
   };
   for (const [key, value] of Object.entries(env)) {
@@ -293,6 +295,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
   };
   const args = [
     LOG_TOOL,
@@ -306,7 +309,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "--project-dir",
     project,
   ];
-  const request = spawnSync("bun", args, { encoding: "utf-8" });
+  const request = spawnSync("bun", args, { encoding: "utf-8", env });
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
   }
@@ -321,6 +324,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
   );
   const verdict = spawnSync("bun", [...args, "--verdict", "READY"], {
     encoding: "utf-8",
+    env,
   });
   if (verdict.status !== 0) {
     throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);

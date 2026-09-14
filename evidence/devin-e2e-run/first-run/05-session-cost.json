@@ -1,0 +1,56 @@
+{
+  "workflow_id": "2026-08-31T12:18:26Z",
+  "scope": "express",
+  "started_at": "2026-08-31T12:18:26Z",
+  "duration_minutes": 40,
+  "stages": {
+    "total": 9,
+    "approved": 6,
+    "failed": 0,
+    "pending": 3
+  },
+  "by_phase": {
+    "initialization": {
+      "total": 3,
+      "approved": 3,
+      "failed": 0,
+      "pending": 0
+    },
+    "inception": {
+      "total": 1,
+      "approved": 1,
+      "failed": 0,
+      "pending": 0
+    },
+    "construction": {
+      "total": 2,
+      "approved": 2,
+      "failed": 0,
+      "pending": 0
+    },
+    "operation": {
+      "total": 3,
+      "approved": 0,
+      "failed": 0,
+      "pending": 3
+    }
+  },
+  "memory": {
+    "total": 0,
+    "interpretations": 0,
+    "deviations": 0,
+    "tradeoffs": 0,
+    "open_questions": 0
+  },
+  "sensors": {
+    "total": 33,
+    "passed": 28,
+    "failed": 5,
+    "budget_override": 0,
+    "incomplete": 0
+  },
+  "learnings": {
+    "from_orchestrator": 0,
+    "from_user_addition": 0
+  }
+}

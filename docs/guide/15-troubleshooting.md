@@ -27,6 +27,17 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
+| `Testing-posture contract was read via repair (historical)` doctor warning | See [Testing Contract read via repair](#testing-contract-read-via-repair) below |
+
+---
+
+## Testing Contract read via repair
+
+A `Testing-posture contract was read via repair (historical)` warning from `/aidlc --doctor` means a file-backed contract read needed the temporary raw LF/CR/tab JSON-string repair and still passed the existing version and hash checks. The warning names affected files and counts successful repair reads, not unique incidents. It is non-failing and shared across harnesses; it does not identify which writer caused the corruption.
+
+Inspect the named plan and the intent's `.aidlc-hooks-health/testing-contract-repair.drops`. Regenerate valid contract JSON through the normal plan-approval workflow rather than editing approved records in place. Retire the log manually only after investigating it; fixing a file does not erase historical events. No plan content is logged, and read-only Stop/route engine probes do not write repair telemetry. Logging remains best-effort if the health directory is unwritable.
+
+The fixed Devin CLI version is not yet confirmed. Remove the workaround only after recording a vendor-confirmed fixed version, verifying a captured write/read escape regression, raising the supported baseline accordingly, and regenerating affected stored plans through normal approval. Neither the current supported version nor absence of log entries proves the host bug is fixed.
 
 ---
 

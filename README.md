@@ -3,7 +3,7 @@
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
-and GitHub Copilot.
+GitHub Copilot, and Devin CLI.
 
 ![version](https://img.shields.io/badge/version-2.8.2-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
@@ -45,9 +45,9 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
-`copilot`. Running `aidlc config` without `--harness` starts the interactive
-setup when a terminal is available.
+Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`,
+`copilot`, or `devin`. Running `aidlc config` without `--harness` starts the
+interactive setup when a terminal is available.
 
 ### 3. Start a workflow
 
@@ -76,11 +76,12 @@ guide in the table below. The complete walkthrough is in
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
+| Devin CLI >= 3000.10.21 | `aidlc config --harness devin` | Devin CLI | `/aidlc` | [Devin CLI](docs/guide/harnesses/devin.md) |
 
 Model-provider setup belongs to the harness. Claude Code and the shipped Codex
 configuration default to Amazon Bedrock; GitHub Copilot uses GitHub sign-in or
-BYOK; Kiro, Cursor, and opencode use their configured provider. The methodology
-itself is provider-independent.
+BYOK; Kiro, Cursor, opencode, and Devin CLI use their configured provider. The
+methodology itself is provider-independent.
 
 ## Recommended Model
 
@@ -124,7 +125,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 70 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 71 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling

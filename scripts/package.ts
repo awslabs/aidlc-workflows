@@ -364,11 +364,13 @@ function transform(
     s = substituteToken(s, harnessDir, invoke);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
+    // posixPath: the POSIX-normalized path (srcPath carries the platform
+    // separator on Windows) used by the per-harness agent projections below.
+    const posixPath = srcPath.split(sep).join("/");
     // Cursor, opencode, and Copilot persona bodies are mutable active-space
     // pointers. Ship their memory references on the default seed so the first
     // startup's repointHarnessIncludes(project, "default") is byte-identical;
     // later space switches still rewrite the same concrete segment in place.
-    const posixPath = srcPath.split(sep).join("/");
     if (
       (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
       posixPath.includes("/agents/") &&
@@ -1001,6 +1003,24 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function rewriteDevinNativePermissions(outRoot: string, m: HarnessManifest): void {
+  if (m.name !== "devin") return;
+  const configPath = join(outRoot, m.harnessDir, "config.json");
+  const value = JSON.parse(readFileSync(configPath, "utf-8")) as {
+    permissions?: { allow?: unknown };
+  };
+  const allow = value.permissions?.allow;
+  if (!Array.isArray(allow)) throw new Error("[devin] config.json has no permissions.allow list");
+  value.permissions!.allow = [
+    ...allow.filter((entry) =>
+      entry !== `Exec(bun ${m.harnessDir}/tools/*)` &&
+      entry !== `Exec(bun run ${m.harnessDir}/tools/*)`
+    ),
+    `Exec(${trustedCommand()})`,
+  ];
+  writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "cursor") return;
   const cliPath = join(outRoot, m.harnessDir, "cli.json");
@@ -1029,6 +1049,10 @@ function rewriteNativeOnboarding(value: string): string {
     .replace(
       /^- \*\*Permissions\*\*:.*$/gm,
       `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`,
+    )
+    .replace(
+      "Framework shell grants cover `bun .devin/tools/*`, `bun run .devin/tools/*`, and `date -u`.",
+      `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix and \`date -u\`.`,
     )
     .replace(
       /TypeScript, run via bun/g,
@@ -1129,6 +1153,7 @@ function rewriteNativeInvocations(
     "codex-adapter": true,
     "cursor-adapter": true,
     "copilot-adapter": true,
+    "devin-adapter": true,
   };
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;
@@ -1157,7 +1182,7 @@ function rewriteNativeInvocations(
     );
     value = value.replace(escapedJsonDispatcher, "aidlc");
     const escapedJsonHook = new RegExp(
-      String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
+      String.raw`\bbun\s+\\"\$(?:CLAUDE|DEVIN)_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
       "gi",
     );
     value = value.replace(escapedJsonHook, (_match, hook: string) => {
@@ -1215,6 +1240,7 @@ function rewriteNativeInvocations(
   }
   rewriteKiroNativeAllowlists(outRoot, m);
   rewriteClaudeNativePermissions(outRoot, m);
+  rewriteDevinNativePermissions(outRoot, m);
   rewriteCursorNativePermissions(outRoot, m);
   if (m.tierFlavor === "codex") {
     const { emitDefaultRules, emitTrustSeed } = require(

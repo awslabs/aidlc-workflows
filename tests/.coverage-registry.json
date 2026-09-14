@@ -8057,6 +8057,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8116,6 +8120,10 @@
         },
         {
           "file": "tests/unit/t276-cursor-adapter.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8321,6 +8329,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8385,6 +8397,10 @@
         {
           "file": "tests/unit/t29.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8436,6 +8452,10 @@
         },
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
           "mechanism": "cli"
         },
         {

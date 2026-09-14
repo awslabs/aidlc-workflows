@@ -107,6 +107,36 @@ function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
   return parts.join("\n");
 }
 
+// Normalize a PostToolUse tool_response into the JSON string the selection
+// parsers expect. Codex may deliver {success, output, error} (object form,
+// mirroring Devin); the answer payload is JSON-encoded inside `output`. If the
+// caller already passed a string (test fixtures, live captures), pass it
+// through. The codex adapter `export`s hasExplicitHumanSelection, so the
+// public signature is unchanged — only the parsing pre-step is added.
+//
+// Two inner answer shapes are recognized (the outer {answers: {...}} wrapper
+// is shared):
+//   1. Claude Code: {answers: {<question id>: {answers: ["<string>"]}}}
+//      — keyed by question id; value is a non-array object with an `answers`
+//      array of plain strings.
+//   2. Devin: {answers: {<question text>: [{selected: ["<label>"], custom_text: ""}]}}
+//      — keyed by question TEXT (not id); value is an ARRAY of objects each
+//      with a `selected` (string[]) and `custom_text` (string) field. For
+//      "Other" free-text: {selected: ["Other"], custom_text: "<text>"}. For
+//      multi-select: {selected: ["<opt1>", "<opt2>"], custom_text: ""}.
+function normalizeToolResponse(toolResponse: unknown): string | null {
+  if (typeof toolResponse === "string") return toolResponse;
+  if (
+    toolResponse !== null &&
+    typeof toolResponse === "object" &&
+    !Array.isArray(toolResponse)
+  ) {
+    const obj = toolResponse as Record<string, unknown>;
+    if (typeof obj.output === "string") return obj.output;
+  }
+  return null;
+}
+
 function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
   const offered = new Map<string, Set<string>>();
   if (toolInput === null || typeof toolInput !== "object") return offered;
@@ -131,11 +161,36 @@ function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
   return offered;
 }
 
+function offeredOptionLabelsByText(toolInput: unknown): Map<string, Set<string>> {
+  const offered = new Map<string, Set<string>>();
+  if (toolInput === null || typeof toolInput !== "object") return offered;
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions)) return offered;
+  for (const question of questions) {
+    if (question === null || typeof question !== "object") continue;
+    const record = question as Record<string, unknown>;
+    if (typeof record.question !== "string" || !Array.isArray(record.options)) continue;
+    const labels = new Set<string>();
+    for (const option of record.options) {
+      if (typeof option === "string") labels.add(option.trim());
+      else if (option !== null && typeof option === "object") {
+        const candidate = option as Record<string, unknown>;
+        for (const key of ["label", "value", "text"] as const) {
+          if (typeof candidate[key] === "string") labels.add(candidate[key].trim());
+        }
+      }
+    }
+    offered.set(record.question, labels);
+  }
+  return offered;
+}
+
 export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): boolean {
-  if (typeof toolResponse !== "string") return false;
+  const json = normalizeToolResponse(toolResponse);
+  if (json === null) return false;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(toolResponse);
+    parsed = JSON.parse(json);
   } catch {
     return false;
   }
@@ -147,32 +202,101 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   const selections = Object.entries(answers as Record<string, unknown>);
   if (selections.length === 0) return false;
   const offered = offeredOptionLabels(toolInput);
-  return selections.every(([questionId, selection]) => {
-    if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
-    const record = selection as Record<string, unknown>;
-    if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
-    return record.answers.length > 0 && record.answers.every((answer) => {
-      if (typeof answer !== "string" || answer.trim().length === 0) return false;
-      return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
-    });
+  const offeredByText = offeredOptionLabelsByText(toolInput);
+  return selections.every(([questionKey, selection]) => {
+    // Claude Code shape: non-array object with an `answers` array of strings.
+    if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
+      const record = selection as Record<string, unknown>;
+      if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
+      return record.answers.length > 0 && record.answers.every((answer) => {
+        if (typeof answer !== "string" || answer.trim().length === 0) return false;
+        return !isNonAnswer(answer) || offered.get(questionKey)?.has(answer.trim()) === true;
+      });
+    }
+    // Devin shape: array of {selected: string[], custom_text: string} objects.
+    if (Array.isArray(selection)) {
+      if (selection.length === 0) return false;
+      return selection.every((entry) => {
+        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+        const record = entry as Record<string, unknown>;
+        if (!Array.isArray(record.selected)) return false;
+        const texts: string[] = [];
+        for (const label of record.selected) {
+          if (typeof label === "string") texts.push(label);
+        }
+        if (typeof record.custom_text === "string" && record.custom_text.trim().length > 0) {
+          texts.push(record.custom_text);
+        }
+        if (texts.length === 0) return false;
+        return texts.every((text) => {
+          if (text.trim().length === 0) return false;
+          return !isNonAnswer(text) || offeredByText.get(questionKey)?.has(text.trim()) === true;
+        });
+      });
+    }
+    return false;
   });
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
-  if (typeof toolResponse !== "string") return "";
+  const json = normalizeToolResponse(toolResponse);
+  if (json === null) return "";
   try {
-    const parsed = JSON.parse(toolResponse) as {
-      answers?: Record<string, { answers?: unknown[] }>;
+    const parsed = JSON.parse(json) as {
+      answers?: Record<string, { answers?: unknown[] } | unknown[]>;
     };
     for (const selection of Object.values(parsed.answers ?? {})) {
-      for (const answer of selection.answers ?? []) {
-        if (typeof answer === "string" && answer.trim()) return answer.trim();
+      // Claude Code shape: object with an `answers` array of strings.
+      if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
+        const record = selection as Record<string, unknown>;
+        if (Array.isArray(record.answers)) {
+          for (const answer of record.answers) {
+            if (typeof answer === "string" && answer.trim()) return answer.trim();
+          }
+        }
+      }
+      // Devin shape: array of {selected: string[], custom_text: string} objects.
+      if (Array.isArray(selection)) {
+        for (const entry of selection) {
+          if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+          const record = entry as Record<string, unknown>;
+          if (Array.isArray(record.selected)) {
+            for (const label of record.selected) {
+              if (typeof label === "string" && label.trim()) return label.trim();
+            }
+          }
+          if (typeof record.custom_text === "string" && record.custom_text.trim()) {
+            return record.custom_text.trim();
+          }
+        }
       }
     }
   } catch {
     // Non-structured prompt payloads use the direct fields below.
   }
   return "";
+}
+
+// Lift tool_input.workdir into the top-level cwd field the core
+// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:665).
+// The guard's isFrameworkToolInvocation resolves framework-tool script
+// paths against cwd (resolve(cwd, script) at line 487). Without this lift,
+// a framework hook command run from a subdirectory (Codex
+// passes the subdirectory as workdir) fails the framework-tool exemption
+// because the guard resolves the script path against the project root.
+function rewriteStdinCwd(rawInput: string, codex: CodexHookInput): string {
+  const workdir = codex.tool_input?.workdir;
+  if (typeof workdir !== "string" || !workdir) return rawInput;
+  try {
+    const parsed = JSON.parse(rawInput) as Record<string, unknown>;
+    if (typeof parsed.cwd !== "string" || !parsed.cwd) {
+      parsed.cwd = workdir;
+      return JSON.stringify(parsed);
+    }
+    return rawInput;
+  } catch {
+    return rawInput;
+  }
 }
 
 export async function run(
@@ -679,13 +803,17 @@ switch (target) {
 
   case "plan-approval-guard": {
     // PreToolUse: code-generation's plan-before-generation ordering. Bash
-    // forwards directly; apply_patch fans out one Write call per touched path;
-    // spawn_agent is normalized to the core Task shape. The block contract is
-    // exit 2 + stderr, cached like reviewer-scope so duplicate delivery replays
-    // the block faithfully.
+    // forwards directly; tool_input.workdir is lifted into the top-level cwd
+    // first so the guard resolves framework-tool script paths against the
+    // subdirectory (the cwd the conductor actually ran the command from),
+    // not the project root. apply_patch fans out one Write call per touched
+    // path; spawn_agent is normalized to the core Task shape. The block
+    // contract is exit 2 + stderr, cached like reviewer-scope so duplicate
+    // delivery replays the block faithfully.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
-      const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rawInput);
+      const rewritten = rewriteStdinCwd(rawInput, codex);
+      const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rewritten);
       persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
       if (r.code === 2) {
         process.stderr.write(r.stderr);

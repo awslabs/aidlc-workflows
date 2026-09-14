@@ -12,6 +12,7 @@ import {
 import { homedir, platform as hostPlatform } from "node:os";
 import { delimiter, extname, join, relative, resolve } from "node:path";
 import { sha256Bytes } from "./aidlc-distribution.ts";
+import { DEVIN_MIN_VERSION_STRING } from "./aidlc-devin-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -646,6 +647,12 @@ const HARNESS_CLI: Record<
     command: "opencode",
     required: true,
     install: "Install opencode and ensure `opencode --version` works.",
+  },
+  devin: {
+    command: "devin",
+    required: true,
+    minimumVersion: DEVIN_MIN_VERSION_STRING,
+    install: `Install Devin CLI ${DEVIN_MIN_VERSION_STRING} or later and ensure \`devin --version\` works.`,
   },
 };
 

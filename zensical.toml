@@ -128,6 +128,23 @@ nav = [
     { "Harness Notes" = [
       "reference/14-claude-features.md",
       "reference/kiro-ide-hook-payload.md",
+      { "Devin Harness Findings" = [
+        "reference/research/devin/index.md",
+        "reference/research/devin/01-distribution-and-packaging.md",
+        "reference/research/devin/02-skills-rules-and-onboarding.md",
+        "reference/research/devin/03-agent-profiles-models-and-tools.md",
+        "reference/research/devin/04-permissions-and-configuration.md",
+        "reference/research/devin/05-optional-mcp.md",
+        "reference/research/devin/06-hook-transport.md",
+        "reference/research/devin/07-subagent-lifecycle-and-ensemble.md",
+        "reference/research/devin/08-questions-and-human-turns.md",
+        "reference/research/devin/09-plan-approval-authority.md",
+        "reference/research/devin/10-shell-guards-and-working-directory.md",
+        "reference/research/devin/11-stop-hook-observer-safety.md",
+        "reference/research/devin/12-testing-contract-repair.md",
+        "reference/research/devin/13-version-support-and-diagnostics.md",
+        "reference/research/devin/14-regression-and-evidence.md",
+      ] },
     ] },
     { "Contributing" = [
       "reference/09-testing.md",

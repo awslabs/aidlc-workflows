@@ -1,0 +1,50 @@
+AI-DLC Health Check
+─────────────────────────────────────
+✓  bun installed (required for CLI tools and hooks)
+✓  aidlc-write-audit-log.ts present
+✓  aidlc-sync-workflow-state.ts present
+✓  aidlc-validate-state.ts present
+✓  aidlc-log-subagent.ts present
+✓  aidlc-session-start.ts present
+✓  aidlc-session-end.ts present
+✓  aidlc-statusline.ts present
+✓  aidlc-devin-adapter.ts present
+✓  hooks.v1.json present (hook wiring)
+✓  config.json present (permissions + read_config_from)
+✓  mcp_config.json present (MCP servers)
+✓  rules/aidlc.md present (standing method rule (auto-loaded pointer))
+✓  devin CLI version 3000.6.7 >= 3000.3.0 (modern .devin/ config layout: hooks.v1.json + dedicated mcp_config.json)
+✓  hook approval: approve the project's hooks via /hooks then fully restart Devin CLI (/clear is not enough — unapproved hooks silently no-op)
+✓  AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
+✓  Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=30, bootstrap=3
+✓  Plugin selection flags: harness.json agrees with stage-graph.json
+✓  Enabled stage compile coverage: every enabled stage file is in the full graph
+✓  Composed plugin surface: all enabled plugin stages and recorded contributions are present
+✓  workspace shell ready (.devin/ + aidlc/spaces/default/memory/)
+✓  Agent filename/name consistency: all agent files match declared names
+✓  Scope filename/name consistency: all scope files match declared names
+✓  Submodules: no .gitmodules at workspace root
+✓  Hook heartbeats: not yet fired (first workflow stage will populate)
+✓  Hook drops: none recorded
+✓  Runtime locks: none leaked
+✓  Orphan worktrees: 0 observed
+✓  Stale branches: 0 (0 bolt-* observed)
+✓  Orphan state files: 0 observed
+✓  Orphan audit: 0 observed
+✓  Practices staleness: state file absent (informational)
+✓  MERGE_DISPATCH: 0 orphan INVOKED (0 bracketed)
+✓  Cycle detection: 0 cycles
+✓  Orphan stage files: 33 graph entries all have files
+✓  Uncompiled stage files: 0 stage files missing from the compiled graph
+✓  Scope validation: 11 scopes valid (47 advisories)
+✓  Schema validation: 33/33 stages validated
+✓  Graph references: 122 artifacts + edges resolved
+✓  Duplicate producers: every consumed artifact has a single producer
+✓  Keyword overlap: no conflicts
+✓  Rule drift: no team/project rule overlaps org policy
+✓  Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
+✓  Intent registry: all rows ⇄ record dirs reconciled
+✓  Workspace records: no uncommitted changes under aidlc/
+─────────────────────────────────────
+45 passed, 0 failed
+EXIT_CODE=0

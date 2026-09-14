@@ -46,7 +46,8 @@ export type ModelHarness =
   | "cursor"
   | "kiro"
   | "kiro-ide"
-  | "opencode";
+  | "opencode"
+  | "devin";
 export type ModelPolicyLayer =
   | "agent-exception"
   | "group-dial"
@@ -156,6 +157,13 @@ export const HARNESS_HONESTY = Object.freeze({
     groupEffort: false,
     message:
       "GitHub Copilot cannot pin one portable agent model or effort across CLI and IDE; agents inherit the session.",
+  }),
+  devin: Object.freeze({
+    model: false,
+    effort: false,
+    groupEffort: false,
+    message:
+      "AI-DLC does not project Devin model or effort overrides; shipped custom profiles use the default subagent model, not automatic parent-model inheritance. Ask an admin to review the organization's Default subagent model setting.",
   }),
 });
 

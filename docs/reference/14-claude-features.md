@@ -4,7 +4,7 @@ AI-DLC's methodology concepts are harness-neutral; each CLI harness expresses
 them through its own native primitives. This chapter maps the AI-DLC concept to
 the primitive each harness uses, then details the **Claude Code** expression in
 depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, Codex,
-opencode, GitHub Copilot, and Cursor express the same concepts through their
+opencode, GitHub Copilot, Cursor, and Devin CLI express the same concepts through their
 own equivalents, summarised per chapter in
 [Running on other harnesses](../guide/harnesses/README.md), and the source
 contract for adding a harness is [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md)).
@@ -31,7 +31,7 @@ The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives
 that carry them differ. The rest of this chapter documents the **Claude Code**
 expression of each primitive in detail; for the Kiro CLI, Kiro IDE, Codex,
-opencode, Copilot, and Cursor
+opencode, Copilot, Cursor, and Devin CLI
 equivalents see their guide chapters.
 
 ---

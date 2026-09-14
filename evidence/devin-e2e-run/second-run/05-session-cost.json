@@ -1,0 +1,68 @@
+{
+  "note": "Generated from audit trail analysis — bun runtime command was not executable in background agent context",
+  "workflow_id": "2026-08-31T21:37:16Z",
+  "scope": "express",
+  "started_at": "2026-08-31T21:37:16Z",
+  "session_ended_at": "2026-09-01T01:31:51Z",
+  "session_end_reason": "prompt_input_exit",
+  "stages_total": 9,
+  "stages_completed": 4,
+  "stages_in_progress": 1,
+  "stages_pending": 4,
+  "completed_stages": [
+    "workspace-scaffold",
+    "workspace-detection",
+    "state-init",
+    "requirements-analysis"
+  ],
+  "in_progress_stage": "code-generation",
+  "pending_stages": [
+    "build-and-test",
+    "deployment-pipeline",
+    "deployment-execution",
+    "observability-setup"
+  ],
+  "phases": {
+    "initialization": "verified",
+    "ideation": "skipped",
+    "inception": "verified",
+    "construction": "active",
+    "operation": "pending"
+  },
+  "audit_event_counts": {
+    "PLAN_APPROVAL_BLOCKED": 12,
+    "ARTIFACT_CREATED": 9,
+    "SENSOR_PASSED": 8,
+    "SENSOR_FIRED": 8,
+    "ERROR_LOGGED": 8,
+    "ARTIFACT_UPDATED": 8,
+    "STAGE_STARTED": 7,
+    "HUMAN_TURN": 5,
+    "DECISION_RECORDED": 5,
+    "STAGE_COMPLETED": 4,
+    "PHASE_STARTED": 3,
+    "PHASE_VERIFIED": 2,
+    "PHASE_COMPLETED": 2,
+    "WORKFLOW_STARTED": 1,
+    "SUMMARY_CONFIRMATION_RECORDED": 1,
+    "STAGE_AWAITING_APPROVAL": 1,
+    "SESSION_ENDED": 1,
+    "PHASE_SKIPPED": 1,
+    "GATE_APPROVED": 1
+  },
+  "headline_deltas": {
+    "PLAN_APPROVAL_BLOCKED": { "run1": 15, "run2": 12, "target": 0, "status": "IMPROVED but not zero" },
+    "SUBAGENT_COMPLETED": { "run1": 0, "run2": 0, "target": ">=1", "status": "NOT TESTED — session ended before subagent dispatch" },
+    "HUMAN_TURN": { "run1": 2, "run2": 5, "target": ">=1", "status": "PASS" },
+    "GATE_APPROVED": { "run1": "unknown", "run2": 1, "target": ">=1", "status": "PASS" },
+    "PLAN_APPROVAL_RECORDED": { "run2": 0, "status": "NOT ACHIEVED — plan approval recording failed" }
+  },
+  "sensor_firings_total": 8,
+  "sensor_passes_total": 8,
+  "sensor_failures_total": 0,
+  "human_turns_total": 5,
+  "gate_approvals_total": 1,
+  "errors_total": 8,
+  "artifacts_created_total": 9,
+  "artifacts_updated_total": 8
+}

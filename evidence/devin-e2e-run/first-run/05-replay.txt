@@ -1,0 +1,36 @@
+Session Summary
+===============
+
+Workflow:   2026-08-31T12:18:26Z
+Scope:      express
+Duration:   40 min
+
+Stages
+  Total:      9
+  Approved:   6
+  Failed:     0
+  Pending:    3
+
+By phase
+  initialization 3/3 approved
+  inception      1/1 approved
+  construction   2/2 approved
+  operation      0/3 approved, 3 pending
+
+Memory entries
+  Total:            0
+  Interpretations:  0
+  Deviations:       0
+  Trade-offs:       0
+  Open questions:   0
+
+Sensors
+  Fired:            33
+  Passed:           28
+  Failed:           5
+  Budget-override:  0
+  Incomplete:       0
+
+Learnings captured
+  From orchestrator:    0
+  From user additions:  0

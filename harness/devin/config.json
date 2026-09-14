@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "edit",
+      "write",
+      "grep",
+      "glob",
+      "Exec(bun .devin/tools/*)",
+      "Exec(bun run .devin/tools/*)",
+      "Exec(date -u)",
+      "run_subagent",
+      "ask_user_question",
+      "web_search",
+      "webfetch"
+    ]
+  },
+  "read_config_from": {
+    "cursor": false,
+    "windsurf": false,
+    "claude": false
+  }
+}
