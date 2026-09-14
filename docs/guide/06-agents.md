@@ -217,7 +217,7 @@ This table shows which agents are active in which phases, and whether they serve
 | aidlc-devsecops-agent | — | — | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
 | aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery, user-stories) | L (code-generation), S (functional-design) | S (deployment-execution) |
 | aidlc-quality-agent | — | — | S (practices-discovery, user-stories) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
-| aidlc-pipeline-deploy-agent | — | — | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
+| aidlc-pipeline-deploy-agent | — | — | L (practices-discovery) | L (pr-integration, ci-pipeline) | L (deployment-pipeline, deployment-execution) |
 | aidlc-operations-agent | — | — | — | — | L (observability-setup, incident-response, feedback-optimization) |
 
 ### Observations

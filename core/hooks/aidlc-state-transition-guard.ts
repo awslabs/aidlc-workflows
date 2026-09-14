@@ -32,6 +32,7 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
   ...BLOCKED_STATE_TRANSITIONS,
   "set-skeleton-stance",
   "set-construction-iteration",
+  "set-integration-mode",
   "set-unit-ownership",
   "set-unit-gate-rhythm",
   "acknowledge-compaction",

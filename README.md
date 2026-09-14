@@ -93,12 +93,13 @@ Ad-hoc AI coding loses context as projects grow. AI-DLC keeps requirements,
 decisions, implementation, tests, and operational work connected through one
 audited lifecycle:
 
-- 5 phases and 33 stages from initialization through operation
+- 5 phases and 34 stages from initialization through operation
+- [PR-based integration](docs/guide/18-pr-based-integration.md): protected-branch detection, evidence-rich PRs, review rounds, and merge receipts
 - 14 agents: 11 domain experts, 2 reviewers, and an adaptive composer
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 98-event audit trail plus persistent state, team knowledge, and learned rules
+- 102-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -124,7 +125,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 70 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 71 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling

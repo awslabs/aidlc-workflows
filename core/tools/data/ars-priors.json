@@ -58,6 +58,7 @@
     "nfr-design": { "targets": ["ve", "r"], "cost": 4 },
     "infrastructure-design": { "targets": ["csu", "r"], "cost": 4 },
     "code-generation": { "targets": [], "cost": 5, "role": "core" },
+    "pr-integration": { "targets": ["ve"], "cost": 3, "role": "core" },
     "build-and-test": { "targets": ["ve"], "cost": 4, "role": "core" },
     "ci-pipeline": { "targets": ["ve"], "cost": 3 },
     "deployment-pipeline": { "targets": ["r"], "cost": 5 },

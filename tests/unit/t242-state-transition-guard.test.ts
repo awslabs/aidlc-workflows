@@ -122,6 +122,7 @@ describe("t242 state-transition ownership guard", () => {
       "get",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-integration-mode",
       "count",
       "resume",
       "acknowledge-compaction",
@@ -699,7 +700,7 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   test("non-initialization stages delegate lifecycle transitions and Learn writes through §13", () => {
-    expect(NON_INITIALIZATION_STAGES).toHaveLength(30);
+    expect(NON_INITIALIZATION_STAGES).toHaveLength(31);
     for (const path of NON_INITIALIZATION_STAGES) {
       const body = readFileSync(path, "utf-8");
       const label = relative(REPO_ROOT, path);

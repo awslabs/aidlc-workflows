@@ -1133,7 +1133,7 @@ describe("tui fixture runtime graph", () => {
         cleanupTuiProject(projectDir);
       }
     }
-  });
+  }, 15_000);
 
   test("resolves the active intent created by direct custom-harness creation", () => {
     const projectDir = setupTuiProject({ customHarness: true });

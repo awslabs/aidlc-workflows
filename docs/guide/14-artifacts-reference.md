@@ -61,6 +61,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
       nfr-design/                   (conditional)
       infrastructure-design/        (conditional)
       code-generation/
+      pr-integration/                (conditional after affirmation)
     build-and-test/
     ci-pipeline/                    (conditional)
 
@@ -196,9 +197,11 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | 2.8 Contract Design | `contract-summary.md` (inter-unit contracts) | Multi-unit systems |
 | 2.9 Delivery Planning | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | Always |
 
-### Construction (stages 3.1-3.7)
+### Construction (stages 3.1-3.8)
 
-Stages 3.1-3.5 repeat per unit of work. Artifacts go in `construction/{unit-name}/{stage-name}/`. Stages 3.6-3.7 run once after all units.
+Stages 3.1-3.6 repeat per unit of work when PR Integration is affirmed.
+Artifacts go in `construction/{unit-name}/{stage-name}/`. Stages 3.7-3.8 run
+once after all units.
 
 The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (tagged in 2.7's edge block: `service`, `spec`, `ui`, `packaging`, or `library`). A `spec` unit owes no scalability doc, a `packaging` unit no functional spec; a unit left untagged receives the full matrix below. Which artifact applies to which kind is stage frontmatter data (`produces_kinds`, see [Stage definition](../reference/15-stage-definition.md)). A unit for which none of a stage's artifacts apply is complete for that stage with zero files.
 
@@ -211,8 +214,9 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 | 3.3 NFR Design | `observability-design.md` | Per plan, service units only |
 | 3.4 Infrastructure Design | `infrastructure-specification.md`, `monitoring-design.md`, `cicd-pipeline.md` | Per plan, per unit (by kind) |
 | 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `unit-test-instructions.md`, `code-summary.md`, `traceability.json`, plus engine-required `source-manifest.json` (code goes to workspace root) | Always, per unit |
-| 3.6 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
-| 3.7 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |
+| 3.6 PR Integration | `pr-record.md` | Conditional per Unit after affirmation |
+| 3.7 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
+| 3.8 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |
 
 ### Operation (stages 4.1-4.7)
 

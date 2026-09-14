@@ -722,10 +722,10 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     // new start must bind to the same ambiguity token.
     writeFileSync(
       seededAuditShard(proj),
-      "# AI-DLC Audit Log\n" + block(
+      `# AI-DLC Audit Log\n${block(
         "UNIT_COMPLETED",
         `**Stage**: ${SLUG}\n**Unit**: unit-b\n**Run floor**: ${floor}\n`,
-      ),
+      )}`,
       "utf-8",
     );
     expect(currentUnitLifecycleMode(proj, SLUG)).toBe("serial");

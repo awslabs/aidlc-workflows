@@ -200,9 +200,9 @@ describe("t66 producersOf / consumersOf (in-process)", () => {
 
 describe("t66 topoSort (in-process)", () => {
   // .sh:79-84
-  test("topoSort(loadGraph()) returns 33 stages starting with workspace-scaffold", () => {
+  test("topoSort(loadGraph()) returns 34 stages starting with workspace-scaffold", () => {
     const order = topoSort(loadGraph());
-    expect(`${order.length}:${order[0]}`).toBe("33:workspace-scaffold");
+    expect(`${order.length}:${order[0]}`).toBe("34:workspace-scaffold");
   });
   // .sh:86-95
   test("topoSort throws on cycle input", () => {
@@ -401,8 +401,10 @@ describe("t66 graph traversal — full graph (in-process)", () => {
 
 describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
   // .sh:337-341 — enterprise sub-DAG is the full graph
-  test("enterprise sub-DAG equals full graph", () => {
-    expect(subgraphForScope("enterprise").length).toBe(loadGraph().length);
+  test("enterprise sub-DAG contains all 33 stock stages and leaves PR integration dormant", () => {
+    expect(subgraphForScope("enterprise").length).toBe(33);
+    expect(subgraphForScope("enterprise").map((stage) => stage.slug))
+      .not.toContain("pr-integration");
   });
   // .sh:344-356 — bugfix sub-DAG has sawed-off edges (producers off-path)
   test("bugfix sub-DAG has sawed-off edges (producers off-path)", () => {
@@ -902,7 +904,7 @@ describe("t66 for_each preservation (in-process)", () => {
       .map((s) => s.slug)
       .sort();
     expect(perUnit.join(",")).toBe(
-      "code-generation,functional-design,infrastructure-design,nfr-design,nfr-requirements",
+      "code-generation,functional-design,infrastructure-design,nfr-design,nfr-requirements,pr-integration",
     );
   });
 });
@@ -1039,9 +1041,9 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
       artifacts: unknown[];
       agents: unknown[];
     };
-    expect(out.stages.length).toBe(33);
+    expect(out.stages.length).toBe(34);
     expect(Object.keys(out.scopes).length).toBe(11);
-    expect(out.artifacts.length).toBe(122);
+    expect(out.artifacts.length).toBe(123);
     expect(out.agents.length).toBe(14);
   });
 

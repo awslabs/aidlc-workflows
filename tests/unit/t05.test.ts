@@ -87,6 +87,7 @@ const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   ["construction", "nfr-design"],
   ["construction", "infrastructure-design"],
   ["construction", "code-generation"],
+  ["construction", "pr-integration"],
   ["construction", "build-and-test"],
   ["construction", "ci-pipeline"],
   // Operation (7)
@@ -113,8 +114,8 @@ function parseStage(phase: string, slug: string): Record<string, unknown> {
 // length so a stage added/removed without updating this port is caught,
 // matching the .sh's implicit count contract.
 describe("t05 stage table integrity", () => {
-  test("table holds exactly 33 stages (plan 66 = 33 x 2)", () => {
-    expect(STAGE_TABLE.length).toBe(33);
+  test("table holds exactly 34 stages (plan 68 = 34 x 2)", () => {
+    expect(STAGE_TABLE.length).toBe(34);
   });
 });
 

@@ -132,6 +132,7 @@ export const TOOLS = {
   completions: "aidlc-completions.ts",
   orchestrate: "aidlc-orchestrate.ts",
   plugin: "aidlc-plugin.ts",
+  pr: "aidlc-pr.ts",
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
   reviewBrief: "aidlc-review-brief.ts",
@@ -546,6 +547,7 @@ export const ROUTES: readonly Route[] = [
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-integration-mode",
       "checkbox",
       "count",
       "advance",
@@ -579,6 +581,7 @@ export const ROUTES: readonly Route[] = [
           "set-status",
           "set-skeleton-stance",
           "set-construction-iteration",
+          "set-integration-mode",
           "checkbox",
           "count",
           "lookup",
@@ -643,6 +646,16 @@ export const ROUTES: readonly Route[] = [
     tool: TOOLS.audit,
     ...HIDDEN_ENGINE,
     targets: { fork: "audit-fork", merge: "audit-merge" },
+  },
+  {
+    id: "pr",
+    group: "pr",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["detect", "open", "sweep", "sync-feedback", "finalize"],
+    tool: TOOLS.pr,
+    ...HIDDEN_ENGINE,
+    networkPolicy: "interactive-bounded",
   },
   {
     // Commit provenance. `resolve` is read-only attribution and `anchor` appends
@@ -2043,6 +2056,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-orchestrate.ts");
     case TOOLS.plugin:
       return import("./aidlc-plugin.ts");
+    case TOOLS.pr:
+      return import("./aidlc-pr.ts");
     case TOOLS.runnerGen:
       return import("./aidlc-runner-gen.ts");
     case TOOLS.runtime:

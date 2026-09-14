@@ -8,6 +8,7 @@ keywords:
 description: Infrastructure changes
 skeleton: on
 change_control: strict
+integration: pr
 ---
 
 # infra scope

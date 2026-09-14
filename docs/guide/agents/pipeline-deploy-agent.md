@@ -11,7 +11,8 @@ The aidlc-pipeline-deploy-agent leads four stages spanning Inception, Constructi
 | Stage | Phase | Description |
 |-------|-------|-------------|
 | 2.2 Practices Discovery | Inception | Draft, interview, and integrate the hub-and-spoke findings; promote approved practices to active-space team/project memory |
-| 3.7 CI Pipeline | Construction | CI pipeline configuration with quality gates |
+| 3.6 PR Integration | Construction | Evidence-rich PR publication, review-state observation, and merge settlement |
+| 3.8 CI Pipeline | Construction | CI pipeline configuration with quality gates |
 | 4.1 Deployment Pipeline | Operation | CD pipeline with deployment strategy and rollback procedures |
 | 4.3 Deployment Execution | Operation | Execute deployments, run smoke tests, monitor health |
 

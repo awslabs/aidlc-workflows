@@ -17,7 +17,7 @@ The aidlc-devsecops-agent does not lead any stages.
 | 2.2 Practices Discovery | Inception | Mutually blind security-practice spoke; writes its own contribution file |
 | 3.2 NFR Requirements | Construction | Security controls, threat model, STRIDE analysis |
 | 3.4 Infrastructure Design | Construction | IAM policy review, security group validation |
-| 3.6 Build and Test | Construction | SAST/DAST scans, dependency vulnerabilities, IaC linting |
+| 3.7 Build and Test | Construction | SAST/DAST scans, dependency vulnerabilities, IaC linting |
 | 4.2 Environment Provisioning | Operation | Security posture validation (Security Hub, Inspector, GuardDuty) |
 
 ## What to Expect

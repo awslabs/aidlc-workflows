@@ -8,6 +8,7 @@ keywords:
 description: Clean up existing code
 skeleton: off
 change_control: relaxed
+integration: pr
 ---
 
 # refactor scope

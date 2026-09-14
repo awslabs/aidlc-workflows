@@ -1477,6 +1477,7 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
   const cases = [
     { name: "version", args: ["version"] },
     { name: "graph artifacts", args: ["engine", "graph", "artifacts", "--help"] },
+    { name: "pr detect", args: ["engine", "pr", "detect", "--help"] },
     { name: "sensor list", args: ["engine", "sensor", "list"] },
     { name: "state get", args: ["engine", "state", "get"] },
   ];
@@ -1612,9 +1613,13 @@ describe("t230 dispatcher route completeness", () => {
       expect(route.outputModes.length).toBeGreaterThan(0);
     }
     for (const route of ROUTES.filter((candidate) => candidate.namespace === "engine")) {
-      expect(route.networkPolicy, route.id).toBe("forbidden");
+      // pr-integration reads GitHub only at routing decisions and --status --refresh (RFC #970); the one engine route with interactive-bounded network.
+      if (route.id !== "pr") expect(route.networkPolicy, route.id).toBe("forbidden");
       expect(["none", "project"], route.id).toContain(route.mutationScope);
     }
+    expect(ROUTES.filter((route) => route.namespace === "engine" && route.networkPolicy !== "forbidden")
+      .map((route) => ({ id: route.id, networkPolicy: route.networkPolicy })))
+      .toEqual([{ id: "pr", networkPolicy: "interactive-bounded" }]);
     expect(ROUTES.find((route) => route.id === "top-doctor"))
       .toEqual(expect.objectContaining({
         tool: "aidlc-doctor.ts",

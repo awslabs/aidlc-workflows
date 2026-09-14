@@ -195,6 +195,24 @@ function parked(): Record<string, unknown> {
   return { kind: "parked", reason: "Parked at feasibility.", stage: "feasibility" };
 }
 
+function awaitingIntegration(): Record<string, unknown> {
+  return {
+    kind: "awaiting-integration",
+    reason: "Waiting for PR merge.",
+    stage: "pr-integration",
+    integrating_units: [{
+      unit: "alpha",
+      prs: [{
+        repo: "example/service",
+        url: "https://github.com/example/service/pull/1",
+        state: "OPEN",
+        observed_at: "2026-08-28T00:00:00Z",
+        age_seconds: 60,
+      }],
+    }],
+  };
+}
+
 // Mirror of the .sh run_validator helper (t113-directive-schema.sh:60-67):
 // call the validator and reduce the failure case to the pipe-joined error
 // string the original asserted against. On success return "VALID".
@@ -389,6 +407,10 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(parked()).valid).toBe(true);
   });
 
+  test("awaiting-integration well-formed -> VALID", () => {
+    expect(validateDirective(awaitingIntegration()).valid).toBe(true);
+  });
+
   // ============================================================
   // Positive returns the parsed directive as data (1 assertion)
   // .sh lines 88-93: `kind=` + r.data.kind
@@ -472,6 +494,23 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     const d = parked();
     delete d.stage;
     expect(errs(d)).toContain("parked: missing required field: stage");
+  });
+
+  test("awaiting-integration rejects malformed PR rows", () => {
+    const d = awaitingIntegration();
+    (d.integrating_units as Array<Record<string, unknown>>)[0].prs = [{
+      repo: "example/service",
+      url: 42,
+      state: "OPEN",
+      observed_at: "2026-08-28T00:00:00Z",
+      age_seconds: -1,
+    }];
+    expect(errs(d)).toContain(
+      "awaiting-integration: integrating_units[0].prs[0].url must be string",
+    );
+    expect(errs(d)).toContain(
+      "awaiting-integration: integrating_units[0].prs[0].age_seconds must be a non-negative number",
+    );
   });
 
   // ============================================================
@@ -826,6 +865,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       error(),
       done(),
       parked(),
+      awaitingIntegration(),
     ]) {
       expect(validateDirective({ ...directive, stage_validity: stageValidity }).valid)
         .toBe(true);
