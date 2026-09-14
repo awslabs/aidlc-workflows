@@ -16,6 +16,7 @@ import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
   detectAwsCredentials,
+  harnessOwnsModelAccess,
   instructionFileDoctorCheck,
   normalizeProvidersRecord,
   postApplyOutstandingActions,
@@ -911,6 +912,175 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
+  }, 60_000);
+
+  // Record-level behaviour of the `builtin` kind. The flag stays permissive
+  // across harnesses; where it appears in the MENU is Kiro-only, covered in
+  // t296, because only Kiro serves its own models.
+  test("builtin provider records the harness's own model access with no pending action", () => {
+    const record = reconcileProviderActions(
+      normalizeProvidersRecord({ schemaVersion: 1, provider: "builtin" }) as ProvidersRecord,
+      "kiro",
+    );
+    expect(record).toEqual({ schemaVersion: 1, provider: "builtin" });
+    expect(providerIssues("/nonexistent", ".kiro", "kiro", record, {
+      hasCredentials: false,
+      sources: [],
+      profiles: [],
+      regions: [],
+      files: [],
+    })).toEqual([]);
+    expect(() => normalizeProvidersRecord({ schemaVersion: 1, provider: "subscription" }))
+      .toThrow("providers.provider must be amazon-bedrock, builtin, or other");
+
+    const project = install("claude");
+    const env = runtimeEnv();
+    const rejected = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "subscription",
+      "--yes",
+    ], project, env);
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout + rejected.stderr)
+      .toContain("--provider must be amazon-bedrock, builtin, or other");
+
+    // Start from a Bedrock answer so the switch has stale fields to shed:
+    // `builtin` writes nothing, so it must not keep a region it never uses.
+    const bedrock = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-west-2",
+      "--profile",
+      "dev",
+      "--yes",
+    ], project, env);
+    expect(bedrock.status, bedrock.stdout + bedrock.stderr).toBe(0);
+    const withRegion = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "builtin",
+      "--region",
+      "us-west-2",
+      "--yes",
+    ], project, env);
+    expect(withRegion.status).not.toBe(0);
+    expect(withRegion.stdout + withRegion.stderr)
+      .toContain("--provider builtin records no region, profile, or OpenCode default");
+    const builtin = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "builtin",
+      "--yes",
+    ], project, env);
+    expect(builtin.status, builtin.stdout + builtin.stderr).toBe(0);
+    expect(builtin.stdout).not.toContain("config providers --check");
+    expect(builtin.stdout).toContain(
+      "Providers    builtin; the harness provides its own model access, nothing written",
+    );
+    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
+      .toEqual({ schemaVersion: 1, provider: "builtin" });
+    expect(providerDoctorCheck(project)).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Providers: recorded answers have no unmet actions",
+    }));
+    const show = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, env);
+    expect(show.status, show.stdout + show.stderr).toBe(0);
+    expect(show.stdout).toContain("Provider: builtin");
+    expect(show.stdout).not.toContain("Pending:");
+  }, 60_000);
+
+  test("check names an unrecorded providers section instead of calling it clean", () => {
+    const env = runtimeEnv();
+    // Where AI-DLC configures the provider, an unrecorded section is a real gap.
+    const claude = install("claude");
+    const claudeCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      claude,
+      "--check",
+    ], claude, env);
+    expect(claudeCheck.status, claudeCheck.stdout + claudeCheck.stderr).toBe(0);
+    expect(claudeCheck.stdout).toContain("no recorded answer for claude");
+    expect(claudeCheck.stdout).toContain("the shipped fallback is in use");
+    expect(claudeCheck.stdout).not.toContain("configuration is clean");
+
+    // Where it does not, the same state needs no answer at all.
+    const kiro = install("kiro");
+    const kiroCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      kiro,
+      "--check",
+    ], kiro, env);
+    expect(kiroCheck.status, kiroCheck.stdout + kiroCheck.stderr).toBe(0);
+    expect(kiroCheck.stdout).toContain("needs no answer for kiro");
+    expect(kiroCheck.stdout).toContain("harness-managed");
+    expect(providerDoctorCheck(kiro, ".kiro")).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Providers: harness-managed model access; no answer needed",
+    }));
+    expect(providerDoctorCheck(claude, ".claude")).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Providers: using shipped fallback; no recorded answers",
+    }));
+  }, 90_000);
+
+  test("only Kiro owns its own model access; every other harness is Bedrock-oriented", () => {
+    for (const harness of ["kiro", "kiro-ide"] as const) {
+      expect(harnessOwnsModelAccess(harness)).toBe(true);
+    }
+    // Copilot and Cursor reach Bedrock through their own BYOK/provider settings,
+    // so they must still be asked rather than assumed to be self-served.
+    for (const harness of ["claude", "codex", "opencode", "copilot", "cursor"] as const) {
+      expect(harnessOwnsModelAccess(harness)).toBe(false);
+    }
+  });
+
+  test("a bun-requiring projection names the copy channel in its runtime remediation", () => {
+    const project = temp("aidlc-t294-copy-runtime-");
+    mkdirSync(join(project, ".git"));
+    cpSync(join(DIST, "claude"), project, { recursive: true });
+    const bin = temp("aidlc-t294-copy-path-");
+    if (process.platform !== "win32") {
+      writeFileSync(
+        join(bin, "getconf"),
+        `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(bin)}\n`,
+        { mode: 0o755 },
+      );
+    }
+    const issues = runtimeIssues(probeRuntime(project, ".claude", "claude", {
+      env: { PATH: bin },
+      baselinePath: bin,
+      interactivePath: bin,
+      includeHarnessCli: false,
+    }));
+    const bunIssue = issues.find((issue) => issue.id.includes("bun"));
+    expect(bunIssue, issues.map((issue) => issue.id).join(",")).toBeDefined();
+    expect(bunIssue?.remediation).toContain("copy-channel projection");
+    expect(bunIssue?.remediation).toContain("native install runs them through the aidlc command");
   }, 60_000);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {

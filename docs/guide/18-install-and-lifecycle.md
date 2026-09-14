@@ -258,10 +258,24 @@ Step 3 also offers a fourth option, `unchanged`, which records no preset and
 preserves existing model settings; projects without model policy use shipped
 defaults. `balanced` remains the recommended default.
 
-An existing-project rerun keeps the seven-row map for Harnesses, Models,
-Runtime, Flags, Project, Providers, and Trust. Rows are lowercase `[ok]` or
-`[needs]`; one default-yes gate walks only Runtime, Providers, and Trust
-findings. Runtime leads with the immediate action and points to
+An existing-project rerun keeps the eight-row map for Harnesses, Models,
+Runtime, Flags, Project, Providers, Trust, and Workspace. Rows are lowercase
+`[ok]` or `[needs]`; one default-yes gate walks only Models, Runtime,
+Providers, and Trust findings. Workspace is reported, never walked: a missing
+`aidlc/spaces/default/memory/` shell is repaired by an explicit
+`aidlc config --harness <name>` refresh, not by a question, and while the shell
+is incomplete the gate is not offered at all: its sections would either fail on
+the missing directory or, with no-op answers, rebuild nothing. The ledger then
+leads with the rebuild command. On a Bun-invoking projection, one copied from the
+`runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's
+`dist/<name>/` tree, there is no installed runtime to refresh from, so that
+command also carries
+`--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`;
+a native install refreshes from its installed runtime without it. A missing
+`aidlc/` root is counted once: the Trust section's own
+`workspace-root-missing` issue is folded into the Workspace row. The Providers
+row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
+their own model access. Runtime leads with the immediate action and points to
 `aidlc config runtime --show` for diagnostics. The closing ledger is a compact
 label-to-command list. Section-named commands, non-TTY runs, `--dry-run`,
 `--json`, and `--quiet` keep their deterministic output and never render the
@@ -425,13 +439,26 @@ Kiro IDE has no required separate CLI.
 
 ### Provider Diagnostics
 
-`aidlc config providers` records provider answers for this project install.
-Amazon Bedrock is the default answer, but the shipped fallback bytes remain
-valid when this section has never run.
+`aidlc config providers` records provider answers for this project install. The
+interactive section offers only the two answers that have distinct effects for
+the harness in front of you. `amazon-bedrock` records the region and profile the
+harness should use, and leads on every harness whose models AI-DLC can point at
+Bedrock. The second answer is `builtin` on Kiro CLI and Kiro IDE, recording that
+the harness provides its own model access, and `unchanged` everywhere else,
+recording nothing and keeping what is already in place. The shipped fallback
+bytes remain valid when this section has never run.
+
+`other` is available as `--provider other --acknowledge` but is not offered
+interactively. Nothing reads a recorded `other`: its only effect is a
+`non-bedrock-provider-configuration` reminder that `--acknowledge` immediately
+clears, and declining that acknowledgement did exactly what `unchanged` does,
+so it duplicated the second answer by a longer route. Existing `other` records
+stay valid.
 
 ```bash
 aidlc config providers --provider amazon-bedrock \
   --region us-east-1 --profile default --yes
+aidlc config providers --provider builtin --yes
 aidlc config providers --show --json
 aidlc config providers --check
 aidlc config providers --mark-done bedrock-model-access --yes
@@ -459,9 +486,49 @@ Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
 `--mark-done <id>` records completion. Kiro IDE also carries the
-`kiro-ide-chat-model` action. A non-Bedrock opt-out is supported with
+`kiro-ide-chat-model` action. Neither applies to `builtin`, which carries no
+pending action. A custom non-Bedrock provider is recorded with
 `--provider other --acknowledge`; it records the choice without silently
 editing provider bytes.
+
+The question is worded for the harness in front of you, so each install offers
+the two paths that actually exist for it:
+
+| Harness | `amazon-bedrock` records |
+|---------|--------------------------|
+| Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
+| Codex CLI | the AWS region and profile in `config.toml` |
+| OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
+| GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
+| Cursor | that you configure the provider in Cursor yourself |
+| Kiro CLI | the AWS MCP region only; model access is unaffected |
+| Kiro IDE | picking a Bedrock chat model in the IDE as a manual step |
+
+`builtin` reads the same everywhere: it records no provider settings and keeps
+the model access the harness already uses. It never names a vendor, because
+AI-DLC cannot know which one you are on. Claude Code also runs on Vertex AI,
+Codex on Azure, and OpenCode on anything it has a provider for.
+
+Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures none
+for them. The first-run wizard states that and asks nothing, an unrecorded
+section is complete rather than outstanding, and the Providers row reads `[ok]`.
+Naming the section explicitly still offers the menu, because answering there
+changes the AWS MCP region or records the IDE picker step.
+
+Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
+credentials are never read as evidence that you are on your own subscription.
+Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
+which AI-DLC tracks as a pending action rather than performs.
+
+On any unrecorded section `--check` names that state instead of reporting a
+verified answer, and still exits zero, because the shipped fallback bytes
+remain valid.
+
+On a Bedrock-oriented harness `unchanged` is always the second answer, and it
+becomes the default once something is recorded, so re-entering the section never
+silently rewrites a region or profile you already set. It names what it keeps,
+records nothing, and still reaches the mark-done prompts, so a pending action
+can be cleared without re-answering.
 
 ### Trust Diagnostics
 

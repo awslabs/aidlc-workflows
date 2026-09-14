@@ -489,20 +489,58 @@ describe("t304 first-run prompt and detection safety", () => {
       .toContain('export PATH="$HOME/.local/bin:$PATH"');
   });
 
-  test("recommended defaults without credentials leave provider setup manual", () => {
+  test("recommended defaults without credentials record Bedrock with the access check outstanding", () => {
     const result = runWizard("1\n\n", { hasCredentials: false });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      "provider recorded as other; manual provider setup remains",
-    );
-    expect(result.stdout).toContain("Choose and configure a model provider");
+    // Claude Code is Bedrock-oriented, so absent credentials must not be read
+    // as "this user is on their own subscription".
+    expect(result.stdout).toContain("Bedrock, with model access left for you to verify");
+    expect(result.stdout).not.toContain("provider recorded as other");
+    expect(result.stdout).not.toContain("Choose and configure a model provider");
     expect(result.stdout).not.toContain("Run: ");
     expectCopyChannelPurity(result.stdout);
     const harness = JSON.parse(
       readFileSync(join(result.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
-    expect(harness.providers).toBeUndefined();
+    expect(harness.providers.provider).toBe("amazon-bedrock");
+    expect(harness.providers.pendingActions).toEqual([
+      { id: "bedrock-model-access", status: "pending" },
+    ]);
   }, 120_000);
+
+  // The provider answer is harness-dependent, so a harness change at the
+  // check-your-answers table must re-derive it. Before the fix the previous
+  // harness's answer was applied: Kiro recorded Bedrock and chased model access
+  // it never needed; Claude Code recorded `builtin` and was never asked again.
+  test("changing the harness at the summary re-derives the provider answer", () => {
+    // Claude Code first (1), customize (2), accept every step, then edit step 1
+    // to Kiro CLI (5) and apply.
+    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n\n\n1\n5\n\n");
+    expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
+    expect(toKiro.stdout).toContain("2. Provider     amazon-bedrock, us-east-2");
+    expect(toKiro.stdout).toContain(
+      "2. Provider     builtin, Kiro CLI provides its own model access",
+    );
+    expect(toKiro.stdout).not.toContain("Verify Amazon Bedrock model access");
+    const kiro = JSON.parse(
+      readFileSync(join(toKiro.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(kiro.providers).toEqual({ schemaVersion: 1, provider: "builtin" });
+
+    // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
+    // on Kiro), then edit step 1 to Claude Code (1) and apply.
+    const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n");
+    expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
+    expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
+    expect(toClaude.stdout).toContain("2. Provider     amazon-bedrock, us-east-2");
+    const claude = JSON.parse(
+      readFileSync(join(toClaude.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(claude.providers.provider).toBe("amazon-bedrock");
+    expect(claude.providers.pendingActions).toEqual([
+      { id: "bedrock-model-access", status: "pending" },
+    ]);
+  }, 240_000);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {

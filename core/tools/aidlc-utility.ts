@@ -63,6 +63,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
+  workspaceShellRefreshCommand,
 } from "./aidlc-config-diagnostics.ts";
 import {
   type cachedUnitClaimOverview,
@@ -247,6 +248,7 @@ import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
   compiledExecutable,
+  discoverProjectHarnesses,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -3571,7 +3573,25 @@ export async function collectDoctorReport(
   results.push({
     pass: shellReady,
     label: `workspace shell ready (${harnessDir()}/ + aidlc/spaces/default/memory/)`,
-    fix: "run `aidlc config` in the project root to create the harness tree and workspace shell",
+    // Naming the harness matters: a bare `aidlc config` on a project that
+    // already has a harness directory takes the interactive existing-projection
+    // walk, which does not rebuild a missing shell, so the old advice sent the
+    // user back to the command that had just failed them. An explicit
+    // `--harness` goes through the refresh transaction that recreates it, and
+    // on the copy channel that refresh needs `--from` as well; the shared
+    // renderer spells both channels so this row, the setup map, and the trust
+    // issue agree.
+    fix: (() => {
+      let selected: string | undefined;
+      try {
+        selected = discoverProjectHarnesses(projectDir)[0]?.distribution;
+      } catch {
+        // An unreadable projection is reported by its own checks, not here.
+      }
+      return `run \`${
+        workspaceShellRefreshCommand(harnessDir(), selected ?? "<name>")
+      }\` in the project root to recreate the harness tree and workspace shell`;
+    })(),
   });
 
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are
