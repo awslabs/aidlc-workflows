@@ -160,8 +160,25 @@ Rules (both tracks):
 - A free-text reply that clearly matches an option counts as that option;
   anything else is an "Other" answer — treat it per the protocol (discuss,
   then re-ask for a final pick).
-- Gate semantics live in the ENGINE either way — the rendering never decides;
-  an ordinary ask's answer rides back on
-  `report --user-input "<exact label>"`. The exception is an ask with
-  `ask_type: "new-work-routing"`: its answer routes through `next` exactly as
-  the SKILL.md `ask` row specifies, never through `report`.
+- Gate semantics live in the ENGINE either way - the rendering never decides.
+  Every engine ask carries `ask_type` and `response_route`. A `"next"` route
+  uses the chosen `confirm_command` / `compose_command` or the supplied scope
+  template; replace only `<scope>` with the selected valid scope as one
+  shell-safe argument. Keep `--pending-request <8hex id>` intact and never
+  append the request text. The full request appears once in `intent_text`,
+  while the question uses at most 240 characters plus an ellipsis when truncated.
+  For `intent-pick`, match the chosen exact `available_intents` selector to
+  `select_commands[].selector` and execute that entry's complete `command`
+  verbatim; never interpolate a selector. `new-work-routing` keeps its existing
+  `new_work_description`, `proposed_scope`, `available_intents`, and question
+  fields: follow the question's complete route commands and retain its pending
+  token through selection or composition. Existing intents with no selected
+  cursor and pending work receive this ask on every harness, including after
+  scope confirmation; only no-pending selection uses `intent-pick`.
+  A `"command"` route runs `resume_command` and then re-runs `next`; `"claim"`
+  follows the Unit claim flow. `"execute-remedy"` offers only executable guard
+  remedies and follows the human-selected command or action, never an invented
+  report. Empty remedies remain terminal. The prompt-rendered resume menu is
+  the sole non-stage report round-trip and uses
+  `report --result resumed --user-input "<exact label>"`; this is not a generic
+  engine-ask answer route. Explicit guard-remedy stage reports are unchanged.

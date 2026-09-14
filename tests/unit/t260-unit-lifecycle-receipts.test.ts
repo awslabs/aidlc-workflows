@@ -632,12 +632,31 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     constructionProject();
     pauseUnitA();
     const r = runNext(proj);
+    const directive = JSON.parse(r.out) as {
+      ask_type?: string;
+      response_route?: string;
+      stage?: string;
+      unit?: string;
+      resume_command?: string;
+    };
     expect(r.rc).toBe(0);
     expect(r.out).toContain('"kind":"ask"');
     expect(r.out).toContain("unit_state: paused");
     expect(r.out).toContain("unit-a");
     expect(r.out).toContain("blocked on auth contract");
     expect(r.out).toContain("confirm token flow");
+    expect(directive.ask_type).toBe("unit-paused");
+    expect(directive.response_route).toBe("command");
+    expect(directive.stage).toBe(SLUG);
+    expect(directive.unit).toBe("unit-a");
+    expect(directive.resume_command).toBeDefined();
+    const resumed = spawnSync("sh", ["-c", directive.resume_command!], {
+      cwd: join(AIDLC_SRC, ".."),
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+    });
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(activeUnitCheckpoint(proj, SLUG)?.state).toBe("in-progress");
   });
 
   test("report --result awaiting-approval is refused while a unit is paused", () => {

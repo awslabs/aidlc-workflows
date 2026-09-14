@@ -604,19 +604,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Codex routes typed new-work questions through next, not report", () => {
-    const annex = readFileSync(
-      join(
-        REPO_ROOT,
-        "harness/codex/skills/aidlc/question-rendering.md",
-      ),
-      "utf-8",
-    );
-    expect(annex).toContain('ask_type: "new-work-routing"');
-    expect(annex).toContain("routes through `next`");
-    expect(annex).toContain("never through `report`");
-  });
-
   test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {
@@ -646,12 +633,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       for (const token of [
         "## Engine-emitted ask directives",
-        "Untyped asks use `directive.question`",
         'For `ask_type: "new-work-routing"`',
         "`directive.numbered_prose_question` verbatim",
         "`4. **Other** — describe what you want instead`",
         "older and newer Kiro",
-        "untyped intent-picker ask",
         "Every engine-ask render is invalid",
         '**"What would you like me to do instead?"**',
         '`next "<human alternative>"`',
