@@ -1784,7 +1784,7 @@ export function trustStatus(
 }
 
 export type ConfigOutstandingAction = {
-  section: "runtime" | "trust" | "providers";
+  section: "runtime" | "trust" | "providers" | "models";
   id: string;
   message: string;
   command: string;

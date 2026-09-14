@@ -131,7 +131,7 @@ describe("t296 first-run config setup walk", () => {
       "n\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("Setup check - 2 of 7 sections need you.");
+    expect(result.stdout).toContain("Setup check - 3 of 7 sections need you.");
     expect(setupRows(result.stdout)).toHaveLength(7);
     for (const label of [
       "Harnesses",
@@ -148,12 +148,22 @@ describe("t296 first-run config setup walk", () => {
       .toContain("[needs]");
     expect(setupRows(result.stdout).find((line) => line.includes("Providers")))
       .toContain("[needs]");
-    expect(result.stdout.match(/Fix the 2 sections that need you now\?/g))
+    // A scaffold records no model policy, so every agent would silently inherit
+    // the session's effort. The row says so and the walk offers the section.
+    expect(setupRows(result.stdout).find((line) => line.includes("Models")))
+      .toContain("[needs]");
+    expect(result.stdout).toContain(
+      "no recorded policy; agents inherit your session model and effort",
+    );
+    expect(result.stdout.match(/Fix the 3 sections that need you now\?/g))
       .toHaveLength(1);
     expect(result.stdout).not.toContain("Outstanding actions:");
-    expect(result.stdout).toContain("Setup complete. 2 actions still need you");
+    expect(result.stdout).toContain("Setup complete. 3 actions still need you");
     expect(result.stdout).toContain(
       "runtime      bun .claude/tools/aidlc.ts config runtime",
+    );
+    expect(result.stdout).toContain(
+      "models       bun .claude/tools/aidlc.ts config models",
     );
     expect(result.stdout).toContain(
       "providers    bun .claude/tools/aidlc.ts config providers",
@@ -168,30 +178,40 @@ describe("t296 first-run config setup walk", () => {
     expect(records.trust).toBeNull();
   }, 60_000);
 
-  test("yes walks only providers, applies answers without double confirm, and closes clean", () => {
+  test("yes walks models then providers, applies answers without double confirm, and closes clean", () => {
     const path = project("aidlc-t296-walk-provider-");
     const env = hookPathEnv("aidlc", true, {
       AWS_ACCESS_KEY_ID: "test-access",
       AWS_SECRET_ACCESS_KEY: "test-secret",
     });
+    // Models is walked first now: settings layer, then 1 to pick a preset, then
+    // balanced. Providers follows with region and profile. Recording the preset
+    // is the point of the walk: without it every agent inherits the session.
     const result = run(
       scaffoldArgs(path),
       path,
       env,
-      "\n\nus-west-2\ndev\ny\n",
+      "\nproject\n1\nbalanced\n\nus-west-2\ndev\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("Setup check - 1 of 7 sections need you.");
+    expect(result.stdout).toContain("Setup check - 2 of 7 sections need you.");
     expect(setupRows(result.stdout).find((line) => line.includes("Runtime")))
       .toContain("[ok]");
+    expect(setupRows(result.stdout).find((line) => line.includes("Models")))
+      .toContain("[needs]");
     expect(setupRows(result.stdout).find((line) => line.includes("Providers")))
       .toContain("[needs]");
+    expect(result.stdout).toContain("Model policy for claude");
     expect(result.stdout).toContain("Provider [1]:");
     expect(result.stdout).not.toContain("Apply providers configuration changes?");
     expect(result.stdout).not.toContain("Runtime configuration for");
     expect(result.stdout).not.toContain("Trust configuration for");
     expect(result.stdout).not.toContain("Outstanding actions:");
     expect(result.stdout).toContain("Setup complete. 0 actions still need you");
+    // The recorded preset is what closes the row; a declined walk would leave it
+    // open and the ledger would name the command instead.
+    expect(readFileSync(join(path, "aidlc.settings.json"), "utf-8"))
+      .toContain('"preset": "balanced"');
 
     const records = readConfigDiagnosticRecords(join(path, ".claude"));
     expect(records.providers).toEqual(expect.objectContaining({

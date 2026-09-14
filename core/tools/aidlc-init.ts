@@ -205,7 +205,7 @@ type ModelsMutationContext = {
 
 type DiagnosticSection = "runtime" | "providers" | "trust";
 type ChoiceSection = "flags" | "project";
-type SetupWalkSection = "runtime" | "providers" | "trust";
+type SetupWalkSection = "models" | "runtime" | "providers" | "trust";
 
 type ConfigMainInternal = {
   setupWalkChild?: boolean;
@@ -1882,8 +1882,9 @@ function setupMapRows(
   const trust = outstanding.filter((action) => action.section === "trust");
   const providers = outstanding.filter((action) => action.section === "providers");
   const providerNeeds = records.providers === null || providers.length > 0;
-  const modelDetail = !policy || modelPolicyIsEmpty(policy)
-    ? "shipped defaults"
+  const modelsUnrecorded = !policy || modelPolicyIsEmpty(policy);
+  const modelDetail = modelsUnrecorded
+    ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset
     ? `preset ${policy.preset}`
     : "recorded project policy";
@@ -1920,7 +1921,8 @@ function setupMapRows(
     {
       label: "Models",
       detail: modelDetail,
-      needs: false,
+      section: "models",
+      needs: modelsUnrecorded,
     },
     {
       label: "Runtime",
@@ -1969,7 +1971,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
       `    ${renderedState}  ${row.label.padEnd(11)} ${row.detail}\n`,
     );
   }
-  const order: SetupWalkSection[] = ["runtime", "providers", "trust"];
+  const order: SetupWalkSection[] = ["models", "runtime", "providers", "trust"];
   const flagged = new Set(
     needed.map((row) => row.section).filter(
       (section): section is SetupWalkSection => section !== undefined,
@@ -1996,9 +1998,24 @@ function renderSetupLedger(
 function setupLedgerActions(
   projectDir: string,
   harnessDir: string,
+  harness: ModelHarness,
   actions: readonly ConfigOutstandingAction[],
 ): ConfigOutstandingAction[] {
   const next = [...actions];
+  if (!next.some((action) => action.section === "models")) {
+    const resolved = resolveAidlcSettings(projectDir);
+    const policy = modelPolicyForHarness(resolved.models, harness);
+    if (!policy || modelPolicyIsEmpty(policy)) {
+      next.push({
+        section: "models",
+        id: "models-policy-unrecorded",
+        message:
+          "No model policy is recorded, so every agent inherits your session model and effort. " +
+          "Record a preset, or choose unchanged to keep it that way.",
+        command: configCommandForHarness(harnessDir, "models"),
+      });
+    }
+  }
   if (next.some((action) => action.section === "providers")) return next;
   try {
     const record = readConfigDiagnosticRecords(
@@ -2027,6 +2044,7 @@ async function runSetupWalk(
   const initialLedger = setupLedgerActions(
     projectDir,
     harnessDir,
+    modelHarness(distribution),
     initialOutstanding,
   );
   const flagged = renderSetupMap(
@@ -2078,6 +2096,7 @@ async function runSetupWalk(
   const remaining = setupLedgerActions(
     projectDir,
     harnessDir,
+    modelHarness(distribution),
     postApplyOutstandingActions(
       projectDir,
       harnessDir,
