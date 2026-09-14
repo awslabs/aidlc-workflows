@@ -32,6 +32,8 @@ diagnostic and lifecycle routes.
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
+| `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
+| `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
@@ -267,6 +269,38 @@ repo. An intent with no recorded repos is the single-repo default (git runs in t
 workspace/project dir). Team-owned Units currently require that single-repo
 default: `set-unit-ownership team` rejects an intent with recorded sibling repos
 before changing state. See [Artifacts Reference](14-artifacts-reference.md).
+
+---
+
+### `/aidlc park` - Park the workflow
+
+Stop cleanly at the current inter-stage boundary so the workflow can be picked up in a later session, or by someone else after the `aidlc/` tree is committed and pulled.
+
+**Syntax:**
+
+```
+/aidlc park
+```
+
+**Behavior:** The engine routes the verb to `aidlc park`, which emits `WORKFLOW_PARKED`, records the park marker in the state file, and reports the stage it parked at. No stage is advanced and nothing is marked complete. Parking is refused when no workflow is active or the workflow is already Completed. In a Unit-scoped team checkout (a Construction worktree carrying a Unit scope stamp) the same command parks that Unit locally instead: it writes a checkout-local Unit park marker, leaves the shared workflow state untouched, and prints `{"parked": true, "unit": ..., "checkout_local": true}`. Resume with `/aidlc --resume`, which clears whichever marker applies and continues. The verb is sole-token: `park` inside a longer sentence is treated as a description of work, so ask the conductor to park in prose or type the bare verb.
+
+The per-user cursor `aidlc/spaces/<space>/intents/active-intent` is gitignored, so a teammate who pulls a parked workflow selects it with `/aidlc intent <name>` before `/aidlc --resume`.
+
+---
+
+### `/aidlc team-board` - Team Construction board
+
+Read-only view of a team-owned Construction: Unit progress, observed claims, pinned merge readiness, claimable Units, and blockers. The same board `/aidlc --status` appends under `Unit Ownership: team`.
+
+**Syntax:**
+
+```
+/aidlc team-board
+/aidlc team-board --snapshot
+/aidlc team-board --space <name> --intent <name>
+```
+
+**Behavior:** The engine routes the verb to `aidlc team-board` and prints its output verbatim without touching state, cache, or audit. Only `--snapshot`, `--space <name>`, and `--intent <name>` are accepted; any other token is a usage error. Requires `Unit Ownership: team`.
 
 ---
 

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:team-board, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
+// covers: subcommand:aidlc-orchestrate:team-board, function:parseTeamBoardArgs, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -795,6 +795,19 @@ describe("t327 team construction dispatcher", () => {
     expect(missingSpace.out).toContain(
       "team-board --space requires a value",
     );
+    // The direct path shares the engine's allowlist: stray, duplicate, and
+    // path-escaping tokens are refused before any board is resolved.
+    for (const [argv, message] of [
+      [["team-board", "--status"], 'does not accept "--status"'],
+      [["team-board", "--snapshot", "junk"], 'does not accept "junk"'],
+      [["team-board", "--snapshot", "--snapshot"], "--snapshot may be given once"],
+      [["team-board", "--space", "../../tmp"], "is not a valid name"],
+    ] as const) {
+      const refused = run(ORCH, [...argv], fixture.project);
+      expect(refused.status, refused.out).not.toBe(0);
+      expect(refused.out).toContain(message);
+      expect(refused.stdout).not.toContain("Unit Progress");
+    }
   });
 
   test("multi-intent picker annotates team, parked, and complete while dormant paths stay byte-identical", () => {
