@@ -1648,7 +1648,7 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("the gate's Request Changes choice tolerates case, prefix, and punctuation but not paraphrase", () => {
+  test("the gate's Request Changes choice tolerates case, prefix, punctuation, and a recommended decorator but not paraphrase", () => {
     for (const reply of [
       "Request Changes",
       "request changes",
@@ -1658,6 +1658,9 @@ describe("AttemptView projections and refusal streaks", () => {
       '"Request Changes"',
       "Request Changes.",
       "  Request   Changes  ",
+      // The picker returns the recommended choice's decorated label.
+      "Request Changes (Recommended)",
+      "request changes (recommended)",
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }
@@ -1665,6 +1668,8 @@ describe("AttemptView projections and refusal streaks", () => {
       "Approve",
       "please change it",
       "Request Changes to the plan",
+      "(Recommended)",
+      "Request Changes (Recommended) extra",
       "Changes",
       "",
       undefined,
