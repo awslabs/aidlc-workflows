@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 985,
+    "total": 967,
     "enumeratedByClass": {
-      "function": 675,
-      "audit": 99,
+      "function": 658,
+      "audit": 98,
       "scope": 11,
       "stage": 33,
       "hook": 18,
@@ -31,12 +31,12 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 404,
-      "audit": 59,
+      "function": 391,
+      "audit": 58,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 129,
+      "subcommand": 128,
       "render-surface": 7
     }
   },
@@ -109,18 +109,6 @@
       "coveredBy": [
         {
           "file": "tests/unit/t322-fix-round-hardening.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "audit",
-      "unitId": "CEREMONY_SET",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t338-ceremony-verb.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1250,18 +1238,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:activeDirectiveStorageDir",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t248-steering-content-delivery.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:activeIntent",
       "minMechanism": "none",
       "coveredBy": [
@@ -1708,72 +1684,6 @@
         {
           "file": "tests/integration/t66.test.ts",
           "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:CEREMONY_ENV",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:CEREMONY_FIELDS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:CEREMONY_FLAGS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:CEREMONY_KEYS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:CEREMONY_SETTINGS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:ceremonyOffClause",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:ceremonyOffList",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t213-scope-cost-summary.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:ceremonyPolicyValues",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2572,34 +2482,17 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:DEFAULT_SPACE",
+      "unitId": "function:DEFAULT_SCOPE",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
-      "unitId": "function:defaultScope",
+      "unitId": "function:DEFAULT_SPACE",
       "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t340-default-scope-resolver.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:defaultScopeResolution",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t340-default-scope-resolver.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2738,37 +2631,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:ENGINE_DIR",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:engineDir",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:engineDirFor",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:EngineModeViolationError",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2813,6 +2675,13 @@
     {
       "unitClass": "function",
       "unitId": "function:ensureDirSync",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:envDefaultScope",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2974,18 +2843,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:formatCeremony",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4030,13 +3887,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:LEGACY_SENSORS_DIR",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:legacyReviewAppendixEchoFields",
       "minMechanism": "none",
       "coveredBy": [
@@ -4581,30 +4431,6 @@
         {
           "file": "tests/unit/t207-unit-kind-schema.test.ts",
           "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:parseCeremonySetting",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:parseCeremonyStateLine",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -5432,6 +5258,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:RECHECK_IF_VALUES",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordAcceptedChanges",
       "minMechanism": "none",
       "coveredBy": [
@@ -5445,6 +5283,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordChangeControlSet",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5815,30 +5660,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:resolveCeremony",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:resolveCeremonyPolicy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:resolveChangeControl",
       "minMechanism": "none",
       "coveredBy": [
@@ -5860,6 +5681,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveDefaultScope",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -6400,18 +6228,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:scopeCeremonyDefault",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t337-ceremony-policy.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:scopeChangeControlDefault",
       "minMechanism": "none",
       "coveredBy": [
@@ -6508,18 +6324,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:sensorsReadDir",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -10353,18 +10157,6 @@
     },
     {
       "unitClass": "subcommand",
-      "unitId": "aidlc-orchestrate wait",
-      "minMechanism": "cli",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t341-orchestrate-wait.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "subcommand",
       "unitId": "aidlc-runtime compile",
       "minMechanism": "cli",
       "coveredBy": [
@@ -11076,6 +10868,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility change-control",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "subcommand",
