@@ -248,6 +248,22 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Methodology: tdd", "Mode")).toBeNull();
   });
 
+  test("a field value continues on indented lines and stops at the next item", () => {
+    const wrapped = [
+      "- **Ordering**: tests first,",
+      "  then implementation.",
+      "- **Coverage**: 80%",
+    ].join("\n");
+    expect(structuredField(wrapped, "Ordering")).toBe("tests first, then implementation.");
+    expect(structuredField(wrapped, "Coverage")).toBe("80%");
+    // A blank line, an unindented line, or a nested bullet ends the value.
+    expect(structuredField("Ordering: a first,\n\n  not the value", "Ordering")).toBe("a first,");
+    expect(structuredField("Ordering: a first,\nnext paragraph", "Ordering")).toBe("a first,");
+    expect(structuredField("- **Ordering**: a first,\n  - sub item", "Ordering")).toBe("a first,");
+    // An empty head with an indented continuation still yields the value.
+    expect(structuredField("Ordering:\n  tests first.", "Ordering")).toBe("tests first.");
+  });
+
   test("the section body ignores commented headings and commented lines", () => {
     const content = [
       "# Team",
