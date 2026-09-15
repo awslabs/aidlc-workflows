@@ -508,6 +508,18 @@ describe("t304 first-run prompt and detection safety", () => {
     ]);
   }, 120_000);
 
+  test("Kiro recommended defaults record no provider answer", () => {
+    const result = runWizard("5\n\n");
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "no provider settings; model access comes with Kiro CLI",
+    );
+    const harness = JSON.parse(
+      readFileSync(join(result.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(harness.providers).toBeUndefined();
+  }, 120_000);
+
   // The provider answer is harness-dependent, so a harness change at the
   // check-your-answers table must re-derive it. Before the fix the previous
   // harness's answer was applied: Kiro recorded Bedrock and chased model access
@@ -519,13 +531,13 @@ describe("t304 first-run prompt and detection safety", () => {
     expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
     expect(toKiro.stdout).toContain("2. Provider     amazon-bedrock, us-east-2");
     expect(toKiro.stdout).toContain(
-      "2. Provider     builtin, Kiro CLI provides its own model access",
+      "2. Provider     comes with Kiro CLI",
     );
     expect(toKiro.stdout).not.toContain("Verify Amazon Bedrock model access");
     const kiro = JSON.parse(
       readFileSync(join(toKiro.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
     );
-    expect(kiro.providers).toEqual({ schemaVersion: 1, provider: "builtin" });
+    expect(kiro.providers).toBeUndefined();
 
     // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
     // on Kiro), then edit step 1 to Claude Code (1) and apply.

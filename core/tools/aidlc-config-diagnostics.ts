@@ -37,46 +37,38 @@ export type RuntimeRecord = {
   cliPath?: string;
 };
 
-// `builtin` records that the harness provides its own model access. It applies
-// only to the harnesses that actually do, which is Kiro CLI and Kiro IDE; the
-// Bedrock-oriented harnesses use the model-preset step's `unchanged` shape
-// instead, recording nothing and keeping what is already in place.
+// `builtin` remains readable for records written by earlier builds. New provider
+// answers are only recorded for Bedrock-oriented harnesses.
 export type ProviderKind = "amazon-bedrock" | "builtin" | "other";
 
-// The harnesses whose MODEL ACCESS belongs to their own product licence, so
-// AI-DLC has no provider decision to put to the user. Kiro CLI and Kiro IDE
-// ship this way: they provide their own model access, AI-DLC writes nothing
-// about it, and on Kiro CLI a recorded Bedrock answer moves exactly one value, the
-// region inside the `aws-mcp` entry of `.kiro/settings/mcp.json`, a server that
-// ships disabled and is off by default on every non-Claude harness.
+// Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
+// decision to ask, write, or check for them, even when a legacy answer exists.
 //
 // Every OTHER harness is Bedrock-oriented and must still be asked. Claude Code,
 // Codex CLI, and OpenCode take region and profile bytes directly. GitHub
 // Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
 // which is manual work AI-DLC tracks rather than performs. Never assume those
 // are on the harness's own access.
+export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
+
 const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
   "kiro",
   "kiro-ide",
 ]);
 
-export function harnessOwnsModelAccess(harness: ModelHarness): boolean {
+export function harnessOwnsModelAccess(
+  harness: ModelHarness,
+): harness is Exclude<ModelHarness, BedrockOrientedHarness> {
   return HARNESS_OWNED_MODEL_ACCESS.has(harness);
 }
 
-// Per-harness wording for the provider question, so each install offers the two
-// paths that actually exist for it in its own vocabulary rather than one generic
-// list. `ownedNote` is present only where the model belongs to the harness's own
-// licence, and is what the wizard prints INSTEAD of asking.
+export function ownedModelAccessFact(product: string): string {
+  return `Model access comes with ${product}; AI-DLC configures no model provider for it.`;
+}
+
+// Per-harness wording for the provider question on Bedrock-oriented harnesses.
+// Harness-owned model access has no question and uses ownedModelAccessFact.
 export type ProviderMenuCopy = {
-  // Present only where the harness's own licence serves the models. `fact` is
-  // the statement both surfaces share; the guided wizard adds that there is
-  // nothing to choose and asks nothing, while the explicit section adds
-  // `sectionHint`, because deliberately naming the section still offers the
-  // menu and the user deserves to know what answering would actually change.
-  // `builtin` is present only alongside `owned`: it is the recordable statement
-  // that this harness serves its own models.
-  owned?: { fact: string; sectionHint: string; builtin: string };
   bedrock: string;
 };
 
@@ -84,8 +76,7 @@ export type ProviderMenuCopy = {
 // user is presumed to be on. Naming one would be a guess: Claude Code also runs
 // on Vertex AI, Codex on Azure, and OpenCode on anything it has a provider for.
 export function providerMenuCopy(
-  harness: ModelHarness,
-  product: string,
+  harness: BedrockOrientedHarness,
 ): ProviderMenuCopy {
   switch (harness) {
     case "claude":
@@ -111,26 +102,6 @@ export function providerMenuCopy(
     case "cursor":
       return {
         bedrock: "records that you configure the provider in Cursor yourself",
-      };
-    case "kiro":
-      return {
-        owned: {
-          fact: `${product} provides its own model access, so AI-DLC configures none for it.`,
-          sectionHint: "Answer only to change the AWS MCP region.",
-          builtin: `records that ${product} provides its own model access`,
-        },
-        bedrock: "records the AWS MCP region only; model access is unaffected",
-      };
-    case "kiro-ide":
-      return {
-        owned: {
-          fact:
-            `${product} provides its own model access, chosen in the IDE model picker, ` +
-            "so AI-DLC configures none for it.",
-          sectionHint: "Answer only to record the IDE model-picker step.",
-          builtin: `records that ${product} provides its own model access`,
-        },
-        bedrock: "records picking a Bedrock chat model in the IDE as a manual step",
       };
   }
 }
@@ -309,6 +280,7 @@ const PROJECT_KEYS = new Set(["schemaVersion", "mcp", "completions"]);
 const SAFE_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
 const PENDING_ACTION_IDS = [
   "bedrock-model-access",
+  // Retired from generation, but accepted so legacy records can be read and reset.
   "kiro-ide-chat-model",
   "copilot-byok-configuration",
   "cursor-provider-configuration",
@@ -1029,12 +1001,12 @@ export function requiredProviderActions(
   record: ProvidersRecord,
   harness: ModelHarness,
 ): ProviderPendingActionId[] {
+  if (harnessOwnsModelAccess(harness)) return [];
   if (record.provider === "other") return ["non-bedrock-provider-configuration"];
   // The harness provides its own model access: nothing to write, nothing to do.
   if (record.provider === "builtin") return [];
   if (record.provider !== "amazon-bedrock") return [];
   const actions: ProviderPendingActionId[] = ["bedrock-model-access"];
-  if (harness === "kiro-ide") actions.push("kiro-ide-chat-model");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
   return actions;
@@ -1068,8 +1040,9 @@ export function reconcileProviderActions(
 
 export function pendingProviderIssues(
   record: ProvidersRecord | null,
+  harness: ModelHarness,
 ): DiagnosticIssue[] {
-  if (!record) return [];
+  if (harnessOwnsModelAccess(harness) || !record) return [];
   return (record.pendingActions ?? [])
     .filter((action) => action.status === "pending")
     .map((action) => {
@@ -1139,27 +1112,64 @@ function writeCodexProvider(
   );
 }
 
-function writeKiroProvider(
-  projectionRoot: string,
+// The `aws-mcp` region in `.kiro/settings/mcp.json` is plain MCP configuration.
+// Kiro CLI no longer asks a provider question, so no record drives it; but every
+// refresh restages that file from the release bytes, which would silently move a
+// region the project already carries (set by an earlier build's Bedrock answer,
+// or by hand) back to the shipped one. Carry the project's current endpoint
+// region and `AWS_REGION` metadata into the staged file instead, so the staged
+// bytes equal the current bytes and the refresh preserves the file. Reads only
+// the two aws-mcp arguments; everything else comes from the release.
+export function preserveKiroMcpRegion(
+  projectDir: string,
+  stagedRoot: string,
   harnessDir: string,
-  record: ProvidersRecord,
 ): void {
-  const path = join(projectionRoot, harnessDir, "settings", "mcp.json");
-  if (!existsSync(path)) return;
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-  const servers = isRecord(value.mcpServers) ? value.mcpServers : {};
-  const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
-  if (!aws || !Array.isArray(aws.args)) return;
-  aws.args = aws.args.map((arg) => {
-    if (typeof arg !== "string") return arg;
-    if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
-      return `https://aws-mcp.${record.region}.api.aws/mcp`;
+  const relative = join(harnessDir, "settings", "mcp.json");
+  const currentPath = join(projectDir, relative);
+  const stagedPath = join(stagedRoot, relative);
+  if (!existsSync(currentPath) || !existsSync(stagedPath)) return;
+  const awsArgs = (path: string): { value: Record<string, unknown>; args: unknown[] } | null => {
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      return null;
     }
-    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${record.region}`;
+    const servers = isRecord(value.mcpServers) ? value.mcpServers : {};
+    const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
+    return aws && Array.isArray(aws.args) ? { value, args: aws.args } : null;
+  };
+  const current = awsArgs(currentPath);
+  const staged = awsArgs(stagedPath);
+  if (!current || !staged) return;
+  const endpoint = current.args.find((arg): arg is string =>
+    typeof arg === "string" && /^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)
+  );
+  const metadata = current.args.find((arg): arg is string =>
+    typeof arg === "string" && /^AWS_REGION=/.test(arg)
+  );
+  if (!endpoint && !metadata) return;
+  const servers = staged.value.mcpServers as Record<string, unknown>;
+  const aws = servers["aws-mcp"] as Record<string, unknown>;
+  aws.args = staged.args.map((arg) => {
+    if (typeof arg !== "string") return arg;
+    if (endpoint && /^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) return endpoint;
+    if (metadata && /^AWS_REGION=/.test(arg)) return metadata;
     return arg;
   });
-  writeJson(path, value);
+  // When the region was the only difference, stage the project's exact bytes so
+  // the refresh sees an identical file and preserves it, whatever its
+  // formatting. Otherwise the release changed the file elsewhere and the staged
+  // copy carries the preserved region in canonical form.
+  const currentText = readFileSync(currentPath, "utf-8");
+  if (JSON.stringify(current.value) === JSON.stringify(staged.value)) {
+    writeFileSync(stagedPath, currentText);
+    return;
+  }
+  writeJson(stagedPath, staged.value);
 }
+
 
 function writeOpenCodeProvider(
   projectionRoot: string,
@@ -1215,14 +1225,16 @@ export function applyConfigDiagnosticRecords(
   harness: ModelHarness,
   records: ConfigDiagnosticRecords,
 ): void {
+  // Owned harnesses record no provider answer; a legacy record is not applied
+  // anywhere. The Kiro CLI MCP region is carried by preserveKiroMcpRegion from
+  // the project's own file during staging, not from a record.
+  if (harnessOwnsModelAccess(harness)) return;
   const provider = records.providers;
   if (provider?.provider !== "amazon-bedrock" || !provider.region) return;
   if (harness === "claude") {
     writeClaudeProvider(projectionRoot, harnessDir, provider);
   } else if (harness === "codex") {
     writeCodexProvider(projectionRoot, harnessDir, provider);
-  } else if (harness === "kiro") {
-    writeKiroProvider(projectionRoot, harnessDir, provider);
   } else if (harness === "opencode") {
     writeOpenCodeProvider(projectionRoot, provider);
   }
@@ -1239,7 +1251,7 @@ export function providerFiles(
     setting: "provider answers and pending actions",
     file: harnessData,
   }];
-  if (record?.provider !== "amazon-bedrock") return files;
+  if (harnessOwnsModelAccess(harness) || record?.provider !== "amazon-bedrock") return files;
   if (harness === "claude") {
     files.push({
       setting: "AWS region and profile",
@@ -1255,11 +1267,6 @@ export function providerFiles(
     files.push({
       setting: "Bedrock AWS region and profile",
       file: join(harnessDir, "config.toml"),
-    });
-  } else if (harness === "kiro") {
-    files.push({
-      setting: "AWS MCP region endpoint and metadata",
-      file: join(harnessDir, "settings", "mcp.json"),
     });
   } else if (harness === "opencode" && record.opencodeDefault) {
     files.push({
@@ -1687,15 +1694,6 @@ function providerValueIssues(
       ) {
         mismatch("provider-codex", path, "Codex Bedrock settings do not reflect the recorded region/profile");
       }
-    } else if (harness === "kiro") {
-      const path = join(projectDir, harnessDir, "settings", "mcp.json");
-      const text = readFileSync(path, "utf-8");
-      if (
-        !text.includes(`https://aws-mcp.${record.region}.api.aws/mcp`) ||
-        !text.includes(`AWS_REGION=${record.region}`)
-      ) {
-        mismatch("provider-kiro", path, "Kiro AWS MCP settings do not reflect the recorded region");
-      }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -1723,9 +1721,9 @@ export function providerIssues(
   record: ProvidersRecord | null,
   credentials: AwsCredentialDiagnostics = detectAwsCredentials(),
 ): DiagnosticIssue[] {
-  if (!record) return [];
+  if (harnessOwnsModelAccess(harness) || !record) return [];
   const issues = [
-    ...pendingProviderIssues(record),
+    ...pendingProviderIssues(record, harness),
     ...providerValueIssues(projectDir, harnessDir, harness, record),
   ];
   if (record.provider === "amazon-bedrock" && !credentials.hasCredentials) {
@@ -1980,7 +1978,7 @@ export function postApplyOutstandingActions(
       const record = readConfigDiagnosticRecords(
         join(projectDir, harnessDir),
       ).providers;
-      actions.push(...pendingProviderIssues(record).map((issue) => ({
+      actions.push(...pendingProviderIssues(record, harness).map((issue) => ({
         section: "providers" as const,
         id: issue.id,
         message: issue.message,
@@ -2268,7 +2266,15 @@ export function providerDoctorCheck(
   }
   try {
     const record = readConfigDiagnosticRecords(selected.root).providers;
-    const issues = pendingProviderIssues(record);
+    // Read first so a corrupt harness.json is still reported below; a legacy
+    // answer on an owned harness is otherwise ignored, pending actions included.
+    if (harnessOwnsModelAccess(selected.harness)) {
+      return {
+        pass: true,
+        label: "Providers: harness-managed model access; no answer needed",
+      };
+    }
+    const issues = pendingProviderIssues(record, selected.harness);
     return issues.length === 0
       ? {
           pass: true,
@@ -2276,8 +2282,6 @@ export function providerDoctorCheck(
           // gap only where AI-DLC configures the provider.
           label: record
             ? "Providers: recorded answers have no unmet actions"
-            : harnessOwnsModelAccess(selected.harness)
-            ? "Providers: harness-managed model access; no answer needed"
             : "Providers: using shipped fallback; no recorded answers",
         }
       : {

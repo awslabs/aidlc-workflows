@@ -81,8 +81,9 @@ guide in the table below. The complete walkthrough is in
 
 Model-provider setup belongs to the harness. Claude Code and the shipped Codex
 configuration default to Amazon Bedrock; GitHub Copilot uses GitHub sign-in or
-BYOK; Kiro, Cursor, and opencode use their configured provider. The methodology
-itself is provider-independent.
+BYOK; Cursor and opencode use their configured provider; Kiro CLI and Kiro IDE
+need none, because model access comes with Kiro. The methodology itself is
+provider-independent.
 
 ## Recommended Model
 

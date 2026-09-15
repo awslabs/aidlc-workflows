@@ -443,9 +443,9 @@ Kiro IDE has no required separate CLI.
 interactive section offers only the two answers that have distinct effects for
 the harness in front of you. `amazon-bedrock` records the region and profile the
 harness should use, and leads on every harness whose models AI-DLC can point at
-Bedrock. The second answer is `builtin` on Kiro CLI and Kiro IDE, recording that
-the harness provides its own model access, and `unchanged` everywhere else,
-recording nothing and keeping what is already in place. The shipped fallback
+Bedrock. The second answer is `unchanged` on every harness the section asks,
+recording nothing and keeping what is already in place. Kiro CLI and Kiro IDE
+are not asked at all because model access comes with Kiro. The shipped fallback
 bytes remain valid when this section has never run.
 
 `other` is available as `--provider other --acknowledge` but is not offered
@@ -458,7 +458,6 @@ stay valid.
 ```bash
 aidlc config providers --provider amazon-bedrock \
   --region us-east-1 --profile default --yes
-aidlc config providers --provider builtin --yes
 aidlc config providers --show --json
 aidlc config providers --check
 aidlc config providers --mark-done bedrock-model-access --yes
@@ -476,8 +475,6 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 |---------|-----------------------------|
 | Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
-| Kiro CLI | Writes the AWS MCP URL and metadata in `.kiro/settings/mcp.json` |
-| Kiro IDE | Records and instructs only; the chat model must be selected manually in the IDE |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
 | GitHub Copilot | Records acknowledgement of the manual BYOK environment setup |
 | Cursor | Records acknowledgement of the manual provider and model-picker setup |
@@ -485,9 +482,7 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
-`--mark-done <id>` records completion. Kiro IDE also carries the
-`kiro-ide-chat-model` action. Neither applies to `builtin`, which carries no
-pending action. A custom non-Bedrock provider is recorded with
+`--mark-done <id>` records completion. A custom non-Bedrock provider is recorded with
 `--provider other --acknowledge`; it records the choice without silently
 editing provider bytes.
 
@@ -501,28 +496,30 @@ the two paths that actually exist for it:
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
 | Cursor | that you configure the provider in Cursor yourself |
-| Kiro CLI | the AWS MCP region only; model access is unaffected |
-| Kiro IDE | picking a Bedrock chat model in the IDE as a manual step |
 
-`builtin` reads the same everywhere: it records no provider settings and keeps
-the model access the harness already uses. It never names a vendor, because
-AI-DLC cannot know which one you are on. Claude Code also runs on Vertex AI,
-Codex on Azure, and OpenCode on anything it has a provider for.
 
-Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures none
-for them. The first-run wizard states that and asks nothing, an unrecorded
-section is complete rather than outstanding, and the Providers row reads `[ok]`.
-Naming the section explicitly still offers the menu, because answering there
-changes the AWS MCP region or records the IDE picker step.
+Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures no
+model provider for them. Both the first-run wizard and `aidlc config providers`
+state that model access comes with Kiro and ask nothing. Provider flags are
+refused, and the Providers row reads `[ok]` regardless of a legacy record.
+`aidlc config providers --reset --yes` clears a record left by an earlier build.
+`builtin` records from the previous build still load and read as harness-managed,
+with no pending actions. Legacy Kiro Bedrock records are also ignored, including
+their pending actions, and nothing is written from them. The `aws-mcp` region in
+`.kiro/settings/mcp.json` is plain MCP configuration, not a model-provider
+answer: whatever region that file carries, whether an earlier build's Bedrock
+answer put it there or you did, is kept across refreshes, and `--reset` leaves
+the file alone.
 
 Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
 credentials are never read as evidence that you are on your own subscription.
 Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
 which AI-DLC tracks as a pending action rather than performs.
 
-On any unrecorded section `--check` names that state instead of reporting a
-verified answer, and still exits zero, because the shipped fallback bytes
-remain valid.
+On Kiro, `--check` says no answer is needed and exits zero even with a legacy
+record. On every other unrecorded section it names that state instead of
+reporting a verified answer, and still exits zero because the shipped fallback
+bytes remain valid.
 
 On a Bedrock-oriented harness `unchanged` is always the second answer, and it
 becomes the default once something is recorded, so re-entering the section never

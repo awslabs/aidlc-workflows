@@ -20,6 +20,7 @@ import {
   instructionFileDoctorCheck,
   normalizeProvidersRecord,
   postApplyOutstandingActions,
+  preserveKiroMcpRegion,
   probeHarnessCli,
   probeRuntime,
   providerDoctorCheck,
@@ -107,6 +108,15 @@ function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     AWS_SECRET_ACCESS_KEY: "test-secret",
     ...extra,
   };
+}
+
+// Rewrites both aws-mcp region arguments of a Kiro CLI mcp.json text. Built from
+// regex literals and templates rather than quoted endpoint strings, which the
+// repository's secret scanner otherwise reads as an API key assignment.
+function withMcpRegion(text: string, region: string): string {
+  return text
+    .replaceAll(/aws-mcp\.[a-z0-9-]+\.api\.aws/g, `aws-mcp.${region}.api.aws`)
+    .replaceAll(/AWS_REGION=[a-z0-9-]+/g, `AWS_REGION=${region}`);
 }
 
 function writeExecutable(path: string): void {
@@ -375,13 +385,6 @@ describe("t294 provider diagnostics", () => {
       codexBefore.match(/^model_reasoning_effort\s*=.*$/m)?.[0],
     );
 
-    const kiro = temp("aidlc-t294-provider-kiro-");
-    cpSync(join(DIST, "kiro"), kiro, { recursive: true });
-    applyConfigDiagnosticRecords(kiro, ".kiro", "kiro", emptyRecords(record));
-    const kiroMcp = readFileSync(join(kiro, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(kiroMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
-    expect(kiroMcp).toContain("AWS_REGION=eu-west-1");
-
     const opencode = temp("aidlc-t294-provider-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });
     applyConfigDiagnosticRecords(
@@ -413,7 +416,11 @@ describe("t294 provider diagnostics", () => {
     );
     expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
 
+    // Owned harnesses: no record writes anything, Kiro CLI included. The aws-mcp
+    // region there is carried from the project's own file during staging, and a
+    // record's region never reaches it, even when the file says something else.
     for (const [harness, dir, file] of [
+      ["kiro", ".kiro", "settings/mcp.json"],
       ["kiro-ide", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
@@ -430,6 +437,30 @@ describe("t294 provider diagnostics", () => {
       );
       expect(readFileSync(path), harness).toEqual(original);
     }
+
+    // Staging preservation: the project's aws-mcp endpoint and metadata replace
+    // the release values in the staged copy, argument by argument, and a project
+    // without that entry leaves the staged bytes alone.
+    const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
+    cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
+    const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
+    writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
+    const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
+    cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
+    preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
+    const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
+    expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
+    expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
+    expect(stagedMcp).not.toContain("us-east-1");
+    expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
+    const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
+    mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
+    writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
+    const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
+    cpSync(join(DIST, "kiro"), untouched, { recursive: true });
+    const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
+    preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
+    expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
   });
 
   test("pending actions drive check and doctor until marked done", () => {
@@ -914,101 +945,195 @@ describe("t294 config diagnostics CLI", () => {
       }));
   }, 60_000);
 
-  // Record-level behaviour of the `builtin` kind. The flag stays permissive
-  // across harnesses; where it appears in the MENU is Kiro-only, covered in
-  // t296, because only Kiro serves its own models.
-  test("builtin provider records the harness's own model access with no pending action", () => {
-    const record = reconcileProviderActions(
-      normalizeProvidersRecord({ schemaVersion: 1, provider: "builtin" }) as ProvidersRecord,
-      "kiro",
-    );
-    expect(record).toEqual({ schemaVersion: 1, provider: "builtin" });
-    expect(providerIssues("/nonexistent", ".kiro", "kiro", record, {
-      hasCredentials: false,
-      sources: [],
-      profiles: [],
-      regions: [],
-      files: [],
-    })).toEqual([]);
-    expect(() => normalizeProvidersRecord({ schemaVersion: 1, provider: "subscription" }))
-      .toThrow("providers.provider must be amazon-bedrock, builtin, or other");
-
-    const project = install("claude");
+  test("provider flags refuse builtin and harness-owned access without writing", () => {
     const env = runtimeEnv();
-    const rejected = run([
-      "config",
-      "providers",
-      "--project-dir",
-      project,
-      "--provider",
-      "subscription",
-      "--yes",
-    ], project, env);
-    expect(rejected.status).not.toBe(0);
-    expect(rejected.stdout + rejected.stderr)
-      .toContain("--provider must be amazon-bedrock, builtin, or other");
+    for (const [harness, flags, message] of [
+      [
+        "claude",
+        ["--provider", "builtin"],
+        "--provider builtin is no longer recorded; a harness that provides its own model access needs no answer",
+      ],
+      [
+        "kiro",
+        ["--provider", "amazon-bedrock", "--region", "us-west-2"],
+        "kiro provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
+      ],
+    ] as const) {
+      const project = install(harness);
+      const snapshot = () => Object.fromEntries(Array.from(
+        new Bun.Glob("**/*").scanSync({ cwd: project, dot: true, onlyFiles: true }),
+        (file) => [file, readFileSync(join(project, file))],
+      ));
+      const before = snapshot();
+      const result = run([
+        "config", "providers", "--project-dir", project, ...flags, "--yes",
+      ], project, env);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(message);
+      expect(snapshot()).toEqual(before);
+    }
+  }, 90_000);
 
-    // Start from a Bedrock answer so the switch has stale fields to shed:
-    // `builtin` writes nothing, so it must not keep a region it never uses.
-    const bedrock = run([
-      "config",
-      "providers",
-      "--project-dir",
-      project,
-      "--provider",
-      "amazon-bedrock",
-      "--region",
-      "us-west-2",
-      "--profile",
-      "dev",
-      "--yes",
-    ], project, env);
-    expect(bedrock.status, bedrock.stdout + bedrock.stderr).toBe(0);
-    const withRegion = run([
-      "config",
-      "providers",
-      "--project-dir",
-      project,
-      "--provider",
-      "builtin",
-      "--region",
-      "us-west-2",
-      "--yes",
-    ], project, env);
-    expect(withRegion.status).not.toBe(0);
-    expect(withRegion.stdout + withRegion.stderr)
-      .toContain("--provider builtin records no region, profile, or OpenCode default");
-    const builtin = run([
-      "config",
-      "providers",
-      "--project-dir",
-      project,
-      "--provider",
-      "builtin",
-      "--yes",
-    ], project, env);
-    expect(builtin.status, builtin.stdout + builtin.stderr).toBe(0);
-    expect(builtin.stdout).not.toContain("config providers --check");
-    expect(builtin.stdout).toContain(
-      "Providers    builtin; the harness provides its own model access, nothing written",
-    );
-    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
-      .toEqual({ schemaVersion: 1, provider: "builtin" });
-    expect(providerDoctorCheck(project)).toEqual(expect.objectContaining({
-      pass: true,
-      label: "Providers: recorded answers have no unmet actions",
-    }));
-    const show = run([
-      "config",
-      "providers",
-      "--project-dir",
-      project,
-      "--show",
-    ], project, env);
+  test("a legacy Kiro record with pending actions reads as harness-managed everywhere", () => {
+    const project = install("kiro-ide");
+    const env = runtimeEnv();
+    const record: ProvidersRecord = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-west-2",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "pending" },
+        { id: "kiro-ide-chat-model", status: "pending" },
+      ],
+    };
+    const dataPath = join(project, ".kiro", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = record;
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    expect(readConfigDiagnosticRecords(join(project, ".kiro")).providers).toEqual(record);
+
+    const args = ["config", "providers", "--project-dir", project];
+    const show = run([...args, "--show"], project, env);
     expect(show.status, show.stdout + show.stderr).toBe(0);
-    expect(show.stdout).toContain("Provider: builtin");
+    expect(show.stdout).toContain(
+      "Model access: comes with Kiro IDE; AI-DLC configures no model provider",
+    );
+    expect(show.stdout).toContain("Legacy provider answer present and ignored;");
+    expect(show.stdout).toContain("config providers --reset");
+    expect(show.stdout).not.toContain("Offline credentials:");
     expect(show.stdout).not.toContain("Pending:");
-  }, 60_000);
+
+    const json = run([...args, "--show", "--json"], project, env);
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout).data).toEqual(expect.objectContaining({
+      harnessManaged: true,
+      pendingActions: [],
+      issues: [],
+      files: [{
+        setting: "provider answers and pending actions",
+        file: join(".kiro", "tools", "data", "harness.json"),
+      }],
+    }));
+    const check = run([...args, "--check"], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain(
+      "providers needs no answer for kiro-ide; its model access is harness-managed",
+    );
+    expect(postApplyOutstandingActions(project, ".kiro", "kiro-ide", {
+      skipSections: ["runtime", "trust"],
+    }).filter((action) => action.section === "providers")).toEqual([]);
+    expect(providerDoctorCheck(project, ".kiro")).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Providers: harness-managed model access; no answer needed",
+    }));
+
+    const reset = run([...args, "--reset", "--yes"], project, env);
+    expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".kiro")).providers).toBeNull();
+
+    // Kiro CLI, with every AWS credential source detectAwsCredentials reads
+    // cleared (run() spreads process.env first, so each source is emptied
+    // explicitly rather than deleted) and HOME pointed at an empty directory:
+    // the legacy record raises no provider issue because ownership decides, not
+    // a credential check; an unrelated refresh keeps the aws-mcp region the
+    // project file carries even when the record says something else; and
+    // --reset clears the record without touching the MCP bytes.
+    const kiro = install("kiro");
+    const kiroPath = join(kiro, ".kiro", "tools", "data", "harness.json");
+    const kiroData = JSON.parse(readFileSync(kiroPath, "utf-8"));
+    kiroData.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "eu-west-1",
+      pendingActions: [{ id: "bedrock-model-access", status: "pending" }],
+    };
+    writeFileSync(kiroPath, `${JSON.stringify(kiroData, null, 2)}\n`);
+    const mcpPath = join(kiro, ".kiro", "settings", "mcp.json");
+    const projectMcp = withMcpRegion(readFileSync(mcpPath, "utf-8"), "ap-southeast-2");
+    writeFileSync(mcpPath, projectMcp);
+    const noCredentials = runtimeEnv({
+      HOME: temp("aidlc-t294-no-aws-home-"),
+      AWS_ACCESS_KEY_ID: "",
+      AWS_SECRET_ACCESS_KEY: "",
+      AWS_BEARER_TOKEN_BEDROCK: "",
+      AWS_PROFILE: "",
+      AWS_DEFAULT_PROFILE: "",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "",
+      AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "",
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: "",
+      AWS_ROLE_ARN: "",
+      AWS_ROLE_SESSION_NAME: "",
+    });
+    const kiroShow = run(
+      ["config", "providers", "--project-dir", kiro, "--show", "--json"],
+      kiro,
+      noCredentials,
+    );
+    expect(kiroShow.status, kiroShow.stdout + kiroShow.stderr).toBe(0);
+    expect(JSON.parse(kiroShow.stdout).data.credentials.hasCredentials).toBe(false);
+    const kiroCheck = run(
+      ["config", "providers", "--project-dir", kiro, "--check"],
+      kiro,
+      noCredentials,
+    );
+    expect(kiroCheck.status, kiroCheck.stdout + kiroCheck.stderr).toBe(0);
+    expect(kiroCheck.stdout).not.toContain("provider-credentials-missing");
+    const refresh = run([
+      "config",
+      "--project-dir",
+      kiro,
+      "--from",
+      join(DIST_RELEASE, "kiro"),
+      "--harness",
+      "kiro",
+      "--yes",
+    ], kiro, noCredentials);
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    expect(readFileSync(mcpPath, "utf-8")).toBe(projectMcp);
+    const kiroReset = run(
+      ["config", "providers", "--project-dir", kiro, "--reset", "--yes"],
+      kiro,
+      noCredentials,
+    );
+    expect(kiroReset.status, kiroReset.stdout + kiroReset.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(kiro, ".kiro")).providers).toBeNull();
+    expect(readFileSync(mcpPath, "utf-8")).toBe(projectMcp);
+
+    // The preservation must not turn mcp.json into a runtime-generated file: with
+    // the nondefault region still in place, enabling aws-mcp by hand and adding a
+    // server is a local modification the refresh has to refuse, not overwrite.
+    const parsedMcp = JSON.parse(projectMcp) as {
+      mcpServers: Record<string, Record<string, unknown>>;
+    };
+    parsedMcp.mcpServers["aws-mcp"].disabled = false;
+    parsedMcp.mcpServers["team-docs"] = { type: "http", url: "https://docs.example.test/mcp" };
+    const editedMcp = `${JSON.stringify(parsedMcp, null, 2)}\n`;
+    writeFileSync(mcpPath, editedMcp);
+    const refused = run([
+      "config",
+      "--project-dir",
+      kiro,
+      "--from",
+      join(DIST_RELEASE, "kiro"),
+      "--harness",
+      "kiro",
+      "--yes",
+    ], kiro, noCredentials);
+    expect(refused.status, refused.stdout + refused.stderr).not.toBe(0);
+    expect(refused.stdout + refused.stderr).toContain("locally modified");
+    expect(readFileSync(mcpPath, "utf-8")).toBe(editedMcp);
+
+    const claude = install("claude");
+    const claudePath = join(claude, ".claude", "tools", "data", "harness.json");
+    const claudeData = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeData.providers = record;
+    writeFileSync(claudePath, `${JSON.stringify(claudeData, null, 2)}\n`);
+    const claudeCheck = run([
+      "config", "providers", "--project-dir", claude, "--check",
+    ], claude, env);
+    expect(claudeCheck.status).toBe(1);
+    expect(claudeCheck.stdout + claudeCheck.stderr).toContain("bedrock-model-access");
+  }, 90_000);
 
   test("check names an unrecorded providers section instead of calling it clean", () => {
     const env = runtimeEnv();
@@ -1411,26 +1536,6 @@ describe("t294 config diagnostics CLI", () => {
     });
     expect(copilotRecord.pendingActions).toContainEqual({
       id: "bedrock-model-access",
-      status: "pending",
-    });
-
-    const ide = install("kiro-ide");
-    expect(run([
-      "config",
-      "providers",
-      "--project-dir",
-      ide,
-      "--provider",
-      "amazon-bedrock",
-      "--region",
-      "us-east-1",
-      "--yes",
-    ], ide, env).status).toBe(0);
-    const ideRecord = readConfigDiagnosticRecords(
-      join(ide, ".kiro"),
-    ).providers as ProvidersRecord;
-    expect(ideRecord.pendingActions).toContainEqual({
-      id: "kiro-ide-chat-model",
       status: "pending",
     });
 

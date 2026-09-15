@@ -132,8 +132,10 @@ import {
   normalizeProjectChoicesRecord,
   normalizeRuntimeRecord,
   normalizeTrustRecord,
+  ownedModelAccessFact,
   pendingProviderIssues,
   postApplyOutstandingActions,
+  preserveKiroMcpRegion,
   probeHarnessCli,
   probeRuntime,
   providerFiles,
@@ -153,7 +155,6 @@ import {
   type CompletionShell,
   type ConfigOutstandingAction,
   type ProjectChoicesRecord,
-  type ProviderKind,
   type ProvidersRecord,
   type RuntimeRecord,
   type TrustRecord,
@@ -1222,7 +1223,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
     : section === "providers"
     ? [
         heading("Provider answers:", out),
-        "  --provider <amazon-bedrock|builtin|other>",
+        "  --provider <amazon-bedrock|other>",
         "  --region <aws-region>",
         "  --profile <aws-profile>",
         "  --opencode-default <yes|no>",
@@ -1230,7 +1231,6 @@ function diagnosticHelp(section: DiagnosticSection): string {
         "  --mark-done <pending-action-id>",
         "",
         "Credential detection is offline only. No provider or model endpoint is contacted.",
-        "builtin records that the harness's own model access (subscription or signed-in account) is in use; nothing is written and no action stays pending.",
       ]
     : [
         heading("Trust answers:", out),
@@ -1394,9 +1394,10 @@ function showDiagnosticSection(
     data = {
       section,
       harness: selected.harness,
+      harnessManaged: harnessOwnsModelAccess(selected.harness),
       record,
       credentials,
-      pendingActions: record ? pendingProviderIssues(record) : [],
+      pendingActions: pendingProviderIssues(record, selected.harness),
       issues: providerIssues(
         projectDir,
         selected.harnessDir,
@@ -1451,12 +1452,20 @@ function showDiagnosticSection(
     );
   } else if (section === "providers") {
     const record = data.record as ProvidersRecord | null;
-    const credentials = data.credentials as ReturnType<typeof detectAwsCredentials>;
-    output += `  Provider: ${record?.provider ?? "shipped fallback"}\n`;
-    output += `  Region: ${record?.region ?? "shipped fallback"}\n`;
-    output += `  Profile: ${record?.profile ?? "default credential chain"}\n`;
-    output += `  Offline credentials: ${credentials.hasCredentials ? "found" : "not found"}\n`;
-    for (const source of credentials.sources) output += `    source: ${source}\n`;
+    if (data.harnessManaged) {
+      const product = projectionProductName(selected.root, selected.distribution);
+      output += `  Model access: comes with ${product}; AI-DLC configures no model provider\n`;
+      if (record !== null) {
+        output += `  Legacy provider answer present and ignored; ${configCommand("providers --reset")} clears it.\n`;
+      }
+    } else {
+      const credentials = data.credentials as ReturnType<typeof detectAwsCredentials>;
+      output += `  Provider: ${record?.provider ?? "shipped fallback"}\n`;
+      output += `  Region: ${record?.region ?? "shipped fallback"}\n`;
+      output += `  Profile: ${record?.profile ?? "default credential chain"}\n`;
+      output += `  Offline credentials: ${credentials.hasCredentials ? "found" : "not found"}\n`;
+      for (const source of credentials.sources) output += `    source: ${source}\n`;
+    }
     const pending = data.pendingActions as ReturnType<typeof pendingProviderIssues>;
     for (const issue of pending) output += `  Pending: ${issue.id} - ${issue.message}\n`;
     output += "  Files carrying provider settings:\n";
@@ -1507,12 +1516,12 @@ function checkDiagnosticSection(
   // answer was verified. The exit code is unchanged: the shipped fallback bytes
   // stay valid, so an unrecorded section is not a failure.
   const providersUnrecorded = section === "providers" && records.providers === null;
-  const cleanMessage = !providersUnrecorded
-    ? `${section} configuration is clean for ${selected.harness}`
-    : !harnessOwnsModelAccess(selected.harness)
+  const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
+    ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
+    : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
-    : `providers needs no answer for ${selected.harness}; its model access is harness-managed`;
+    : `${section} configuration is clean for ${selected.harness}`;
   emitResult(
     issues.length === 0
       ? success(cleanMessage, {
@@ -1568,15 +1577,18 @@ function providerRecordFromArgs(
   argv: readonly string[],
   selected: ReturnType<typeof selectedDiagnosticHarness>,
 ): ProvidersRecord {
+  if (harnessOwnsModelAccess(selected.harness)) throw new Error(`${selected.harness} provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.`);
   const next = cloneDiagnosticRecord(current) ?? { schemaVersion: 1 };
   const provider = valueAfter(argv, "--provider");
+  if (provider === "builtin" || (provider === undefined && next.provider === "builtin")) {
+    throw new Error("--provider builtin is no longer recorded; a harness that provides its own model access needs no answer");
+  }
   if (
     provider !== undefined &&
     provider !== "amazon-bedrock" &&
-    provider !== "builtin" &&
     provider !== "other"
   ) {
-    throw new Error("--provider must be amazon-bedrock, builtin, or other");
+    throw new Error("--provider must be amazon-bedrock or other");
   }
   if (provider) next.provider = provider;
   const region = valueAfter(argv, "--region");
@@ -1595,7 +1607,7 @@ function providerRecordFromArgs(
   }
   if (argv.includes("--acknowledge")) next.acknowledged = true;
   if (!next.provider) {
-    throw new Error("provider configuration requires --provider <amazon-bedrock|builtin|other>");
+    throw new Error("provider configuration requires --provider <amazon-bedrock|other>");
   }
   if (next.provider === "amazon-bedrock" && !next.region) {
     throw new Error("Amazon Bedrock configuration requires --region <aws-region>");
@@ -1614,20 +1626,6 @@ function providerRecordFromArgs(
     throw new Error(
       `${selected.harness} provider setup is instruct-only; pass --acknowledge after completing the manual provider step`,
     );
-  }
-  if (next.provider === "builtin") {
-    // `builtin` writes nothing, so it carries no Bedrock settings: reject them
-    // when passed explicitly, and drop the ones inherited from an earlier
-    // Bedrock answer so `--show` does not report a region for a provider that
-    // never uses one.
-    if (region || profile || opencodeDefault !== undefined) {
-      throw new Error(
-        "--provider builtin records no region, profile, or OpenCode default; omit them",
-      );
-    }
-    delete next.region;
-    delete next.profile;
-    delete next.opencodeDefault;
   }
   let reconciled = reconcileProviderActions(
     normalizeProvidersRecord(next) as ProvidersRecord,
@@ -1684,34 +1682,20 @@ function diagnosticWizard(
     return answer ? runtimeRecordFromProbe(projectDir, selected) : records.runtime;
   }
   if (section === "providers") {
+    if (harnessOwnsModelAccess(selected.harness)) return records.providers;
     const credentials = detectAwsCredentials();
     const detected = awsSummary(credentials);
     process.stdout.write("\n  Model provider\n");
-    const product = projectionProductName(selected.root, selected.distribution);
-    // Each harness offers the two paths that actually exist for it, in its own
-    // words. Kiro owns its model access, so its note leads; every other harness
-    // is Bedrock-oriented and Bedrock leads.
-    const owned = harnessOwnsModelAccess(selected.harness);
-    const copy = providerMenuCopy(selected.harness, product);
-    // Detected AWS credentials are irrelevant where the licence serves the
-    // models, so that line is only printed for the Bedrock-oriented harnesses.
-    if (copy.owned) {
-      process.stdout.write(`  ${copy.owned.fact} ${copy.owned.sectionHint}\n`);
-    } else {
-      process.stdout.write(
-        credentials.hasCredentials
-          ? `  Found AWS credentials (${detected.source}); ${
-            detected.regionSource === "detected" ? "detected" : "fallback"
-          } region ${detected.region}.\n`
-          : "  No AWS credentials were detected.\n",
-      );
-    }
-    // Two shapes. A harness that provides its own model access offers `builtin`
-    // and leads with it, because that is the true answer there. Every other
-    // harness gets the model-preset step's `unchanged` answer: always offered,
-    // records nothing, keeps what is in place. It leads once something is
-    // recorded, since re-entering a settings section must never silently rewrite
-    // a region or profile already set.
+    const copy = providerMenuCopy(selected.harness);
+    process.stdout.write(
+      credentials.hasCredentials
+        ? `  Found AWS credentials (${detected.source}); ${
+          detected.regionSource === "detected" ? "detected" : "fallback"
+        } region ${detected.region}.\n`
+        : "  No AWS credentials were detected.\n",
+    );
+    // `unchanged` records nothing and keeps what is in place. It leads once an
+    // answer is recorded, so re-entering never silently rewrites that answer.
     // Two answers, because only two have distinct effects. `other` is not
     // offered: nothing reads a recorded `other`, and declining its
     // acknowledgement did exactly what `unchanged` does, so it duplicated the
@@ -1719,40 +1703,33 @@ function diagnosticWizard(
     // `--provider other --acknowledge` for anyone who wants its reminder.
     const recorded = records.providers;
     process.stdout.write(`    1. amazon-bedrock   ${copy.bedrock}\n`);
-    if (copy.owned) {
-      process.stdout.write(`    2. builtin          ${copy.owned.builtin}\n`);
-    } else {
-      process.stdout.write(
-        "    2. unchanged        records no provider answer and keeps existing settings;\n",
-      );
-      process.stdout.write(
-        `                        ${
-          recorded
-            ? "the recorded answer stays as it is"
-            : "new projects use the shipped fallback"
-        }\n`,
-      );
-    }
+    process.stdout.write(
+      "    2. unchanged        records no provider answer and keeps existing settings;\n",
+    );
+    process.stdout.write(
+      `                        ${
+        recorded
+          ? "the recorded answer stays as it is"
+          : "new projects use the shipped fallback"
+      }\n`,
+    );
     const choice = promptChoice(
       "  Provider",
       2,
-      owned || recorded ? 2 : 1,
+      recorded ? 2 : 1,
     );
     // On a Bedrock-oriented harness the second answer records nothing but must
     // still reach the mark-done loop below, or a pending action could never be
     // cleared here.
-    const keepRecorded = choice === 2 && !copy.owned;
+    const keepRecorded = choice === 2;
     if (keepRecorded) {
       process.stdout.write(
         "  Keeping existing settings unchanged; no provider answer recorded.\n\n",
       );
     }
-    const providerAnswer: ProviderKind = choice === 1 ? "amazon-bedrock" : "builtin";
-    const args = ["--provider", providerAnswer];
+    const args = ["--provider", "amazon-bedrock"];
     const skipMarkDone = new Set<string>();
-    if (keepRecorded) {
-      // Nothing to build: fall through to the pending-action prompts.
-    } else if (providerAnswer === "amazon-bedrock") {
+    if (choice === 1) {
       const region = promptTextDefault("  AWS region", detected.region);
       const profileAnswer = promptTextDefault(
         "  AWS profile",
@@ -1797,10 +1774,6 @@ function diagnosticWizard(
           );
         }
       }
-    } else if (providerAnswer === "builtin") {
-      process.stdout.write(
-        `  Recording that ${product} provides its own model access.\n\n`,
-      );
     }
     // Keeping an absent answer leaves the section untouched, and there are no
     // pending actions to offer, so stop before the loop below dereferences null.
@@ -1842,6 +1815,7 @@ function diagnosticWizard(
 function diagnosticSummary(
   section: DiagnosticSection,
   next: RuntimeRecord | ProvidersRecord | TrustRecord | null,
+  harness: ModelHarness,
 ): { lines: string[]; notes: string[] } {
   if (section === "runtime") {
     return {
@@ -1868,7 +1842,7 @@ function diagnosticSummary(
             }`,
       ],
       notes: record
-        ? pendingProviderIssues(record).map((issue) => `${issue.id}: ${issue.message}`)
+        ? pendingProviderIssues(record, harness).map((issue) => `${issue.id}: ${issue.message}`)
         : [],
     };
   }
@@ -1979,12 +1953,10 @@ function setupMapRows(
   const trust = outstanding.filter((action) => action.section === "trust");
   const providers = outstanding.filter((action) => action.section === "providers");
   const workspace = outstanding.filter((action) => action.section === "workspace");
-  // A missing answer only "needs you" where AI-DLC actually configures the
-  // model provider. On a subscription harness the model comes from the harness
-  // itself, so an unanswered row is complete, not outstanding.
+  // Harness-owned model access is complete regardless of a legacy answer.
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
-  const providerNeeds = providers.length > 0 ||
-    (records.providers === null && providerManaged);
+  const providerNeeds = providerManaged &&
+    (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !policy || modelPolicyIsEmpty(policy);
   const modelDetail = modelsUnrecorded
     ? "no recorded policy; agents inherit your session model and effort"
@@ -2009,10 +1981,10 @@ function setupMapRows(
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
     :
     (records.trust?.reviewed ? "review acknowledged" : "no unmet host trust");
-  const providerDetail = records.providers === null
-    ? providerManaged
-      ? "no recorded answers; provider access unverified"
-      : "harness-managed model access; nothing for AI-DLC to configure"
+  const providerDetail = !providerManaged
+    ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
+    : records.providers === null
+    ? "no recorded answers; provider access unverified"
     : providers.length > 0
     ? `${providers.length} pending provider action${providers.length === 1 ? "" : "s"}`
     :
@@ -2335,6 +2307,19 @@ function prepareDiagnosticSection(
     checkDiagnosticSection(section, projectDir, selected, records, options);
     return null;
   }
+  if (section === "providers" && harnessOwnsModelAccess(selected.harness) && !hasMutationFlags) {
+    // The fact line is human prose: `--json` must stay a single parseable
+    // object and `--quiet` a single line, so only the human mode prints it.
+    if (options.mode === "human") {
+      const product = projectionProductName(selected.root, selected.distribution);
+      process.stdout.write(`  ${ownedModelAccessFact(product)} Nothing to answer.\n`);
+    }
+    emitResult(
+      success(`providers needs no answer for ${selected.harness}; its model access is harness-managed`),
+      options,
+    );
+    return null;
+  }
   let next: RuntimeRecord | ProvidersRecord | TrustRecord | null;
   if (argv.includes("--reset")) {
     const conflicting = mutationFlags.find((flag) => flag !== "--reset" && argv.includes(flag));
@@ -2388,7 +2373,7 @@ function prepareDiagnosticSection(
       return null;
     }
   }
-  const summary = diagnosticSummary(section, next);
+  const summary = diagnosticSummary(section, next, selected.harness);
   return {
     argv: diagnosticPipelineArgv(argv),
     context: {
@@ -3749,6 +3734,16 @@ function prepareRefreshSource(
       regenerated.add(integration.path);
     }
   }
+  // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
+  // answer, so the staged file takes it from the project rather than the release.
+  // This runs after the regenerated scan on purpose: a file in `regenerated` is
+  // copied without the locally-modified check, and this preservation must not
+  // grant that. The staged file equals the project's when the region is its only
+  // difference, so the planner preserves it; any other local edit still meets the
+  // ownership check and is reported as a conflict instead of being overwritten.
+  if (modelHarness(distribution) === "kiro") {
+    preserveKiroMcpRegion(projectDir, root, descriptor.harnessDir);
+  }
 
   const currentGrid = join(currentHarness, "tools", "data", "scope-grid.json");
   const stagedGrid = join(stagedHarness, "tools", "data", "scope-grid.json");
@@ -4294,11 +4289,9 @@ type FirstRunDetection = {
 
 type FirstRunChoices = {
   candidate: InstalledSourceCandidate;
-  // The wizard offers only the answers with distinct effects: Bedrock, the
-  // model-preset step's "unchanged", and "builtin" where the harness serves its
-  // own models. "other" is deliberately absent, reachable only by flag, so the
-  // compiler proves the dead branch cannot occur here.
-  provider: "amazon-bedrock" | "builtin" | "unchanged";
+  // Bedrock-oriented harnesses offer Bedrock or unchanged. Harness-managed
+  // access asks nothing and records no provider answer.
+  provider: "amazon-bedrock" | "harness-managed" | "unchanged";
   region: string;
   profile: string;
   preset: "balanced" | "thorough" | "minimal" | "unchanged";
@@ -4605,9 +4598,8 @@ function applyFirstRunChoices(
     "--yes",
     "--json",
   ], projectDir, snapshot);
-  // "unchanged" records nothing by design, exactly as the model-preset step
-  // skips its own child call.
-  if (choices.provider === "unchanged") return;
+  // Neither unchanged nor harness-managed access has a provider answer to write.
+  if (choices.provider === "unchanged" || choices.provider === "harness-managed") return;
   const providerArgs = [
     "providers",
     "--project-dir",
@@ -4798,7 +4790,7 @@ function renderFirstRunEnding(
     modelHarness(choices.candidate.stamp.distribution),
   );
   // The wizard no longer offers "other", so there is no manual-provider step to
-  // chase here: Bedrock carries its own access check, "builtin" needs nothing,
+  // chase here: Bedrock carries its own access check, harness-managed needs none,
   // and "unchanged" leaves the shipped fallback in place.
   if (remaining.length > 0) {
     process.stdout.write(
@@ -4837,19 +4829,16 @@ function renderFirstRunEnding(
   process.stdout.write(`    ${invoke}\n`);
 }
 
-// The provider answer is harness-dependent: `builtin` is true only where the
-// harness serves its own models, and every other harness is Bedrock-oriented.
-// Re-derive it whenever the harness changes, or a switch at the summary would
-// apply the previous harness's answer: Kiro would record Bedrock and chase model
-// access it never needed, Claude Code would record `builtin` and never be asked.
+// Re-derive the provider choice whenever the harness changes. Harness-managed
+// access has no answer to record; every other harness is Bedrock-oriented.
 // A Bedrock-oriented answer (`amazon-bedrock` or `unchanged`) carries across
 // Bedrock-oriented harnesses unchanged.
 function providerForHarness(
   current: FirstRunChoices["provider"],
   distribution: string,
 ): FirstRunChoices["provider"] {
-  if (harnessOwnsModelAccess(modelHarness(distribution))) return "builtin";
-  return current === "builtin" ? "amazon-bedrock" : current;
+  if (harnessOwnsModelAccess(modelHarness(distribution))) return "harness-managed";
+  return current === "harness-managed" ? "amazon-bedrock" : current;
 }
 
 function customizeFirstRun(
@@ -4900,19 +4889,14 @@ function customizeFirstRun(
       process.stdout.write("  Step 2 of 6 - Model provider\n");
       const product = choices.candidate.descriptor.productName;
       const harness = modelHarness(choices.candidate.stamp.distribution);
-      const copy = providerMenuCopy(harness, product);
-      // Where the harness provides its own model access there is no decision to
-      // put to the user, so state why and record that fact. Saying it rather
-      // than skipping silently is the point: being asked about Bedrock on a Kiro
-      // licence is what confused people in the first place. The explicit
-      // `config providers` section still offers the full choice.
-      if (copy.owned) {
+      if (harnessOwnsModelAccess(harness)) {
         process.stdout.write(
-          `  ${copy.owned.fact} There is nothing to choose here.\n\n`,
+          `  ${ownedModelAccessFact(product)} There is nothing to choose here.\n\n`,
         );
-        choices.provider = "builtin";
+        choices.provider = "harness-managed";
         return;
       }
+      const copy = providerMenuCopy(harness);
       process.stdout.write(
         detection.aws.hasCredentials
           ? `  Found AWS credentials (${aws.source}); ${
@@ -5026,8 +5010,8 @@ function customizeFirstRun(
     process.stdout.write(`    2. Provider     ${
       choices.provider === "amazon-bedrock"
         ? `amazon-bedrock, ${choices.region}, ${choices.profile || "default credential chain"}`
-        : choices.provider === "builtin"
-        ? `builtin, ${choices.candidate.descriptor.productName} provides its own model access`
+        : choices.provider === "harness-managed"
+        ? `comes with ${choices.candidate.descriptor.productName}`
         : "none (unchanged)"
     }\n`);
     process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
@@ -5116,7 +5100,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       candidate.stamp.distribution === "claude" ? "MCP servers on, " : ""
     }all plugins, ${
       harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
-        ? `no provider settings, so ${candidate.descriptor.productName} keeps its own model access`
+        ? `no provider settings; model access comes with ${candidate.descriptor.productName}`
         : detection.aws.hasCredentials
         ? "Bedrock via your AWS credentials"
         : "Bedrock, with model access left for you to verify"
@@ -5142,11 +5126,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (selected === 1) {
     choices = {
       candidate,
-      // Kiro records that it serves its own models; every other harness is
-      // Bedrock-oriented, so recommended defaults record Bedrock and let the
-      // pending action carry the access check when no credentials were detected.
+      // Kiro needs no provider answer. Other harnesses record Bedrock and leave
+      // the access check pending when credentials were not detected.
       provider: harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
-        ? "builtin"
+        ? "harness-managed"
         : "amazon-bedrock",
       region: aws.region,
       profile: "",
