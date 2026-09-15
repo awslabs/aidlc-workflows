@@ -9034,7 +9034,8 @@ export function checkSummaryConfirmationEvidence(
       return failure(
         "SUMMARY_HASH_SCOPE_INVALID",
         `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
-          `Hash Scope "${hashScope}". ${recovery}`,
+          `Hash Scope "${hashScope}". Supported: ` +
+          `"${SUMMARY_CONFIRMATION_HASH_SCOPE}". ${recovery}`,
         "stale",
       );
     }
@@ -11090,6 +11091,11 @@ function splitMarkdownRow(line: string): string[] {
   return cells;
 }
 
+/** The accepted statuses, in one place so a refusal can name them without
+ *  restating the predicate below and drifting from it. */
+export const REVIEW_FINDING_STATUS_VALUES =
+  'New, Unresolved, Resolved, Accepted risk, or "Rejected: <reason>"';
+
 export function validReviewFindingStatus(value: string): value is ReviewFindingStatus {
   return (
     value === "New" ||
@@ -11180,8 +11186,12 @@ export function parseReviewSection(
     }
     const status = value("Status");
     if (!validReviewFindingStatus(status)) {
+      // Name the accepted set: "Fixed" is the word a reviewer reaches for once a
+      // human has fixed something, so the rejected value alone leaves them
+      // guessing at an enum that is right here.
       throw new Error(
-        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}`,
+        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}. ` +
+          `Valid statuses: ${REVIEW_FINDING_STATUS_VALUES}.`,
       );
     }
     const finding: ReviewFinding = {
