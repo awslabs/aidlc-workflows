@@ -48,6 +48,10 @@ export interface ArtifactBasis {
   presentCount: number;
   structureHash: string;
   contentHash: string;
+  // POC (feat/typed-dependency-edges): only set on INPUT basis rows when the
+  // consuming stage declared a sensitivity. Absence means pre-PoC pessimistic
+  // "any change propagates". See propagateStageInvalidation.
+  sensitivity?: "structure" | "content";
 }
 
 export interface StageValidationBasis {
@@ -112,6 +116,9 @@ export interface StageValidityNode {
     artifact: string;
     required?: boolean;
     conditional_on?: string;
+    // POC (feat/typed-dependency-edges): mirrors Consume.sensitivity in
+    // aidlc-graph.ts. Optional; absent = pessimistic propagation.
+    sensitivity?: "structure" | "content";
   }>;
   requires_stage?: readonly string[];
 }
@@ -141,7 +148,22 @@ interface CompletionReceipts {
 interface ObservedDependency {
   to: string;
   artifact: string;
+  // POC (feat/typed-dependency-edges): consumer's sensitivity declaration.
+  // Absent = pessimistic (any producer change propagates).
+  sensitivity?: "structure" | "content";
 }
+
+/**
+ * POC: per-artifact change classification for a producer's outputs, computed
+ * by comparing the receipt basis vs the current basis. Used by
+ * propagateStageInvalidation to filter edges whose sensitivity does not match
+ * the actual change class.
+ */
+export interface ProducerOutputChange {
+  structure: boolean;
+  content: boolean;
+}
+export type ProducerOutputChanges = Map<string, Map<string, ProducerOutputChange>>;
 
 export interface CaptureStageValidationOptions {
   resolution?: ArtifactResolutionOptions;
@@ -394,7 +416,12 @@ function captureInputBasis(
       required,
       instances,
     );
-    if (basis) inputs.push(basis);
+    if (basis) {
+      // POC: carry declared sensitivity through the receipt so downstream
+      // propagation can filter by it. Undeclared = pessimistic (absent).
+      if (consume.sensitivity) basis.sensitivity = consume.sensitivity;
+      inputs.push(basis);
+    }
   }
   return sortedArtifactBases(inputs);
 }
@@ -763,6 +790,9 @@ function observedDependencyEdges(
       outgoing.push({
         to: consumer,
         artifact: input.artifact,
+        // POC: carry consumer sensitivity through the edge. Absent =
+        // pessimistic propagation (any producer change flows through).
+        sensitivity: input.sensitivity,
       });
       edges.set(input.producer, outgoing);
     }
@@ -778,16 +808,61 @@ function observedDependencyEdges(
 }
 
 /**
+ * POC: compute per-artifact change classification for each producer stage.
+ * Compares the receipt's OUTPUT basis with the currently-recomputed OUTPUT
+ * basis. Only outputs are considered here — inputs feed the producer's OWN
+ * direct staleness, not what its consumers should filter on.
+ */
+export function computeProducerOutputChanges(
+  before: ReadonlyMap<string, StageValidationBasis>,
+  after: ReadonlyMap<string, StageValidationBasis>,
+): ProducerOutputChanges {
+  const result: ProducerOutputChanges = new Map();
+  for (const [slug, previous] of before) {
+    const current = after.get(slug);
+    if (!current) continue;
+    const perArtifact = new Map<string, ProducerOutputChange>();
+    const prevByArtifact = new Map(
+      previous.outputs.map((item) => [item.artifact, item]),
+    );
+    const currByArtifact = new Map(
+      current.outputs.map((item) => [item.artifact, item]),
+    );
+    const keys = new Set([
+      ...prevByArtifact.keys(),
+      ...currByArtifact.keys(),
+    ]);
+    for (const key of keys) {
+      const p = prevByArtifact.get(key);
+      const c = currByArtifact.get(key);
+      perArtifact.set(key, {
+        structure: p?.structureHash !== c?.structureHash,
+        content: p?.contentHash !== c?.contentHash,
+      });
+    }
+    result.set(slug, perArtifact);
+  }
+  return result;
+}
+
+/**
  * Propagate stale roots through dependencies actually observed in schema-3
  * completion receipts. A declared-but-missing optional consume is not an edge.
  * requires_stage is not used because v2 does not yet distinguish semantic and
  * ordering-only requires edges.
+ *
+ * POC (feat/typed-dependency-edges): when producerOutputChanges is supplied
+ * AND an edge carries a sensitivity, the edge only fires when the producer's
+ * actual change class intersects the consumer sensitivity. Absent sensitivity
+ * or absent change info falls back to pessimistic propagation (unchanged
+ * pre-PoC behavior).
  */
 export function propagateStageInvalidation(
   stages: readonly StageValidityNode[],
   completedSlugs: ReadonlySet<string>,
   directReasons: ReadonlyMap<string, readonly string[]>,
   completionBases: ReadonlyMap<string, StageValidationBasis>,
+  producerOutputChanges?: ProducerOutputChanges,
 ): StageValidityIssue[] {
   const known = new Set(stages.map((stage) => stage.slug));
   const edges = observedDependencyEdges(completionBases);
@@ -825,6 +900,19 @@ export function propagateStageInvalidation(
 
     for (const edge of edges.get(current.slug) ?? []) {
       if (!known.has(edge.to)) continue;
+      // POC (feat/typed-dependency-edges): sensitivity-aware edge filter.
+      // Only applies at DIRECT producer edges where we have concrete
+      // before/after output change info. Transitive hops (where current.slug
+      // is not itself in producerOutputChanges) remain pessimistic.
+      if (edge.sensitivity && producerOutputChanges) {
+        const changes = producerOutputChanges.get(current.slug)?.get(edge.artifact);
+        if (changes) {
+          const passes = edge.sensitivity === "content"
+            ? changes.content
+            : changes.structure;
+          if (!passes) continue;
+        }
+      }
       const reason =
         `depends on stale stage "${current.slug}" via ` +
         `artifact:${edge.artifact}`;
@@ -974,6 +1062,9 @@ export function inspectStageValidity(
   const amended = new Map<string, { basis: StageValidationBasis; message: string }>();
   const warnings: string[] = [];
   const unavailable = new Set<string>();
+  // POC (feat/typed-dependency-edges): collect current bases so we can
+  // classify producer output changes for sensitivity-aware propagation.
+  const currentBases = new Map<string, StageValidationBasis>();
 
   for (const [slug, previous] of receipts.latestKnown) {
     const stage = stageBySlug.get(slug);
@@ -991,6 +1082,10 @@ export function inspectStageValidity(
       );
       continue;
     }
+    // POC (feat/typed-dependency-edges): record every recomputed basis,
+    // including stages the upstream content/definition gate below explains
+    // away, so computeProducerOutputChanges still has data for them.
+    currentBases.set(slug, current);
     // Content recorded over raw line endings reads as the same content now.
     const recorded = basisInCurrentForm(previous);
     const edited = changesExplainedBy(recorded, current, contentOnly);
@@ -1025,11 +1120,17 @@ export function inspectStageValidity(
     if (changes.length > 0) directReasons.set(slug, changes);
   }
 
+  const producerOutputChanges = computeProducerOutputChanges(
+    receipts.latestKnown,
+    currentBases,
+  );
+
   const issues = propagateStageInvalidation(
     stages,
     completedSlugs,
     directReasons,
     receipts.latestKnown,
+    producerOutputChanges,
   ).map((issue) => issue.direct && issue.reasons.every((reason) =>
     reason.startsWith("output:") && edits.get(issue.stage)?.has(reason))
     ? { ...issue, edited: true as const } : issue);
