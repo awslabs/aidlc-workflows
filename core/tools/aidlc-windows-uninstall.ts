@@ -389,6 +389,10 @@ function Assert-PathRegistration($Registration, [string]$Command) {
 function Assert-PathCleanup($Journal, [string]$Command) {
   if ($Journal.PSObject.Properties.Name -contains 'pathRegistration') {
     Assert-PathRegistration $Journal.pathRegistration $Command
+  } elseif ($null -ne $pathBinding.registration) {
+    # The scheduled script proves a receipt existed; a journal without one
+    # would delete the files and the receipt while leaving User PATH behind.
+    throw 'invalid Windows PATH registration binding'
   }
   if ($Journal.PSObject.Properties.Name -contains 'pathCleanup') {
     $state = $Journal.pathCleanup
@@ -662,19 +666,20 @@ function readJournal(path: string): WindowsUninstallJournal | null {
       scopes.length !== 1 ||
       scopes[0][1] !== deletionScopeBinding(value as WindowsUninstallJournal)
     ) return null;
-    if (Object.hasOwn(value, "pathRegistration")) {
-      pathRegistrationShape(value.pathRegistration);
-      // Re-resolving a junction here would reject a valid continuation once
-      // its alias was removed. Check the receipt against the proof embedded
-      // in the existing executable script instead; never rebind on recovery.
-      const bindings = [...script.matchAll(
-        /^\$expectedPathBinding = '([A-Za-z0-9+/=]+)'\r?$/gm,
-      )];
-      if (
-        bindings.length !== 1 ||
-        bindings[0][1] !== pathRegistrationBinding(value as WindowsUninstallJournal)
-      ) return null;
-    }
+    if (Object.hasOwn(value, "pathRegistration")) pathRegistrationShape(value.pathRegistration);
+    // Re-resolving a junction here would reject a valid continuation once its
+    // alias was removed. Check the receipt against the proof embedded in the
+    // existing executable script instead; never rebind on recovery. Compare
+    // unconditionally: the deletion scope does not cover the receipt, so a
+    // journal whose receipt was removed or added after scheduling must not
+    // relaunch with a different PATH outcome.
+    const bindings = [...script.matchAll(
+      /^\$expectedPathBinding = '([A-Za-z0-9+/=]+)'\r?$/gm,
+    )];
+    if (
+      bindings.length !== 1 ||
+      bindings[0][1] !== pathRegistrationBinding(value as WindowsUninstallJournal)
+    ) return null;
     if (Object.hasOwn(value, "pathCleanup")) {
       const state = value.pathCleanup;
       if (
@@ -884,7 +889,6 @@ export function scheduleWindowsUninstall(
 }
 
 export function recoverWindowsUninstallContinuations(requestedPurge?: boolean): number {
-  assertSafeUninstallRoot();
   const scan = scanWindowsUninstallJournals();
   if (scan.invalid.length > 0) {
     throw new Error(
@@ -902,6 +906,11 @@ export function recoverWindowsUninstallContinuations(requestedPurge?: boolean): 
         "finish or recover the pending uninstall before changing purge mode",
     );
   }
+  if (scan.pending.length === 0) return 0;
+  // The dispatcher runs this before every Windows command. Only a continuation
+  // that is about to be relaunched needs the install-root guard; an idle
+  // install must keep working even when its configured root is unusual.
+  assertSafeUninstallRoot();
   if (process.platform !== "win32") return 0;
   let recovered = 0;
   for (const { path, journal } of scan.pending) {

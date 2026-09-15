@@ -68,6 +68,7 @@ import {
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   recoverWindowsUninstallContinuations,
+  scanWindowsUninstallJournals,
   windowsUninstallCleanupScript,
   type WindowsUninstallJournal,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
@@ -3528,6 +3529,172 @@ describe("t243 release lifecycle", () => {
       expect(
         (JSON.parse(readFileSync(journalPath, "utf-8")) as WindowsUninstallJournal).purge,
       ).toBe(false);
+    } finally {
+      const envKeys = {
+        root: "AIDLC_INSTALL_ROOT",
+        bin: "AIDLC_BIN_DIR",
+        tmpdir: "TMPDIR",
+        tmp: "TMP",
+        temp: "TEMP",
+      } as const;
+      for (const [name, key] of Object.entries(envKeys)) {
+        const value = saved[name as keyof typeof saved];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Windows uninstall recovery guards the install root only for a pending continuation", () => {
+    const machine = temp("aidlc-t243-windows-recovery-root-machine-");
+    const isolatedTemp = temp("aidlc-t243-windows-recovery-root-temp-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+      tmpdir: process.env.TMPDIR,
+      tmp: process.env.TMP,
+      temp: process.env.TEMP,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    process.env.TMPDIR = isolatedTemp;
+    process.env.TMP = isolatedTemp;
+    process.env.TEMP = isolatedTemp;
+    try {
+      // A project-like root is refused as an uninstall target, but the
+      // dispatcher's pre-command recovery must not fail an idle install.
+      mkdirSync(join(machine, ".git"));
+      expect(recoverWindowsUninstallContinuations()).toBe(0);
+
+      const id = createHash("sha256").update(machine).digest("hex").slice(0, 16);
+      const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
+      const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
+      const fencePath = windowsUninstallFencePath();
+      mkdirSync(dirname(commandPath()), { recursive: true });
+      writeFileSync(commandPath(), "installer-owned command\n");
+      const journal: WindowsUninstallJournal = {
+        schemaVersion: 1,
+        operation: "windows-uninstall-continuation",
+        status: "pending",
+        parentPid: process.pid,
+        shimPid: null,
+        installRoot: machine,
+        commandPath: commandPath(),
+        pointerPath: activeExecutablePath(),
+        cleanupPath,
+        fencePath,
+        purge: false,
+        preserved: [],
+        files: [{ path: commandPath(), expected: sha256Bytes(readFileSync(commandPath())) }],
+        directories: [dirname(commandPath()), machine],
+      };
+      writeFileSync(cleanupPath, `\uFEFF${windowsUninstallCleanupScript(journal)}`);
+      writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+      writeFileSync(
+        fencePath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          operation: "windows-uninstall-continuation",
+          journalPath,
+        }, null, 2)}\n`,
+      );
+
+      expect(() => recoverWindowsUninstallContinuations()).toThrow(
+        "refusing uninstall from a shared or project directory",
+      );
+      expect(readFileSync(commandPath(), "utf-8")).toBe("installer-owned command\n");
+      expect(
+        (JSON.parse(readFileSync(journalPath, "utf-8")) as WindowsUninstallJournal).status,
+      ).toBe("pending");
+    } finally {
+      const envKeys = {
+        root: "AIDLC_INSTALL_ROOT",
+        bin: "AIDLC_BIN_DIR",
+        tmpdir: "TMPDIR",
+        tmp: "TMP",
+        temp: "TEMP",
+      } as const;
+      for (const [name, key] of Object.entries(envKeys)) {
+        const value = saved[name as keyof typeof saved];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Windows uninstall recovery rejects a journal whose PATH receipt was removed after binding", () => {
+    const machine = temp("aidlc-t243-windows-receipt-machine-");
+    const isolatedTemp = temp("aidlc-t243-windows-receipt-temp-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+      tmpdir: process.env.TMPDIR,
+      tmp: process.env.TMP,
+      temp: process.env.TEMP,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    process.env.TMPDIR = isolatedTemp;
+    process.env.TMP = isolatedTemp;
+    process.env.TEMP = isolatedTemp;
+    try {
+      const id = createHash("sha256").update(machine).digest("hex").slice(0, 16);
+      const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
+      const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
+      const fencePath = windowsUninstallFencePath();
+      mkdirSync(dirname(commandPath()), { recursive: true });
+      writeFileSync(commandPath(), "installer-owned command\n");
+      const entry = dirname(commandPath());
+      const journal: WindowsUninstallJournal = {
+        schemaVersion: 1,
+        operation: "windows-uninstall-continuation",
+        status: "pending",
+        parentPid: process.pid,
+        shimPid: null,
+        installRoot: machine,
+        commandPath: commandPath(),
+        pointerPath: activeExecutablePath(),
+        cleanupPath,
+        fencePath,
+        purge: false,
+        preserved: [],
+        files: [{ path: commandPath(), expected: sha256Bytes(readFileSync(commandPath())) }],
+        directories: [dirname(commandPath()), machine],
+        pathRegistration: {
+          schemaVersion: 1,
+          scope: "user",
+          accountSid: "S-1-5-21-1-2-3-1001",
+          entry,
+          previousValue: null,
+          previousKind: null,
+          registeredValue: entry,
+        },
+      };
+      writeFileSync(cleanupPath, `\uFEFF${windowsUninstallCleanupScript(journal)}`);
+      writeFileSync(
+        fencePath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          operation: "windows-uninstall-continuation",
+          journalPath,
+        }, null, 2)}\n`,
+      );
+
+      // The deletion scope does not cover the receipt: dropping it would still
+      // delete every planned file (including windows-path.json) and skip the
+      // PATH cleanup the script was bound to perform.
+      const { pathRegistration: _dropped, ...withoutReceipt } = journal;
+      writeFileSync(journalPath, `${JSON.stringify(withoutReceipt, null, 2)}\n`);
+      const tampered = scanWindowsUninstallJournals();
+      expect(tampered.pending).toEqual([]);
+      expect(tampered.invalid).toContain(journalPath);
+      expect(() => recoverWindowsUninstallContinuations()).toThrow("invalid Windows uninstall journal(s)");
+
+      writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+      const intact = scanWindowsUninstallJournals();
+      expect(intact.invalid).toEqual([]);
+      expect(intact.pending.map(({ path }) => path)).toEqual([journalPath]);
+      expect(readFileSync(commandPath(), "utf-8")).toBe("installer-owned command\n");
     } finally {
       const envKeys = {
         root: "AIDLC_INSTALL_ROOT",

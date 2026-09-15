@@ -335,6 +335,19 @@ describe("uninstall file ownership plans", () => {
     });
   });
 
+  test("preserves a version whose manifest cannot be read as an object", () => {
+    withInstall((fixture) => {
+      for (const manifest of ["{ not json\n", "null\n", "[]\n"]) {
+        put(join(fixture.version, "version.json"), manifest);
+        const result = plan(fixture, true);
+        expect(result.preserved, manifest).toContain(fixture.version);
+        expect(result.files.some((file) => file.path.startsWith(`${fixture.version}${sep}`)), manifest)
+          .toBe(false);
+        expect(result.directories, manifest).not.toContain(fixture.version);
+      }
+    });
+  });
+
   test("legacy runtime-only ownership preserves untracked plugins", () => {
     withInstall((fixture) => {
       const result = plan(fixture);

@@ -303,6 +303,13 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
         expect(scan.pending).toEqual([]);
         expect(scan.invalid).toContain(pending.path);
       }
+      // Removing the receipt is not covered by the deletion scope; it must
+      // still fail the PATH binding rather than relaunch without PATH cleanup.
+      const { pathRegistration: _dropped, ...withoutReceipt } = pending.journal;
+      writeFileSync(pending.path, JSON.stringify(withoutReceipt));
+      const dropped = scanWindowsUninstallJournals();
+      expect(dropped.pending).toEqual([]);
+      expect(dropped.invalid).toContain(pending.path);
       writeFileSync(pending.path, JSON.stringify({
         ...pending.journal,
         pathCleanup: { beforeValue: OTHER, completed: false },
@@ -530,6 +537,7 @@ for ($attempt = 0; $attempt -lt $global:case.Attempts; $attempt++) {
 
 type NativeCase = {
   receipt?: WindowsPathRegistration | Record<string, unknown>;
+  dropReceipt?: boolean;
   current: string | number | string[] | null;
   kind?: "String" | "ExpandString" | "DWord" | "MultiString";
   sid?: string;
@@ -559,6 +567,7 @@ function nativeCleanup(
   if (options.receipt !== undefined) {
     journal.pathRegistration = options.receipt as WindowsPathRegistration;
   }
+  if (options.dropReceipt) delete journal.pathRegistration;
   writeFileSync(pending.path, JSON.stringify(journal));
   const result = spawnSync("powershell.exe", [
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -1128,6 +1137,23 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       });
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toContain("invalid Windows PATH registration");
+    });
+  }, 35_000);
+
+  test("refuses a journal whose PATH receipt was removed before deleting files or opening HKCU", () => {
+    withInstall((root) => {
+      const receipt = registration(dirname(commandPath()));
+      writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
+      const result = nativeCleanup(schedule(), {
+        current: receipt.registeredValue,
+        dropReceipt: true,
+      });
+      expect(result).toMatchObject({
+        value: receipt.registeredValue, opens: 0, writes: 0, notifications: 0,
+        journalExists: true, fenceExists: true, commandExists: true,
+      });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain("invalid Windows PATH registration binding");
     });
   }, 35_000);
 });

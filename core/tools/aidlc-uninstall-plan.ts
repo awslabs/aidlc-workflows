@@ -211,8 +211,18 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
         }
         const manifestBytes = readFileSync(manifestPath);
         const manifestExpected = `sha256:${createHash("sha256").update(manifestBytes).digest("hex")}`;
-        const manifest = JSON.parse(manifestBytes.toString("utf-8")) as Record<string, unknown>;
-        if (manifest.schemaVersion !== 1 || manifest.version !== name) {
+        // An unreadable manifest is no ownership evidence: keep the version
+        // for review, exactly like a manifest whose identity does not match.
+        let manifest: Record<string, unknown> | null = null;
+        try {
+          const parsed: unknown = JSON.parse(manifestBytes.toString("utf-8"));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            manifest = parsed as Record<string, unknown>;
+          }
+        } catch {
+          manifest = null;
+        }
+        if (manifest?.schemaVersion !== 1 || manifest.version !== name) {
           preserved.add(version);
           continue;
         }
