@@ -519,3 +519,17 @@ step is spoken, which says nothing about it, the engine appends a
 the files as they are; it stands in for the completion receipt like the row
 above, so a later edit is compared with it. A change after the person's next
 message, or with an approval that names no message, is stale as before.
+
+An `inputs[]` entry may also carry an optional `recheck_if` field
+(`edited` | `files-added-or-removed` | `changed`), copied through from the
+consuming stage's `consumes[].recheck_if` declaration at capture time. It
+narrows what class of producer change propagates staleness down this edge:
+`edited` fires when the producer's `contentHash` moves, `files-added-or-removed`
+fires when its `structureHash` moves, and `changed` (or an omitted field on an
+older receipt) fires on any change. Older schema-3 receipts written before this
+field existed continue to behave as `changed` — the pre-RFC pessimistic default
+— until natural re-completion mints a fresh receipt. This is an edge-local
+filter applied after the stage-level gate above: it narrows which *downstream*
+consumers see a producer's staleness once that producer is already judged
+stale, not whether the producer's own change counts as stale in the first
+place.

@@ -187,7 +187,7 @@ The exact message wording lives with the implementation, not this RFC;
 the contract is: **the message names the effective policy and, when
 narrowing is possible, tells the author which value would silence it.**
 
-### Deterministic A/B evidence (from `tests/unit/t330-selective-propagation.test.ts`)
+### Deterministic A/B evidence (from `tests/unit/t338-selective-propagation.test.ts`)
 
 Fixture: Producer `A` → four consumers:
 - `B` (`recheck_if: edited`)
@@ -330,19 +330,17 @@ untracked histories. Extend for:
   maintainer round-1 review here.
 - PoC branch and evidence: `stage-validity-typed-edges` on
   `djoo-lgcns/aidlc-workflows`, draft PR #1002 and test
-  `tests/unit/t330-selective-propagation.test.ts` (10/10 pass,
+  `tests/unit/t338-selective-propagation.test.ts` (10/10 pass,
   deterministic).
 
 ## Decisions requested (revision 2)
 
 The four decisions from revision 1 are resolved by maintainer round-1
-(comment 5521355176). Remaining open item:
-
-1. **Test-slot renumber.** Draft PR #1002's `t330-selective-propagation`
-   collides with #1000's reserved `t328–t332` block (which includes
-   `t330-authority-rebinding`). After #1000 merges, this file will move
-   to the next free slot. No design consequence; noted here for the
-   PR-round tracker.
+(comment 5521355176). No open design decisions remain for this RFC; the
+one open mechanical item (test-slot collision with #1000's reserved
+`t328–t332`) has been resolved now that #1000 has merged — the test
+lives at `tests/unit/t338-selective-propagation.test.ts` on the rebased
+branch.
 
 All content changes from round 1 are folded into this revision:
 
