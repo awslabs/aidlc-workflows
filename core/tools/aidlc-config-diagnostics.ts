@@ -247,6 +247,8 @@ export type RuntimeProbeOptions = {
   includeHarnessCli?: boolean;
   env?: NodeJS.ProcessEnv;
   home?: string;
+  /** Root the system PATH registries (/etc/...) are read under; tests point it at a fixture. */
+  systemRoot?: string;
   platform?: NodeJS.Platform;
   which?: (command: string, pathValue: string) => string | null;
   run?: (
@@ -566,14 +568,15 @@ export function deriveNonInteractivePath(
       : "/usr/local/bin:/usr/bin:/bin",
     platform,
   );
+  const systemRoot = options.systemRoot ?? "/";
   if (platform === "darwin") {
-    for (const path of ["/etc/paths"]) {
+    for (const path of [join(systemRoot, "etc", "paths")]) {
       if (!existsSync(path)) continue;
       entries.push(
         ...readFileSync(path, "utf-8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
       );
     }
-    const pathsDir = "/etc/paths.d";
+    const pathsDir = join(systemRoot, "etc", "paths.d");
     if (existsSync(pathsDir)) {
       for (const file of readdirSync(pathsDir).sort()) {
         const path = join(pathsDir, file);
@@ -587,8 +590,58 @@ export function deriveNonInteractivePath(
         }
       }
     }
+  } else {
+    // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the
+    // Debian family), not what a login session or a systemd user service
+    // receives. Those come from pam_env's /etc/environment, login.defs
+    // ENV_PATH, and environment.d - the surfaces the remediation names.
+    const home = options.home ?? env.HOME ?? homedir();
+    const configHome = env.XDG_CONFIG_HOME || join(home, ".config");
+    entries.push(
+      ...pathAssignments(join(systemRoot, "etc", "environment"), /^(?:export\s+)?PATH=/),
+      ...pathAssignments(join(systemRoot, "etc", "login.defs"), /^ENV_PATH\s+PATH=/),
+      ...environmentDirectoryPaths(join(systemRoot, "etc", "environment.d")),
+      ...environmentDirectoryPaths(join(configHome, "environment.d")),
+    );
   }
   return [...new Set(entries)].join(delimiter);
+}
+
+// Entries of every `PATH=` assignment in a pam_env / login.defs style file.
+// Values are literal there (no shell expansion), so quotes are stripped and
+// `$PATH`-style references are dropped; the entries they would splice in are
+// already accumulated by the caller.
+function pathAssignments(path: string, prefix: RegExp): string[] {
+  let content: string;
+  try {
+    if (!existsSync(path) || !statSync(path).isFile()) return [];
+    content = readFileSync(path, "utf-8");
+  } catch {
+    return [];
+  }
+  const entries: string[] = [];
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!prefix.test(line)) continue;
+    const value = line.slice(line.indexOf("=") + 1).trim().replace(/^(["'])(.*)\1$/, "$2");
+    for (const entry of value.split(":")) {
+      const trimmed = entry.trim();
+      if (trimmed && !trimmed.startsWith("$")) entries.push(trimmed);
+    }
+  }
+  return entries;
+}
+
+// systemd environment.d: every *.conf in the directory, sorted, PATH= lines.
+function environmentDirectoryPaths(directory: string): string[] {
+  let files: string[];
+  try {
+    if (!existsSync(directory)) return [];
+    files = readdirSync(directory).filter((file) => file.endsWith(".conf")).sort();
+  } catch {
+    return [];
+  }
+  return files.flatMap((file) => pathAssignments(join(directory, file), /^PATH=/));
 }
 
 function walkTextFiles(root: string): string[] {
@@ -666,7 +719,7 @@ function runtimeRemediation(
   }
   return platform === "win32"
     ? "Add the aidlc command directory to the Windows User or Machine PATH."
-    : "Add ~/.local/bin to the login-independent environment used by the harness, not only an interactive shell rc file.";
+    : "Add ~/.local/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only an interactive shell rc file.";
 }
 
 function binaryProbe(
