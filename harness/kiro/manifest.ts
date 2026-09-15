@@ -101,7 +101,11 @@ function personaFrontmatter(agent: string): string[] {
     "toolsSettings:",
     "  execute_bash:",
     "    allowedCommands:",
-    `      - 'bun (run )?["'']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts["'']?( .*)?'`,
+    // The engine invocation this channel actually uses: the copy channel runs
+    // the .ts entrypoints through bun, the native channel runs the compiled
+    // trusted command. Hardcoding the bun form allowed a command the native
+    // install cannot run while denying the one its own prose instructs.
+    `      - '{{TOOL_COMMAND_PATTERN}}'`,
     `      - 'date -u( .*)?'`,
     "    deniedCommands:",
     `      - '([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?'`,

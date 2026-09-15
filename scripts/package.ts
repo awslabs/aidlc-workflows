@@ -160,6 +160,10 @@ const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
 const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
+// A harness whose agent config allowlists shell commands needs a REGEX for this
+// channel's invocation, which no other token can compose: the copy channel's
+// pattern ends in `.ts` and the native channel's must not mention it at all.
+const TOOL_COMMAND_PATTERN_TOKEN = /\{\{TOOL_COMMAND_PATTERN\}\}/g;
 const TRUSTED_NAMESPACE_TOKEN = /\{\{TRUSTED_NAMESPACE\}\}/g;
 // Matched by PREFIX (mirroring aidlc-init.ts's marker scan): the begin marker
 // embeds the harness-projected invocation, so its tail varies per channel.
@@ -198,9 +202,18 @@ function substituteInvocationTokens(
   invoke = `bun ${harnessDir}/tools/aidlc.ts`,
 ): string {
   const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  // Single quotes are doubled because this value lands inside a single-quoted
+  // YAML scalar, and the dot in the harness dir is escaped because the value is
+  // read as a regex by the host, not as a path.
+  const toolCommandPattern = invoke === "aidlc"
+    ? String.raw`${TRUSTED_COMMAND_PREFIX}( .*)?`
+    : String.raw`bun (run )?["'']?${
+      escapeRegExp(harnessDir)
+    }/tools/[A-Za-z0-9._-]+\.ts["'']?( .*)?`;
   return s
     .replace(INVOKE_TOKEN, invoke)
     .replace(TOOL_PREFIX_TOKEN, toolPrefix)
+    .replace(TOOL_COMMAND_PATTERN_TOKEN, toolCommandPattern)
     .replace(TRUSTED_NAMESPACE_TOKEN, TRUSTED_ROUTE_NAMESPACE);
 }
 
@@ -757,7 +770,14 @@ function buildTree(
       const fmLines = fmAdditions.get(harnessRel);
       if (fmLines) {
         out = Buffer.from(
-          applyFrontmatterAdditions(out.toString("utf-8"), fmLines, harnessRel),
+          applyFrontmatterAdditions(
+            out.toString("utf-8"),
+            // Additions are authored text like every other projected line, so
+            // they take the same substitution. A manifest runs once and cannot
+            // know which channel it is being built for.
+            fmLines.map((line) => substituteToken(line, harnessDir, invoke)),
+            harnessRel,
+          ),
           "utf-8",
         );
         fmApplied.add(harnessRel);
@@ -1252,7 +1272,7 @@ function rewriteNativeInvocations(
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
     const value = readFileSync(file, "utf-8");
-    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}"]) {
+    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}", "{{TOOL_COMMAND_PATTERN}}"]) {
       if (value.includes(token)) {
         leftovers.push(`${relative(outRoot, file)}: unexpanded ${token}`);
       }
