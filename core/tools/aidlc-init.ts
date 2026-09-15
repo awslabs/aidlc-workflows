@@ -826,7 +826,7 @@ function showModels(
   options: ReturnType<typeof globalOptions>,
 ): void {
   const data = modelStateData(policy, tiers, harness, projectDir, resolved);
-  if (options.mode === "json") {
+  if (options.mode !== "human") {
     emitResult(success(`model policy for ${harness}`, data), options);
     return;
   }
@@ -1425,7 +1425,7 @@ function showDiagnosticSection(
       ...status,
     };
   }
-  if (options.mode === "json") {
+  if (options.mode !== "human") {
     emitResult(success(`${section} configuration for ${selected.harness}`, data), options);
     return;
   }
@@ -2732,7 +2732,7 @@ function showChoiceSection(
       ),
     };
   }
-  if (options.mode === "json") {
+  if (options.mode !== "human") {
     emitResult(success(`${section} configuration for ${selected.harness}`, data), options);
     return;
   }
@@ -6787,21 +6787,29 @@ export async function main(
       !from &&
       /(harness .+ is not installed|no installed harness runtime is available)/.test(rawMessage),
     );
-    const message = copiedRefreshWithoutSource
+    // A Bun-invoking projection has no installed runtime to refresh from. The
+    // two real options are the native command, or the explicit `--from` refresh
+    // that the doctor row, setup map, and trust issue already render, pointing
+    // at the bytes the project was copied from. Re-copying alone would not make
+    // a rerun succeed, so it is not offered as one.
+    const copiedRefresh = copiedHarness
+      ? workspaceShellRefreshCommand(copiedHarness.harnessDir, copiedHarness.distribution)
+      : null;
+    const message = copiedRefreshWithoutSource && copiedRefresh
       ? `This copy-channel project already contains ${copiedHarness?.harnessDir}, but refreshing project files needs release source bytes. ` +
-        "Install the native aidlc command when a release is available, or re-copy the matching dist/<harness>/ tree from the aidlc-workflows checkout."
+        `Install the native aidlc command and rerun this command, or refresh from the bytes you copied with \`${copiedRefresh}\`.`
       : rawMessage;
     emitResult(failure(
       message,
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource
-        ? "re-copy the matching dist/<harness>/ tree, then rerun this command"
+      copiedRefreshWithoutSource && copiedRefresh
+        ? `install the native aidlc command and rerun this command, or run ${copiedRefresh}`
         : from
         ? configCommand("--from <valid-release-data>")
-        : selected?.projectProjection
-        ? "install a native release when available, or re-copy the projection from the aidlc-workflows checkout"
+        : selected?.projectProjection && copiedHarness
+        ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`
         : configCommand("--harness <name>"),
     ), options);
   } finally {
