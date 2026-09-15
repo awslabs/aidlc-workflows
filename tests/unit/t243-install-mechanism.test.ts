@@ -68,6 +68,7 @@ import {
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   recoverWindowsUninstallContinuations,
+  windowsUninstallCleanupScript,
   type WindowsUninstallJournal,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
 import {
@@ -3493,7 +3494,6 @@ describe("t243 release lifecycle", () => {
       const fencePath = windowsUninstallFencePath();
       mkdirSync(dirname(commandPath()), { recursive: true });
       writeFileSync(commandPath(), "installer-owned command\n");
-      writeFileSync(cleanupPath, "exit 0\n");
       const journal: WindowsUninstallJournal = {
         schemaVersion: 1,
         operation: "windows-uninstall-continuation",
@@ -3507,7 +3507,10 @@ describe("t243 release lifecycle", () => {
         fencePath,
         purge: false,
         preserved: [join(machine, "pins.json")],
+        files: [{ path: commandPath(), expected: sha256Bytes(readFileSync(commandPath())) }],
+        directories: [dirname(commandPath()), machine],
       };
+      writeFileSync(cleanupPath, `\uFEFF${windowsUninstallCleanupScript(journal)}`);
       writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
       writeFileSync(
         fencePath,

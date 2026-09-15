@@ -20,9 +20,11 @@ Release assets cover:
 - Linux x64 and arm64, with glibc and musl builds
 - Windows x64
 
-Install as the target user. The Unix installer refuses root; the Windows
-installer refuses an elevated Administrator session. Native installs are
-per-user and do not need `sudo`.
+Native installs are per-user. The Unix installer refuses root and does not need
+`sudo`. Windows installation always targets the account running PowerShell,
+including an elevated Administrator session, without an opt-in environment
+variable. Running PowerShell with another account's credentials installs for
+that account. There is no all-users mode.
 
 Alpine Linux's musl asset follows Bun's own runtime contract: Bun's musl build,
 like Node.js, requires the system `libgcc` and `libstdc++` packages. Fully
@@ -93,12 +95,47 @@ Remove-Item -Recurse -Force $download
 ```
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps a
-stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. The installer adds that bin
-directory to the current PowerShell process and prints the command needed in
-new sessions; it does not edit a PowerShell profile.
+stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. After successful verification
+and installation, the installer registers that bin directory in the current
+account's persistent User PATH, preserving existing entries and avoiding
+duplicates on reruns. It also updates the current PowerShell process and
+notifies Windows of the environment change for new terminals. If another
+session cannot find `aidlc`, open a new terminal; restart the terminal app or
+IDE if needed.
+It does not change Machine PATH or edit a PowerShell profile.
+
+Successful human output starts with `Installed`, the version, the account,
+and the installed command path. Next, run `aidlc config` from your project
+directory. Restart guidance applies only if another terminal or IDE cannot
+find the command.
+
+The installer writes `windows-path.json` under the install root only when it
+adds a User PATH entry. This ownership record survives reruns, including
+`-NoModifyPath`, so uninstall can remove the entry later. An entry that was
+already present is not claimed. Both `aidlc uninstall` and
+`aidlc uninstall --purge` remove the recorded entry while preserving pre-existing
+entries and later unrelated PATH changes.
+
+If another `aidlc` command takes precedence in persistent PATH, the result
+names it and gives the installed command's full path. Resolve that PATH
+conflict or invoke the installed command directly. If PATH registration fails,
+the installer reports that the files were installed but PATH still needs
+configuration, with a recovery instruction and exit code 1.
+
+To skip **both persistent and current-process PATH changes**, replace
+`& $installer` above with `& $installer -NoModifyPath`. The installer prints
+a direct command to run without PATH registration. For the default location:
+
+```powershell
+& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config
+```
+
+Use the printed command path if you changed the install location. Rerun the
+installer without `-NoModifyPath` to enable automatic PATH registration. The
+switch does not undo an earlier registration or erase its ownership record.
 
 PowerShell installer parameters use their native names, such as `-Version`, `-From`, `-Offline`,
-`-ReleaseBaseUrl`, `-CaBundle`, `-Yes`, `-Quiet`, `-Json`, and `-NoColor`.
+`-ReleaseBaseUrl`, `-CaBundle`, `-NoModifyPath`, `-Yes`, `-Quiet`, `-Json`, and `-NoColor`.
 
 An installer downloaded from a versioned release URL defaults to that exact
 release, including previews. The `latest/download` installer continues to
@@ -111,6 +148,34 @@ version from the local release manifest.
 Installation asks no harness question. Human and non-interactive runs install
 the same binary plus all harness runtimes.
 
+For temporary or isolated Windows installs, pass `-NoModifyPath` and invoke
+the reported `aidlc.cmd` path directly to keep the temporary bin directory out
+of User PATH and the current process.
+
+PowerShell `-Json` emits one result with `schemaVersion: 1`, `ok`, `code`,
+`status`, and `message`. After the files are installed, `data` contains:
+
+| Field | Meaning |
+|-------|---------|
+| `installed` | `true`, including when the subsequent PATH step fails |
+| `ready` | Whether the recommended command is ready to use; `false` for a PATH conflict or failure |
+| `version`, `account`, `installRoot`, `command` | Installed version, Windows account, install root, and full command path |
+| `path.scope` | `"user"` |
+| `path.status` | `"updated"`, `"unchanged"`, `"skipped"`, `"conflict"`, or `"failed"` |
+| `path.changed` | Whether this run changed persistent User PATH |
+| `path.owned` | Whether this run confirmed installer ownership; `null` when `-NoModifyPath` leaves an earlier record unassessed |
+| `nextSteps` | An array of instructions, including project configuration or PATH recovery |
+
+Successful registration or an existing matching PATH normally uses
+`status: "ok"` and exit code 0. If Windows cannot notify other applications,
+the result uses `status: "warning"` with `data.ready: true` and a conditional
+sign-out instruction. A persistent command conflict uses `status: "warning"`,
+exit code 0, and `data.ready: false`; automation should inspect readiness as
+well as the exit code. `-NoModifyPath` uses `status: "ok"`, `path.status: "skipped"`, and
+`data.ready: true`, with a direct command in `nextSteps`. A PATH failure after
+installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
+`data.ready: false`.
+
 ### Installer Options
 
 | Unix | PowerShell | Meaning |
@@ -121,6 +186,7 @@ the same binary plus all harness runtimes.
 | `--release-base-url <url>` | `-ReleaseBaseUrl <url>` | Use a compatible release mirror |
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
+| Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
 | `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |
@@ -148,9 +214,10 @@ job uses the `release` environment, which can require reviewer approval before
 publication.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
-locations. Those paths must be absolute on Unix. The PowerShell installer also
-honors `AIDLC_OFFLINE=1`; the Unix installer requires the explicit `--offline`
-or `--from` spelling.
+locations. Those paths must be absolute on Unix. On Windows, the selected bin
+directory is registered in the current account's User PATH unless
+`-NoModifyPath` is set. The PowerShell installer also honors `AIDLC_OFFLINE=1`;
+the Unix installer requires the explicit `--offline` or `--from` spelling.
 
 ### Release Authentication
 
@@ -846,6 +913,10 @@ of the protection every release has (active, rollback, in use, pinned): after
 an update the two newest complete previews stay, and every older preview
 without its own protection is pruned; stable retention is unchanged.
 
+Version pruning also uses recorded file lists and empty-directory cleanup.
+If a selected version contains unowned or changed paths, pruning is refused
+and the files are kept for review.
+
 Project pins keep overriding the machine channel: `aidlc config --pin <id>` and
 `.aidlc-version` accept preview ids, and a pinned project dispatches to that
 exact retained version whatever the machine follows.
@@ -1115,12 +1186,29 @@ aidlc uninstall
 aidlc uninstall --purge --yes
 ```
 
-Uninstall removes the installer-owned command and all retained versions but
-never changes project trees. Without `--purge`, it preserves machine config,
-update cache, pin registrations, and the default harness. `--purge` removes
-those machine records too.
+Uninstall uses an explicit list of installer-owned files and checks their
+contents before deleting them. It does not recursively remove installation or
+version directories. Directories are removed only when empty; project trees,
+unlisted files, changed files, and linked targets are preserved. The result
+reports unowned or changed paths kept for review.
 
-Uninstall requires confirmation and refuses a root-owned, package-manager-owned,
-or mixed-ownership command. On Windows it schedules verified cleanup after the
-running command exits and resumes an interrupted continuation on the next
-command.
+New installations record a full per-version `installed-files.json` inventory,
+whose hash is stored in `version.json`. Older installations use their verified
+runtime inventory where available; files without ownership evidence are kept.
+Without `--purge`, machine config, update cache, pin registrations, and the
+default harness are also preserved. `--purge` selects those known machine
+records for removal; it does not broaden deletion to unrelated files.
+
+On Windows, both forms remove the User PATH entry recorded in the install
+root's `windows-path.json`. Entries that existed before installation and
+unrelated changes made afterward are preserved. An install without an
+ownership record leaves User PATH alone. `-NoModifyPath` on a later installer
+run preserves an earlier record, so that entry is still removed on uninstall.
+
+Uninstall requires confirmation and refuses filesystem, home, shared-system,
+and project roots, as well as root-owned, package-manager-owned, or
+mixed-ownership commands. On Windows, a bound file list and expected checksums
+are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
+refuses reparse points, and deletes files individually after the running command
+exits. An interrupted continuation can resume only with its validated file plan.
+Older journals without such a plan are refused and left for inspection.
