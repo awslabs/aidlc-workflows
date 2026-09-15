@@ -92,11 +92,11 @@ describe("t343 intent-create refuses orphaned positionals", () => {
     expect(JSON.parse(description(project).out).description).toBe(text);
   });
 
-  test("all three creation spellings still work — the guard must not eat a verb token", () => {
-    // `isIntentCreate` is true for `intent-create`, `init`, and the two-token
-    // `intent create` alias. A guard that counts every positional past the first
-    // rejects that alias outright, because its `create` reads as an orphan. Measured:
-    // the first version of this fix broke it, and a single-spelling test missed it.
+  test("both creation spellings still work — the guard must not eat a verb token", () => {
+    // A guard that counts every positional past the first rejects the two-token
+    // `intent create` alias outright, because its `create` reads as an orphan.
+    // Measured: the first version of this fix broke it, and a single-spelling
+    // test missed it.
     if (!existsSync(TOOL)) return;
     for (const verb of [["intent-create"], ["intent", "create"]]) {
       const project = setupIntegrationProject();
@@ -107,6 +107,16 @@ describe("t343 intent-create refuses orphaned positionals", () => {
       expect(created.status, `${verb.join(" ")}: ${created.out}`).toBe(0);
       expect(JSON.parse(description(project).out).description).toBe(text);
     }
+  });
+
+  test("legacy init keeps its transition refusal instead of posing as intent-create", () => {
+    if (!existsSync(TOOL)) return;
+    const project = setupIntegrationProject();
+    const result = run(project, ["init", "stray"]);
+    expect(result.status).not.toBe(0);
+    const message = errorMessage(result.out);
+    expect(message).toContain("init now lays down the project data tree");
+    expect(message).not.toContain("intent-create does not accept positional arguments");
   });
 
   test("the alias still refuses a genuine orphan past its verb", () => {

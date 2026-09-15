@@ -455,7 +455,7 @@ function validateIntentCreateFlagValues(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
   positional: string[] = [],
-  verbTokens = 1,
+  verbTokens?: number,
 ): void {
   // Creation takes every input as a flag and never a positional, so anything past the
   // verb means the shell split a value that was not quoted. The common case is
@@ -464,9 +464,10 @@ function validateIntentCreateFlagValues(
   // project-description.json is written once and is the [desc] source register for the
   // whole run, so a silent prefix is unrecoverable data loss - refuse instead.
   //
-  // verbTokens is 2 for the `intent create` alias, whose second token is part of the
-  // verb rather than an orphan; `intent-create` and `init` spell it in one.
-  if (positional.length > verbTokens) {
+  // verbTokens is 2 for the `intent create` alias and 1 for `intent-create`.
+  // It is omitted for the retired `init` command so that command keeps its
+  // dedicated transition refusal.
+  if (verbTokens !== undefined && positional.length > verbTokens) {
     const orphans = positional.slice(verbTokens);
     const hint = flags.arguments !== undefined
       ? ` This usually means an unquoted --arguments=... was split by the shell: ` +
@@ -9083,7 +9084,7 @@ export async function main(argv: string[]): Promise<void> {
       flags,
       missingValueFlags,
       positional,
-      subcommand === "intent" ? 2 : 1,
+      subcommand === "intent" ? 2 : subcommand === "intent-create" ? 1 : undefined,
     );
   }
   if (subcommand === "config-change" || subcommand === "scope-change") {
