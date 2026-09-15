@@ -2,6 +2,11 @@
 //
 // covers: file:scripts/package.ts (emitPlugins), file:scripts/plugin-hooks-template/compose.ts
 //
+// Serial by design: two lock-wait cases hold the workspace lock for 5.5 s and
+// assert queued tool processes wait past the default budget, then finish within
+// TIMEOUT_MS. Three sibling workers composing plugins pushed both past 60 s, so
+// this file runs alone (`.serial.`) rather than beside them.
+//
 // WHAT. A plugin authored in plugins/<name>/ is emitted by the packager as a
 // per-harness host plugin (dist/plugins/<name>/<harness>/), and its compose hook
 // merges the plugin into a base install: new stages copied, the contribution
@@ -91,7 +96,7 @@ function stageBody(projectDir: string, phase: string, slug: string): string {
 }
 function hookDrops(projectDir: string): string {
   let drops = "";
-  const hd = join(projectDir, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+  const hd = join(projectDir, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
   if (!existsSync(hd)) return drops;
   for (const f of readdirSync(hd)) {
     if (f.startsWith("plugin-compose") && f.endsWith(".drops")) {
@@ -1221,7 +1226,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine/hooks-health",
       "plugin-compose-installed-tool-payloads-claude.drops",
     ))).toBe(false);
   });
@@ -1253,7 +1258,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           AIDLC_HARNESS_DIR: leaf,
         },
       });
-    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
     const claudeRecord = join(hd, "plugin-compose-installed-tool-payloads-claude.drops");
     const codexRecord = join(hd, "plugin-compose-installed-tool-payloads-codex.drops");
 
@@ -1650,7 +1655,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // harness" while the frontmatter merge above still succeeds - so assert
     // the whole chain: zero drops AND the scope present in the recompiled grid.
     let drops = "";
-    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
     if (existsSync(hd)) {
       for (const f of readdirSync(hd)) {
         if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
@@ -1842,7 +1847,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         "spaces",
         "default",
         "intents",
-        ".aidlc-hooks-health",
+        ".aidlc-engine/hooks-health",
         "plugin-compose-test-pro.drops",
       );
       expect(existsSync(dropsPath)).toBe(true);
@@ -1983,7 +1988,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // Drops files are per-plugin (`plugin-compose-<key>.drops`) — aggregate any
     // that exist under the health dir.
     let drops = "";
-    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
     if (existsSync(hd)) {
       for (const f of require("node:fs").readdirSync(hd) as string[]) {
         if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
@@ -3145,7 +3150,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(r.status).toBe(0);
 
     let drops = "";
-    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
     if (existsSync(hd)) {
       for (const f of require("node:fs").readdirSync(hd) as string[]) {
         if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
@@ -3409,7 +3414,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function doctorDropsRow(dropLines: string[]): { out: string; failRow: boolean; passRow: boolean } {
     const proj = mkdtempSync(join(tmp, "doc-"));
     cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
-    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
     require("node:fs").mkdirSync(hd, { recursive: true });
     writeFileSync(join(hd, "session-start.last"), "2026-07-08T00:00:00Z"); // heartbeat present
     writeFileSync(join(hd, "plugin-compose.drops"), `${dropLines.join("\n")}\n`);
@@ -3448,7 +3453,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "contributions/construction/build-and-test.md":
         `---\ntarget: build-and-test\nplugin: syn-clean\nadds:\n  produces:\n    - syn-clean-artifact\n---\n`,
     });
-    const dropFile = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health", "plugin-compose-syn-clean.drops");
+    const dropFile = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health", "plugin-compose-syn-clean.drops");
     expect(existsSync(dropFile)).toBe(false);
   });
 
@@ -3624,7 +3629,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     };
     mkPlugin("pl-degraded", `---\ntarget: no-such-stage-xyz\nplugin: pl-degraded\nadds:\n  produces: []\n---\n`);
     mkPlugin("pl-clean", `---\ntarget: build-and-test\nplugin: pl-clean\nadds:\n  produces:\n    - pl-clean-artifact\n---\n`);
-    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
     expect(existsSync(join(hd, "plugin-compose-pl-degraded.drops"))).toBe(true); // survived B's clean run
   });
 

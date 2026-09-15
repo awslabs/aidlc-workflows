@@ -22,6 +22,7 @@ import {
   emitResult,
   failure,
   globalOptions,
+  readTerminalLine,
   success,
   usage,
   valueAfter,
@@ -53,7 +54,8 @@ import {
   runtimeRoot,
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
-import { configureProjectPin } from "./aidlc-lifecycle.ts";
+import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
+import { RELEASE_CHANNELS } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -63,11 +65,12 @@ import {
   validateTransactionPlan,
   writeOperation,
 } from "./aidlc-transaction.ts";
-import { compileStageGraph, __resetGraphCache } from "./aidlc-graph.ts";
+import { compileStageGraph, __resetGraphCache, memoryDirFor } from "./aidlc-graph.ts";
 import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
+  DEFAULT_SPACE,
   getField,
   listIntents,
   listSpaces,
@@ -92,6 +95,7 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
+  HARNESS_HONESTY,
   harnessHonestyNotes,
   isModelEffort,
   isModelPreset,
@@ -115,6 +119,7 @@ import { resolveTierCap } from "./aidlc-tiers.ts";
 import {
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
+  harnessOwnsModelAccess,
   availableScopeNames,
   completionInstruction,
   detectAwsCredentials,
@@ -133,6 +138,7 @@ import {
   probeRuntime,
   providerFiles,
   providerIssues,
+  providerMenuCopy,
   projectChoiceFiles,
   projectChoiceIssues,
   projectMcpNote,
@@ -141,11 +147,13 @@ import {
   reconcileProviderActions,
   runtimeIssues,
   trustStatus,
+  workspaceShellRefreshCommand,
   type ConfigDiagnosticOverrides,
   type ConfigDiagnosticRecords,
   type CompletionShell,
   type ConfigOutstandingAction,
   type ProjectChoicesRecord,
+  type ProviderKind,
   type ProvidersRecord,
   type RuntimeRecord,
   type TrustRecord,
@@ -202,7 +210,7 @@ type ModelsMutationContext = {
 
 type DiagnosticSection = "runtime" | "providers" | "trust";
 type ChoiceSection = "flags" | "project";
-type SetupWalkSection = "runtime" | "providers" | "trust";
+type SetupWalkSection = "models" | "runtime" | "providers" | "trust";
 
 type ConfigMainInternal = {
   setupWalkChild?: boolean;
@@ -245,6 +253,7 @@ type SettingsMutation = {
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
   "--ca-bundle",
+  "--channel",
   "--deciding-effort",
   "--default-scope",
   "--effort",
@@ -372,6 +381,7 @@ const VALID_CONFIG_SECTIONS = new Set([
 
 const ROOT_CONFIG_FLAGS = new Set([
   "--ca-bundle",
+  "--channel",
   "--dry-run",
   "--force",
   "--from",
@@ -606,10 +616,38 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   return null;
 }
 
+// `config --channel [stable|preview]` reads or sets the machine release
+// channel. The value is optional: bare `--channel` prints the channel in force.
+function validateChannelConfigArgs(argv: readonly string[]): string | null {
+  const index = argv.indexOf("--channel");
+  const value = argv[index + 1];
+  const hasValue = value !== undefined && !value.startsWith("--");
+  if (hasValue && !(RELEASE_CHANNELS as readonly string[]).includes(value)) {
+    return `--channel must be ${RELEASE_CHANNELS.join(" or ")}`;
+  }
+  const rest = [
+    ...argv.slice(0, index),
+    ...argv.slice(index + (hasValue ? 2 : 1)),
+  ];
+  if (rest.includes("--channel")) return "--channel may be specified only once";
+  const grammar = validateConfigOptionGrammar(rest, "config --channel", {
+    values: new Set(["--project-dir"]),
+    bare: new Set(["--help", "--json", "--no-color", "--quiet", "--verbose"]),
+    invalidKnownFlags: ROOT_CONFIG_FLAGS,
+    invalidKnownMessage: (flag) => `${flag} is not valid with config --channel`,
+  });
+  if (grammar) return grammar;
+  return validateConfigOutputMode(argv);
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
+  if (argv.includes("--channel")) {
+    if (hasPin || hasUnpin) return "--channel cannot be combined with --pin or --unpin";
+    return validateChannelConfigArgs(argv);
+  }
 
   const commonValues = ["--project-dir"];
   const commonBare = [
@@ -691,11 +729,13 @@ function modelPolicyHelp(): string {
     `  ${cmd(`${invoke} config models [flags]`, out)}`,
     "",
     "Pins bind in both directions: a pinned agent stays pinned if the session later moves to a larger model.",
-    "Judgment and Writing up inherit by default; the balanced reviewer baseline is the disclosed shipped step-down.",
+    "Without a recorded policy, Deciding and Writing up inherit; only the shipped reviewing tier pins medium effort.",
     "",
     heading("POLICY", out),
     "  --preset <thorough|balanced|minimal>",
-    "    balanced explicitly matches the shipped reviewing default",
+    "    thorough: session effort for deciding and writing up, extra-high reviewing",
+    "    balanced: medium effort for deciding, reviewing, and writing up (wizard default)",
+    "    minimal: medium deciding and reviewing, low writing up",
     "  --from <preset|profile> [--save-as <name>]",
     "  --deciding-effort <low|medium|high|xhigh|max>",
     "  --reviewing-effort <low|medium|high|xhigh|max>",
@@ -1060,7 +1100,10 @@ function modelsWizard(
   if (!choice) return current;
   if (choice === "1") {
     process.stdout.write(
-      "Presets: thorough raises reviewing to xhigh; balanced matches the shipped reviewing default; minimal also lowers Writing up to low.\n",
+      "Presets:\n" +
+        "  thorough: session effort for deciding and writing up, extra-high reviewing\n" +
+        "  balanced: medium effort for deciding, reviewing, and writing up\n" +
+        "  minimal: medium deciding and reviewing, low writing up\n",
     );
     const selected = configPrompt("Preset [thorough/balanced/minimal]:")?.trim() ?? "";
     if (!isModelPreset(selected)) throw new Error("preset selection cancelled");
@@ -1179,7 +1222,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
     : section === "providers"
     ? [
         heading("Provider answers:", out),
-        "  --provider <amazon-bedrock|other>",
+        "  --provider <amazon-bedrock|builtin|other>",
         "  --region <aws-region>",
         "  --profile <aws-profile>",
         "  --opencode-default <yes|no>",
@@ -1187,6 +1230,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         "  --mark-done <pending-action-id>",
         "",
         "Credential detection is offline only. No provider or model endpoint is contacted.",
+        "builtin records that the harness's own model access (subscription or signed-in account) is in use; nothing is written and no action stays pending.",
       ]
     : [
         heading("Trust answers:", out),
@@ -1216,6 +1260,23 @@ function diagnosticHelp(section: DiagnosticSection): string {
       out,
     ),
   ].join("\n");
+}
+
+// The projected descriptor's product name ("Kiro CLI", "Claude Code"), so a
+// prompt can name the harness the user is actually running; the distribution
+// id is the fallback when the descriptor is unreadable.
+function projectionProductName(root: string, distribution: string): string {
+  try {
+    const value = JSON.parse(
+      readFileSync(join(root, "tools", "data", "harness.json"), "utf-8"),
+    ) as { productName?: unknown };
+    if (typeof value.productName === "string" && value.productName.trim()) {
+      return value.productName;
+    }
+  } catch {
+    // An unreadable descriptor is reported by the doctor checks, not here.
+  }
+  return distribution;
 }
 
 function selectedDiagnosticHarness(
@@ -1441,9 +1502,20 @@ function checkDiagnosticSection(
       selected.harness,
     ).issues;
   }
+  // "clean" on an unrecorded providers section contradicted the setup map,
+  // which calls the same state `[needs]`. Name the state instead of implying an
+  // answer was verified. The exit code is unchanged: the shipped fallback bytes
+  // stay valid, so an unrecorded section is not a failure.
+  const providersUnrecorded = section === "providers" && records.providers === null;
+  const cleanMessage = !providersUnrecorded
+    ? `${section} configuration is clean for ${selected.harness}`
+    : !harnessOwnsModelAccess(selected.harness)
+    ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
+      `Record one with '${configCommand("providers")}'`
+    : `providers needs no answer for ${selected.harness}; its model access is harness-managed`;
   emitResult(
     issues.length === 0
-      ? success(`${section} configuration is clean for ${selected.harness}`, {
+      ? success(cleanMessage, {
           section,
           harness: selected.harness,
           issues: [],
@@ -1498,8 +1570,13 @@ function providerRecordFromArgs(
 ): ProvidersRecord {
   const next = cloneDiagnosticRecord(current) ?? { schemaVersion: 1 };
   const provider = valueAfter(argv, "--provider");
-  if (provider !== undefined && provider !== "amazon-bedrock" && provider !== "other") {
-    throw new Error("--provider must be amazon-bedrock or other");
+  if (
+    provider !== undefined &&
+    provider !== "amazon-bedrock" &&
+    provider !== "builtin" &&
+    provider !== "other"
+  ) {
+    throw new Error("--provider must be amazon-bedrock, builtin, or other");
   }
   if (provider) next.provider = provider;
   const region = valueAfter(argv, "--region");
@@ -1517,7 +1594,9 @@ function providerRecordFromArgs(
     next.opencodeDefault = opencodeDefault === "yes";
   }
   if (argv.includes("--acknowledge")) next.acknowledged = true;
-  if (!next.provider) throw new Error("provider configuration requires --provider <amazon-bedrock|other>");
+  if (!next.provider) {
+    throw new Error("provider configuration requires --provider <amazon-bedrock|builtin|other>");
+  }
   if (next.provider === "amazon-bedrock" && !next.region) {
     throw new Error("Amazon Bedrock configuration requires --region <aws-region>");
   }
@@ -1535,6 +1614,20 @@ function providerRecordFromArgs(
     throw new Error(
       `${selected.harness} provider setup is instruct-only; pass --acknowledge after completing the manual provider step`,
     );
+  }
+  if (next.provider === "builtin") {
+    // `builtin` writes nothing, so it carries no Bedrock settings: reject them
+    // when passed explicitly, and drop the ones inherited from an earlier
+    // Bedrock answer so `--show` does not report a region for a provider that
+    // never uses one.
+    if (region || profile || opencodeDefault !== undefined) {
+      throw new Error(
+        "--provider builtin records no region, profile, or OpenCode default; omit them",
+      );
+    }
+    delete next.region;
+    delete next.profile;
+    delete next.opencodeDefault;
   }
   let reconciled = reconcileProviderActions(
     normalizeProvidersRecord(next) as ProvidersRecord,
@@ -1594,27 +1687,72 @@ function diagnosticWizard(
     const credentials = detectAwsCredentials();
     const detected = awsSummary(credentials);
     process.stdout.write("\n  Model provider\n");
-    process.stdout.write(
-      credentials.hasCredentials
-        ? `  Found AWS credentials (${detected.source}); ${
+    const product = projectionProductName(selected.root, selected.distribution);
+    // Each harness offers the two paths that actually exist for it, in its own
+    // words. Kiro owns its model access, so its note leads; every other harness
+    // is Bedrock-oriented and Bedrock leads.
+    const owned = harnessOwnsModelAccess(selected.harness);
+    const copy = providerMenuCopy(selected.harness, product);
+    // Detected AWS credentials are irrelevant where the licence serves the
+    // models, so that line is only printed for the Bedrock-oriented harnesses.
+    if (copy.owned) {
+      process.stdout.write(`  ${copy.owned.fact} ${copy.owned.sectionHint}\n`);
+    } else {
+      process.stdout.write(
+        credentials.hasCredentials
+          ? `  Found AWS credentials (${detected.source}); ${
             detected.regionSource === "detected" ? "detected" : "fallback"
           } region ${detected.region}.\n`
-        : "  No AWS credentials were detected.\n",
-    );
-    process.stdout.write(`    1. amazon-bedrock   ${
-      credentials.hasCredentials ? "(detected, default)" : ""
-    }\n`);
-    process.stdout.write("    2. other\n");
-    const providerAnswer = promptChoice(
+          : "  No AWS credentials were detected.\n",
+      );
+    }
+    // Two shapes. A harness that provides its own model access offers `builtin`
+    // and leads with it, because that is the true answer there. Every other
+    // harness gets the model-preset step's `unchanged` answer: always offered,
+    // records nothing, keeps what is in place. It leads once something is
+    // recorded, since re-entering a settings section must never silently rewrite
+    // a region or profile already set.
+    // Two answers, because only two have distinct effects. `other` is not
+    // offered: nothing reads a recorded `other`, and declining its
+    // acknowledgement did exactly what `unchanged` does, so it duplicated the
+    // second answer by a longer route. It remains available as
+    // `--provider other --acknowledge` for anyone who wants its reminder.
+    const recorded = records.providers;
+    process.stdout.write(`    1. amazon-bedrock   ${copy.bedrock}\n`);
+    if (copy.owned) {
+      process.stdout.write(`    2. builtin          ${copy.owned.builtin}\n`);
+    } else {
+      process.stdout.write(
+        "    2. unchanged        records no provider answer and keeps existing settings;\n",
+      );
+      process.stdout.write(
+        `                        ${
+          recorded
+            ? "the recorded answer stays as it is"
+            : "new projects use the shipped fallback"
+        }\n`,
+      );
+    }
+    const choice = promptChoice(
       "  Provider",
       2,
-      credentials.hasCredentials ? 1 : 2,
-    ) === 1
-      ? "amazon-bedrock"
-      : "other";
+      owned || recorded ? 2 : 1,
+    );
+    // On a Bedrock-oriented harness the second answer records nothing but must
+    // still reach the mark-done loop below, or a pending action could never be
+    // cleared here.
+    const keepRecorded = choice === 2 && !copy.owned;
+    if (keepRecorded) {
+      process.stdout.write(
+        "  Keeping existing settings unchanged; no provider answer recorded.\n\n",
+      );
+    }
+    const providerAnswer: ProviderKind = choice === 1 ? "amazon-bedrock" : "builtin";
     const args = ["--provider", providerAnswer];
     const skipMarkDone = new Set<string>();
-    if (providerAnswer === "amazon-bedrock") {
+    if (keepRecorded) {
+      // Nothing to build: fall through to the pending-action prompts.
+    } else if (providerAnswer === "amazon-bedrock") {
       const region = promptTextDefault("  AWS region", detected.region);
       const profileAnswer = promptTextDefault(
         "  AWS profile",
@@ -1659,22 +1797,17 @@ function diagnosticWizard(
           );
         }
       }
-    } else {
-      process.stdout.write("  Using other provider setup.\n");
-      const acknowledged = promptYesDefault(
-        "  Manual provider setup complete?",
-        false,
+    } else if (providerAnswer === "builtin") {
+      process.stdout.write(
+        `  Recording that ${product} provides its own model access.\n\n`,
       );
-      if (acknowledged) {
-        args.push("--acknowledge");
-      } else {
-        process.stdout.write(
-          "  Provider setup remains pending; no provider answer was recorded.\n\n",
-        );
-        return records.providers;
-      }
     }
-    let next = providerRecordFromArgs(records.providers, args, selected);
+    // Keeping an absent answer leaves the section untouched, and there are no
+    // pending actions to offer, so stop before the loop below dereferences null.
+    if (keepRecorded && !recorded) return null;
+    let next = keepRecorded
+      ? recorded as ProvidersRecord
+      : providerRecordFromArgs(records.providers, args, selected);
     for (const action of next.pendingActions ?? []) {
       if (action.status === "done") continue;
       if (skipMarkDone.has(action.id)) continue;
@@ -1726,11 +1859,13 @@ function diagnosticSummary(
     const record = next as ProvidersRecord | null;
     return {
       lines: [
-        record
-          ? `  Providers    ${record.provider} region=${record.region ?? "manual"} profile=${
+        !record
+          ? "  Providers    reset to shipped fallback bytes"
+          : record.provider === "builtin"
+          ? "  Providers    builtin; the harness provides its own model access, nothing written"
+          : `  Providers    ${record.provider} region=${record.region ?? "manual"} profile=${
               record.profile ?? "default-chain"
-            }`
-          : "  Providers    reset to shipped fallback bytes",
+            }`,
       ],
       notes: record
         ? pendingProviderIssues(record).map((issue) => `${issue.id}: ${issue.message}`)
@@ -1817,7 +1952,7 @@ function configPrompt(label: string): string | null {
     process.stdout.write(`${label} `);
     return scriptedPromptAnswers.shift() ?? null;
   }
-  return prompt(label);
+  return readTerminalLine(label);
 }
 
 type SetupMapRow = {
@@ -1843,9 +1978,16 @@ function setupMapRows(
   const runtime = outstanding.filter((action) => action.section === "runtime");
   const trust = outstanding.filter((action) => action.section === "trust");
   const providers = outstanding.filter((action) => action.section === "providers");
-  const providerNeeds = records.providers === null || providers.length > 0;
-  const modelDetail = !policy || modelPolicyIsEmpty(policy)
-    ? "shipped defaults"
+  const workspace = outstanding.filter((action) => action.section === "workspace");
+  // A missing answer only "needs you" where AI-DLC actually configures the
+  // model provider. On a subscription harness the model comes from the harness
+  // itself, so an unanswered row is complete, not outstanding.
+  const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
+  const providerNeeds = providers.length > 0 ||
+    (records.providers === null && providerManaged);
+  const modelsUnrecorded = !policy || modelPolicyIsEmpty(policy);
+  const modelDetail = modelsUnrecorded
+    ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset
     ? `preset ${policy.preset}`
     : "recorded project policy";
@@ -1868,7 +2010,9 @@ function setupMapRows(
     :
     (records.trust?.reviewed ? "review acknowledged" : "no unmet host trust");
   const providerDetail = records.providers === null
-    ? "no recorded answers; provider access unverified"
+    ? providerManaged
+      ? "no recorded answers; provider access unverified"
+      : "harness-managed model access; nothing for AI-DLC to configure"
     : providers.length > 0
     ? `${providers.length} pending provider action${providers.length === 1 ? "" : "s"}`
     :
@@ -1882,7 +2026,8 @@ function setupMapRows(
     {
       label: "Models",
       detail: modelDetail,
-      needs: false,
+      section: "models",
+      needs: modelsUnrecorded,
     },
     {
       label: "Runtime",
@@ -1914,6 +2059,15 @@ function setupMapRows(
       section: "trust",
       needs: trust.length > 0,
     },
+    // No `section`: the walk has no wizard for a missing shell, so this row is
+    // shown and carried into the ledger without being offered as a step.
+    {
+      label: "Workspace",
+      detail: workspace.length > 0
+        ? "aidlc/spaces/default/memory/ is missing; the shell is incomplete"
+        : "workspace shell present",
+      needs: workspace.length > 0,
+    },
   ];
 }
 
@@ -1931,7 +2085,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
       `    ${renderedState}  ${row.label.padEnd(11)} ${row.detail}\n`,
     );
   }
-  const order: SetupWalkSection[] = ["runtime", "providers", "trust"];
+  const order: SetupWalkSection[] = ["models", "runtime", "providers", "trust"];
   const flagged = new Set(
     needed.map((row) => row.section).filter(
       (section): section is SetupWalkSection => section !== undefined,
@@ -1955,18 +2109,82 @@ function renderSetupLedger(
   }
 }
 
+// An existing projection whose `aidlc/` workspace shell never arrived fails the
+// doctor's "workspace shell ready" check. The interactive rerun surfaced it only
+// as a Trust issue whose remedy, like the doctor's, was `aidlc config`, the
+// command the user had just run, and it never repaired anything. Report it as
+// its own row with the command that rebuilds the shell: an explicit `--harness`
+// refresh, which bypasses this walk and goes through the refresh transaction.
+function workspaceShellActions(
+  projectDir: string,
+  installed: { harnessDir: string; distribution: string },
+): ConfigOutstandingAction[] {
+  if (existsSync(memoryDirFor(projectDir, DEFAULT_SPACE))) return [];
+  return [{
+    section: "workspace",
+    id: "workspace-shell-missing",
+    message:
+      "aidlc/spaces/default/memory/ is missing, so the workspace shell is incomplete " +
+      "and rule loading resolves nothing.",
+    command: workspaceShellRefreshCommand(
+      installed.harnessDir,
+      installed.distribution,
+    ),
+  }];
+}
+
+// Everything the setup map and ledger report for an existing projection. The
+// Trust section already reports a missing `aidlc/` root as
+// `workspace-root-missing`; when the Workspace row owns that state, drop the
+// Trust copy so one defect is counted once and carries one remedy.
+function existingProjectionOutstanding(
+  projectDir: string,
+  installed: { harnessDir: string; distribution: string },
+): ConfigOutstandingAction[] {
+  const workspace = workspaceShellActions(projectDir, installed);
+  const others = postApplyOutstandingActions(
+    projectDir,
+    installed.harnessDir,
+    modelHarness(installed.distribution),
+  );
+  return [
+    ...(workspace.length > 0
+      ? others.filter((action) => action.id !== "workspace-root-missing")
+      : others),
+    ...workspace,
+  ];
+}
+
 function setupLedgerActions(
   projectDir: string,
   harnessDir: string,
+  harness: ModelHarness,
   actions: readonly ConfigOutstandingAction[],
 ): ConfigOutstandingAction[] {
   const next = [...actions];
+  if (!next.some((action) => action.section === "models")) {
+    const resolved = resolveAidlcSettings(projectDir);
+    const policy = modelPolicyForHarness(resolved.models, harness);
+    if (!policy || modelPolicyIsEmpty(policy)) {
+      next.push({
+        section: "models",
+        id: "models-policy-unrecorded",
+        message:
+          "No model policy is recorded, so every agent inherits your session model and effort. " +
+          "Record a preset, or choose unchanged to keep it that way.",
+        command: configCommandForHarness(harnessDir, "models"),
+      });
+    }
+  }
   if (next.some((action) => action.section === "providers")) return next;
   try {
     const record = readConfigDiagnosticRecords(
       join(projectDir, harnessDir),
     ).providers;
-    if (record === null) {
+    // Only chase a missing answer where AI-DLC configures the model provider.
+    // Asking a subscription-harness user to "choose and configure a model
+    // provider" is a instruction they cannot complete and never needed.
+    if (record === null && !harnessOwnsModelAccess(harness)) {
       next.push({
         section: "providers",
         id: "provider-record-missing",
@@ -1989,6 +2207,7 @@ async function runSetupWalk(
   const initialLedger = setupLedgerActions(
     projectDir,
     harnessDir,
+    modelHarness(distribution),
     initialOutstanding,
   );
   const flagged = renderSetupMap(
@@ -1999,7 +2218,17 @@ async function runSetupWalk(
       initialOutstanding,
     ),
   );
-  if (flagged.length === 0) {
+  // Reported, never walked: while the shell is incomplete no section is offered,
+  // because the record-only children go through the projection the shell
+  // belongs to and either fail on the missing directory or, when every answer
+  // is a no-op, rebuild nothing. The ledger leads with the rebuild command.
+  const shellMissing = initialOutstanding.some((action) => action.section === "workspace");
+  if (flagged.length === 0 || shellMissing) {
+    if (shellMissing) {
+      process.stdout.write(
+        "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
+      );
+    }
     if (initialLedger.length > 0) {
       renderSetupLedger(initialLedger);
     }
@@ -2037,14 +2266,13 @@ async function runSetupWalk(
       return;
     }
   }
+  // Recompute the same list the map was built from, shell included, so the
+  // closing ledger never drops a row the map showed.
   const remaining = setupLedgerActions(
     projectDir,
     harnessDir,
-    postApplyOutstandingActions(
-      projectDir,
-      harnessDir,
-      modelHarness(distribution),
-    ),
+    modelHarness(distribution),
+    existingProjectionOutstanding(projectDir, { harnessDir, distribution }),
   );
   renderSetupLedger(remaining);
 }
@@ -3682,11 +3910,15 @@ function activeWorkflowDescriptions(projectDir: string): string[] {
   const active: string[] = [];
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
-      if (intent.status === "complete" || !intent.dirName) continue;
+      if (
+        intent.status === "complete" ||
+        intent.status === "archived" ||
+        !intent.dirName
+      ) continue;
       const path = stateFilePath(projectDir, intent.dirName, space.name);
       if (regularFile(path)) {
         const status = getField(readFileSync(path, "utf-8"), "Status");
-        if (status === "Completed") continue;
+        if (status === "Completed" || status === "Archived") continue;
       }
       active.push(`${space.name}/${intent.dirName}`);
     }
@@ -4062,10 +4294,14 @@ type FirstRunDetection = {
 
 type FirstRunChoices = {
   candidate: InstalledSourceCandidate;
-  provider: "amazon-bedrock" | "other";
+  // The wizard offers only the answers with distinct effects: Bedrock, the
+  // model-preset step's "unchanged", and "builtin" where the harness serves its
+  // own models. "other" is deliberately absent, reachable only by flag, so the
+  // compiler proves the dead branch cannot occur here.
+  provider: "amazon-bedrock" | "builtin" | "unchanged";
   region: string;
   profile: string;
-  preset: "balanced" | "thorough" | "minimal";
+  preset: "balanced" | "thorough" | "minimal" | "unchanged";
   plugins: string;
   pluginLabel: string;
   mcp: "defaults" | "none";
@@ -4344,16 +4580,18 @@ function applyFirstRunChoices(
     "--json",
   ];
   runConfigChild(common, projectDir, snapshot);
-  runConfigChild([
-    "models",
-    "--project-dir",
-    projectDir,
-    `--${choices.target}`,
-    "--preset",
-    choices.preset,
-    "--yes",
-    "--json",
-  ], projectDir, snapshot);
+  if (choices.preset !== "unchanged") {
+    runConfigChild([
+      "models",
+      "--project-dir",
+      projectDir,
+      `--${choices.target}`,
+      "--preset",
+      choices.preset,
+      "--yes",
+      "--json",
+    ], projectDir, snapshot);
+  }
   runConfigChild([
     "project",
     "--project-dir",
@@ -4367,6 +4605,9 @@ function applyFirstRunChoices(
     "--yes",
     "--json",
   ], projectDir, snapshot);
+  // "unchanged" records nothing by design, exactly as the model-preset step
+  // skips its own child call.
+  if (choices.provider === "unchanged") return;
   const providerArgs = [
     "providers",
     "--project-dir",
@@ -4386,9 +4627,9 @@ function applyFirstRunChoices(
     if (choices.providerVerified) {
       providerArgs.push("--mark-done", "bedrock-model-access");
     }
-    providerArgs.push("--yes", "--json");
-    runConfigChild(providerArgs, projectDir, snapshot);
   }
+  providerArgs.push("--yes", "--json");
+  runConfigChild(providerArgs, projectDir, snapshot);
 }
 
 function firstRunMutationPaths(
@@ -4556,20 +4797,9 @@ function renderFirstRunEnding(
     choices.candidate.descriptor.harnessDir,
     modelHarness(choices.candidate.stamp.distribution),
   );
-  if (
-    choices.provider === "other" &&
-    !remaining.some((action) => action.section === "providers")
-  ) {
-    remaining.push({
-      section: "providers",
-      id: "provider-manual-setup",
-      message: "Choose and configure a model provider, then acknowledge the completed setup.",
-      command: configCommandForHarness(
-        choices.candidate.descriptor.harnessDir,
-        "providers",
-      ),
-    });
-  }
+  // The wizard no longer offers "other", so there is no manual-provider step to
+  // chase here: Bedrock carries its own access check, "builtin" needs nothing,
+  // and "unchanged" leaves the shipped fallback in place.
   if (remaining.length > 0) {
     process.stdout.write(
       `\n  ${remaining.length === 1 ? "One thing needs you" : `${remaining.length} things need you`} - ${
@@ -4607,6 +4837,21 @@ function renderFirstRunEnding(
   process.stdout.write(`    ${invoke}\n`);
 }
 
+// The provider answer is harness-dependent: `builtin` is true only where the
+// harness serves its own models, and every other harness is Bedrock-oriented.
+// Re-derive it whenever the harness changes, or a switch at the summary would
+// apply the previous harness's answer: Kiro would record Bedrock and chase model
+// access it never needed, Claude Code would record `builtin` and never be asked.
+// A Bedrock-oriented answer (`amazon-bedrock` or `unchanged`) carries across
+// Bedrock-oriented harnesses unchanged.
+function providerForHarness(
+  current: FirstRunChoices["provider"],
+  distribution: string,
+): FirstRunChoices["provider"] {
+  if (harnessOwnsModelAccess(modelHarness(distribution))) return "builtin";
+  return current === "builtin" ? "amazon-bedrock" : current;
+}
+
 function customizeFirstRun(
   initial: InstalledSourceCandidate,
   candidates: readonly InstalledSourceCandidate[],
@@ -4615,7 +4860,7 @@ function customizeFirstRun(
   const aws = awsSummary(detection.aws);
   const choices: FirstRunChoices = {
     candidate: initial,
-    provider: detection.aws.hasCredentials ? "amazon-bedrock" : "other",
+    provider: providerForHarness("amazon-bedrock", initial.stamp.distribution),
     region: aws.region,
     profile: "",
     preset: "balanced",
@@ -4645,10 +4890,29 @@ function customizeFirstRun(
       choices.mcp = choices.candidate.stamp.distribution === "claude"
         ? "defaults"
         : "none";
+      choices.provider = providerForHarness(
+        choices.provider,
+        choices.candidate.stamp.distribution,
+      );
       return;
     }
     if (step === 2) {
       process.stdout.write("  Step 2 of 6 - Model provider\n");
+      const product = choices.candidate.descriptor.productName;
+      const harness = modelHarness(choices.candidate.stamp.distribution);
+      const copy = providerMenuCopy(harness, product);
+      // Where the harness provides its own model access there is no decision to
+      // put to the user, so state why and record that fact. Saying it rather
+      // than skipping silently is the point: being asked about Bedrock on a Kiro
+      // licence is what confused people in the first place. The explicit
+      // `config providers` section still offers the full choice.
+      if (copy.owned) {
+        process.stdout.write(
+          `  ${copy.owned.fact} There is nothing to choose here.\n\n`,
+        );
+        choices.provider = "builtin";
+        return;
+      }
       process.stdout.write(
         detection.aws.hasCredentials
           ? `  Found AWS credentials (${aws.source}); ${
@@ -4656,16 +4920,17 @@ function customizeFirstRun(
             } region ${aws.region}.\n`
           : "  No AWS credentials were detected.\n",
       );
-      process.stdout.write(`    1. amazon-bedrock   ${
-        detection.aws.hasCredentials ? "(detected, default)" : ""
+      process.stdout.write(`    1. amazon-bedrock   ${copy.bedrock}${
+        detection.aws.hasCredentials ? " (detected, default)" : " (default)"
       }\n`);
-      process.stdout.write("    2. other            record your own provider setup\n");
-      const selected = promptChoice(
-        "  Provider",
-        2,
-        detection.aws.hasCredentials ? 1 : 2,
+      process.stdout.write(
+        "    2. unchanged        records no provider answer and keeps existing settings;\n",
       );
-      choices.provider = selected === 1 ? "amazon-bedrock" : "other";
+      process.stdout.write(
+        "                        new projects use the shipped fallback\n",
+      );
+      const selected = promptChoice("  Provider", 2, 1);
+      choices.provider = selected === 1 ? "amazon-bedrock" : "unchanged";
       if (choices.provider === "amazon-bedrock") {
         choices.region = promptTextDefault("  AWS region", choices.region);
         const profile = promptTextDefault(
@@ -4685,22 +4950,28 @@ function customizeFirstRun(
           }.\n\n`,
         );
       } else {
-        process.stdout.write("  Using other provider setup.\n\n");
+        process.stdout.write(
+          "  Keeping existing settings unchanged; no provider answer recorded.\n\n",
+        );
       }
       return;
     }
     if (step === 3) {
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
-      process.stdout.write("    1. balanced    reviewing at medium effort - the shipped default\n");
-      process.stdout.write("    2. thorough    reviewing at xhigh effort - deepest correctness checking; slower, costlier reviews\n");
-      process.stdout.write("    3. minimal     lightest touch - review medium, write-ups at low effort\n");
+      process.stdout.write("    1. balanced    medium effort for deciding, reviewing, and writing up (recommended, default)\n");
+      process.stdout.write("    2. thorough    session effort for deciding and writing up, extra-high reviewing\n");
+      process.stdout.write("    3. minimal     medium deciding and reviewing, low writing up\n");
+      process.stdout.write("    4. unchanged   records no preset and keeps existing settings; new projects use shipped defaults\n");
+      process.stdout.write("                   where agents inherit your session's model and effort\n");
       const selected = promptChoice(
         "  Preset",
-        3,
-        choices.preset === "balanced" ? 1 : choices.preset === "thorough" ? 2 : 3,
+        4,
+        choices.preset === "balanced" ? 1 : choices.preset === "thorough" ? 2 : choices.preset === "minimal" ? 3 : 4,
       );
-      choices.preset = selected === 1 ? "balanced" : selected === 2 ? "thorough" : "minimal";
-      process.stdout.write(`  Using the ${choices.preset} preset.\n\n`);
+      choices.preset = selected === 1 ? "balanced" : selected === 2 ? "thorough" : selected === 3 ? "minimal" : "unchanged";
+      process.stdout.write(choices.preset === "unchanged"
+        ? "  Keeping existing settings unchanged; no preset recorded.\n\n"
+        : `  Using the ${choices.preset} preset.\n\n`);
       return;
     }
     if (step === 4) {
@@ -4755,9 +5026,11 @@ function customizeFirstRun(
     process.stdout.write(`    2. Provider     ${
       choices.provider === "amazon-bedrock"
         ? `amazon-bedrock, ${choices.region}, ${choices.profile || "default credential chain"}`
-        : "other"
+        : choices.provider === "builtin"
+        ? `builtin, ${choices.candidate.descriptor.productName} provides its own model access`
+        : "none (unchanged)"
     }\n`);
-    process.stdout.write(`    3. Preset       ${choices.preset}\n`);
+    process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
     process.stdout.write(`    4. Plugins      ${choices.pluginLabel}\n`);
     process.stdout.write(`    5. MCP          ${choices.mcp === "defaults" ? "on" : "off"}\n`);
     process.stdout.write(`    6. Record in    ${firstRunSettingsTargetLabel(choices.target)}\n`);
@@ -4842,11 +5115,20 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     `    1. Yes, use recommended defaults   ${
       candidate.stamp.distribution === "claude" ? "MCP servers on, " : ""
     }all plugins, ${
-      detection.aws.hasCredentials
+      harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
+        ? `no provider settings, so ${candidate.descriptor.productName} keeps its own model access`
+        : detection.aws.hasCredentials
         ? "Bedrock via your AWS credentials"
-        : "provider recorded as other; manual provider setup remains"
+        : "Bedrock, with model access left for you to verify"
     }\n`,
   );
+  if (HARNESS_HONESTY[modelHarness(candidate.stamp.distribution)].groupEffort) {
+    process.stdout.write("                                       Records balanced (default): medium project agent effort for deciding,\n");
+    process.stdout.write("                                       reviewing, and writing up; your session (conductor) effort stays unchanged.\n");
+  } else {
+    process.stdout.write("                                       Records balanced (default).\n");
+    process.stdout.write(`                                       In ${candidate.descriptor.productName}, effort dials do not apply, so agents keep your session's effort.\n`);
+  }
   process.stdout.write(
     "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer\n",
   );
@@ -4860,7 +5142,12 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (selected === 1) {
     choices = {
       candidate,
-      provider: detection.aws.hasCredentials ? "amazon-bedrock" : "other",
+      // Kiro records that it serves its own models; every other harness is
+      // Bedrock-oriented, so recommended defaults record Bedrock and let the
+      // pending action carry the access check when no credentials were detected.
+      provider: harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
+        ? "builtin"
+        : "amazon-bedrock",
       region: aws.region,
       profile: "",
       preset: "balanced",
@@ -5962,6 +6249,10 @@ export async function main(
       return;
     }
   }
+  if (argv.includes("--channel")) {
+    emitResult(configureChannel(argv), options);
+    return;
+  }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
     emitResult(await configureProjectPin(argv), options);
     return;
@@ -6044,11 +6335,7 @@ export async function main(
     process.stdout.write(
       `\n  Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.\n`,
     );
-    const outstanding = postApplyOutstandingActions(
-      projectDir,
-      installed.harnessDir,
-      modelHarness(installed.distribution),
-    );
+    const outstanding = existingProjectionOutstanding(projectDir, installed);
     await runSetupWalk(
       projectDir,
       installed.harnessDir,

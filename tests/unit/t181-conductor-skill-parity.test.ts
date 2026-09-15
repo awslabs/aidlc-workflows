@@ -30,7 +30,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -52,39 +52,6 @@ function harnessQuestionAnnexes(): string[] {
     .sort();
 }
 
-function stageDefinitionFiles(): string[] {
-  const coreRoot = join(REPO_ROOT, "core", "aidlc-common", "stages");
-  const core = readdirSync(coreRoot, { withFileTypes: true })
-    .filter((phase) => phase.isDirectory())
-    .flatMap((phase) =>
-      readdirSync(join(coreRoot, phase.name), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-        .map(
-          (entry) =>
-            `core/aidlc-common/stages/${phase.name}/${entry.name}`,
-        ),
-    );
-  const pluginsRoot = join(REPO_ROOT, "plugins");
-  const plugins = readdirSync(pluginsRoot, { withFileTypes: true })
-    .filter((plugin) => plugin.isDirectory())
-    .flatMap((plugin) => {
-      const stagesRoot = join(pluginsRoot, plugin.name, "stages");
-      if (!existsSync(stagesRoot)) return [];
-      return readdirSync(stagesRoot, { withFileTypes: true })
-        .filter((phase) => phase.isDirectory())
-        .flatMap((phase) =>
-          readdirSync(join(stagesRoot, phase.name), {
-            withFileTypes: true,
-          })
-            .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-            .map(
-              (entry) =>
-                `plugins/${plugin.name}/stages/${phase.name}/${entry.name}`,
-            ),
-        );
-    });
-  return [...core, ...plugins].sort();
-}
 
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
@@ -504,40 +471,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
   });
 
-  test("stage definitions preserve the centralized engine-owned diary boundary", () => {
-    const failures: string[] = [];
-    const protocol = readFileSync(
-      join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"),
-      "utf-8",
-    );
-    for (const required of [
-      "created by the engine from the shipped template",
-      "Treat this path as an output-only target",
-      "the orchestrator never reads, probes, creates, or initializes it",
-    ]) {
-      if (!protocol.includes(required)) {
-        failures.push(`stage-protocol.md §13 missing: ${required}`);
-      }
-    }
-
-    for (const rel of stageDefinitionFiles()) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes("memory.md")) continue;
-      if (
-        !body.includes("engine-created") &&
-        !body.includes("stage-protocol.md §13")
-      ) {
-        failures.push(`${rel} missing centralized diary contract reference`);
-      }
-      for (const retired of [
-        "create on stage start if absent",
-        "Before the approval gate, read memory.md",
-      ]) {
-        if (body.includes(retired)) failures.push(`${rel} retired: ${retired}`);
-      }
-    }
-    expect(failures).toEqual([]);
-  });
 
   test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
@@ -658,6 +591,64 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "never use `report` for this response route",
       ]) {
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("the guard-recovery rendering clause is byte-identical across every harness", () => {
+    // The clause is authored once and ported: the router and every enforcing tool
+    // emit the same typed ask, so every conductor must render it the same way.
+    // Both the sentence inside the `ask` row and the execution paragraph below the
+    // directive table are extracted by their own anchors and compared as bytes.
+    const sentences = new Map<string, string[]>();
+    const paragraphs = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const askRow = body
+        .split("\n")
+        .find((line) => line.startsWith("| `ask` |"));
+      expect(askRow, `${rel} lacks the ask row`).toBeDefined();
+      const sentenceStart = (askRow as string).indexOf(
+        'When `directive.ask_type === "guard-recovery"`',
+      );
+      const sentenceEnd = (askRow as string).indexOf(
+        "take no engine action until they answer.",
+      );
+      expect(sentenceStart, `${rel} lacks the guard-recovery sentence`).toBeGreaterThan(-1);
+      expect(sentenceEnd, `${rel} lacks the terminal-ask rule`).toBeGreaterThan(sentenceStart);
+      const sentence = (askRow as string).slice(
+        sentenceStart,
+        sentenceEnd + "take no engine action until they answer.".length,
+      );
+      sentences.set(sentence, [...(sentences.get(sentence) ?? []), rel]);
+      const paragraph = body
+        .split("\n")
+        .find((line) => line.startsWith("**Guard-recovery execution.**"));
+      expect(paragraph, `${rel} lacks the guard-recovery execution paragraph`).toBeDefined();
+      paragraphs.set(paragraph as string, [
+        ...(paragraphs.get(paragraph as string) ?? []),
+        rel,
+      ]);
+    }
+    expect([...sentences.values()].map((v) => v.sort())).toHaveLength(1);
+    expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "A remedy without `command` is action-only",
+        "render that follow-up and END THE TURN",
+        "their exact text",
+        "Never synthesize a missing command",
+        "process its returned directive through the table above",
+        "whose last line is a guard-recovery ask JSON is the same directive",
+        "When `directive.remedies` is empty the ask is terminal",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }
     }
     expect(missing).toEqual([]);

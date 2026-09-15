@@ -49,9 +49,16 @@ function run(
   cwd: string,
   env: NodeJS.ProcessEnv = {},
 ): { status: number; stdout: string; stderr: string } {
+  // Keep the host's active runtime out of fixture source selection.
+  const machine = temp("aidlc-t295-machine-");
   const result = spawnSync(BUN, [INIT, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: {
+      ...process.env,
+      AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      ...env,
+    },
     encoding: "utf-8",
     timeout: 60_000,
   });
@@ -85,6 +92,8 @@ function install(harness = "claude", mcp: "defaults" | "none" = "none"): string 
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+    // Host active-version runtimes must not join this fixture's source discovery.
+    AIDLC_INSTALL_ROOT: temp("aidlc-t295-runtime-machine-"),
     ...extra,
   };
 }

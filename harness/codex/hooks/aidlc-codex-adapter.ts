@@ -358,13 +358,37 @@ function wrapContext(coreStdout: string, eventName: string): string {
   return coreStdout;
 }
 
+function allowUpdatedInput(coreStdout: string): string {
+  try {
+    const parsed = JSON.parse(coreStdout) as {
+      hookSpecificOutput?: {
+        hookEventName?: unknown;
+        permissionDecision?: unknown;
+        updatedInput?: unknown;
+      };
+    };
+    const output = parsed.hookSpecificOutput;
+    if (
+      output?.hookEventName === "PreToolUse" &&
+      output.updatedInput !== undefined &&
+      output.permissionDecision === undefined
+    ) {
+      output.permissionDecision = "allow";
+      return `${JSON.stringify(parsed)}\n`;
+    }
+  } catch {
+    // Unparseable core output is not a successful input rewrite.
+  }
+  return coreStdout;
+}
+
 function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
-  return `${JSON.stringify({
+  return allowUpdatedInput(`${JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       updatedInput,
     },
-  })}\n`;
+  })}\n`);
 }
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
@@ -638,12 +662,14 @@ switch (target) {
 
   case "deliver-stage-rules": {
     // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
-    // contract as Claude. The core hook recognizes spawn_agent and appends the
-    // exact active-stage bundle to message/items without adapter re-shaping.
+    // contract as Claude, plus an explicit allow decision for rewritten input.
+    // The core hook recognizes spawn_agent and appends the exact active-stage
+    // bundle to message/items; the adapter completes the Codex envelope.
     const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rawInput);
     const answeredCode = r.code === 2 ? 2 : 0;
-    persistResponse(r.stdout, answeredCode, r.stderr);
-    if (r.stdout) process.stdout.write(r.stdout);
+    const stdout = r.code === 2 ? r.stdout : allowUpdatedInput(r.stdout);
+    persistResponse(stdout, answeredCode, r.stderr);
+    if (stdout) process.stdout.write(stdout);
     if (r.code === 2) {
       process.stderr.write(r.stderr);
       return 2;
@@ -749,20 +775,26 @@ switch (target) {
     // state existing (same self-gate as the core record-human-turn hook) so a prompt in a
     // project that never ran the framework does not scaffold audit shards.
     // Fail-open: a record-human-turn failure must never block the turn. Advisory, no stdout.
-    const responseText =
-      explicitHumanSelectionText(codex.tool_response) ||
-      codex.prompt ||
-      codex.user_prompt ||
-      codex.message ||
-      "";
-    runCoreWithStderr(
-      "aidlc-record-human-turn.ts",
-      JSON.stringify({
-        hook_event_name: "UserPromptSubmit",
-        ...(codex.session_id ? { session_id: codex.session_id } : {}),
-        prompt: responseText,
-      }),
-    );
+    //
+    // A structured request_user_input selection is forwarded as the tool
+    // response it is, never as typed prompt text: the core hook records the
+    // Plan Approval choice from either channel, but the break-glass override
+    // phrase counts only when the human typed it as a prompt.
+    const selectionText = explicitHumanSelectionText(codex.tool_response);
+    const forwarded =
+      codex.tool_name === "request_user_input"
+        ? {
+            hook_event_name: "PostToolUse",
+            ...(codex.session_id ? { session_id: codex.session_id } : {}),
+            tool_name: "request_user_input",
+            tool_response: { answer: selectionText },
+          }
+        : {
+            hook_event_name: "UserPromptSubmit",
+            ...(codex.session_id ? { session_id: codex.session_id } : {}),
+            prompt: codex.prompt || codex.user_prompt || codex.message || "",
+          };
+    runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
     persistResponse("", 0);
     return 0;
   }

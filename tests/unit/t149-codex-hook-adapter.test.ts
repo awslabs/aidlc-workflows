@@ -31,7 +31,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -54,6 +53,7 @@ import {
   setActiveSpaceCursor,
   writeSessionBinding,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -175,7 +175,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     kind: "run-stage",
     stage: "code-generation",
     unit,
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
@@ -444,10 +444,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const output = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
           hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { command?: string };
         };
       };
       expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
       expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
         "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
           "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
@@ -542,9 +544,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code, r.stderr).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
+          hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { message?: string };
         };
       };
+      expect(out.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
       const message = out.hookSpecificOutput?.updatedInput?.message ?? "";
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");

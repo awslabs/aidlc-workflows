@@ -286,12 +286,12 @@ This reflects the cyclical nature of the AI-DLC lifecycle.
 - 4.7 Feedback & Optimization -- SLO compliance, cost analysis, drift detection, feedback loop
 
 **Scope applicability:**
-- enterprise / feature / classic / workshop: All 7 stages
+- enterprise / feature / workshop: All 7 stages
 - infra: Stages 4.1-4.4 (deployment-pipeline, environment-provisioning, deployment-execution, observability-setup)
 - bugfix / refactor: Stages 4.1, 4.3 (deployment-pipeline, deployment-execution)
 - security-patch: Stages 4.1, 4.3 (deployment-pipeline, deployment-execution)
 - express: Stages 4.1, 4.3, 4.4 (deployment-pipeline, deployment-execution, observability-setup)
-- mvp / poc: Operation phase skipped entirely
+- mvp / poc / classic: Operation phase skipped entirely (a placeholder in classic)
 
 ## Cross-References
 

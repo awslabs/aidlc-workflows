@@ -34,7 +34,7 @@
 //   2. A NO-PROGRESS counter — consecutive blocks with no intervening workflow
 //      advance (the stable state digest and pending-directive fingerprint are both
 //      unchanged). It is persisted across the rapid-fire blocks in a transient
-//      file under aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling
+//      file under <record>/.aidlc-engine/stop-hook/. Under a no-progress ceiling
 //      exposed as CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap
 //      we LET GO (allow the stop). The default ceiling is run-mode aware: an
 //      unattended autonomous Construction run keeps the long ceiling (8, the
@@ -88,8 +88,8 @@
 //      the stop when the most recent genuine human prompt was answered with zero
 //      engine calls (isConversationalStop below). ONE predicate, TWO evidence
 //      sources: the harness TRANSCRIPT where the Stop payload delivers
-//      `transcript_path` (Claude, Codex), and the `.aidlc-human-turn` vs
-//      `.aidlc-engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
+//      `transcript_path` (Claude, Codex), and the `.aidlc-engine/human-turn` vs
+//      `.aidlc-engine/engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
 //      opencode — these expose no turn history to a hook at all, so the framework
 //      writes the two facts itself on the mint and engine seams). The marker path
 //      depends on the engine skipping its touch for this hook's OWN `next` probe
@@ -134,6 +134,7 @@ import {
   findIntentByUuid,
   effectiveUnitGateRhythm,
   getField,
+  stateDigest,
   hasCurrentSharedResumeWait,
   hasPendingDecision,
   hookChildEnv,
@@ -233,7 +234,7 @@ function blockStop(reason: string): number {
 // and the pending directive did not advance, so we increment the counter; when
 // it changes, the loop is healthy and we reset to 0.
 //
-// The file lives under the gitignored aidlc-docs/.aidlc-stop-hook/ alongside
+// The file lives under the gitignored <record>/.aidlc-engine/stop-hook/ alongside
 // the other transient framework state. It is keyed off the project dir, so it
 // is per-workflow and survives across the rapid-fire blocks within one stuck
 // turn (the blocks happen in the same project; each re-invocation re-reads it).
@@ -260,11 +261,11 @@ function currentStageSlug(stateContent: string): string {
 // the pending directive advances, while ignoring unrelated audit-only traffic.
 function progressSignature(stateContent: string, directive: EngineDirective): string {
   const stage = currentStageSlug(stateContent);
-  const stableState = stateContent.replace(
-    /^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm,
-    "",
-  );
-  const stateSha256 = createHash("sha256").update(stableState, "utf-8").digest("hex");
+  // The same projection the engine binds a directive to, so "did the workflow
+  // advance?" and "is the issued directive still current?" cannot disagree. This
+  // hook already ignored Last Updated for exactly this reason; the projection
+  // generalizes that to the whole cache layer.
+  const stateSha256 = stateDigest(stateContent);
   const directiveFingerprint = createHash("sha256")
     .update(
       JSON.stringify({
@@ -795,9 +796,46 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     return false; // unreadable transcript: fall through to the cap
   }
   const lines = raw.split("\n");
-  // Parse to a flat sequence of {role, engineCall} events in file order.
-  type Turn = { role: "user" | "assistant"; engineCall: boolean; humanPrompt: boolean };
+  // Keep tool calls separate, including calls in the same assistant message.
+  // A terminal result for one call must never erase another call's engagement.
+  type Turn = {
+    role: "user" | "assistant";
+    engineCall: boolean;
+    humanPrompt: boolean;
+    call?: { id: string | null; name: string; input: unknown };
+    result?: { id: string | null; output: unknown; failed: boolean };
+  };
   const turns: Turn[] = [];
+  const engineCallIds = new Set<string>();
+  const callId = (value: unknown): string | null =>
+    typeof value === "string" && value.trim().length > 0 ? value : null;
+  const recordCall = (id: unknown, name: string, input: unknown): void => {
+    const engineCall = isEngineToolCall(name, input);
+    const normalizedId = callId(id);
+    if (engineCall && normalizedId !== null) engineCallIds.add(normalizedId);
+    turns.push({
+      role: "assistant",
+      engineCall,
+      humanPrompt: false,
+      // All IDs participate in duplicate detection; only engine inputs are
+      // needed for result validation.
+      call: { id: normalizedId, name, input: engineCall ? input : undefined },
+    });
+  };
+  const recordResult = (id: unknown, output: unknown, failed: unknown): void => {
+    const normalizedId = callId(id);
+    turns.push({
+      role: "assistant",
+      engineCall: false,
+      humanPrompt: false,
+      result: {
+        id: normalizedId,
+        // Do not retain large Read/Task outputs or results preceding their call.
+        output: normalizedId !== null && engineCallIds.has(normalizedId) ? output : undefined,
+        failed: failed !== undefined && failed !== false,
+      },
+    });
+  };
   for (const line of lines) {
     if (line.trim().length === 0) continue;
     let o: unknown;
@@ -829,7 +867,15 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const isToolResult =
           Array.isArray(content) &&
           content.some((x) => (x as Record<string, unknown>)?.type === "tool_result");
-        if (isToolResult) continue; // a tool_result is not a human prompt
+        if (isToolResult) {
+          for (const block of content) {
+            const result = block as Record<string, unknown>;
+            if (result?.type === "tool_result") {
+              recordResult(result.tool_use_id, result.content, result.is_error);
+            }
+          }
+          continue; // a tool_result is not a human prompt
+        }
         // Defence-in-depth: the hook's continuation text is injected as a user
         // turn; exclude it by content even if a future build drops `isMeta`.
         const asText =
@@ -851,15 +897,17 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
             content.some((x) => (x as Record<string, unknown>)?.type === "text"));
         if (isHuman) turns.push({ role: "user", engineCall: false, humanPrompt: true });
       } else if (type === "assistant" && role === "assistant" && Array.isArray(content)) {
-        let engineCall = false;
+        let hasToolCall = false;
         for (const block of content) {
           const b = block as Record<string, unknown>;
-          if (b?.type === "tool_use" && isEngineToolCall(String(b.name ?? ""), b.input)) {
-            engineCall = true;
-            break;
+          if (b?.type === "tool_use") {
+            recordCall(b.id, String(b.name ?? ""), b.input);
+            hasToolCall = true;
           }
         }
-        turns.push({ role: "assistant", engineCall, humanPrompt: false });
+        if (!hasToolCall) {
+          turns.push({ role: "assistant", engineCall: false, humanPrompt: false });
+        }
       }
     } else {
       // Codex rollout JSONL: {type:"response_item", payload:{type, role, content,
@@ -918,11 +966,13 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         if (typeof parsedArgs.command !== "string") {
           parsedArgs = { ...parsedArgs, command: typeof args === "string" ? args : JSON.stringify(args) };
         }
-        const engineCall = isEngineToolCall(
+        recordCall(
+          payload.call_id,
           /^(bash|shell|execute_bash|local_shell_call)$/i.test(name) ? "Bash" : name,
           parsedArgs,
         );
-        turns.push({ role: "assistant", engineCall, humanPrompt: false });
+      } else if (ptype === "function_call_output") {
+        recordResult(payload.call_id, payload.output, payload.is_error);
       }
     }
   }
@@ -937,10 +987,45 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
   }
   if (lastHumanIdx === -1) return false; // no human prompt found: cannot confirm chat
 
-  // Any engine call AFTER that prompt means the conductor engaged the workflow;
-  // a mid-loop bail must still be nudged. Zero engine calls -> conversational.
+  // Correlate across the entire transcript so reused IDs are never accepted as
+  // proof. The matching result must follow its call in the current human turn.
+  const callsById = new Map<string, number[]>();
+  const resultsById = new Map<string, number[]>();
+  for (let i = 0; i < turns.length; i++) {
+    const call = turns[i].call;
+    if (call?.id) {
+      const indices = callsById.get(call.id) ?? [];
+      indices.push(i);
+      callsById.set(call.id, indices);
+    }
+    const result = turns[i].result;
+    if (result?.id) {
+      const indices = resultsById.get(result.id) ?? [];
+      indices.push(i);
+      resultsById.set(result.id, indices);
+    }
+  }
+
+  // A config modifier can start a workflow or dispatch a terminal utility.
+  // Only that call's validated terminal result can resolve the ambiguity;
+  // every other engine call after the human prompt still requires continuation.
   for (let i = lastHumanIdx + 1; i < turns.length; i++) {
-    if (turns[i].engineCall) return false;
+    const turn = turns[i];
+    if (!turn.engineCall) continue;
+    const call = turn.call;
+    if (call?.id && callsById.get(call.id)?.length === 1) {
+      const results = resultsById.get(call.id);
+      if (results?.length === 1 && results[0] > i) {
+        const result = turns[results[0]].result;
+        if (
+          result && !result.failed &&
+          !isEngineToolCall(call.name, call.input, result.output)
+        ) {
+          continue;
+        }
+      }
+    }
+    return false;
   }
   return true;
 }
@@ -958,8 +1043,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 //   - MARKER mtimes (Kiro IDE, Kiro CLI, opencode): these harnesses deliver NO
 //     transcript and expose no turn history to a hook at all, so the same
 //     predicate is reconstructed from two files the framework already writes on
-//     the relevant seams — `.aidlc-human-turn` (the UserPromptSubmit mint) and
-//     `.aidlc-engine-touch` (every advancing aidlc-orchestrate invocation). A
+//     the relevant seams - `.aidlc-engine/human-turn` (the UserPromptSubmit mint) and
+//     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation). A
 //     human turn NEWER than the last engine advance is the marker spelling of
 //     "answered with zero engine calls".
 //
@@ -1036,7 +1121,7 @@ function runEngineNextDirective(
   //
   // STOP_HOOK_PROBE_ENV MARKS THIS SPAWN AS THE HOOK'S OWN PROBE, and that is
   // load-bearing for the conversational carve-out — not a debug nicety. The
-  // engine touches `.aidlc-engine-touch` on every advancing invocation, and the
+  // engine touches `.aidlc-engine/engine-touch` on every advancing invocation, and the
   // transcript-free carve-out below asks "is the last human turn newer than the
   // last engine touch?". This consultation runs on EVERY stop, so without the
   // marker it would refresh the engine mtime first and the answer would be `no`
@@ -1211,7 +1296,7 @@ try {
   /* malformed input remains fail-open */
 }
 
-// Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
+// Write a health heartbeat (mirrors the other hooks' .aidlc-engine/hooks-health beat).
 try {
   const healthDir = hooksHealthDir(projectDir);
   mkdirSync(healthDir, { recursive: true });
@@ -1529,8 +1614,8 @@ if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
 // answered the human's most recent prompt with NO workflow-engine engagement, so
 // the human was just chatting mid-workflow, allow the stop instead of nudging
 // them back into the loop. Two evidence sources for one predicate: the harness
-// transcript where it is delivered (Claude / Codex), and the `.aidlc-human-turn`
-// vs `.aidlc-engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
+// transcript where it is delivered (Claude / Codex), and the `.aidlc-engine/human-turn`
+// vs `.aidlc-engine/engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
 // opencode). Strictly gated and fail-closed (see isConversationalStop): no
 // evidence, no human prompt, ANY engine call in the responding turn, an
 // autonomous run, or any read error falls through to the cap-bounded block below,

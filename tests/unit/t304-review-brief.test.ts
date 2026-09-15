@@ -1,5 +1,7 @@
 // covers: function:reviewArtifactEntries, tool:aidlc-review-brief, audit:GATE_APPROVED,
-// audit:GATE_REJECTED, audit:STAGE_JUMPED
+// audit:GATE_REJECTED, audit:STAGE_JUMPED, function:latestReviewRecordRefs,
+// function:reviewRecordFindings, function:readReviewRecord, function:parseReviewSection,
+// function:reviewFindingFingerprint, function:validReviewFindingStatus
 
 import {
   afterEach,
@@ -18,8 +20,10 @@ import {
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   findStageBySlug,
   readAllAuditShards,
+  readAuditShardEvents,
   reviewArtifactEntries,
   sourcePathKey,
   writeUnitSourceSnapshot,
@@ -157,12 +161,50 @@ function recordReviewAndOpenGate(proj: string, artifact: string): void {
     "--iteration",
     "1",
   ];
-  expect(run(LOG, base, proj).status).toBe(0);
-  writeFileSync(artifact, `${requestedBody}${reviewerAppendix}`, "utf-8");
+  const requested = run(LOG, base, proj);
+  expect(requested.status, requested.out).toBe(0);
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  const draft = join(proj, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(draft, reviewerAppendix.replace(/^## Review\s*/, ""), "utf-8");
   expect(run(LOG, [...base, "--verdict", "READY"], proj).status).toBe(0);
   expect(
     run(STATE, ["gate-start", "requirements-analysis"], proj).status,
   ).toBe(0);
+}
+
+// The record path: the reviewer writes the review to the slot the request
+// names; the verdict records it and the artifact keeps its requested bytes.
+function recordReviewViaRecordAndOpenGate(
+  proj: string,
+  reviewBody: string,
+): { reviewRecord: string } {
+  const base = [
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+  ];
+  const requested = run(LOG, base, proj);
+  expect(requested.status, requested.out).toBe(0);
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  const draft = join(proj, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(draft, reviewBody, "utf-8");
+  const completed = run(LOG, [...base, "--verdict", "READY"], proj);
+  expect(completed.status, completed.out).toBe(0);
+  const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+  expect(reviewRecord).toMatch(
+    /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+  );
+  expect(existsSync(draft)).toBe(false);
+  expect(
+    run(STATE, ["gate-start", "requirements-analysis"], proj).status,
+  ).toBe(0);
+  return { reviewRecord };
 }
 
 function perUnitReviewProject(
@@ -312,6 +354,128 @@ describe("t304 executable review brief scenarios", () => {
     expect(renderFindingsContext([second])).toContain(
       "requirements-analysis-questions.md > Q4",
     );
+  });
+
+  test.each(["New", "Unresolved", "Resolved", "Accepted risk", "Rejected: duplicate"])(
+    "a short findings row offers a repair hint for trailing status %s",
+    (status) => {
+      // Required action was omitted here, but the parser cannot identify
+      // that column reliably from the remaining positional values.
+      const shortRow =
+        `| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | ${status} |`;
+      expect(() =>
+        parseReviewArtifact(
+          reviewMarkdown("NOT-READY", [shortRow]),
+          "aidlc/requirements.md",
+        )
+      ).toThrow(
+        "aidlc/requirements.md#R-05: row has 5 cells, header declares 6. " +
+          "Expected columns: ID | Severity | Location | Finding | Required action | Status. " +
+          `The last cell ${JSON.stringify(status)} looks like Status; check earlier cells for a missing value or "|" separator`,
+      );
+    },
+  );
+
+  test.each([
+    ["| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | Fix it |", 5],
+    ["| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing |", 4],
+    ["| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | |", 5],
+  ] satisfies [string, number][])("a short row without a recognizable trailing status shows the expected columns: %s", (row, count) => {
+    expect(() =>
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [row]),
+        "aidlc/requirements.md",
+      )
+    ).toThrow(
+      `aidlc/requirements.md#R-05: row has ${count} cells, header declares 6. ` +
+        "Expected columns: ID | Severity | Location | Finding | Required action | Status. " +
+        'Check for a missing cell or "|" separator',
+    );
+  });
+
+  test("reordered headers keep their declared order without treating a non-final Status as shifted", () => {
+    const review = reviewMarkdown("NOT-READY", [
+      "| R-05 | Resolved | Minor | aidlc/requirements.md > FR-1 | New |",
+    ]).replace(
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "| ID | Status | Severity | Location | Finding | Required action |",
+    );
+    expect(() => parseReviewArtifact(review, "aidlc/requirements.md")).toThrow(
+      "aidlc/requirements.md#R-05: row has 5 cells, header declares 6. " +
+        "Expected columns: ID | Status | Severity | Location | Finding | Required action. " +
+        'Check for a missing cell or "|" separator',
+    );
+  });
+
+  test("a findings row with extra cells reports the surplus", () => {
+    const longRow =
+      "| R-06 | Minor | aidlc/requirements.md > FR-1 | Extra | Fix it | New | surplus |";
+    expect(() =>
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [longRow]),
+        "aidlc/requirements.md",
+      )
+    ).toThrow("row has 7 cells, header declares 6: 1 unexpected extra cell(s)");
+  });
+
+  test("valid findings preserve escaped pipes and explicit empty cells", () => {
+    expect(
+      parseReviewArtifact(
+        reviewMarkdown("NOT-READY", [
+          ROW_NEW,
+          String.raw`| R-02 | Minor | aidlc/requirements.md > A\|B | A\|B is missing | | New |`,
+        ]).replace("|---|---|---|---|---|---|", "|:---|---:|:---:|---|---|---|"),
+        "aidlc/requirements.md",
+      )!.findings.map(({ id, location, finding, requiredAction, status }) =>
+        ({ id, location, finding, requiredAction, status })
+      ),
+    ).toEqual([
+      {
+        id: "R-01",
+        location: "aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements.md > FR-1",
+        finding: "Deadline is missing",
+        requiredAction: "Add a delivery date",
+        status: "New",
+      },
+      {
+        id: "R-02",
+        location: "aidlc/requirements.md > A|B",
+        finding: "A|B is missing",
+        requiredAction: "",
+        status: "New",
+      },
+    ]);
+  });
+
+  test("review completion carries the short-row repair hint without recording a terminal receipt", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const base = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, base, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, reviewMarkdown("NOT-READY", [
+      "| R-05 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | New |",
+    ]).replace(/^# Requirements\n\n/, ""), "utf-8");
+    const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+    expect(completed.status).not.toBe(0);
+    const diagnostic = JSON.parse(completed.stderr).error;
+    expect(diagnostic).toContain('Refusing REVIEW_COMPLETED for "requirements-analysis"');
+    expect(diagnostic).toContain("row has 5 cells, header declares 6");
+    expect(diagnostic).toContain('The last cell "New" looks like Status');
+    expect(diagnostic).not.toContain('missing "Status"');
+    expect(
+      readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+    ).toHaveLength(0);
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
@@ -956,5 +1120,166 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts context");
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
     expect(reviewerProtocol).toContain("--reject-finding");
+  });
+
+  test("a review recorded as a record renders at the gate and in redispatch context, and its findings take dispositions", () => {
+    const { proj, artifact, relativeArtifact } = requirementProject([ROW_NEW]);
+    // The artifact carries no review section: the review lives in its record.
+    const body = "# Requirements\n\nFR-1: ship it.\n";
+    writeFileSync(artifact, body, "utf-8");
+    const reviewBody = reviewMarkdown("READY", [ROW_NEW, ROW_NEW_SECOND]).replace(
+      /^# Requirements\n\n/,
+      "",
+    );
+    const { reviewRecord } = recordReviewViaRecordAndOpenGate(proj, reviewBody);
+    expect(readFileSync(artifact, "utf-8")).toBe(body);
+    const recordPath = join(seededRecordDir(proj), reviewRecord);
+    expect(existsSync(recordPath)).toBe(true);
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const contexts = readReviewArtifactContexts(proj, stage);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].artifact).toBe(relativeArtifact);
+    expect(contexts[0].verdict).toBe("READY");
+    expect(contexts[0].findings.map((finding) => finding.id)).toEqual(["R-01", "R-02"]);
+
+    const brief = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
+    expect(brief.status, brief.out).toBe(0);
+    expect(brief.stdout).toContain(`**Review artifact:** \`${relativeArtifact}\``);
+    expect(brief.stdout).toContain("| R-01 |");
+    expect(brief.stdout).toContain("| R-02 |");
+    expect(brief.stdout).toContain("Concerns remain for your decision.");
+    expect(brief.stdout).not.toContain("READY");
+    const context = run(REVIEW_BRIEF, ["context", "--stage", "requirements-analysis"], proj);
+    expect(context.status, context.out).toBe(0);
+    expect(context.stdout).toContain("| R-01 |");
+
+    // Dispositions address the record's findings through the reviewed
+    // artifact's path, as they always did.
+    const rejected = run(
+      ORCHESTRATE,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "R-01 does not apply to this internal milestone",
+        "--reject-finding",
+        `${relativeArtifact}#R-01=Internal milestones intentionally have no public date`,
+      ],
+      proj,
+    );
+    expect(rejected.status, rejected.out).toBe(0);
+    const hydrated = hydrateReviewArtifactContexts(
+      readReviewArtifactContexts(proj, stage),
+      readReviewFindingDispositions(proj, stage.slug),
+    );
+    expect(hydrated[0].findings.map((finding) => finding.status)).toEqual([
+      "Rejected: Internal milestones intentionally have no public date",
+      "New",
+    ]);
+
+    // A completion row that descends from no request is not a review, whatever
+    // it names: the real record it points at, a made-up record, a legacy shape
+    // with no record at all. Only the paired completion decides what is read.
+    const completion = readAllAuditShards(proj)
+      .replace(/\r\n/g, "\n")
+      .split(/\n---\n/)
+      .find((block) => auditBlockField(block, "Event") === "REVIEW_COMPLETED");
+    const recordDigest = auditBlockField(completion ?? "", "Review Record Digest") as string;
+    const base = {
+      Stage: "requirements-analysis",
+      Reviewer: "aidlc-product-lead-agent",
+      Iteration: "1",
+      Verdict: "NOT-READY",
+      "Request Fingerprint": auditBlockField(completion ?? "", "Request Fingerprint") as string,
+      "Artifact Fingerprint": auditBlockField(completion ?? "", "Artifact Fingerprint") as string,
+    };
+    for (const forged of [
+      { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": reviewRecord, "Review Record Digest": recordDigest },
+      { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": ".aidlc-engine/reviews/requirements-analysis/stage/0123456789abcdef/1.json", "Review Record Digest": `sha256:${"0".repeat(64)}` },
+      { ...base, "Request Id": `review:${"f".repeat(32)}` },
+      { ...base },
+    ]) {
+      appendAuditEntry("REVIEW_COMPLETED", forged, proj);
+      const after = readReviewArtifactContexts(proj, stage);
+      expect(after).toHaveLength(1);
+      expect(after[0].verdict).toBe("READY");
+      expect(after[0].findings.map((finding) => finding.id)).toEqual(["R-01", "R-02"]);
+    }
+
+    // A record edited after the fact is not the review: the gate falls back to
+    // what the artifact says, which here is nothing.
+    writeFileSync(recordPath, readFileSync(recordPath, "utf-8").replace("R-02", "R-09"), "utf-8");
+    expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+  });
+
+  test("an empty incomplete-review record leaves room for the explicit gate fallback finding", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+    const request = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, request, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const retried = run(LOG, [...request, "--retry-pending"], proj);
+    expect(retried.status, retried.out).toBe(0);
+    const completed = run(LOG, [...request, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+    const recordPath = join(seededRecordDir(proj), reviewRecord);
+    expect(existsSync(recordPath)).toBe(true);
+    expect(JSON.parse(readFileSync(recordPath, "utf-8"))).toMatchObject({
+      verdict: "NOT-READY",
+      body: "",
+      findings: [],
+    });
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+    const fallbackFinding = "review did not complete within its turn budget";
+    const brief = run(
+      REVIEW_BRIEF,
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--why",
+        "first",
+        "--fallback-finding",
+        fallbackFinding,
+      ],
+      proj,
+    );
+    expect(brief.status, brief.out).toBe(0);
+    expect(brief.stdout).toContain(fallbackFinding);
+    expect(brief.stdout).not.toContain(
+      "| - | - | - | No findings | No action required | Resolved |",
+    );
+  });
+
+  test("a record replaces a legacy embedded review for the same scope at the gate", () => {
+    const { proj, artifact, relativeArtifact } = requirementProject([ROW_UNRESOLVED]);
+    // The artifact still carries an old embedded section; the fresh review is
+    // a record. The record wins for the scope, the section stays as content.
+    const legacyBytes = readFileSync(artifact, "utf-8");
+    const reviewBody = reviewMarkdown("READY", [ROW_RESOLVED]).replace(/^# Requirements\n\n/, "");
+    recordReviewViaRecordAndOpenGate(proj, reviewBody);
+    expect(readFileSync(artifact, "utf-8")).toBe(legacyBytes);
+    const stage = findStageBySlug("requirements-analysis")!;
+    const contexts = readReviewArtifactContexts(proj, stage);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].artifact).toBe(relativeArtifact);
+    expect(contexts[0].findings.map((finding) => finding.status)).toEqual(["Resolved"]);
   });
 });

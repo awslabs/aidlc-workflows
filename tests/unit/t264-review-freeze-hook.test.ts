@@ -34,7 +34,6 @@ import {
 } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -240,6 +239,44 @@ test("inspection marks altered executable lookup and data-driven mutations", () 
   ]);
 });
 
+test("descriptor redirections preserve command boundaries and real operands", () => {
+  for (const redirect of ["2>&1", "1>&2", "2>&-", "0<&0", "2>& 1"]) {
+    expect(shellCommandInvocations(`cp source target ${redirect}`), redirect).toEqual([
+      { name: "cp", args: ["source", "target"] },
+    ]);
+  }
+  expect(
+    shellCommandInvocations('cp source target 2>&1 && printf "%s" "2>&1"'),
+  ).toEqual([
+    { name: "cp", args: ["source", "target"] },
+    { name: "printf", args: ["%s", "2>&1"] },
+  ]);
+  expect(shellCommandInvocations("printf value2>&1")).toEqual([
+    { name: "printf", args: ["value2"] },
+  ]);
+  expect(shellCommandInvocations('printf "2">&1')).toEqual([
+    { name: "printf", args: ["2"] },
+  ]);
+  expect(shellCommandInvocations(String.raw`printf x\>&1`)).toEqual([
+    { name: "printf", args: ["x>"] },
+    { name: "1", args: [] },
+  ]);
+  expect(shellCommandInvocations(String.raw`printf x\<&0`)).toEqual([
+    { name: "printf", args: ["x<"] },
+    { name: "0", args: [] },
+  ]);
+  expect(shellCommandInvocations(String.raw`printf x \>& 1>&1 cp source target`)).toEqual([
+    { name: "printf", args: ["x", ">"] },
+    { name: "cp", args: ["source", "target"] },
+  ]);
+  expect(shellCommandInvocations("bun run ''2>&1 installed.ts engine orchestrate next")).toEqual([
+    { name: "bun", args: ["run", "2", "installed.ts", "engine", "orchestrate", "next"] },
+  ]);
+  expect(shellCommandInvocations("bun run '' installed.ts")).toEqual([
+    { name: "bun", args: ["run", "", "installed.ts"] },
+  ]);
+});
+
 const NONE: ReadonlySet<string> = new Set();
 const ready = { stageVerdict: "READY", unitVerdicts: new Map<string, string>() };
 const notReady = { stageVerdict: "NOT-READY", unitVerdicts: new Map<string, string>() };
@@ -287,73 +324,49 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
   });
 
-  test("only a validated pending recovery request suspends its exact scope", () => {
+  test("a pending stale-receipt recovery freezes its exact scope like a receipt does", () => {
+    // The reviewer records its review beside the artifact, never inside it, so
+    // a recovery request opens no write window: the frozen bytes stay frozen
+    // until the recovery verdict or a human decision.
     const raFile =
       "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
     expect(
       judgeFreeze(RA, raFile, NONE, {
+        stageVerdict: null,
+        unitVerdicts: new Map(),
+        stagePending: { recovery: true },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
         ...ready,
-        stageStale: true,
-        stagePending: { recovery: true, suspensionActive: true },
+        stagePending: { recovery: true },
+      }).block,
+    ).toBe(true);
+    // A pending request that is not a recovery neither freezes nor thaws by itself.
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        stageVerdict: null,
+        unitVerdicts: new Map(),
+        stagePending: { recovery: false },
       }).block,
     ).toBe(false);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stagePending: { recovery: true, suspensionActive: true },
-      }).block,
-    ).toBe(true);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        sourceStale: false,
-        newestSourceUnit: null,
-        stagePending: {
-          recovery: true,
-          suspensionActive: true,
-          recoveryCause: "source",
-        },
-      }).block,
-    ).toBe(true);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        sourceStale: true,
-        newestSourceUnit: null,
-        stagePending: {
-          recovery: true,
-          suspensionActive: true,
-          recoveryCause: "source",
-        },
-      }).block,
-    ).toBe(false);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        stagePending: { recovery: false, suspensionActive: false },
-      }).block,
-    ).toBe(true);
 
     const u3 =
       "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const u4 =
       "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const u5 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U05/nfr-requirements/nfr-requirements.md";
     const receipts = {
       stageVerdict: null,
-      unitVerdicts: new Map([
-        ["U03", "READY"],
-        ["U04", "READY"],
-      ]),
-      unitStale: new Set(["U03"]),
-      unitPending: new Map([
-        ["U03", { recovery: true, suspensionActive: true }],
-      ]),
+      unitVerdicts: new Map([["U04", "READY"]]),
+      unitPending: new Map([["U03", { recovery: true }]]),
     };
-    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).unit).toBe("U03");
     expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u5, NONE, receipts).block).toBe(false);
   });
 
   test("guidance failures fall back without changing the freeze decision", () => {
@@ -554,9 +567,13 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
   }
-  appendFileSync(
-    artifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+  const { reviewFile } = JSON.parse(requested.stdout ?? "{}") as {
+    reviewFile: string;
+  };
+  mkdirSync(dirname(join(p, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(p, reviewFile),
+    `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
@@ -625,8 +642,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       "If this is a reviewer suggestion, quote it at the gate",
     );
     expect(blocked.stderr).toContain(
-      "tell me what should change and I'll record your Request Changes decision",
+      'Ask "What should change?" for stage "requirements-analysis"',
     );
+    expect(blocked.stderr).toContain("their exact text unchanged");
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 
     // A recorded gate rejection resets the receipt floor: the freeze lifts
@@ -695,6 +713,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       `printf "change">>${JSON.stringify(file)}`,
       `printf "change" >> "$PWD/${rel}"`,
       `cp --target-directory=${JSON.stringify(dirname(file))} /tmp/requirements.md`,
+      `cp /tmp/requirements.md ${JSON.stringify(file)} 2>&1`,
+      `cp /tmp/requirements.md ${JSON.stringify(file)} 2>&-`,
+      `cp /tmp/requirements.md ${JSON.stringify(file)} 2>& 1`,
       `mv ${JSON.stringify(file)} /tmp/review-freeze-moved`,
       `install -dv ${JSON.stringify(file)} /tmp/review-freeze-directory`,
       `truncate -s 1 -o ${JSON.stringify(file)}`,
@@ -714,8 +735,10 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
 
     for (const command of [
       `cat ${JSON.stringify(file)}`,
+      `cat ${JSON.stringify(file)} 2>&1`,
       `sed -n '1p' ${JSON.stringify(file)}`,
       `cp ${JSON.stringify(file)} /tmp/review-freeze-copy`,
+      `cp ${JSON.stringify(file)} /tmp/review-freeze-copy 2>&1`,
       `cp --target-directory=/tmp ${JSON.stringify(file)}`,
       `cp /tmp/requirements.md ${JSON.stringify(
         join(p, "unrelated", "inception", "requirements-analysis"),

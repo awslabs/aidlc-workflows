@@ -46,6 +46,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const CURSOR_ROOT = join(REPO_ROOT, "dist", "cursor");
+const CURSOR_RELEASE_ROOT = join(REPO_ROOT, "dist-release", "cursor");
 const ENGINE = join(CURSOR_ROOT, ".cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 
@@ -327,6 +328,63 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       });
       expect(rerun.status, rerun.stderr).toBe(0);
       expect(readFileSync(join(cursorDir, "hooks.json"), "utf-8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("9b: native Cursor installer replaces legacy adapter wiring without duplication", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-native-hook-upgrade-"));
+    const project = join(root, "project");
+    try {
+      const cursorDir = join(project, ".cursor");
+      mkdirSync(cursorDir, { recursive: true });
+      // A project refreshed across releases carries BOTH legacy spellings of
+      // the AI-DLC guards entry (bun-era copy channel, then 2.8.0 native), with
+      // a project-owned hook between them. Only the AI-DLC entries are owned:
+      // both collapse into one canonical entry at the first one's position and
+      // the project's hook is untouched.
+      const userEntry = { command: "bun scripts/my-guard.ts guards", failClosed: false };
+      writeFileSync(
+        join(cursorDir, "hooks.json"),
+        `${JSON.stringify({
+          version: 1,
+          hooks: {
+            preToolUse: [
+              {
+                command: "bun .cursor/hooks/aidlc-cursor-adapter.ts guards",
+                failClosed: true,
+              },
+              userEntry,
+              {
+                command: "aidlc engine hook cursor-adapter guards",
+                failClosed: true,
+              },
+            ],
+          },
+        }, null, 2)}\n`,
+      );
+
+      const install = spawnSync(
+        "bun",
+        [join(CURSOR_RELEASE_ROOT, "install.ts"), project],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        },
+      );
+      expect(install.status, install.stderr).toBe(0);
+
+      const hooks = JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf-8")) as {
+        hooks: Record<string, Array<{ command: string; failClosed?: boolean }>>;
+      };
+      expect(hooks.hooks.preToolUse).toEqual([
+        {
+          command: "aidlc engine adapter cursor guards",
+          failClosed: true,
+        },
+        userEntry,
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

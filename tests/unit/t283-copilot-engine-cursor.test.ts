@@ -97,14 +97,14 @@ function project(
     harness,
     tool,
     markerPath: withState
-      ? join(seededRecordDir(dir), ".aidlc-active-directive.json")
+      ? join(seededRecordDir(dir), ".aidlc-engine/active-directive.json")
       : join(
           dir,
           "aidlc",
           "spaces",
           "default",
           "intents",
-          ".aidlc-active-directive.json",
+          ".aidlc-engine/active-directive.json",
         ),
   };
 }
@@ -449,6 +449,11 @@ describe("t283 engine-owned continuation cursor", () => {
 
       expect(continueResult.directive.kind).not.toBe("error");
       expect(nextResult.directive.kind).toBe("load-steering");
+      // The `continue` advances the cursor to part two (one revision). The `next`
+      // after it cannot be told apart from an ask by a compacted context, so rather
+      // than hand back a middle part it restarts delivery at part one, which costs
+      // the second revision. Only a repeat ask AT part one is free.
+      expect((nextResult.directive as { part?: number }).part).toBe(1);
       expect(marker(installed).revision).toBe(beforeRevision + 2);
       assertMarkerMatchesDirective(installed, nextResult.directive);
     }
@@ -464,7 +469,9 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(nextResult.directive.kind).toBe("load-steering");
       expect(nextResult.directive.continue_token).toBe(token);
       expect(continueResult.directive.kind).not.toBe("error");
-      expect(marker(installed).revision).toBe(beforeRevision + 2);
+      // Same in the other order: the repeated `next` is free, the `continue` costs
+      // the one revision that actually advances the cursor.
+      expect(marker(installed).revision).toBe(beforeRevision + 1);
       assertMarkerMatchesDirective(installed, continueResult.directive);
     }
 
@@ -474,7 +481,7 @@ describe("t283 engine-owned continuation cursor", () => {
       const token = first.continue_token ?? "";
       const lockDir = join(
         seededRecordDir(installed.dir),
-        ".aidlc-active-directive.lock",
+        ".aidlc-engine/active-directive.lock",
       );
       const lockToken = randomUUID();
       mkdirSync(join(lockDir, lockToken), { recursive: true });
@@ -505,10 +512,13 @@ describe("t283 engine-owned continuation cursor", () => {
   test("fresh next emits no work directive when cursor reset publication contends", () => {
     const installed = project(HARNESSES[0]);
     invoke(installed, "next");
-    const before = readFileSync(markerPath(installed), "utf-8");
+    // Removing the marker makes publication genuinely necessary, which is the
+    // case this guarantee is about: a `next` that COULD NOT publish must never
+    // hand the conductor work anyway.
+    rmSync(markerPath(installed));
     const lockDir = join(
       seededRecordDir(installed.dir),
-      ".aidlc-active-directive.lock",
+      ".aidlc-engine/active-directive.lock",
     );
     const token = randomUUID();
     mkdirSync(join(lockDir, token), { recursive: true });
@@ -528,6 +538,40 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(blocked.message).toContain("no work directive was issued");
     expect(blocked.message).toContain("Retry the command");
     expect(blocked.message).not.toContain("Retry `next`");
+    expect(existsSync(markerPath(installed))).toBe(false);
+    expect(existsSync(lockDir)).toBe(true);
+  });
+
+  test("a repeated next answers from the issued directive without taking the coordination lock", () => {
+    const installed = project(HARNESSES[0]);
+    const first = invoke(installed, "next").directive;
+    const before = readFileSync(markerPath(installed), "utf-8");
+    const lockDir = join(
+      seededRecordDir(installed.dir),
+      ".aidlc-engine/active-directive.lock",
+    );
+    const token = randomUUID();
+    mkdirSync(join(lockDir, token), { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: true,
+        token,
+      }),
+    );
+
+    // Nothing to publish, so the query does not contend at all: it returns the
+    // directive already issued for this state, byte for byte, and the other
+    // holder's lock is left alone.
+    const repeated = invoke(installed, "next").directive;
+
+    expect(repeated.kind).toBe(first.kind);
+    expect(repeated.continue_token).toBe(first.continue_token);
+    expect((repeated as Record<string, unknown>).part).toBe(
+      (first as Record<string, unknown>).part,
+    );
     expect(readFileSync(markerPath(installed), "utf-8")).toBe(before);
     expect(existsSync(lockDir)).toBe(true);
   });
@@ -542,7 +586,7 @@ describe("t283 engine-owned continuation cursor", () => {
       const before = readFileSync(markerPath(installed), "utf-8");
       const lockDir = join(
         seededRecordDir(installed.dir),
-        ".aidlc-active-directive.lock",
+        ".aidlc-engine/active-directive.lock",
       );
       const lockToken = randomUUID();
       mkdirSync(join(lockDir, lockToken), { recursive: true });

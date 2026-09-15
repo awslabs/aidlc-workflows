@@ -36,8 +36,9 @@
 // per-unit branch resolves `none` and exercises the stage-level fallback -
 // exactly the receipt path the fingerprint filter protects.
 
-import { afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -57,10 +58,13 @@ import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
+  auditBlockField,
   gitCommitSourceListing,
   readAllAuditShards,
   sourceBaselineAuditFields,
   reviewArtifactFingerprint,
+  reviewRecordDigest,
+  type ReviewRecord,
   resolveStage,
   shapeSourceSnapshotIndex,
   workspaceSourceFingerprint,
@@ -82,6 +86,10 @@ import {
   seedStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+// The default also governs afterAll removal of a dozen-plus worktree fixtures,
+// which exceeds bun's 5s hook default under load; per-case literals stay.
+setDefaultTimeout(120_000);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -310,8 +318,8 @@ function seedTwoUnitDag(proj: string): void {
   );
 }
 
-// Strip the stamped Source Fingerprint field from every audit shard - the
-// exact shape of a pre-upgrade (legacy) REVIEW_COMPLETED row.
+// Rewrite the request/completion pair into the genuine pre-record appendix
+// shape: no request id, no named record, and an explicit appendix boundary.
 function stripFingerprintFields(proj: string): void {
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
   for (const intent of readdirSync(intentsDir)) {
@@ -320,11 +328,42 @@ function stripFingerprintFields(proj: string): void {
     for (const f of readdirSync(auditDirPath)) {
       if (!f.endsWith(".md")) continue;
       const p = join(auditDirPath, f);
-      const body = readFileSync(p, "utf-8");
-      if (!body.includes("**Source Fingerprint**: ")) continue;
-      writeFileSync(p, body.replace(/^\*\*Source Fingerprint\*\*: .*\r?\n/gm, ""), "utf-8");
+      const blocks = readFileSync(p, "utf-8").split(/\n---\n/).map((block) => {
+        if (!/\*\*Event\*\*: REVIEW_(?:REQUESTED|COMPLETED)/.test(block)) {
+          return block;
+        }
+        const stripped = block.replace(
+          /^\*\*(?:Source Fingerprint|Request Source Fingerprint|Request Id|Review Record|Review Record Digest)\*\*: .*\r?\n/gm,
+          "",
+        );
+        return `${stripped.trimEnd()}\n` +
+          "**Review Appendix Artifact**: construction/code-generation/code-generation-plan.md\n" +
+          "**Review Appendix Offset**: 0\n";
+      });
+      writeFileSync(p, blocks.join("\n---\n"), "utf-8");
     }
   }
+}
+
+function rewriteRecordedSourceBinding(proj: string, value: string): void {
+  const shard = seededAuditShard(proj);
+  let audit = readFileSync(shard, "utf-8");
+  const completion = audit
+    .split(/\n---\n/)
+    .find((block) => auditBlockField(block, "Event") === "REVIEW_COMPLETED");
+  if (completion === undefined) throw new Error("missing review completion");
+  const relativeRecord = auditBlockField(completion, "Review Record");
+  if (relativeRecord === null) throw new Error("missing review record path");
+  const path = join(seededRecordDir(proj), relativeRecord);
+  const record = JSON.parse(readFileSync(path, "utf-8")) as ReviewRecord;
+  record.source_fingerprint = value;
+  const bytes = `${JSON.stringify(record, null, 2)}\n`;
+  writeFileSync(path, bytes, "utf-8");
+  audit = audit.replace(
+    /^\*\*Review Record Digest\*\*: .*$/m,
+    `**Review Record Digest**: ${reviewRecordDigest(bytes)}`,
+  );
+  writeFileSync(shard, audit, "utf-8");
 }
 
 // Seed the minimum an intent registry needs for intentRepos() to resolve a
@@ -1050,14 +1089,10 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   }, 20000);
 
-  // #646 review P2 - the aidlc-workspace exclusion was top-level only. Before
-  // 2.6.94, type-check anchored `.aidlc-sensors/.tsbuildinfo` at the tsconfig
-  // dir, so a monorepo subpackage could retain an engine-written cache
-  // arbitrarily deep after upgrade. That legacy churn must not alter the
-  // fingerprint. The cache is matched by the path the engine wrote
-  // (sensorsDir -> docsRoot -> intentsDir -> workspaceRoot), not by its leaf
-  // name - see the sibling test below for why the leaf alone is unsafe.
-  test("excludes a nested .aidlc-sensors cache (any depth), but not real nested source", () => {
+  // Both old package-local caches and the new engine directory must stay out
+  // of source identity. Match their full record-tree shape, never the leaf
+  // name alone: unrelated application dot directories remain real source.
+  test.each([".aidlc-engine/sensors", ".aidlc-sensors"])("excludes a nested %s cache (any depth), but not real nested source", (sensorPath) => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
 
@@ -1065,7 +1100,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     // not at the workspace root. Before 2.6.94 the `services/backend` tsconfig
     // anchor gave the cache its own `aidlc/spaces/<space>/intents/` root.
     const cache = join(
-      dir, "services", "backend", "aidlc", "spaces", "default", "intents", ".aidlc-sensors",
+      dir, "services", "backend", "aidlc", "spaces", "default", "intents", sensorPath,
     );
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "tsbuildinfo"), "cache\n", "utf-8");
@@ -1075,7 +1110,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     // excluded by the same rule.
     const recordCache = join(
       dir, "services", "backend", "aidlc", "spaces", "default", "intents",
-      "add-login-ab12cd34", ".aidlc-sensors", "code-generation",
+      "add-login-ab12cd34", sensorPath, "code-generation",
     );
     mkdirSync(recordCache, { recursive: true });
     writeFileSync(join(recordCache, "required-sections-1.md"), "finding\n", "utf-8");
@@ -1092,15 +1127,12 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     expect(existsSync(src)).toBe(true);
   });
 
-  // #646 review - reproduction. Depth tolerance for the sensor cache was
-  // implemented as a bare `**/.aidlc-sensors/**` leaf match, which excludes ANY
-  // directory of that name - so an application tracking its own source under a
-  // dot-prefixed, framework-named directory could be edited or DELETED without
-  // moving the fingerprint, and a receipt bound to it stayed valid.
-  test("a .aidlc-sensors directory outside the engine's cache path is real source", () => {
+  // A bare leaf-name exclusion would hide real application source with the
+  // same directory name. Its edits and deletions must change the fingerprint.
+  test("a .aidlc-engine/sensors directory outside the engine's cache path is real source", () => {
     seedGitRepo(dir);
-    mkdirSync(join(dir, "src", ".aidlc-sensors"), { recursive: true });
-    const shipped = join(dir, "src", ".aidlc-sensors", "shipped.ts");
+    mkdirSync(join(dir, "src", ".aidlc-engine/sensors"), { recursive: true });
+    const shipped = join(dir, "src", ".aidlc-engine/sensors", "shipped.ts");
     writeFileSync(shipped, "export const rule = 1;\n", "utf-8");
 
     const fp1 = workspaceSourceFingerprint(dir);
@@ -1270,6 +1302,69 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     } finally {
       rmSync(external, { recursive: true, force: true });
     }
+  });
+
+  test("commit reconstruction preserves a batch header split at the 64 KiB refill boundary", () => {
+    git(dir, ["init", "-q", "--object-format=sha1"]);
+    git(dir, ["config", "user.email", "t@test"]);
+    git(dir, ["config", "user.name", "t"]);
+    const first = Buffer.alloc(65_482, 0x61);
+    const second = Buffer.alloc(65_482, 0x62);
+    const third = Buffer.from("tail\n");
+    const paths = [
+      "a-boundary.bin",
+      "b-split-header.bin",
+      "c-refill.bin",
+    ] as const;
+    for (const [path, bytes] of [
+      [paths[0], first],
+      [paths[1], second],
+      [paths[2], third],
+    ] as const) {
+      writeFileSync(join(dir, path), bytes);
+    }
+    git(dir, ["add", "--", ...paths]);
+    git(dir, ["commit", "-qm", "batch boundary"]);
+    const head = spawnSync(
+      "git",
+      ["-C", dir, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const oids = paths.map((path) =>
+      spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", `${head}:${path}`],
+        { encoding: "utf-8" },
+      ).stdout.trim()
+    );
+    const responseBytes = (oid: string, bytes: Buffer): number =>
+      Buffer.byteLength(`${oid} blob ${bytes.length}\n`, "ascii") +
+      bytes.length +
+      1;
+    const firstResponseBytes = responseBytes(oids[0], first);
+    const secondResponseBytes = responseBytes(oids[1], second);
+    const thirdResponseBytes = responseBytes(oids[2], third);
+
+    // The first response leaves byte 65,535 as the first byte of the second
+    // header. The next full refill reaches the third header and overwrites that
+    // borrowed buffer position, so a non-owning partial-line slice is corrupted.
+    expect(oids.every((oid) => /^[0-9a-f]{40}$/.test(oid))).toBe(true);
+    expect(firstResponseBytes).toBe(64 * 1024 - 1);
+    expect(secondResponseBytes).toBe(64 * 1024 - 1);
+    expect(secondResponseBytes - 1 + thirdResponseBytes).toBeGreaterThanOrEqual(
+      64 * 1024,
+    );
+    expect(oids[1][0]).not.toBe(oids[2][1]);
+
+    const listing = gitCommitSourceListing(dir, head, true);
+    expect([...(listing ?? new Map()).entries()]).toEqual(
+      paths.map((path, index) => [
+        `\0${path}`,
+        `100644 ${createHash("sha256")
+          .update([first, second, third][index])
+          .digest("hex")}`,
+      ]),
+    );
   });
 
   test("commit reconstruction never reads a symlinked worktree metadata target", () => {
@@ -1451,7 +1546,7 @@ process.stdin.on("data", (chunk) => {
     expect(workspaceSourceFingerprint(dir)).toBe(fp2); // and it is stable
   });
 
-  // #646 review - reproduction. Unlike .aidlc-sensors, `aidlc`/`.aidlc` are
+  // #646 review - reproduction. Unlike .aidlc-engine/sensors, `aidlc`/`.aidlc` are
   // anchored at the top level of the dir that CARRIES the workspace shell:
   // they never legitimately nest inside application source. An earlier fix
   // applied the any-depth glob to all four names alike, which silently
@@ -1656,7 +1751,7 @@ process.stdin.on("data", (chunk) => {
 
   // The depth-tolerant sensor-cache match is orthogonal to the shell split and
   // must survive it inside a registered repo, where no shell exclusion applies.
-  test("a nested .aidlc-sensors cache inside a registered sibling repo is still excluded", () => {
+  test("a nested .aidlc-engine/sensors cache inside a registered sibling repo is still excluded", () => {
     const repoA = join(dir, "repo-a");
     mkdirSync(repoA, { recursive: true });
     seedGitRepo(repoA);
@@ -1664,18 +1759,18 @@ process.stdin.on("data", (chunk) => {
 
     const fp1 = workspaceSourceFingerprint(dir);
     const cache = join(
-      repoA, "packages", "pkg", "aidlc", "spaces", "default", "intents", ".aidlc-sensors",
+      repoA, "packages", "pkg", "aidlc", "spaces", "default", "intents", ".aidlc-engine/sensors",
     );
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "tsbuildinfo"), "cache\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
-    // ...while a `.aidlc-sensors` directory that is NOT on the engine's cache
+    // ...while a `.aidlc-engine/sensors` directory that is NOT on the engine's cache
     // path stays real source inside a registered repo too - the sibling-repo
     // walk uses the same rule, so the leaf-name blind spot cannot survive here.
-    mkdirSync(join(repoA, "src", ".aidlc-sensors"), { recursive: true });
+    mkdirSync(join(repoA, "src", ".aidlc-engine/sensors"), { recursive: true });
     writeFileSync(
-      join(repoA, "src", ".aidlc-sensors", "shipped.ts"),
+      join(repoA, "src", ".aidlc-engine/sensors", "shipped.ts"),
       "export const rule = 1;\n",
       "utf-8",
     );
@@ -1983,6 +2078,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
     recordReview(proj);
     const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, "unbindable");
     writeFileSync(
       shard,
       readFileSync(shard, "utf-8")
@@ -1998,7 +2094,10 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     );
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("project source changed after");
+    expect(r.out).toContain("reviewed source boundary could not be fingerprinted");
+    expect(r.out).toContain(".aidlc-source-paths.json");
+    expect(r.out).not.toContain("project source changed after");
+    expect(r.out).not.toContain("revert the source change");
   }, 60_000);
 
   test("a true advance replay stays idempotent even if source later changes", () => {
@@ -2474,8 +2573,8 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
-    expect(dirty.out).toContain("To change this document");
-    expect(dirty.out).toContain("Request Changes decision");
+    expect(dirty.out).toContain('Ask \\"What should change?\\" for stage \\"code-generation\\"');
+    expect(dirty.out).toContain("their exact text unchanged");
   }, 60_000);
 });
 

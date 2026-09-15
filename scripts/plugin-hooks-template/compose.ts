@@ -204,7 +204,7 @@ async function resolveHealthDir(): Promise<string> {
   if (typeof lib?.hooksHealthDir === "function") {
     dir = lib.hooksHealthDir(PROJECT_DIR);
   } else {
-    dir = join(PROJECT_DIR, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    dir = join(PROJECT_DIR, "aidlc", "spaces", "default", "intents", ".aidlc-engine", "hooks-health");
   }
   _healthDir = dir;
   return dir;

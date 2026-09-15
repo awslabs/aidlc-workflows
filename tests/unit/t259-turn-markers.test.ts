@@ -6,12 +6,12 @@
 // history, so the same predicate is reconstructed from two mtimes the framework
 // writes on seams that already exist:
 //
-//   conversational  <=>  mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+//   conversational  <=>  mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
 //
 // WHY THIS FILE EXISTS AS A SEPARATE UNIT TIER. t121 drives the real Stop hook,
 // but it does so against a MOCK engine that never calls markEngineTouch. That
 // makes t121 structurally incapable of pinning the LIB half of the contract:
-// its `.aidlc-engine-touch` cannot be refreshed by the hook's probe no matter
+// its `.aidlc-engine/engine-touch` cannot be refreshed by the hook's probe no matter
 // what the spawn env carries, so an mtime-equality assertion there passes even
 // with the probe marking deleted (proved by mutation in review of #687). t121
 // now pins the HOOK half with an env witness; this file pins the LIB half

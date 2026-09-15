@@ -37,7 +37,103 @@ export type RuntimeRecord = {
   cliPath?: string;
 };
 
-export type ProviderKind = "amazon-bedrock" | "other";
+// `builtin` records that the harness provides its own model access. It applies
+// only to the harnesses that actually do, which is Kiro CLI and Kiro IDE; the
+// Bedrock-oriented harnesses use the model-preset step's `unchanged` shape
+// instead, recording nothing and keeping what is already in place.
+export type ProviderKind = "amazon-bedrock" | "builtin" | "other";
+
+// The harnesses whose MODEL ACCESS belongs to their own product licence, so
+// AI-DLC has no provider decision to put to the user. Kiro CLI and Kiro IDE
+// ship this way: they provide their own model access, AI-DLC writes nothing
+// about it, and on Kiro CLI a recorded Bedrock answer moves exactly one value, the
+// region inside the `aws-mcp` entry of `.kiro/settings/mcp.json`, a server that
+// ships disabled and is off by default on every non-Claude harness.
+//
+// Every OTHER harness is Bedrock-oriented and must still be asked. Claude Code,
+// Codex CLI, and OpenCode take region and profile bytes directly. GitHub
+// Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
+// which is manual work AI-DLC tracks rather than performs. Never assume those
+// are on the harness's own access.
+const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
+  "kiro",
+  "kiro-ide",
+]);
+
+export function harnessOwnsModelAccess(harness: ModelHarness): boolean {
+  return HARNESS_OWNED_MODEL_ACCESS.has(harness);
+}
+
+// Per-harness wording for the provider question, so each install offers the two
+// paths that actually exist for it in its own vocabulary rather than one generic
+// list. `ownedNote` is present only where the model belongs to the harness's own
+// licence, and is what the wizard prints INSTEAD of asking.
+export type ProviderMenuCopy = {
+  // Present only where the harness's own licence serves the models. `fact` is
+  // the statement both surfaces share; the guided wizard adds that there is
+  // nothing to choose and asks nothing, while the explicit section adds
+  // `sectionHint`, because deliberately naming the section still offers the
+  // menu and the user deserves to know what answering would actually change.
+  // `builtin` is present only alongside `owned`: it is the recordable statement
+  // that this harness serves its own models.
+  owned?: { fact: string; sectionHint: string; builtin: string };
+  bedrock: string;
+};
+
+// Every line describes what recording the answer DOES, never which vendor the
+// user is presumed to be on. Naming one would be a guess: Claude Code also runs
+// on Vertex AI, Codex on Azure, and OpenCode on anything it has a provider for.
+export function providerMenuCopy(
+  harness: ModelHarness,
+  product: string,
+): ProviderMenuCopy {
+  switch (harness) {
+    case "claude":
+      return {
+        bedrock: "records the AWS region and profile in settings.json, and the AWS MCP region in .mcp.json when present",
+      };
+    case "codex":
+      return {
+        bedrock: "records the AWS region and profile in config.toml",
+      };
+    case "opencode":
+      // opencode.json is written only when the follow-up offer is accepted; the
+      // record itself always carries the region and profile.
+      return {
+        bedrock: "records the AWS region and profile, and offers to write them to opencode.json",
+      };
+    case "copilot":
+      // Copilot reaches Bedrock through BYOK environment variables that AI-DLC
+      // cannot set, so that branch is tracked as manual work, not performed.
+      return {
+        bedrock: "records that you set the Copilot BYOK provider variables yourself",
+      };
+    case "cursor":
+      return {
+        bedrock: "records that you configure the provider in Cursor yourself",
+      };
+    case "kiro":
+      return {
+        owned: {
+          fact: `${product} provides its own model access, so AI-DLC configures none for it.`,
+          sectionHint: "Answer only to change the AWS MCP region.",
+          builtin: `records that ${product} provides its own model access`,
+        },
+        bedrock: "records the AWS MCP region only; model access is unaffected",
+      };
+    case "kiro-ide":
+      return {
+        owned: {
+          fact:
+            `${product} provides its own model access, chosen in the IDE model picker, ` +
+            "so AI-DLC configures none for it.",
+          sectionHint: "Answer only to record the IDE model-picker step.",
+          builtin: `records that ${product} provides its own model access`,
+        },
+        bedrock: "records picking a Bedrock chat model in the IDE as a manual step",
+      };
+  }
+}
 export type ProviderPendingStatus = "pending" | "done";
 export type ProviderPendingAction = {
   id: string;
@@ -86,6 +182,33 @@ function invocationForHarness(harnessDir: string): string {
   return aidlcInvocation() === "aidlc"
     ? "aidlc"
     : `bun ${harnessDir}/tools/aidlc.ts`;
+}
+
+// The one command that rebuilds a missing workspace shell: an explicit
+// `--harness` refresh, which goes through the refresh transaction instead of the
+// interactive existing-projection walk. Every surface that names the rebuild
+// (doctor row, setup map, trust issue) renders it from here.
+//
+// The `--from` clause is added only for a projection that invokes through the
+// bun dispatcher, because a native install refreshes from its installed runtime
+// with no `--from` at all. Bun-invoking bytes come from two places, and the
+// placeholder names both: the `runtime/<harness>/` root extracted from the
+// manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` asset, which is built from the
+// `dist/` projections, or a checkout's own `dist/<harness>/` tree. Either keeps
+// the project on the Bun channel; the native `aidlc-runtime-X.Y.Z.tar.gz` and
+// `dist-release/` trees are the wrong source here, since refreshing from them
+// would swap the hooks and tools to the `aidlc` command. Without `--from` the
+// bun projection stops at "refreshing project files needs release source
+// bytes", the state this remedy exists to end.
+export function workspaceShellRefreshCommand(
+  harnessDir: string,
+  distribution: string,
+): string {
+  const invoke = invocationForHarness(harnessDir);
+  const from = invoke === "aidlc"
+    ? ""
+    : ` --from <the runtime/${distribution}/ root you copied from, or a checkout's dist/${distribution}/ tree>`;
+  return `${invoke} config --harness ${distribution}${from}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -303,8 +426,12 @@ export function normalizeProvidersRecord(value: unknown): ProvidersRecord | null
   }
   const out: ProvidersRecord = { schemaVersion: 1 };
   if (value.provider !== undefined) {
-    if (value.provider !== "amazon-bedrock" && value.provider !== "other") {
-      throw new Error("providers.provider must be amazon-bedrock or other");
+    if (
+      value.provider !== "amazon-bedrock" &&
+      value.provider !== "builtin" &&
+      value.provider !== "other"
+    ) {
+      throw new Error("providers.provider must be amazon-bedrock, builtin, or other");
     }
     out.provider = value.provider;
   }
@@ -554,9 +681,15 @@ function runtimeRemediation(
   platform: NodeJS.Platform,
 ): string {
   if (name === "bun") {
+    // Only a copy-channel projection runs its hooks through bun; a native
+    // install routes them through `aidlc`. Say so, because a user who never
+    // chose the copy channel cannot otherwise tell why Bun is being asked for.
+    const channel =
+      "This project is a copy-channel projection, so its hooks run through Bun; " +
+      "a native install runs them through the aidlc command instead. ";
     return platform === "win32"
-      ? "Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile."
-      : "Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.";
+      ? `${channel}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
+      : `${channel}Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.`;
   }
   return platform === "win32"
     ? "Add the aidlc command directory to the Windows User or Machine PATH."
@@ -897,6 +1030,8 @@ export function requiredProviderActions(
   harness: ModelHarness,
 ): ProviderPendingActionId[] {
   if (record.provider === "other") return ["non-bedrock-provider-configuration"];
+  // The harness provides its own model access: nothing to write, nothing to do.
+  if (record.provider === "builtin") return [];
   if (record.provider !== "amazon-bedrock") return [];
   const actions: ProviderPendingActionId[] = ["bedrock-model-access"];
   if (harness === "kiro-ide") actions.push("kiro-ide-chat-model");
@@ -1664,9 +1799,15 @@ export function codexTrustIssues(
   }];
 }
 
+// A missing sibling is repaired by the same `--harness` refresh as a missing
+// shell. The old remediation was a bare `aidlc config`, which on a project that
+// already has a harness directory takes the interactive walk and rebuilds
+// nothing. `harnessDir` selects the channel-correct command; callers without one
+// (tests) get the native spelling.
 export function workspaceSiblingIssues(
   projectDir: string,
   harness: ModelHarness,
+  harnessDir?: string,
 ): DiagnosticIssue[] {
   const required: Array<{ id: string; path: string; reason: string }> = [{
     id: "workspace-root-missing",
@@ -1690,7 +1831,11 @@ export function workspaceSiblingIssues(
   return required.filter((item) => !existsSync(item.path)).map((item) => ({
     id: item.id,
     message: `${item.reason} is missing at ${item.path}`,
-    remediation: `Run aidlc config to restore the complete ${harness} projection, including sibling directories.`,
+    remediation: `Run ${
+      harnessDir
+        ? workspaceShellRefreshCommand(harnessDir, harness)
+        : `aidlc config --harness ${harness}`
+    } to restore the complete ${harness} projection, including sibling directories.`,
   }));
 }
 
@@ -1751,7 +1896,7 @@ export function trustStatus(
   harness: ModelHarness,
   env: NodeJS.ProcessEnv = process.env,
 ): TrustStatus {
-  const issues = workspaceSiblingIssues(projectDir, harness);
+  const issues = workspaceSiblingIssues(projectDir, harness, harnessDir);
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
   }
@@ -1784,7 +1929,9 @@ export function trustStatus(
 }
 
 export type ConfigOutstandingAction = {
-  section: "runtime" | "trust" | "providers";
+  // "workspace" is reported, never walked: there is no wizard that can answer
+  // it, only a refresh that recreates the missing shell.
+  section: "runtime" | "trust" | "providers" | "models" | "workspace";
   id: string;
   message: string;
   command: string;
@@ -2125,8 +2272,12 @@ export function providerDoctorCheck(
     return issues.length === 0
       ? {
           pass: true,
+          // Same rule as the map row and `--check`: an unrecorded section is a
+          // gap only where AI-DLC configures the provider.
           label: record
             ? "Providers: recorded answers have no unmet actions"
+            : harnessOwnsModelAccess(selected.harness)
+            ? "Providers: harness-managed model access; no answer needed"
             : "Providers: using shipped fallback; no recorded answers",
         }
       : {
@@ -2244,7 +2395,7 @@ export function workspaceSiblingDoctorCheck(
   if (!selected) {
     return { pass: true, label: "Workspace siblings: no installed project harness" };
   }
-  const issues = workspaceSiblingIssues(projectDir, selected.harness);
+  const issues = workspaceSiblingIssues(projectDir, selected.harness, selected.harnessDir);
   return issues.length === 0
     ? { pass: true, label: "Workspace siblings: complete projection is present" }
     : {

@@ -4,7 +4,6 @@
 // covers: function:KNOWN_HARNESS_DIRS, hook:aidlc-rebuild-stage-graph
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -34,6 +33,7 @@ import {
   inspectSubagentInflight,
   subagentInflightMarkerPath,
   writeSessionBinding,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 
@@ -86,7 +86,7 @@ function seedUnapprovedCodeGeneration(root: string): void {
   writeActiveDirectiveMarker(root, {
     kind: "run-stage",
     stage: "code-generation",
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
 }
 
@@ -132,6 +132,8 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-settings.ts",
       "aidlc-install-paths.ts",
       "aidlc-distribution.ts",
+      "aidlc-channel.ts",
+      "aidlc-version.ts",
     ]) {
       copyFileSync(
         join(REPO_ROOT, "core", "tools", dependency),
@@ -244,7 +246,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         "spaces",
         "default",
         "intents",
-        ".aidlc-hooks-health",
+        ".aidlc-engine/hooks-health",
         "hook-debug.log",
       ),
       "utf-8",
@@ -301,8 +303,9 @@ describe("t241 OpenCode adapter reviewer scope", () => {
     mkdirSync(dirname(sibling), { recursive: true });
     writeFileSync(current, "# current\n", "utf-8");
     writeFileSync(sibling, "# sibling\n", "utf-8");
+    mkdirSync(dirname(join(recordRoot, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(recordRoot, ".aidlc-reviewer-dispatch.json"),
+      join(recordRoot, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",

@@ -40,6 +40,9 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. |
 | `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A valid continuation resumes on the next command; do not delete its temp journal, cleanup script, or machine fence independently. |
 | Alpine reports missing `libstdc++.so.6` or `libgcc_s.so.1` | Install the same runtime dependencies required by Bun's and Node.js's musl builds with `apk add libgcc libstdc++`, then rerun the installer or command. Fully static Bun musl compile targets are not available today; the installer reports this remediation but does not install packages. |
+| `Providers` shows `[needs]` with `no recorded answers` although the harness already has its own model access | On Kiro CLI and Kiro IDE the row reads `[ok]` and the wizard never asks, because those harnesses provide their own model access. On every other harness the row is genuine, since they are Bedrock-oriented: answer `amazon-bedrock`, or choose `unchanged` to keep the shipped fallback (the row stays `[needs]` until an answer is recorded). `aidlc config providers --provider builtin --yes` is only for a harness that really provides its own model access; it records no provider settings and leaves no pending action. `--provider other --acknowledge` is for a provider you configured yourself. |
+| `workspace shell ready` fails in `aidlc doctor` and rerunning `aidlc config` does not fix it | The interactive rerun uses the existing projection and never rebuilds a missing `aidlc/spaces/default/memory/`; while the shell is incomplete it reports a `Workspace` row and offers no sections to fix. Run the command that row names. On a native install that is `aidlc config --harness <name>`, which refreshes from the installed runtime and recreates the workspace shell. A Bun-invoking projection, copied from the `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's `dist/<name>/` tree, has no installed runtime to refresh from, so its command also carries `--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`; without it the run stops at `refreshing project files needs release source bytes`. Point it at the same kind of tree you copied from, not at the native `aidlc-runtime-X.Y.Z.tar.gz` or `dist-release/` bytes, or the refresh swaps the project's hooks to the native command. |
+| `aidlc doctor` asks for Bun on a project you did not install through the copy channel | Copy-channel projections run hooks through Bun; native installs run them through the `aidlc` command. The remediation names which channel the project is on. To stop needing Bun, reinstall through the native release installer and rerun `aidlc config --harness <name>`. |
 | `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun `aidlc config`. `--force`, `--yes`, and a plan token cannot bypass this guard. `update` or `use` may proceed because they do not modify projects. |
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
 | `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. |
@@ -102,7 +105,13 @@ Only the Claude Code administrator can lift this managed setting. After hooks ar
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+
+Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
+
+### Sensors are not firing
+
+Check the **Sensors** row in `/aidlc --status`. The `classic` scope defaults to Sensors on. If an intent override or kill switch turns Sensors off, automatic write-time checks, gate-start checks, revision checks, and approve-time revision-backstop checks do not run. `/aidlc --sensors on` opts the active intent back in. `AIDLC_DISABLE_SENSORS=1` takes precedence over that intent setting; unset it (and any recorded project bypass) to allow automatic checks again. All hooks stay installed, and explicit `aidlc engine sensor fire` remains available for diagnostics even when automatic sensors are off.
 
 ### Statusline shows a cost segment you don't want (or usage tracking concerns)
 
@@ -116,7 +125,8 @@ events and `statusLine`. For a native project, complete active workflows and
 run `aidlc config` to reconcile framework-owned wiring. For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive while preserving project root integrations; do
-not patch one hook command in isolation.
+not patch one hook command in isolation. The manual archive is Bun-shaped and
+does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
 
@@ -147,6 +157,7 @@ The `validate-state.ts` hook checks for two required sections on every compactio
 1. Run `/aidlc --doctor` and address any reported state, graph, or hook issues
 2. If the generated Stage Progress rows are stale, re-run the engine path that owns state resync: start or resume the workflow with `/aidlc`, or change scope through `/aidlc --scope <scope>` so the compiled graph and scope grid are reapplied
 3. Use `.claude/knowledge/aidlc-shared/state-template.md` only as the section and field contract; do not restore stage rows by hand from the template
+4. If the record cannot be repaired, retire it with `/aidlc intent archive <name>` (its record dir under `aidlc/spaces/<space>/intents/` is preserved) and run `/aidlc` to start fresh
 
 ---
 
@@ -208,6 +219,58 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### Plan Approval asked twice for the same plan
+
+**Symptom**: Code Generation presents the Plan Approval question again for a plan
+you already approved.
+
+Plan Approval binds to the plan, unit test instructions, and Testing Contract
+content, to the target, and to the current stage attempt. It is NOT reopened by
+re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hook
+probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
+either, and recording a review never touches the plan.
+
+If you are asked again, one of these moved:
+
+- the plan content (anything beyond a ticked task marker, or a terminal
+  `## Review` section left by a review recorded before review records existed)
+- the unit-test instructions content, any byte of it: the instructions are handed
+  to the developer in full, so they bind byte-exactly, and a section appended to
+  them after approval reopens it
+- the Testing Posture, scope, test strategy, or project type
+- the active Unit or stage target
+- the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
+  workflow restart
+- the workspace source, if it changed after the plan was fingerprinted
+
+The refusal message names which one. On a workspace-source change the remedy is
+always the same: re-run the fingerprint command, record both tags it prints, and
+present the plan again. A fingerprint recorded by an older version of the tool
+reads as "was written under an earlier format" and needs the same re-run.
+
+### Plan Approval cannot be recorded and the remedies do not help
+
+**Symptom**: you chose "Approve Plan" but the receipt command keeps refusing,
+for example because the workspace source cannot be bound ("unbindable") or the
+response was orphaned by a re-run decision.
+
+Every refusal lists its remedies in order. Try the repair remedies first: repair
+the source boundary the message names (shrink or exclude the offending path,
+declare real source under an excluded directory in `.aidlc-source-paths.json`,
+remove a broken symlink), re-run the fingerprint command, and let the plan be
+presented again. `/aidlc --doctor` has a "Workspace source boundary binds" check
+that names the failing path.
+
+The last remedy is the break-glass exit, and only you can open it. Type exactly
+`Override Plan Approval: <your reason>` as a chat message (a picked option does
+not count). The conductor then runs the same receipt command with
+`--override "<your reason>"`; the engine checks that the typed phrase exists for
+this session with the same reason, records `PLAN_APPROVAL_OVERRIDDEN` together with
+the checks it overrode, and writes a receipt bound to the plan content and stage
+attempt only. The typed phrase is single-use. The conductor never proposes or
+initiates this; if you did not type the phrase, the command refuses with "Plan
+Approval override is human-only".
+
 ---
 
 ## Context Compaction
@@ -216,14 +279,14 @@ section. The gate remains closed until the matching verdict is recorded.
 
 ### What is preserved
 
-All record-dir artifacts, `aidlc-state.md`, the `audit/` shards, and `.aidlc-recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
+All record-dir artifacts, `aidlc-state.md`, the `audit/` shards, and `.aidlc-engine/recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
 
 ### How to recover
 
 Run `/aidlc` after compaction. The framework:
 
 1. Reads `aidlc-state.md` to load workflow position
-2. Compares `.aidlc-recovery.md` against the state file — warns if they differ
+2. Compares `.aidlc-engine/recovery.md` against the state file - warns if they differ
 3. Offers four resume options
 
 If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to safely re-execute the stage that was in progress during compaction.

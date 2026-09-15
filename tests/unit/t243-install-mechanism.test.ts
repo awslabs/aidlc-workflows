@@ -5,12 +5,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -113,11 +114,12 @@ function releaseBinaryName(): string {
   return `aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
 }
 
+// Removing the accumulated temporary trees can exceed bun's 5s hook default.
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+}, 120_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
 // the canonical temp root (macOS aliases /var to /private/var).
@@ -1188,15 +1190,21 @@ describe("t243 project initialization", () => {
     expect(readFileSync(target)).toEqual(before);
     expect(readdirSync(project).sort()).toEqual(rootEntries);
 
-    writeFileSync(state, readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Completed"));
-    const completed = run(INIT, [
+    writeFileSync(
+      state,
+      readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Archived"),
+    );
+    const registry = JSON.parse(readFileSync(join(intentsDir, "intents.json"), "utf-8"));
+    registry[0].status = "archived";
+    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    const archived = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
       newer,
     ], project);
-    expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+    expect(archived.status, archived.stdout + archived.stderr).toBe(0);
     expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
   }, 60_000);
 
@@ -1308,7 +1316,7 @@ describe("t243 project initialization", () => {
     };
     expect(merged.mcpServers.context7).toEqual(custom);
     expect(merged.projectSetting).toBe(true);
-  });
+  }, 60_000);
 
   test("MCP consent and managed AGENTS blocks preserve user-owned configuration", () => {
     const claudeProject = temp("aidlc-t240-mcp-matrix-");
@@ -2001,6 +2009,118 @@ describe("t243 release lifecycle", () => {
     }
   });
 
+  test("a packaged Unix preview installer downloads its own release without an explicit version", async () => {
+    if (process.platform === "win32") return;
+    const preview = `${NEXT_VERSION}-preview.20260914.7`;
+    const release = fixtureRelease(preview);
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    writeFileSync(
+      binaryPath,
+      [
+        "#!/bin/sh",
+        `if [ "$1" = "version" ]; then printf 'aidlc %s (runtime %s)\\n' '${preview}' '${preview}'; exit 0; fi`,
+        'if [ "$1" = "system" ] && [ "$2" = "lifecycle" ] && [ "$3" = "install-apply" ]; then',
+        '  mkdir -p "$AIDLC_BIN_DIR"',
+        '  cp "$0" "$AIDLC_BIN_DIR/aidlc"',
+        '  chmod 755 "$AIDLC_BIN_DIR/aidlc"',
+        "  exit 0",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      assets: Array<{ name: string; sha256: string; bytes: number }>;
+    };
+    const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+    expect(binaryAsset).toBeDefined();
+    if (!binaryAsset) return;
+    binaryAsset.sha256 = digest(binaryPath);
+    binaryAsset.bytes = statSync(binaryPath).size;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(
+      join(release, "checksums.txt"),
+      `${[
+        "version.json",
+        ...manifest.assets.map((asset) => asset.name),
+      ].map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+    );
+    const installer = join(temp("aidlc-t243-packaged-installer-"), "install.sh");
+    const marker = "PACKAGED_VERSION=''";
+    const source = readFileSync(INSTALLER, "utf-8");
+    expect(source.split(marker)).toHaveLength(2);
+    writeFileSync(
+      installer,
+      source.replace(marker, `PACKAGED_VERSION='${preview}'`),
+      { mode: 0o755 },
+    );
+    // The child PATH below is deliberately bare so the packaged installer proves
+    // it needs nothing beyond POSIX tools. That also drops tests/fixtures/bin,
+    // so `command -v gh` finds the runner's real GitHub CLI, whose attestation
+    // flags make install.sh verify the fixture bundle for real and fail. Hand
+    // the installer the fixture verifier through AIDLC_GH_BIN instead, spelled
+    // with the absolute Bun path so it resolves under that PATH, and log every
+    // call so the test proves provenance verification ran rather than the
+    // installer degrading to checksums because its help probe failed.
+    const ghDir = temp("aidlc-t243-packaged-installer-gh-");
+    const ghCalls = join(ghDir, "calls.log");
+    const ghBin = join(ghDir, "gh");
+    writeFileSync(
+      ghBin,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >>${JSON.stringify(ghCalls)}`,
+        `exec ${JSON.stringify(BUN)} ${JSON.stringify(FIXTURE_GH)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const server = serveReleaseFixture(release);
+    const machine = temp("aidlc-t243-packaged-installer-machine-");
+    try {
+      const child = Bun.spawn([
+        "sh",
+        installer,
+        "--release-base-url",
+        server.baseUrl,
+        "--quiet",
+      ], {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+          NO_PROXY: "127.0.0.1",
+          AIDLC_INSTALL_ROOT: machine,
+          AIDLC_BIN_DIR: join(machine, "bin"),
+          AIDLC_GH_BIN: ghBin,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect(status, `${stdout}${stderr}`).toBe(0);
+      expect(stdout).toContain(`installed AI-DLC ${preview}`);
+      expect(server.requests).toContain(`/download/v${preview}/version.json`);
+      expect(server.requests).not.toContain("/latest/download/version.json");
+      // Help probe, then the two verify passes install.sh runs: bare, and with
+      // the manifest's source ref and digest.
+      const calls = readFileSync(ghCalls, "utf-8").trim().split("\n");
+      expect(calls[0]).toBe("attestation verify --help");
+      expect(calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help")))
+        .toHaveLength(2);
+      expect(calls.at(-1)).toContain("--source-ref refs/heads/main --source-digest ");
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
+
   test("route network policy blocks acquisition before opening a socket", async () => {
     const priorPolicy = process.env.AIDLC_ROUTE_NETWORK_POLICY;
     const priorId = process.env.AIDLC_ROUTE_ID;
@@ -2216,7 +2336,7 @@ describe("t243 release lifecycle", () => {
     }
   });
 
-  test("release manifests reject retired per-distribution data assets", () => {
+  test("release readers tolerate unselected future assets but validate selected metadata", () => {
     const release = fixtureReleaseBytes();
     const manifestPath = join(release, "version.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
@@ -2230,7 +2350,63 @@ describe("t243 release lifecycle", () => {
       distribution: "claude",
     });
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    expect(() => readReleaseManifest(release)).toThrow("invalid asset metadata");
+    expect(readReleaseManifest(release).assets.at(-1)).toEqual(
+      expect.objectContaining({ name: "aidlc-data-claude.tgz", kind: "data" }),
+    );
+
+    const invalidSelected = fixtureReleaseBytes();
+    const invalidManifestPath = join(invalidSelected, "version.json");
+    const invalidManifest = JSON.parse(readFileSync(invalidManifestPath, "utf-8")) as {
+      assets: Array<Record<string, unknown>>;
+    };
+    const runtime = invalidManifest.assets.find((asset) => asset.kind === "runtime");
+    expect(runtime).toBeDefined();
+    if (!runtime || typeof runtime.name !== "string") return;
+    runtime.kind = "future-runtime";
+    writeFileSync(
+      invalidManifestPath,
+      `${JSON.stringify(invalidManifest, null, 2)}\n`,
+    );
+    const checksumsPath = join(invalidSelected, "checksums.txt");
+    writeFileSync(
+      checksumsPath,
+      readFileSync(checksumsPath, "utf-8").replace(
+        /^[a-f0-9]{64} {2}version\.json$/m,
+        `${digest(invalidManifestPath)}  version.json`,
+      ),
+    );
+    expect(() => verifyReleaseDirectory(invalidSelected, [runtime.name as string]))
+      .toThrow("invalid selected runtime metadata");
+
+    const invalidBinary = fixtureReleaseBytes();
+    const invalidBinaryManifestPath = join(invalidBinary, "version.json");
+    const invalidBinaryManifest = JSON.parse(
+      readFileSync(invalidBinaryManifestPath, "utf-8"),
+    ) as {
+      assets: Array<Record<string, unknown>>;
+    };
+    const binary = invalidBinaryManifest.assets.find((asset) => asset.kind === "binary");
+    expect(binary).toBeDefined();
+    if (!binary || typeof binary.name !== "string") return;
+    binary.verification = {
+      status: "TRUSTED",
+      mode: "full-runtime",
+      hostTarget: "test-host",
+    };
+    writeFileSync(
+      invalidBinaryManifestPath,
+      `${JSON.stringify(invalidBinaryManifest, null, 2)}\n`,
+    );
+    const binaryChecksumsPath = join(invalidBinary, "checksums.txt");
+    writeFileSync(
+      binaryChecksumsPath,
+      readFileSync(binaryChecksumsPath, "utf-8").replace(
+        /^[a-f0-9]{64} {2}version\.json$/m,
+        `${digest(invalidBinaryManifestPath)}  version.json`,
+      ),
+    );
+    expect(() => verifyReleaseDirectory(invalidBinary, [binary.name as string]))
+      .toThrow("invalid selected release asset metadata");
   });
 
   test("release client classifies HTTP failures, follows redirects, and enforces metadata timeout", async () => {
@@ -2648,7 +2824,9 @@ describe("t243 release lifecycle", () => {
       const file = walkFiles(runtime).find((path) =>
         !path.endsWith("aidlc-stamp.json")
       ) as string;
-      writeFileSync(join(runtime, file), `${readFileSync(join(runtime, file), "utf-8")}\ntampered\n`);
+      const filePath = join(runtime, file);
+      const originalContent = readFileSync(filePath);
+      writeFileSync(filePath, Buffer.concat([originalContent, Buffer.from("\ntampered\n")]));
 
       const inspection = inspectInstalledVersion(AIDLC_VERSION);
       expect(inspection.complete).toBe(false);
@@ -2660,6 +2838,23 @@ describe("t243 release lifecycle", () => {
         message: `this project requires ${AIDLC_VERSION}, which is not installed completely`,
         remediation: `aidlc config --pin ${AIDLC_VERSION}`,
       }));
+
+      writeFileSync(filePath, originalContent);
+      expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+
+      // Mode drift is also a baseline violation. Same-release identity during
+      // `aidlc update` compares content only, so this is where modes are enforced.
+      if (process.platform !== "win32") {
+        const before = statSync(filePath).mode & 0o777;
+        chmodSync(filePath, before === 0o600 ? 0o644 : 0o600);
+        const modeDrift = inspectInstalledVersion(AIDLC_VERSION);
+        expect(modeDrift.complete).toBe(false);
+        expect(modeDrift.reason).toBe(
+          `runtime file ${file.replaceAll("\\", "/")} does not match the installed baseline`,
+        );
+        chmodSync(filePath, before);
+        expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+      }
     } finally {
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
@@ -3736,6 +3931,7 @@ describe("t243 projection channel", () => {
           "sha256:f2affb8b34499f057284852456cb8a24ae586b8e816595bf98346141f3516281",
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
           "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
+          "sha256:1d51ae4ca4f74f842336dce75bc66bb4bbf55ce2de7c802ab059504cca99fd7b",
         ],
       },
       codex: {
@@ -3755,6 +3951,9 @@ describe("t243 projection channel", () => {
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
           "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
+          "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
+          "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
+          "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
         ],
       },
       kiro: {
@@ -3769,6 +3968,9 @@ describe("t243 projection channel", () => {
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
+          "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
+          "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
+          "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
         ],
       },
       "kiro-ide": {
@@ -3783,6 +3985,9 @@ describe("t243 projection channel", () => {
           "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
           "sha256:990d80744904bfa3f9923b8a04bbb2e69b454154346915edca1e1a4ef7e31c07",
           "sha256:025c596b2f44b688a329d419b5cd39fd2ee2a6d6cae4e6491dc6cd0f663c04ea",
+          "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
+          "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
+          "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
         ],
       },
     };
@@ -3933,13 +4138,15 @@ describe("t243 projection channel", () => {
       join(CURSOR_RELEASE, ".cursor", "hooks.json"),
       "utf-8",
     );
-    expect(cursorHooks).toContain(trustedCommand("hook cursor-adapter"));
+    expect(cursorHooks).toContain(trustedCommand("adapter cursor"));
+    expect(cursorHooks).not.toContain("engine hook cursor-adapter");
     expect(cursorHooks).not.toContain("bun .cursor/hooks/");
     const copilotHooks = readFileSync(
       join(COPILOT_RELEASE, ".github", "hooks", "aidlc.json"),
       "utf-8",
     );
-    expect(copilotHooks).toContain(trustedCommand("hook copilot-adapter"));
+    expect(copilotHooks).toContain(trustedCommand("adapter copilot"));
+    expect(copilotHooks).not.toContain("engine hook copilot-adapter");
     expect(copilotHooks).not.toContain("bun .aidlc/hooks/");
     const opencode = JSON.parse(
       readFileSync(join(OPENCODE_RELEASE, "opencode.json"), "utf-8"),

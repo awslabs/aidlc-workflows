@@ -94,6 +94,22 @@ function listIntentDirs(projectDir: string, space: string): string[] {
   }
 }
 
+function intentIsArchived(
+  projectDir: string,
+  space: string,
+  intent: string,
+): boolean {
+  try {
+    const state = readFileSync(
+      join(intentsDir(projectDir, space), intent, "aidlc-state.md"),
+      "utf-8",
+    );
+    return /^- \*\*Status\*\*:\s*Archived\s*$/m.test(state);
+  } catch {
+    return false;
+  }
+}
+
 function activeIntent(
   projectDir: string,
   space = activeSpace(projectDir),
@@ -101,11 +117,17 @@ function activeIntent(
   const root = intentsDir(projectDir, space);
   try {
     const value = readFileSync(join(root, "active-intent"), "utf-8").trim();
-    if (value && existsSync(join(root, value, "aidlc-state.md"))) return value;
+    if (
+      value &&
+      existsSync(join(root, value, "aidlc-state.md")) &&
+      !intentIsArchived(projectDir, space, value)
+    ) return value;
   } catch {
     // Fall through to the lone-record rule.
   }
-  const dirs = listIntentDirs(projectDir, space);
+  const dirs = listIntentDirs(projectDir, space).filter(
+    (intent) => !intentIsArchived(projectDir, space, intent),
+  );
   return dirs.length === 1 ? dirs[0] : null;
 }
 
@@ -163,6 +185,9 @@ function readSessionBinding(
       intent !== null &&
       !existsSync(join(intentsDir(projectDir, space), intent, "aidlc-state.md"))
     ) {
+      return null;
+    }
+    if (intent !== null && intentIsArchived(projectDir, space, intent)) {
       return null;
     }
     return { space, intent: intent as string | null };

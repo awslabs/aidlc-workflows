@@ -33,6 +33,8 @@ const manifest: HarnessManifest = {
       legacySignatures: {
         wholeFileHashes: [
           "sha256:f919e4bac1790bd1a371d371af473ccbc644f3bb80e4569d190c9364fad771b3",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
         ],
       },
     },
@@ -57,6 +59,10 @@ const manifest: HarnessManifest = {
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
           // The pre-v2-sync shipped variant (2.6.123 merge changed the bytes).
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
+          "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
+          "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
         ],
       },
     },

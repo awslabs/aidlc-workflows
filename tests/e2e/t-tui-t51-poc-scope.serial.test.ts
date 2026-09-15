@@ -69,6 +69,7 @@ import * as os from "node:os";
 import { join } from "node:path";
 import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
+import { runTuiDriverWithinBudget } from "../harness/tui-time-budget.ts";
 import {
   cleanupTuiProjectAfterKill,
   setupTuiProject,
@@ -156,6 +157,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
   test.skipIf(SKIP_REASON !== null)(
     `poc run-through produces the intent-capture artifact + > 6 completed stages on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
+      const testDeadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const session = `aidlc_tui_t51_poc_${process.pid}`;
       // greenfieldStub + noAidlcDocs: a brand-new greenfield workspace the poc
       // workflow scaffolds itself (mirrors the .sh's
@@ -252,8 +254,10 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         // Run it as a long-lived subprocess; its own backstops error loud, so a
         // hang surfaces as a nonzero exit (never a manufactured pass; an unreachable
         // milestone in budget is a FINDING, not a thing to soften).
-        const gateRc = await new Promise<number>((resolve) => {
-          const child = spawn(
+        // Startup consumes the same test deadline. Reserve time for finally;
+        // the parent watchdog also bounds a driver that does not exit itself.
+        const gateRc = await runTuiDriverWithinBudget(testDeadlineMs, (driverTimeoutMs) =>
+          spawn(
             DRIVE_BIN,
             [
               ...DRIVE_PREFIX,
@@ -273,13 +277,11 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
               // overall deadline (one wedge-only backstop); the overall timeout bounds
               // the journey and bun's test cap is the hard ceiling above it.
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              String(driverTimeoutMs),
             ],
             { stdio: "inherit" },
-          );
-          child.on("exit", (code) => resolve(code ?? -1));
-          child.on("error", () => resolve(-1));
-        });
+          ),
+        );
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = undefined;
         expect(gateRc).toBe(0);

@@ -67,14 +67,14 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -93,10 +93,15 @@ import {
 } from "../harness/fixtures.ts";
 import {
   artifactFilename,
+  findStageBySlug,
+  reviewRecordDigest,
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
+  stateDigest,
+  workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import {
   approvalFingerprint,
   evaluateCodeGenerationApproval,
@@ -316,7 +321,7 @@ function seedApprovedCodeGenerationPlan(
       kind: "run-stage",
       stage: "code-generation",
       unit,
-      state_sha256: createHash("sha256").update(state).digest("hex"),
+      state_sha256: stateDigest(state),
     });
   }
   const contract = resolveTestingPosture(proj);
@@ -344,6 +349,7 @@ function seedApprovedCodeGenerationPlan(
     [
       "## Plan Approval",
       `[Approval Fingerprint]: ${fingerprint}`,
+      `[Planned Source]: ${workspaceSourceFingerprint(proj) ?? "unbindable"}`,
       "A. Approve Plan",
       "B. Request Changes",
       "[Answer]: Approve Plan",
@@ -358,6 +364,7 @@ function seedApprovedCodeGenerationPlan(
     intentId: authority.intentId,
     directiveEpoch: authority.directiveEpoch,
     runFloor: authority.runFloor,
+    plannedSourceSha256: workspaceSourceFingerprint(proj) ?? "unbindable",
     fingerprint,
     questionsFile: toPosix(relative(proj, questionsPath)),
     promptSha256: createHash("sha256")
@@ -452,9 +459,15 @@ function logWorktreeReview(
       `worktree review request failed: ${requested.stdout}${requested.stderr}`,
     );
   }
-  appendFileSync(
-    reviewArtifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+  // The reviewer writes its review to the slot the request named, inside the
+  // worktree's intent record; the verdict records it there. The merge carries
+  // the record to main beside the receipt.
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  const draft = join(wt, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(
+    draft,
+    `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\n| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | construction/${unit}/code-generation/code-generation-plan.md > Step 2 | Fixture finding for ${unit} | Fixture action | New |\n`,
   );
   const completed = spawnSync(
     BUN,
@@ -672,7 +685,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(directive.kind).toBe("invoke-swarm");
     const marker = JSON.parse(
       readFileSync(
-        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
         "utf-8",
       ),
     ) as { kind?: string; stage?: string; code_generation_source_sha256?: string };
@@ -781,7 +794,27 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(finalizeOut).toContain('"converged": 1');
   }, 60000);
 
-  test("6d: finalize lands reviewed record artifacts and the bound source manifest", () => {
+  test("6e: the review record travels with its receipt into the main intent record and renders the Unit's findings", () => {
+    setupReferee();
+    if (wtproj === undefined) throw new Error("referee fixture was not created");
+    const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
+    const recordPath = /\*\*Review Record\*\*: (\S+)/.exec(review)?.[1];
+    const recordDigest = /\*\*Review Record Digest\*\*: (\S+)/.exec(review)?.[1];
+    expect(recordPath).toMatch(/^\.aidlc-engine\/reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
+    expect(recordDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const mainRecord = join(seededRecordDir(wtproj), recordPath as string);
+    expect(existsSync(mainRecord)).toBe(true);
+    expect(reviewRecordDigest(readFileSync(mainRecord))).toBe(recordDigest as string);
+    const stage = findStageBySlug("code-generation");
+    if (!stage) throw new Error("code-generation missing from graph");
+    const contexts = readReviewArtifactContexts(wtproj, stage);
+    const win = contexts.find((context) => context.unit === "win");
+    expect(win?.verdict).toBe("READY");
+    expect(win?.findings.map((finding) => finding.id)).toEqual(["R-01"]);
+    expect(win?.findings[0]?.finding).toBe("Fixture finding for win");
+  }, 60000);
+
+  test("6d: finalize lands reviewed record artifacts, the bound source manifest, and its evidence", () => {
     setupReferee();
     if (wtproj === undefined) throw new Error("referee fixture was not created");
     const unitRecord = join(
@@ -800,9 +833,82 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
       unit: "win",
       version: 1,
     });
+
+    // The manifest lands a CLAIM; the reviewed-source evidence is what makes the
+    // claim verifiable from a clone (aidlc-attest.ts). Both must cross out of the
+    // worktree — a manifest alone would resolve `unverifiable` on main forever.
+    const fingerprint = /\*\*Unit Source Fingerprint\*\*: sha256:([0-9a-f]{64})/.exec(
+      auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED")),
+    )?.[1];
+    expect(fingerprint).toBeDefined();
+    if (fingerprint === undefined) return;
+    const evidence = join(
+      unitRecord,
+      `reviewed-source-${fingerprint.slice(0, 12)}.tsv`,
+    );
+    expect(existsSync(evidence)).toBe(true);
+    // Its sha256 IS the receipt's fingerprint — the transfer cannot silently
+    // substitute bytes, and the committed record is self-verifying.
+    expect(createHash("sha256").update(readFileSync(evidence)).digest("hex")).toBe(
+      fingerprint,
+    );
     // Application source still lands only through the later, correlated
     // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
     expect(existsSync(join(wtproj, "win.txt"))).toBe(false);
+  }, 60000);
+
+  test("6f: finalize promotes receipt-bound local evidence from a pre-upgrade review", () => {
+    const unit = "pre-upgrade";
+    const proj = seedRefereeProject([unit]);
+    approvalProjects.push(proj);
+    prepareRefereeProject(proj, unit);
+    const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+    writeFileSync(join(wt, `${unit}.txt`), "done\n");
+    logWorktreeReview(proj, unit);
+
+    const wtUnitRecord = join(
+      seededRecordDir(wt),
+      "construction",
+      unit,
+      "code-generation",
+    );
+    const evidenceName = readdirSync(wtUnitRecord).find((name) =>
+      /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name)
+    );
+    if (evidenceName === undefined) throw new Error("reviewed-source evidence missing");
+    const hash12 = evidenceName.slice(
+      "reviewed-source-".length,
+      -".tsv".length,
+    );
+    const localEvidence = join(
+      seededRecordDir(wt),
+      ".aidlc-engine/source-review",
+      "code-generation",
+      `unit-${unit}-${hash12}.tsv`,
+    );
+    expect(existsSync(localEvidence)).toBe(true);
+    const expectedBytes = readFileSync(localEvidence);
+
+    // Simulate a review completed by the previous runtime: its local,
+    // receipt-bound snapshot exists, but dual-write did not yet create the
+    // committed evidence file.
+    rmSync(join(wtUnitRecord, evidenceName));
+    const result = spawnSync(
+      BUN,
+      [SWARM_TOOL, "--project-dir", proj, "finalize", "--batch", "1", "--units", unit, "--claimed", unit, "--check-cmd", "true"],
+      { encoding: "utf-8", env: identityFreeGitEnv(proj) },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"converged": 1');
+    const promotedEvidence = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "code-generation",
+      evidenceName,
+    );
+    expect(readFileSync(promotedEvidence).equals(expectedBytes)).toBe(true);
   }, 60000);
 });
 

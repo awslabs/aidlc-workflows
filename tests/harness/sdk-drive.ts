@@ -282,6 +282,12 @@ export interface DriveOptions {
    * (sdk.d.ts:1802)
    */
   settingSources?: Array<"user" | "project" | "local">;
+  /**
+   * Persist the per-drive transcript so hooks can inspect the completed turn.
+   * Required when testing natural Stop-hook completion; defaults to false for
+   * drives that intentionally abort at a tool or question boundary.
+   */
+  persistSession?: boolean;
   /** Extra env to layer onto the SDK subprocess (e.g. Bedrock overrides). */
   env?: Record<string, string>;
   /**
@@ -486,6 +492,7 @@ export async function driveAidlc(
     projectDir,
     permissionMode,
     settingSources,
+    persistSession: opts.persistSession ?? false,
     model: sdkSettings.model,
     modelSource: sdkSettings.modelSource,
     timeoutMs: opts.timeoutMs,
@@ -513,8 +520,9 @@ export async function driveAidlc(
         permissionMode,
         settingSources,
         abortController,
-        // Each drive is independent; avoid transcript writes racing cleanup.
-        persistSession: false,
+        // Each drive has its own config directory. Natural-completion tests
+        // need the transcript that Stop hooks inspect before accepting a stop.
+        persistSession: opts.persistSession ?? false,
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         canUseTool: async (toolName, input, permissionOptions) => {

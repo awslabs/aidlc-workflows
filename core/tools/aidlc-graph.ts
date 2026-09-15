@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -60,6 +60,7 @@ import {
   auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
+  refuseEngineObserverWrite,
   gridCostSummary,
   loadAgents,
   loadScopeMapping,
@@ -77,6 +78,11 @@ import {
   mustShift,
   parseStageFrontmatter,
   planFilePath,
+  CHANGE_CONTROL_VALUES,
+  type ChangeControl,
+  changeControlMemoryStrictRefusal,
+  memoryChangeControlDeclarations,
+  parseChangeControl,
   resolveProjectDir,
   resolveWorkflowSelection,
   type ScopeDefinition,
@@ -219,6 +225,10 @@ export interface ScopeValidation {
   // not an LLM recount or the earlier mechanical screen. In-flight treats the
   // ranking as advisory and preserves the running plan.
   nearest_stock?: Array<{ scope: string; diff: number; differs: string[] }>;
+  // The Change Control value the proposal carried (`--change-control` or the
+  // proposal's `changeControl` member), echoed once validated so the gate row
+  // the human sees is the validator's word.
+  change_control?: ChangeControl;
 }
 
 // --- Module-local state ---
@@ -1084,7 +1094,7 @@ export function nearestStockScopes(
 /** Resolve a scope's plan: the EXECUTE/SKIP slice over the full graph in
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
- *  `aidlc-graph resolve` subcommand writes this to .aidlc-plan.json. The
+ *  `aidlc-graph resolve` subcommand writes this to .aidlc-engine/plan.json. The
  *  parity test asserts this matches the legacy plan across all 11 scopes. */
 export function resolvePlanForScope(
   scope: string
@@ -2795,8 +2805,43 @@ const COMMANDS: Record<string, Handler> = {
     if (kwRaw !== undefined) {
       const granted = kwRaw.split(",").map((k) => k.trim()).filter(Boolean);
       for (const err of keywordCollisions(granted)) r.errors.push(err);
-      r.valid = r.errors.length === 0;
     }
+    // The composer's Change Control proposal rides with the grid: `--change-control
+    // <value>` or a `changeControl` member beside `stages`. It must be one of the
+    // two values, and a memory layer that declares strict refuses a relaxed
+    // proposal here, before the gate, naming that file.
+    const ccIdx = args.indexOf("--change-control");
+    const ccRaw =
+      ccIdx >= 0
+        ? args[ccIdx + 1]
+        : typeof obj.changeControl === "string"
+          ? obj.changeControl
+          : undefined;
+    if (ccIdx >= 0 && (ccRaw === undefined || ccRaw.startsWith("--"))) {
+      console.error("validate-grid: --change-control requires <strict|relaxed>.");
+      process.exit(1);
+    }
+    if (ccRaw !== undefined) {
+      const changeControl = parseChangeControl(ccRaw);
+      if (changeControl === null) {
+        r.errors.push(
+          `Change Control must be one of: ${CHANGE_CONTROL_VALUES.join(", ")} (got "${ccRaw}").`,
+        );
+      } else {
+        r.change_control = changeControl;
+        if (changeControl === "relaxed") {
+          const projectDir = resolveProjectDir();
+          const intentIdx = args.indexOf("--intent");
+          const spaceIdx = args.indexOf("--space");
+          const memoryStrict = memoryChangeControlDeclarations(projectDir, {
+            intent: intentIdx >= 0 ? args[intentIdx + 1] : undefined,
+            space: spaceIdx >= 0 ? args[spaceIdx + 1] : undefined,
+          }).find((declaration) => declaration.value === "strict");
+          if (memoryStrict) r.errors.push(changeControlMemoryStrictRefusal(memoryStrict));
+        }
+      }
+    }
+    r.valid = r.errors.length === 0;
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     if (!r.valid) process.exit(1);
   },
@@ -2835,7 +2880,7 @@ const COMMANDS: Record<string, Handler> = {
     }
   },
   resolve: (args) => {
-    // resolve <scope> — emit the active scope's plan (.aidlc-plan.json) to
+    // resolve <scope> - emit the active scope's plan (.aidlc-engine/plan.json) to
     // the project dir. The plan is the EXECUTE/SKIP slice for the scope,
     // derived from the compiled grid (the same transpose runtime reads).
     // Feature-flagged via AIDLC_GRAPH_RESOLVE=1 so it ships
@@ -2855,6 +2900,10 @@ const COMMANDS: Record<string, Handler> = {
     if (args.includes("--stdout")) {
       process.stdout.write(planJson);
       return;
+    }
+    refuseEngineObserverWrite("writeFileAtomic");
+    if (process.env.AIDLC_PLAN_PATH === undefined) {
+      mkdirSync(dirname(outPath), { recursive: true });
     }
     writeFileAtomic(outPath, planJson);
     console.log(outPath);
@@ -2927,7 +2976,7 @@ Common forms:
                                        two gate tables (data: tools/data/ars-priors.json)
   aidlc-graph compile                  Regenerate stage-graph.json + scope-grid.json from YAML
   aidlc-graph compile --check          CI drift guard (exit 1 on mismatch)
-  aidlc-graph resolve <name>           Emit .aidlc-plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)
+  aidlc-graph resolve <name>           Emit .aidlc-engine/plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)
   aidlc-graph export                   Emit designer-facing bundle (stdout)
   aidlc-graph export --check           CI drift guard against fixture
 

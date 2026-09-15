@@ -34,6 +34,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  setField,
 } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -61,6 +62,7 @@ function setupFixture(
   severity: "advisory" | "blocking",
   matches = "**/*",
   pass = false,
+  scope = "bugfix",
 ): Fixture {
   const project = createTestProject();
   projects.push(project);
@@ -116,7 +118,7 @@ function setupFixture(
         consumes: [],
         requires_stage: [],
         sensors: [id],
-        scopes: ["bugfix"],
+        scopes: [scope],
         inputs: "",
         outputs: "",
         rules_in_context: [],
@@ -140,9 +142,9 @@ function setupFixture(
     [
       "# AI-DLC State Tracking",
       "",
-      "- **Workflow**: bugfix",
+      `- **Workflow**: ${scope}`,
       "- **State Version**: 8",
-      "- **Scope**: bugfix",
+      `- **Scope**: ${scope}`,
       "- **Phase**: inception",
       "- **Current Stage**: probe",
       "",
@@ -181,6 +183,7 @@ function stateCommand(
       encoding: "utf-8",
       env: {
         ...process.env,
+        AIDLC_DISABLE_SENSORS: "0",
         AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
         AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
         AIDLC_STAGE_GRAPH: fixture.graph,
@@ -323,6 +326,69 @@ function dispatcherStub(
 }
 
 describe("t311 gate-bound sensor enforcement", () => {
+  for (const transition of ["gate-start", "revise", "approve"] as const) {
+    test(`an explicit off override skips classic sensors at ${transition}; a resumed intent can opt back in`, () => {
+      for (const enabled of [false, true]) {
+        const fixture = setupFixture("blocking", "**/*", false, "classic");
+        const path = seededStateFile(fixture.project);
+        appendFileSync(path, "- **Sensors**: off (set by you)\n");
+        if (transition !== "gate-start") {
+          expect(gate(fixture).status).toBe(0);
+          expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(0);
+          if (transition === "revise") {
+            expect(stateCommand(
+              fixture, "reject", ["--feedback", "revise the deliverables"],
+            ).status).toBe(0);
+          } else {
+            appendAuditEvent(fixture.project, "HUMAN_TURN");
+            appendAuditEvent(fixture.project, "ARTIFACT_UPDATED", {
+              File: join(fixture.outputDir, "one.md"),
+            });
+            appendAuditEvent(fixture.project, "HUMAN_TURN");
+          }
+        }
+        if (enabled) {
+          writeFileSync(path, setField(readFileSync(path, "utf-8"), "Sensors", "on (set by you)"));
+        }
+        const result = stateCommand(
+          fixture,
+          transition,
+          transition === "approve" ? ["--user-input", "Approve"] : [],
+          { AIDLC_SKIP_REVISION_BACKSTOP: "0" },
+        );
+        const finalAudit = audit(fixture.project);
+        const state = readFileSync(seededStateFile(fixture.project), "utf-8");
+        expect(result.status).toBe(enabled ? 1 : 0);
+        expect(eventCount(finalAudit, "SENSOR_FIRED")).toBe(enabled ? 2 : 0);
+        expect(eventCount(finalAudit, "SENSOR_FAILED")).toBe(enabled ? 2 : 0);
+        expect(eventCount(finalAudit, "SENSOR_PASSED")).toBe(0);
+        if (enabled) {
+          expect(state).toContain(transition === "gate-start" ? "- [-] probe" : "- [R] probe");
+        } else {
+          expect(state).toContain(transition === "approve" ? "- [x] probe" : "- [?] probe");
+        }
+        if (transition === "approve") {
+          expect(eventCount(finalAudit, "GATE_REJECTED")).toBe(1);
+          expect(eventCount(finalAudit, "GATE_APPROVED")).toBe(enabled ? 0 : 1);
+          expect(finalAudit).toContain("**Recovered**: true");
+        }
+      }
+    }, 30_000);
+  }
+
+  test.each(["classic", "feature"])("a global sensor kill switch permits a %s gate without synthesizing a verdict", (scope) => {
+    const fixture = setupFixture("blocking", "**/*", false, scope);
+    expect(gate(fixture, [], { AIDLC_DISABLE_SENSORS: "1" }).status).toBe(0);
+    const offAudit = audit(fixture.project);
+    expect(eventCount(offAudit, "SENSOR_FIRED")).toBe(0);
+    expect(eventCount(offAudit, "SENSOR_PASSED")).toBe(0);
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [?] probe");
+
+    expect(gate(fixture).status).toBe(1);
+    expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(2);
+    expect(eventCount(audit(fixture.project), "SENSOR_FAILED")).toBe(2);
+  }, 30_000);
+
   test("fires once per deliverable, blocks, overrides with audit, and leaves advisory failures non-blocking", () => {
     const blocking = setupFixture("blocking");
     const refused = gate(blocking);
@@ -334,7 +400,7 @@ describe("t311 gate-bound sensor enforcement", () => {
       "- [-] probe",
     );
     expect(refused.out).toContain("gate-probe");
-    expect(refused.out).toContain(".aidlc-sensors/probe/gate-probe-");
+    expect(refused.out).toContain(".aidlc-engine/sensors/probe/gate-probe-");
     expect(refused.out).toContain("--override-blocking-sensors");
 
     const unauthorized = gate(blocking, overrideArgs());

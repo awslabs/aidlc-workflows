@@ -1,6 +1,39 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-10
+
+Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
+
+* Short review-findings rows show the expected columns and, when applicable, suggest checking earlier cells for a missing value or `|` separator. Review completion remains refused until the row is corrected. Closes #1076.
+* Review-findings rows with surplus cells report the extra count. Well-formed rows, including escaped pipes and explicit blank cells, retain their existing behavior.
+* `aidlc version` reports `2.8.2`; the unpublished `2.8.6` development version is superseded.
+* Appending `## Assumption Confirmation` after a confirmed summary with an adjacent, blank-delimited `---`, `***`, or `___` no longer causes `SUMMARY_CONTENT_STALE` during stage completion. Code examples before the assumption heading and follow-up answers remain covered by the receipt, so substantive edits still require confirmation. Closes #1074.
+* Content appended under a `## ` heading is separated from the following `## ` heading by a blank line, keeping method files well-formed. Closes #1075.
+
+* `aidlc-state.ts unit start|pause|resume` refuses while the engine routes the stage as a wave, leaves state and audit unchanged, and directs callers to `unit complete --wave`. Closes #1071.
+* `aidlc-state.ts set-construction-iteration unit-major` leaves the remaining units completable through the serial lifecycle even when a revised stage already has wave completion receipts.
+
+## [2.8.6] - 2026-09-09
+
+**Superseded development entry:** No 2.8.6 release was published. The intended release version is 2.8.2, documented above; this entry is retained as development history.
+
+Fix a markdown-hygiene defect in the shared section writer: `appendUnderHeading` inserted new content flush against the following `## ` heading, so a bullet written under a section (for example a self-learning entry under `## Decided` in `project.md`) abutted the next heading with no separating blank line. The engine re-reads `project.md` every stage and the file is human-editable, so the malformed markdown could misgroup for a re-reading model or a stricter markdown tool. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration is required; existing files are corrected the next time content is appended to an affected section.
+
+* Content appended under a `## ` heading is now separated from the following `## ` heading by exactly one blank line, keeping method files (`memory/project.md`, `project-guardrails.md`) well-formed. The terminal end-of-file append is unchanged — no spurious trailing blank line is added. Closes #1075.
+
+## [2.8.1] - 2026-09-08
+
+Fix defects found while exercising the 2.8.0 native install: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, `aidlc update` on an already-current install failed its integrity check under a normal shell umask, and every native GitHub Copilot and Cursor hook was dead because the 2.8.0 packager projected those adapters onto the one-argument core-hook route. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`. Copilot and Cursor projects configured by 2.8.0 work as soon as the binary is updated: their existing `aidlc engine hook <harness>-adapter ...` wiring is accepted, and the 2.8.0 Copilot adapter still installed in the project (whose core-hook calls are the bare `aidlc hook <name>`) is accepted too. `aidlc config` in the project then rewrites the wiring to the canonical `aidlc engine adapter <harness> ...` spelling and installs the current adapter — Cursor's merged `.cursor/hooks.json` collapses every earlier AI-DLC spelling of an entry (bun-era and 2.8.0) into the one shipped entry instead of leaving duplicates that keep executing, and Copilot's `.github/hooks/aidlc.json` is regenerated.
+
+* Pressing Enter at a bracketed default in the first-run `aidlc config` wizard (harness picker, provider, region, preset, plugins, MCP, record layer, and the final `Apply? [Y/n]` gate) now accepts the default as advertised instead of printing `Nothing written.` and exiting 2. Closing stdin (Ctrl-D) still cancels.
+* `aidlc update` on an install that is already at the latest release now reports `You're on the latest version of aidlc (X.Y.Z).` regardless of the caller's umask; previously it failed with `existing X.Y.Z runtime does not match the verified release` (exit 4) unless the shell umask was `077`. Same-release identity is now decided by path set and content; the installed tree's modes are still enforced against its own recorded integrity baseline, so trees installed by 2.8.0 under any umask keep working. `aidlc update --dry-run` on a current install says so instead of `Would update aidlc from X to X.`
+* `aidlc doctor` no longer tells you to copy the workspace shell from `dist/<harness>/`; the remediation is `aidlc config`.
+* README: removed the pre-2.8.0 note that told users to install from a source checkout until native assets shipped.
+* GitHub Copilot hooks no longer fail on every event with `aidlc: undefined is not an object (evaluating 'input.length')`; the adapter's delegated audit, sensor, guard, state, and Stop hooks now run through `aidlc engine hook <name>` under the native binary.
+* Cursor IDE `failClosed` `preToolUse` hooks now emit `{"permission":"allow"}` on allowed tools instead of returning no output (`Hook ... returned no output`) and blocking every tool call; deny decisions continue to emit Cursor permission-deny JSON.
+* Native hook wiring dispatches through `aidlc engine adapter copilot <target>` and `aidlc engine adapter cursor <target>`, preserving each adapter's target and stdin payload. Closes #1061 and #1058.
+
 ## [2.8.0] - 2026-09-08
 
 AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.

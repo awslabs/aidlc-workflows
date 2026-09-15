@@ -74,10 +74,17 @@ const DOCTOR_HOOK_LABEL_2 = "aidlc-session-start.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
 // P4: the "aidlc-docs/ directory exists" row was retired. Doctor now checks the
 // SHIPPED workspace shell (.claude/ + aidlc/spaces/default/memory/) — the row
-// label substring is "workspace shell ready" (utility.ts:597), and its
-// remediation fix is "copy the workspace shell from `dist/claude/`" (utility.ts:598).
+// label substring is "workspace shell ready". Its remediation names the refresh
+// that rebuilds the shell: a bare `aidlc config` was circular, because on a
+// project that already has a harness directory it takes the interactive
+// existing-projection walk, which never recreates a missing shell. The command
+// prefix varies by channel (native `aidlc` vs a copy install's bun dispatcher),
+// and `config --harness` alone also appears in the installed-runtime row's fix,
+// so match the flag together with the suffix only this row prints.
 const DOCTOR_SHELL_LABEL = "workspace shell ready";
-const DOCTOR_SHELL_FIX = "copy the workspace shell from";
+const DOCTOR_SHELL_FIX = "config --harness claude";
+const DOCTOR_SHELL_FIX_SUFFIX =
+  "in the project root to recreate the harness tree and workspace shell";
 const STOP_AFTER_DOCTOR = { toolName: "Bash", resultIncludes: DOCTOR_HEADER } as const;
 
 describe("t22 /aidlc --doctor (SDK port)", () => {
@@ -174,8 +181,8 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   // shell-ready row FAILS, the doctor exits non-zero, and the orchestrator's
   // tool-failure handler prints the doctor stdout verbatim. The .sh grepped that
   // prose for the SPECIFIC failing-check label; here we assert the new
-  // "workspace shell ready" label AND its "copy the workspace shell from"
-  // remediation against the Bash tool_result — the failing-check label is
+  // "workspace shell ready" label AND its `aidlc config` remediation against
+  // the Bash tool_result — the failing-check label is
   // verbatim tool stdout, so this is the deterministic equivalent of the .sh grep.
   // -------------------------------------------------------------------------
   test(
@@ -205,6 +212,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         // specific-label grep gave.
         assertToolResultContains(r, "Bash", DOCTOR_SHELL_LABEL);
         assertToolResultContains(r, "Bash", DOCTOR_SHELL_FIX);
+        assertToolResultContains(r, "Bash", DOCTOR_SHELL_FIX_SUFFIX);
 
         // And the report header is present in that same stdout — proving the
         // failing label came from the doctor block, not stray prose.

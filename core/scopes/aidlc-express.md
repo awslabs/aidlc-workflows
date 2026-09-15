@@ -8,6 +8,7 @@ description: "Lightest run: requirements to deploy, no design pass, no reviewers
 skeleton: off
 runner: true
 review_cap: none
+change_control: relaxed
 ---
 
 # express scope
@@ -15,6 +16,8 @@ review_cap: none
 `express` answers the community request for a lightweight run. It follows a
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
+
+Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
 
 ## Why these stages, why skip those
 

@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -22,8 +23,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractTarGz } from "../../core/tools/aidlc-archive.ts";
+import { walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
+import {
+  digest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
+} from "../../core/tools/aidlc-release.ts";
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
+import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -68,6 +77,41 @@ type BuildResults = {
   results: TargetResult[];
 };
 
+function legacy28ManifestError(manifest: {
+  version: string;
+  assets: Array<{ name: string; kind: string; target?: string }>;
+}): string | undefined {
+  for (const asset of manifest.assets) {
+    const validBinary = asset.kind !== "binary" ||
+      Boolean(
+        asset.target &&
+          asset.name ===
+            `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`,
+      );
+    const validRuntime = asset.kind !== "runtime" ||
+      asset.name === `aidlc-runtime-${manifest.version}.tar.gz`;
+    const validInstaller = asset.kind !== "installer" ||
+      asset.name === "install.sh" ||
+      asset.name === "install.ps1";
+    if (
+      !["binary", "runtime", "installer"].includes(asset.kind) ||
+      !validBinary ||
+      !validRuntime ||
+      !validInstaller
+    ) {
+      return `${asset.name}: invalid asset metadata`;
+    }
+  }
+  return undefined;
+}
+
+function invocationSurfaceFiles(root: string): string[] {
+  return walkFiles(root).filter((path) => {
+    if (!/\.(?:hook|json|md|toml|ts)$/.test(path) || path === "install.ts") return false;
+    return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(path);
+  });
+}
+
 function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.AIDLC_BUILD_ENTRY;
@@ -103,12 +147,15 @@ function gate(result: TargetResult, name: string): GateResult {
   return found as GateResult;
 }
 
+// The binary reports whatever id the build stamped: the source version or, in a
+// release run that sets AIDLC_BUILD_VERSION, a preview id.
+const VERSION_LINE = new RegExp(
+  `^aidlc\\s+(${VERSION_ID_PATTERN})(?:\\s+\\(runtime\\s+${VERSION_ID_PATTERN}\\))?$`,
+);
+
 function stampedVersion(stdout: string): string {
   const trimmed = stdout.trim();
-  const prefixed =
-    /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s+\(runtime\s+[0-9]+\.[0-9]+\.[0-9]+\))?$/
-      .exec(trimmed);
-  return prefixed?.[1] ?? trimmed;
+  return VERSION_LINE.exec(trimmed)?.[1] ?? trimmed;
 }
 
 describe("t238 build-binaries release builder", () => {
@@ -211,6 +258,8 @@ describe("t238 build-binaries release builder", () => {
       "statusline",
       "adapter-codex-validate-state",
       "adapter-cursor-validate-state",
+      "adapter-copilot-validate-state",
+      "adapter-copilot-2.8.0-project-validate-state",
       "routed-project-dir",
       "bun-compiled-parity",
       "final-layout-config-dry-run",
@@ -306,7 +355,10 @@ describe("t238 build-binaries release builder", () => {
     const releaseManifest = JSON.parse(
       readFileSync(join(RELEASE_DIR, "version.json"), "utf-8"),
     ) as {
+      version: string;
+      distributions: Array<{ name: string }>;
       assets: Array<{
+        name: string;
         kind: string;
         verification?: { status: string; mode: string };
       }>;
@@ -318,9 +370,96 @@ describe("t238 build-binaries release builder", () => {
       mode: "full-runtime",
     }));
     expect(releaseManifest.assets.filter((asset) => asset.kind === "runtime")).toEqual([
-      expect.objectContaining({ name: `aidlc-runtime-${AIDLC_VERSION}.tar.gz` }),
+      expect.objectContaining({ name: releaseRuntimeAsset(AIDLC_VERSION) }),
     ]);
+    expect(legacy28ManifestError(releaseManifest)).toBeUndefined();
+    const copyRuntimeName = releaseCopyRuntimeAsset(AIDLC_VERSION);
+    const copyRuntimePath = join(RELEASE_DIR, copyRuntimeName);
+    expect(releaseManifest.assets.some((asset) => asset.name === copyRuntimeName)).toBe(false);
+    expect(readFileSync(join(RELEASE_DIR, "checksums.txt"), "utf-8"))
+      .not.toContain(copyRuntimeName);
+    expect(readFileSync(`${copyRuntimePath}.sha256`, "utf-8")).toBe(
+      `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`,
+    );
     expect(releaseManifest.assets.some((asset) => asset.kind === "data")).toBe(false);
+    const runtimeChannels = mkdtempSync(join(tmpdir(), "aidlc-t238-runtime-channels-"));
+    try {
+      const copyRoot = join(runtimeChannels, "copy");
+      const nativeRoot = join(runtimeChannels, "native");
+      extractTarGz(
+        copyRuntimePath,
+        copyRoot,
+      );
+      extractTarGz(
+        join(RELEASE_DIR, releaseRuntimeAsset(AIDLC_VERSION)),
+        nativeRoot,
+      );
+      for (const distribution of releaseManifest.distributions.map(({ name }) => name)) {
+        const copyHarnessRoot = join(copyRoot, "runtime", distribution);
+        const nativeHarnessRoot = join(nativeRoot, "runtime", distribution);
+        const copyFiles = invocationSurfaceFiles(copyHarnessRoot);
+        const nativeFiles = invocationSurfaceFiles(nativeHarnessRoot);
+        const copyText = copyFiles
+          .map((path) => readFileSync(join(copyHarnessRoot, path), "utf-8"))
+          .join("\n");
+        expect(copyText, distribution).toMatch(/\bbun\s+[^\n]*aidlc\.ts\b/);
+        for (const path of copyFiles) {
+          expect(readFileSync(join(copyHarnessRoot, path), "utf-8"), `${distribution}/${path}`)
+            .not.toMatch(/\baidlc engine\b/);
+        }
+        for (const path of nativeFiles) {
+          expect(readFileSync(join(nativeHarnessRoot, path), "utf-8"), `${distribution}/${path}`)
+            .not.toMatch(/\bbun\s+[^\n]*\.ts\b/);
+        }
+      }
+      const copySettingsText = readFileSync(
+        join(copyRoot, "runtime", "claude", ".claude", "settings.json"),
+        "utf-8",
+      );
+      const nativeSettingsText = readFileSync(
+        join(nativeRoot, "runtime", "claude", ".claude", "settings.json"),
+        "utf-8",
+      );
+      const copySettings = JSON.parse(copySettingsText) as {
+        statusLine: { command: string };
+      };
+      const nativeSettings = JSON.parse(nativeSettingsText) as {
+        statusLine: { command: string };
+      };
+      expect(copySettings.statusLine.command).toBe(
+        'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+      );
+      expect(copySettingsText).not.toContain('"command": "aidlc engine');
+      expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
+      expect(nativeSettingsText).not.toContain('"command": "bun ');
+
+      const manualProject = join(runtimeChannels, "manual-project");
+      cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });
+      const manualStatusline = spawnSync(BUN, [
+        join(manualProject, ".claude", "tools", "aidlc.ts"),
+        "engine",
+        "statusline",
+      ], {
+        cwd: manualProject,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: manualProject,
+          PATH: "",
+        },
+        timeout: 30_000,
+      });
+      expect(
+        manualStatusline.status,
+        `${manualStatusline.stdout ?? ""}${manualStatusline.stderr ?? ""}`,
+      ).toBe(0);
+      expect(manualStatusline.stdout ?? "").toBe("[AIDLC] ready\n");
+      expect(`${manualStatusline.stdout ?? ""}${manualStatusline.stderr ?? ""}`).not.toMatch(
+        /uv_spawn ['"]aidlc['"]|aidlc: (?:command )?not found|ENOENT.*aidlc/,
+      );
+    } finally {
+      rmSync(runtimeChannels, { recursive: true, force: true });
+    }
     writeFileSync(
       join(RELEASE_DIR, "aidlc-release.intoto.jsonl"),
       "aidlc-test-release-provenance\n",
@@ -629,6 +768,12 @@ describe("t238 build-binaries release builder", () => {
       expect(readdirSync(output).filter((name) => name === expectedName)).toEqual([
         expectedName,
       ]);
+      expect(readFileSync(join(output, "install.sh"), "utf-8")).toContain(
+        `PACKAGED_VERSION='${AIDLC_VERSION}'`,
+      );
+      expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
+        `$PackagedVersion = '${AIDLC_VERSION}'`,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

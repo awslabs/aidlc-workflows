@@ -605,12 +605,16 @@ export function inspectKiroIdeChatSurfaceDocument(
       ariaModal: String(e.getAttribute("aria-modal") || ""),
       rect: rectOf(e),
     }));
-  const chatFrames = [
-    ...new Set([
-      ...doc.querySelectorAll("iframe.webview.ready"),
-      ...doc.querySelectorAll("iframe[src*='extensionId=kiro.kiroAgent']"),
-    ]),
-  ].filter(visible);
+  const ownedChatFrames = [
+    ...doc.querySelectorAll("iframe[src*='extensionId=kiro.kiroAgent']"),
+  ];
+  // Other extension webviews can sit behind chat; they are not chat hit-test targets.
+  // Keep the generic selector for older versions without extension ownership metadata.
+  const chatFrames = (
+    ownedChatFrames.length > 0
+      ? ownedChatFrames
+      : [...doc.querySelectorAll("iframe.webview.ready")]
+  ).filter(visible);
   const blockedHitPoints: KiroIdeBlockedHitPoint[] = [];
   for (const frame of chatFrames) {
     const r = frame.getBoundingClientRect();
@@ -671,6 +675,7 @@ function chatSurfaceIsReady(surface: KiroIdeChatSurfaceState): boolean {
 export interface KiroIdeChatSurfaceAdapter {
   inspect: () => Promise<KiroIdeChatSurfaceState>;
   dismissMigration: () => Promise<string | null>;
+  dismissNotification?: () => Promise<string | null>;
   wait: (ms: number) => Promise<void>;
   now: () => number;
 }
@@ -699,6 +704,14 @@ export async function settleKiroIdeChatSurface(
       const clicked = await adapter.dismissMigration();
       if (clicked) dismissed = clicked;
     }
+    if (
+      surface.blockedHitPoints.some((hit) =>
+        hit.hitClassName.split(/\s+/).some((name) => name.startsWith("notification-list-item")),
+      )
+    ) {
+      const clicked = await adapter.dismissNotification?.();
+      if (clicked) dismissed = clicked;
+    }
 
     if (adapter.now() >= deadline) break;
     await adapter.wait(pollMs);
@@ -721,6 +734,10 @@ export function prepareKiroIdeChat(
     {
       inspect: () => inspectKiroIdeChatSurface(port),
       dismissMigration: () => clickByText(port, ["remind me later"]),
+      dismissNotification: () => clickByText(port, [
+        "clear notification",
+        "clear notification (⌘backspace)",
+      ]),
       wait: sleep,
       now: Date.now,
     },
@@ -792,6 +809,41 @@ export async function readChatText(port: number): Promise<string> {
   return "";
 }
 
+// A chat shortcut can focus the webview's BODY without focusing its editor.
+// Focus the visible editor itself; text insertion and submit still use CDP input.
+const FOCUS_CHAT_EDITOR_EXPR = `(() => {
+  for (const e of document.querySelectorAll("[contenteditable='true']")) {
+    if (!/prosemirror|tiptap/i.test(String(e.className || ""))) continue;
+    const r = e.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) continue;
+    e.focus({ preventScroll: true });
+    return document.activeElement === e;
+  }
+  return false;
+})()`;
+
+async function focusChatEditor(port: number): Promise<boolean> {
+  for (const target of await listTargets(port)) {
+    if (!target.webSocketDebuggerUrl || (target.type !== "page" && target.type !== "iframe")) continue;
+    const t = new CdpTarget(target.webSocketDebuggerUrl);
+    try {
+      await t.connect();
+      for (const context of await t.enableContexts(600)) {
+        try {
+          if (await t.evaluateInContext<boolean>(context.id, FOCUS_CHAT_EDITOR_EXPR)) return true;
+        } catch {
+          /* context gone */
+        }
+      }
+    } catch {
+      /* target gone */
+    } finally {
+      t.close();
+    }
+  }
+  return false;
+}
+
 /** Select-all then Delete to clear the focused chat editor between retries. */
 async function selectAllAndDelete(t: CdpTarget): Promise<void> {
   await t.send("Input.dispatchKeyEvent", {
@@ -849,6 +901,7 @@ export async function typeAndSubmit(t: CdpTarget, text: string, port: number): P
   for (let attempt = 0; attempt < 12 && !landed; attempt++) {
     await focusChat(t);
     await sleep(700);
+    await focusChatEditor(port);
     await t.send("Input.insertText", { text });
     await sleep(600);
     const cur = (await readChatText(port)).toLowerCase();

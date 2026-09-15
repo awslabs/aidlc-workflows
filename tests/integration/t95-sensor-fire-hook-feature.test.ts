@@ -12,7 +12,7 @@
 // side-effects: it spawns `bun <proj>/.claude/tools/aidlc-sensor.ts fire <id>
 // --stage <slug> --output-path <path>` per matching sensor (hook :195-222),
 // records hook-level drops via recordHookDrop to
-// aidlc-docs/.aidlc-hooks-health/sensor-fire.drops (hook :238-257, lib.ts:1554),
+// aidlc-docs/.aidlc-engine/hooks-health/sensor-fire.drops (hook :238-257, lib.ts:1554),
 // and touches the heartbeat sensor-fire.last (hook :134-139). (The
 // sensor-fire.skipped accounting under the old test-run mode was removed per
 // #369.) None of that is
@@ -71,7 +71,6 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -80,7 +79,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -89,6 +88,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -177,14 +177,15 @@ function makeProjectActive(slug = "requirements-analysis"): string {
 
 function seedActiveDirective(proj: string, stage: string, unit?: string): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
+  mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json")), { recursive: true });
   writeFileSync(
-    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
     `${JSON.stringify(
       {
         version: 1,
         stage,
         ...(unit ? { unit } : {}),
-        state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+        state_sha256: stateDigest(state),
       },
       null,
       2,
@@ -292,7 +293,7 @@ function spawnArgvs(proj: string): string[][] {
 }
 
 function dropsPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.drops");
+  return join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "run-sensors.drops");
 }
 
 describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — spawnSync)", () => {
@@ -608,7 +609,7 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
       "intent.md",
     );
     runHook(proj, fp);
-    const hb = join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
+    const hb = join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "run-sensors.last");
     expect(existsSync(hb)).toBe(true);
     const m1 = statSync(hb).mtimeMs;
     Bun.sleepSync(1100); // isoTimestamp() has second granularity; advance > 1s.
