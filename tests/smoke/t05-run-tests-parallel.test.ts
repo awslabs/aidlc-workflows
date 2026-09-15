@@ -76,7 +76,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -175,6 +177,32 @@ afterAll(() => {
 const PER_TEST_TIMEOUT = 120000;
 
 describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel.sh, plan 14 + MR8)", () => {
+  test("preserves a caller-selected bun ahead of the home install", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t05-pinned-bun-"));
+    const homeBinDir = join(dir, ".bun", "bin");
+    const pathBinDir = join(dir, "path-bin");
+    try {
+      for (const [binDir, sentinel] of [
+        [homeBinDir, "HOME-BUN-SENTINEL"],
+        [pathBinDir, "PATH-BUN-SENTINEL"],
+      ]) {
+        mkdirSync(binDir, { recursive: true });
+        const fakeBun = join(binDir, "bun");
+        writeFileSync(fakeBun, `#!/bin/bash\nprintf '${sentinel}\\n'\n`, "utf-8");
+        chmodSync(fakeBun, 0o755);
+      }
+      const r = run(["--help"], {
+        HOME: dir,
+        PATH: `${pathBinDir}:/usr/bin:/bin`,
+      });
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("PATH-BUN-SENTINEL");
+      expect(r.out).not.toContain("HOME-BUN-SENTINEL");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
   // --- 1. Invalid --parallel values exit 2 with the error message ----------
   // .sh looped `for bad in 0 -1 abc` asserting rc==2 AND the error grep. Each
   // value is its own distinct behavioural assertion -> three test()s.
