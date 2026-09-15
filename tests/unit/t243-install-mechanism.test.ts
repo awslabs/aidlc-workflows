@@ -2057,6 +2057,27 @@ describe("t243 release lifecycle", () => {
       source.replace(marker, `PACKAGED_VERSION='${preview}'`),
       { mode: 0o755 },
     );
+    // The child PATH below is deliberately bare so the packaged installer proves
+    // it needs nothing beyond POSIX tools. That also drops tests/fixtures/bin,
+    // so `command -v gh` finds the runner's real GitHub CLI, whose attestation
+    // flags make install.sh verify the fixture bundle for real and fail. Hand
+    // the installer the fixture verifier through AIDLC_GH_BIN instead, spelled
+    // with the absolute Bun path so it resolves under that PATH, and log every
+    // call so the test proves provenance verification ran rather than the
+    // installer degrading to checksums because its help probe failed.
+    const ghDir = temp("aidlc-t243-packaged-installer-gh-");
+    const ghCalls = join(ghDir, "calls.log");
+    const ghBin = join(ghDir, "gh");
+    writeFileSync(
+      ghBin,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >>${JSON.stringify(ghCalls)}`,
+        `exec ${JSON.stringify(BUN)} ${JSON.stringify(FIXTURE_GH)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
     const server = serveReleaseFixture(release);
     const machine = temp("aidlc-t243-packaged-installer-machine-");
     try {
@@ -2074,6 +2095,7 @@ describe("t243 release lifecycle", () => {
           NO_PROXY: "127.0.0.1",
           AIDLC_INSTALL_ROOT: machine,
           AIDLC_BIN_DIR: join(machine, "bin"),
+          AIDLC_GH_BIN: ghBin,
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -2087,6 +2109,13 @@ describe("t243 release lifecycle", () => {
       expect(stdout).toContain(`installed AI-DLC ${preview}`);
       expect(server.requests).toContain(`/download/v${preview}/version.json`);
       expect(server.requests).not.toContain("/latest/download/version.json");
+      // Help probe, then the two verify passes install.sh runs: bare, and with
+      // the manifest's source ref and digest.
+      const calls = readFileSync(ghCalls, "utf-8").trim().split("\n");
+      expect(calls[0]).toBe("attestation verify --help");
+      expect(calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help")))
+        .toHaveLength(2);
+      expect(calls.at(-1)).toContain("--source-ref refs/heads/main --source-digest ");
     } finally {
       server.stop();
     }
