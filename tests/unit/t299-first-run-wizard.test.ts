@@ -213,12 +213,12 @@ describe("t299 first-run setup wizard", () => {
     ).models.preset).toBe("balanced");
   }, 60_000);
 
-  test("recommended defaults explain unsupported group effort on Kiro CLI", () => {
+  test("recommended defaults explain unsupported group effort on Kiro", () => {
     const result = runWizard("\n", {
       harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("In Kiro CLI, effort dials do not apply");
+    expect(result.stdout).toContain("In Kiro, effort dials do not apply");
     expect(result.stdout).not.toContain("medium project agent effort for deciding");
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
