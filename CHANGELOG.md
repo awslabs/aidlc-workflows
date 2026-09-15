@@ -1,6 +1,23 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.0] - 2026-09-15
+
+AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
+
+* `aidlc version` reports `2.9.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* New Classic intents use the 18-stage v1 flow through Build and Test, with one approval per stage, one advisory review pass where configured, sensors and learnings enabled, and summary confirmation disabled. Existing Classic intents keep their recorded graph; use the `workshop` scope when the previous Classic graph with CI Pipeline and Operation stages is required.
+* Ceremony is scope-owned and can be changed per intent with `--sensors`, `--learnings`, and `--summary-confirmation`. `aidlc engine config set` applies depth, testing, review, change-control, and ceremony settings as one transaction. Breaking for scripts: the standalone `aidlc-utility.ts change-control` route is removed, and unknown `config-change` flags now fail instead of being ignored.
+* `aidlc config` now resolves provider choices per harness. Kiro CLI and Kiro IDE use their host-provided model access; other harnesses offer Amazon Bedrock or preserving the current provider. The `balanced` preset now records medium deciding, reviewing, and writing-up effort.
+* `aidlc engine orchestrate wait` provides a bounded read-only wait for collaborators, artifacts, or reviews. Record-level engine files now live under `<record>/.aidlc-engine/`; existing records remain readable through legacy-path fallbacks.
+* `/aidlc intent archive <name>` retires an unfinished intent without deleting its record or audit trail. `/aidlc intent unarchive <name>` restores it, and `intent list --all` includes archived intents.
+* `aidlc attest resolve` maps a commit or diff range to reviewed Units and reports `verified`, `drifted`, `unattested`, `unverifiable`, `indeterminate`, or `excluded`. `aidlc attest anchor` records commit pointers in the audit trail. Reviews created before 2.9.0 have no committed source evidence and report `unverifiable` until the next per-Unit review.
+* Construction autonomy can be granted or revoked on demand. The choice persists in older records that did not already contain the state field, while the first Construction approval, Code Generation Plan Approval, and failure stops remain human-owned.
+* Advisory review retries now use the engine's current ordinal after a rejected gate, avoiding false `REVIEW_BUDGET_EXHAUSTED` dead ends. Review bookkeeping stays in review records and audit data instead of becoming artifact content or new reviewer findings.
+* Kiro IDE read tools remain available during Code Generation Plan Approval recovery while write, shell, MCP, and delegated mutation paths stay guarded.
+* Stable and preview release packaging now separates the native `aidlc-runtime-2.9.0.tar.gz` asset from the Bun-based `aidlc-copy-runtime-2.9.0.tar.gz` manual-copy asset. Versioned installers install the release that carries them, including previews, and multiple changed `main` commits can publish previews on the same UTC date.
+* Repository maintainers can run the adversarial AI pull-request review workflow for same-repository PRs, with prompt-injection, security, and project-aligned review passes plus deterministic publication validation.
+
 ## [2.8.2] - 2026-09-10
 
 Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
