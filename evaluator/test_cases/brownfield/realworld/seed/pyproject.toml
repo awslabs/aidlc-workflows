@@ -1,0 +1,89 @@
+[project]
+name = "realworld-django-ninja"
+authors = [
+    {name = "Sean-Miningah", email = "seanpminingah@gmail.com"},
+    {name = "c4ffein", email = "c4ffein@protonmail.com"},
+]
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = ["License :: OSI Approved :: MIT License"]
+dependencies = [
+    "annotated-types==0.6.0",
+    "asgiref==3.8.1",
+    "coreapi==2.3.3",
+    "django==5.2.1",
+    "django-cors-headers==4.3.1",
+    "django-extensions==3.2.3",
+    "django-ninja==1.4.1",
+    "jwtninja",
+    "email-validator==2.1.1",
+    "markdown==3.4.3",
+    "parameterized==0.9.0",
+    "psycopg2==2.9.6",
+    "pydantic>=2.9.2",
+    "sqlparse==0.4.4",
+    "typing-extensions>=4.12.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ty==0.0.1a7",
+    "ruff==0.5.1",
+]
+
+[tool.setuptools]
+py-modules = []  # fixes `Multiple top-level packages discovered in a flat-layout`
+
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "B",    # flake8-bugbear
+    "C",    # flake8-comprehensions
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "FURB", # refurb
+    "I",    # isort
+    "PTH",  # flake8-use-pathlib
+    "UP",   # pyupgrade
+    "W",    # pycodestyle warnings
+]
+ignore = [
+    "C901",  # No complexity check
+]
+
+[tool.ty.rules]
+unresolved-attribute = "ignore"  # tradeoff since some schemas define fields from Meta
+unresolved-import = "ignore"  # not setting this for now but this line should be removed
+possibly-unbound-attribute = "ignore"  # too much false positive for now with Django QuerySet
