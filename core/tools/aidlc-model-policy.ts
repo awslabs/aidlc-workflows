@@ -47,27 +47,6 @@ export type ModelHarness =
   | "kiro"
   | "opencode";
 
-// The unified Kiro row replaces the retired `kiro-ide` distribution: both render
-// the same `.kiro` directory, so an id a previous release persisted resolves to
-// its successor whenever it is READ - a project stamp, a machine default, a
-// per-agent model key. One direction only, and a map rather than an equivalence
-// set, because writing the retired id back must stay impossible.
-//
-// This lives beside the roster on purpose. The first cut of the upgrade path put
-// the same map in aidlc-init.ts, and every consumer that resolves a persisted
-// identity somewhere else - the settings parser, the diagnostics sections, the
-// setup walk - was left rejecting the retired id.
-export const RETIRED_MODEL_HARNESS_SUCCESSOR: Readonly<Record<string, ModelHarness>> = {
-  "kiro-ide": "kiro",
-};
-
-export function currentModelHarness(harness: string): string {
-  return RETIRED_MODEL_HARNESS_SUCCESSOR[harness] ?? harness;
-}
-
-export function harnessUpgradesTo(existing: string, next: string): boolean {
-  return existing === next || RETIRED_MODEL_HARNESS_SUCCESSOR[existing] === next;
-}
 
 export type ModelPolicyLayer =
   | "agent-exception"

@@ -5,7 +5,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { installRoot } from "./aidlc-install-paths.ts";
-import { currentModelHarness } from "./aidlc-model-policy.ts";
+import { currentDistribution } from "./aidlc-runtime-paths.ts";
 import type {
   ModelAgentPolicy,
   ModelHarness,
@@ -204,7 +204,7 @@ function normalizeHarnessModelMap(value: unknown, where: string): HarnessModelMa
   const out: HarnessModelMap = {};
   const retired: Array<[ModelHarness, string]> = [];
   for (const [harness, model] of Object.entries(value)) {
-    const resolved = currentModelHarness(harness);
+    const resolved = currentDistribution(harness);
     if (!(MODEL_HARNESSES as readonly string[]).includes(resolved)) {
       throw new Error(`${where} has unknown harness ${JSON.stringify(harness)}`);
     }

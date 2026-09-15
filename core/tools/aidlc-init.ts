@@ -88,6 +88,8 @@ import {
   renderStageTable,
 } from "./aidlc-utility.ts";
 import {
+  currentDistribution,
+  distributionUpgradesTo,
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
@@ -95,10 +97,8 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
-  currentModelHarness,
   HARNESS_HONESTY,
   harnessHonestyNotes,
-  harnessUpgradesTo,
   isModelEffort,
   isModelPreset,
   MODEL_EFFORTS,
@@ -519,7 +519,7 @@ function modelHarness(value: string): ModelHarness {
   // what makes the diagnostics sections, the models section and the setup walk
   // accept a project that has not been refreshed yet; the returned type still has
   // no retired member, so every WRITE keeps emitting the current id.
-  const value_ = currentModelHarness(value);
+  const value_ = currentDistribution(value);
   if (
     value_ === "claude" ||
     value_ === "codex" ||
@@ -1299,7 +1299,7 @@ function selectedDiagnosticHarness(
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error(
@@ -4132,7 +4132,7 @@ function selectSource(
     }
     if (
       existingDistribution &&
-      !harnessUpgradesTo(existingDistribution, stamp.distribution)
+      !distributionUpgradesTo(existingDistribution, stamp.distribution)
     ) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
@@ -4141,7 +4141,7 @@ function selectSource(
   }
   const candidates = installedSourceCandidates(requiredVersion);
   const selectedName = existingDistribution
-    ? currentModelHarness(existingDistribution)
+    ? currentDistribution(existingDistribution)
     : requested;
   const versionFiltered = candidates;
   if (selectedName) {
@@ -4163,7 +4163,7 @@ function selectSource(
     // successor; without this, `aidlc config` on a fresh project fails until the
     // user passes `--harness` explicitly.
     const selected = versionFiltered.filter((candidate) =>
-      harnessUpgradesTo(configuredDefault, candidate.stamp.distribution)
+      distributionUpgradesTo(configuredDefault, candidate.stamp.distribution)
     );
     if (selected.length === 1) return selected[0];
     if (versionFiltered.length > 0) {
@@ -4208,7 +4208,7 @@ function copiedProjectSource(
 ): ConfigSource {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error("the project does not contain a copied AI-DLC projection");
@@ -5199,7 +5199,7 @@ function existingProject(projectDir: string, requested?: string): {
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const harness = requested
-    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!harness && requested && harnesses.length > 0) {
     throw new Error(
@@ -5769,7 +5769,7 @@ function prepareModelsSection(
   const requested = valueAfter(argv, "--harness");
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     emitResult(
@@ -6390,7 +6390,7 @@ export async function main(
     const { stamp, descriptor } = selected;
     if (
       existing.distribution &&
-      !harnessUpgradesTo(existing.distribution, stamp.distribution)
+      !distributionUpgradesTo(existing.distribution, stamp.distribution)
     ) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
