@@ -15,6 +15,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
   instructionFileDoctorCheck,
@@ -277,6 +278,86 @@ describe("t294 runtime diagnostics", () => {
     expect(absent.binaries.find((item) => item.name === "bun")?.status).toBe(
       "missing",
     );
+  });
+
+  // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the Debian
+  // family), so a Linux baseline built from it alone can never contain the
+  // directories the remediation tells the user to add. The login-independent
+  // sources are pam_env's /etc/environment, login.defs ENV_PATH, and
+  // environment.d; the probe reads them under the injected systemRoot.
+  test("Linux baseline PATH includes /etc/environment, login.defs, and environment.d entries", () => {
+    const root = temp("aidlc-t294-system-root-");
+    const home = temp("aidlc-t294-system-home-");
+    mkdirSync(join(root, "etc", "environment.d"), { recursive: true });
+    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    writeFileSync(
+      join(root, "etc", "environment"),
+      'PATH="/usr/local/bin:/opt/from-environment/bin"\nLANG=C.UTF-8\n',
+    );
+    writeFileSync(
+      join(root, "etc", "login.defs"),
+      "# comment\nENV_SUPATH\tPATH=/usr/local/sbin:/sbin\nENV_PATH\tPATH=/usr/bin:/opt/from-login-defs/bin\n",
+    );
+    writeFileSync(
+      join(root, "etc", "environment.d", "50-site.conf"),
+      "PATH=$PATH:/opt/from-environment-d/bin\n",
+    );
+    writeFileSync(
+      join(home, ".config", "environment.d", "10-user.conf"),
+      ["PATH=$", "{PATH}:/opt/from-user-environment-d/bin", "\nEDITOR=vi\n"].join(""),
+    );
+    const baseline = deriveNonInteractivePath({
+      platform: "linux",
+      systemRoot: root,
+      home,
+      env: {},
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    });
+    const entries = baseline.split(":");
+    expect(entries.slice(0, 2)).toEqual(["/bin", "/usr/bin"]);
+    for (const expected of [
+      "/usr/local/bin",
+      "/opt/from-environment/bin",
+      "/opt/from-login-defs/bin",
+      "/opt/from-environment-d/bin",
+      "/opt/from-user-environment-d/bin",
+    ]) {
+      expect(entries).toContain(expected);
+    }
+    // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
+    // references and quotes never survive as entries.
+    expect(entries).not.toContain("/sbin");
+    expect(entries.filter((entry) => entry.startsWith("$"))).toEqual([]);
+    expect(entries.filter((entry) => entry.includes('"'))).toEqual([]);
+    expect(new Set(entries).size).toBe(entries.length);
+
+    // A binary that lives only in an /etc/environment directory is found on
+    // the baseline, not reported as interactive-only.
+    const project = temp("aidlc-t294-system-root-project-");
+    const bin = join(project, "site-bin");
+    mkdirSync(bin);
+    writeExecutable(join(bin, "aidlc"));
+    const siteRoot = temp("aidlc-t294-system-root-site-");
+    mkdirSync(join(siteRoot, "etc"), { recursive: true });
+    writeFileSync(join(siteRoot, "etc", "environment"), `PATH="${bin}"\n`);
+    const probe = deriveNonInteractivePath({
+      platform: "linux",
+      systemRoot: siteRoot,
+      home,
+      env: {},
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    });
+    expect(probe.split(":")).toContain(bin);
+
+    // Without those sources the same layout is invisible to the baseline.
+    const bare = deriveNonInteractivePath({
+      platform: "linux",
+      systemRoot: temp("aidlc-t294-system-root-empty-"),
+      home: temp("aidlc-t294-system-home-empty-"),
+      env: {},
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    });
+    expect(bare).toBe("/bin:/usr/bin");
   });
 
   test("harness CLI probes guard missing commands and enforce version floors", () => {
