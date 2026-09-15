@@ -420,3 +420,13 @@ tracking for the stage itself. Earlier schemas and receipt-less completions fail
 open until the stage completes with this schema. Schema 2 is deliberately
 untracked because it cannot distinguish its old zero-instance resolution from
 the stage-level zero-Unit resolution introduced with schema 3.
+
+An `inputs[]` entry may also carry an optional `recheck_if` field
+(`edited` | `files-added-or-removed` | `changed`), copied through from the
+consuming stage's `consumes[].recheck_if` declaration at capture time. It
+narrows what class of producer change propagates staleness down this edge:
+`edited` fires when the producer's `contentHash` moves, `files-added-or-removed`
+fires when its `structureHash` moves, and `changed` (or an omitted field on an
+older receipt) fires on any change. Older schema-3 receipts written before this
+field existed continue to behave as `changed` — the pre-RFC pessimistic default
+— until natural re-completion mints a fresh receipt.
