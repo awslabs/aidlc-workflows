@@ -51,6 +51,8 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  isWorkflowParticipant,
+  resolveWorkflowSelection,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
@@ -575,6 +577,9 @@ if (target === "guard-tool-call") {
     if (isAutonomousMode(content)) return 0; // autonomous: never block
     if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
     if (!hasOpenGate(content)) return 0; // no gate awaits approval
+    // #1116: this checkout may merely have RECEIVED the committed record, in
+    // which case the gate is not this session's to satisfy or be blocked by.
+    if (!isWorkflowParticipant(cwd, resolveWorkflowSelection(cwd))) return 0;
 
     if (!humanActedSinceGate(cwd)) {
       process.stderr.write(

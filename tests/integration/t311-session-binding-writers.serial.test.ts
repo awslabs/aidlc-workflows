@@ -9,7 +9,7 @@
 // must beat the legacy fixed-name marker while shared cursors remain write-through.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntent,
@@ -130,6 +130,31 @@ describe("t311 session binding writers", () => {
     expect(resolveWorkflowSelection(proj, { sessionId: "cold-session-a" })).toMatchObject({
       space: "default",
       intent: null,
+    });
+  });
+
+  test("a lone committed record with no cursor does not become a binding (#1116)", () => {
+    // The clone received the record and intents.json; the cursor is per-user and
+    // gitignored, so it never arrived. Resolution still follows the lone-record
+    // fallback, but SessionStart must not bind this session to it.
+    const intent = createIntent(proj, "teammate-work", "default", "feature");
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), {
+      force: true,
+    });
+    expect(resolveWorkflowSelection(proj).intent).toBe(intent.dirName);
+
+    expect(fireSessionStart("received-record-only")).toBe(0);
+
+    expect(readSessionBinding(proj, "received-record-only")).toMatchObject({
+      space: "default",
+      intent: null,
+    });
+    // ... and a session that DOES hold the cursor binds normally.
+    setActiveIntentCursor(proj, intent.dirName, "default");
+    expect(fireSessionStart("cursor-holder")).toBe(0);
+    expect(readSessionBinding(proj, "cursor-holder")).toMatchObject({
+      space: "default",
+      intent: intent.dirName,
     });
   });
 

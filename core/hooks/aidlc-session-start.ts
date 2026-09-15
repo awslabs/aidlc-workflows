@@ -39,22 +39,24 @@ import {
   activeIntentUuid,
   activeSpace,
   clearSessionIntentUuid,
+  clearSessionRebindOffer,
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
-  harnessDir,
   getField,
+  harnessDir,
   hooksHealthDir,
+  intentUuidForSelection,
   isClaudeCodeHookInput,
   isoTimestamp,
-  intentUuidForSelection,
+  isWorkflowParticipant,
   readSessionBinding,
-  readSessionRebindOffer,
   readSessionIntentUuid,
+  readSessionRebindOffer,
   recordHookDrop,
   recoveryFilePath,
-  resolveWorkflowSelection,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   stateFilePathForSelection,
   validSessionId,
   writeCurrentSessionId,
@@ -62,7 +64,6 @@ import {
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
-  clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
@@ -152,7 +153,7 @@ const stampedTarget =
   source === "resume" && !preExistingBinding && preExistingStamp
     ? findIntentByUuid(projectDir, preExistingStamp)
     : null;
-const selection = stampedTarget
+const resolved = stampedTarget
   ? {
       space: stampedTarget.space,
       intent: stampedTarget.dirName,
@@ -160,6 +161,14 @@ const selection = stampedTarget
       binding: null,
     }
   : resolveWorkflowSelection(projectDir, { sessionId });
+
+// A clone that only RECEIVED a teammate's committed record resolves it through
+// the lone-record fallback, and binding that here would launder the fallback
+// into participation for every later hook. A non-participant therefore keeps
+// its session identity with intent:null and takes the no-workflow path below.
+const selection = isWorkflowParticipant(projectDir, resolved)
+  ? resolved
+  : { ...resolved, intent: null };
 
 // Persist the resolved fallback before any early return. A cold session must
 // retain intent:null instead of later following a cursor moved by another

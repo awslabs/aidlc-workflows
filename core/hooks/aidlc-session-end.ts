@@ -14,9 +14,11 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  isWorkflowParticipant,
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -75,6 +77,19 @@ if (sessionId) {
 // with session-start.ts). A session without an id, or a flat legacy workflow,
 // retains cursor fallback.
 if (!existsSync(stateFilePath(projectDir, intent, space))) return 0;
+
+// #1116: a stamp-less session in a flat/legacy workspace keeps the cursor
+// fallback above, which in a clone that never joined resolves a teammate's
+// committed record. Writing SESSION_ENDED there would log this session into
+// their intent.
+if (
+  !isWorkflowParticipant(
+    projectDir,
+    resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {}),
+  )
+) {
+  return 0;
+}
 
 // Health heartbeat follows the same session-owned intent as the audit event.
 const healthDir = hooksHealthDir(projectDir, intent, space);

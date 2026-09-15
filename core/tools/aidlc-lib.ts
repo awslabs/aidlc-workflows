@@ -1979,6 +1979,21 @@ export function listIntentDirs(projectDir: string, space?: string): string[] {
   return records.sort();
 }
 
+// The record the active-intent cursor names, or null when no cursor names a
+// real record. Split out of `activeIntent` because the cursor is per-user and
+// gitignored while the record is committed: participation checks need the
+// cursor ALONE, without the lone-intent fallback below it.
+export function cursorIntent(projectDir: string, space?: string): string | null {
+  const dir = intentsDir(projectDir, space ?? activeSpace(projectDir));
+  try {
+    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
+    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+  } catch {
+    // no cursor
+  }
+  return null;
+}
+
 // The active intent's RECORD directory NAME (`<slug>-<id8>`) for a space, or
 // null when no record resolves (→ the path helpers resolve the bare space record
 // root). Precedence: explicit > active-intent cursor (if it names a real record)
@@ -1991,15 +2006,10 @@ export function activeIntent(
   explicit?: string,
 ): string | null {
   const sp = space ?? activeSpace(projectDir);
-  const dir = intentsDir(projectDir, sp);
   if (explicit) return explicit;
   // Cursor: a real record the pointer names.
-  try {
-    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
-  } catch {
-    // no cursor → fall through to lone-intent
-  }
+  const cursor = cursorIntent(projectDir, sp);
+  if (cursor !== null) return cursor;
   // Archived records never resolve implicitly: a space whose only record was
   // archived reads as "no active intent" (creation is correct), not as that
   // retired record silently coming back. An explicit cursor naming an archived
@@ -4310,6 +4320,57 @@ export function stateFilePathForSelection(
 export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {
   if (selection.intent === null) return null;
   return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
+}
+
+// The record path a worktree's own creation metadata names, or null. Written by
+// `aidlc-worktree.ts create` into `<worktree>/.aidlc/worktree-meta.json`; read
+// here so a worktree can prove participation without a second marker.
+function worktreeMetaIntentRecord(projectDir: string): string | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(projectDir, ".aidlc", "worktree-meta.json"), "utf-8"),
+    ) as { intentRecord?: unknown };
+    return typeof parsed.intentRecord === "string" ? parsed.intentRecord : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether THIS checkout joined the workflow the selection names. Resolution and
+// participation are different questions: `activeIntent`'s lone-record fallback
+// is load-bearing (a git worktree does not inherit the per-user cursor, so
+// t07/t49 depend on resolving the committed record), but a clone that merely
+// received a teammate's committed record never joined it. Reading that fallback
+// as participation is what blocks an unrelated session and writes its events
+// into the teammate's intent.
+//
+// Every signal below is machine-local and names the exact {space, intent}: a
+// committed record alone cannot satisfy any of them.
+export function isWorkflowParticipant(
+  projectDir: string,
+  selection: WorkflowSelection,
+): boolean {
+  if (selection.intent === null) return false;
+  // A session binding this machine wrote for exactly this target.
+  if (
+    selection.binding !== null &&
+    selection.binding.space === selection.space &&
+    selection.binding.intent === selection.intent
+  ) {
+    return true;
+  }
+  // The per-user cursor, WITHOUT the lone-record fallback under it.
+  if (cursorIntent(projectDir, selection.space) === selection.intent) return true;
+  // The intent's own worktree, proven by its creation metadata.
+  if (
+    worktreeMetaIntentRecord(projectDir) ===
+    relativeRecordDirForSelection(selection)
+  ) {
+    return true;
+  }
+  // The Unit participant marker the orchestrator already reads as participation
+  // evidence. Checkout-wide rather than intent-scoped, so it is the last resort.
+  return existsSync(unitParticipantPath(projectDir));
 }
 
 export function intentUuidForSelection(
@@ -7417,12 +7478,24 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_REMOVED",
 ]);
 export function humanActedSinceGate(projectDir: string): boolean {
+  // Presence is workflow-global ACROSS shards by design (a later human turn in
+  // a sibling shard authorizes), but only for a checkout that joined the
+  // workflow. A clone that merely received the committed record resolves it by
+  // the lone-record fallback, so without this precondition its own HUMAN_TURN
+  // would answer the teammate's gate.
+  const selection = resolveWorkflowSelection(projectDir);
+  if (selection.intent !== null && !isWorkflowParticipant(projectDir, selection)) {
+    return false;
+  }
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
   // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
   // genuinely unordered (isoTimestamp is second-precision) and fail closed
   // below.
-  const shards = auditShards(projectDir);
+  const shards =
+    selection.intent === null
+      ? auditShards(projectDir)
+      : auditShards(projectDir, selection.intent, selection.space);
   const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
   let sawPresenceTrackingEvent = false;
   for (let s = 0; s < shards.length; s++) {

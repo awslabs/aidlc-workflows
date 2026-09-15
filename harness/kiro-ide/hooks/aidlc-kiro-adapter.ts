@@ -80,32 +80,34 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
-  decodeHarnessPlainText,
-  hasOpenGate,
   clearKiroIdeLegacyPlanApprovalHost,
+  clearPlanApprovalLegacyWindow,
   clearPlanApprovalViolation,
+  decodeHarnessPlainText,
   getField,
+  hasOpenGate,
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  isWorkflowParticipant,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
-  clearPlanApprovalLegacyWindow,
-  recordHookDrop,
-  readPlanApprovalViolation,
+  readActiveDirectiveMarker,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
-  readActiveDirectiveMarker,
+  readPlanApprovalViolation,
+  recordHookDrop,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   sanitizeHarnessPlainText,
-  writePlanApprovalLegacyWindow,
-  writePlanApprovalViolation,
   sessionsDir,
   splitKiroCommandArgs,
   stateFilePath,
   UNBINDABLE_FINGERPRINT,
   workspaceSourceState,
+  writePlanApprovalLegacyWindow,
+  writePlanApprovalViolation,
   writeWorkspaceSourceSnapshot,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -1053,6 +1055,9 @@ if (target === "enforce-approval-gate") {
     if (isAutonomousMode(content)) return 0;
     if (humanPresenceGuardDisabled()) return 0;
     if (!hasOpenGate(content)) return 0;
+    // #1116: this checkout may merely have RECEIVED the committed record, in
+    // which case the gate is not this session's to satisfy or be blocked by.
+    if (!isWorkflowParticipant(pd, resolveWorkflowSelection(pd))) return 0;
     if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +

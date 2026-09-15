@@ -53,8 +53,10 @@ import { existsSync } from "node:fs";
 import {
   consumeSharedDirectiveAsk,
   humanTurnMintAllowed,
+  isWorkflowParticipant,
   markHumanTurn,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -106,6 +108,21 @@ export async function run(input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   if (existsSync(stateFilePath(projectDir))) {
+    // #1116: the gate above resolves a teammate's committed record through the
+    // lone-record fallback in a clone that never joined it. Both the ledger mint
+    // and the turn marker below write into that record, so participation is
+    // required before either. The payload's session id is read here because a
+    // genuine participant may be evidenced only by its session binding.
+    let payloadSessionId = "";
+    try {
+      const raw = JSON.parse(input) as { session_id?: unknown };
+      if (typeof raw.session_id === "string") payloadSessionId = raw.session_id.trim();
+    } catch { /* legacy payloads carry no identity */ }
+    const selection = resolveWorkflowSelection(
+      projectDir,
+      payloadSessionId ? { sessionId: payloadSessionId } : {},
+    );
+    if (!isWorkflowParticipant(projectDir, selection)) return 0;
     if (humanTurnMintAllowed()) {
       let sessionId = "";
       let humanResponseText = "";
@@ -151,7 +168,13 @@ try {
         }
       } catch { /* presence still records without identity on legacy payloads */ }
       try {
-        appendAuditEntry("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+        appendAuditEntry(
+          "HUMAN_TURN",
+          sessionId ? { Session: sessionId } : {},
+          projectDir,
+          selection.intent ?? undefined,
+          selection.space,
+        );
         if (sessionId && humanResponseText) {
           recordPlanApprovalHumanResponse(
             projectDir,
@@ -171,7 +194,7 @@ try {
         // Non-authority marker consumption is independently best-effort.
       }
     }
-    markHumanTurn(projectDir);
+    markHumanTurn(projectDir, selection.intent ?? undefined, selection.space);
   }
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.
