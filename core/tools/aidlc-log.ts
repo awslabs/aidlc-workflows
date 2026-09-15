@@ -2411,16 +2411,31 @@ function handleReview(args: string[]): void {
       const artifactKey = snapshot.reviewArtifact;
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
       let findings: ReturnType<typeof parseReviewSection>["findings"] = [];
+      let tablePresent = false;
       if (!incompleteFallback) {
         try {
-          findings = parseReviewSection(
+          const parsed = parseReviewSection(
             recordBody.toString("utf-8"),
             artifactKey,
             flags.unit,
-          ).findings;
+          );
+          findings = parsed.findings;
+          tablePresent = parsed.tablePresent;
         } catch (parseError) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
+          );
+        }
+        // A canonical findings table with no rows under a NOT-READY verdict is
+        // refused: the gate would render "No findings" over a rejection, and
+        // --reject-finding would have no row to select. A reviewer that wrote
+        // prose instead of a table is NOT refused here — the reviewer protocol
+        // already classifies that shape as an incomplete review, and enforcing
+        // it at this seam would reject bodies that predate the table contract.
+        if (verdict === "NOT-READY" && tablePresent && findings.length === 0) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": a NOT-READY review ` +
+              "with a findings table must record at least one finding in it.",
           );
         }
       }
