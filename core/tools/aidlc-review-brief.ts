@@ -378,8 +378,15 @@ export function rejectedFindingDispositionField(
       candidate.artifact === spec.artifact && candidate.id === spec.id
     );
     if (!finding) {
+      // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
+      const available = findings
+        .map((candidate) => `${candidate.artifact}#${candidate.id}`)
+        .sort();
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for this gate.`,
+        `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for this gate. ` +
+          (available.length > 0
+            ? `Current findings: ${available.join(", ")}.`
+            : "This gate has no current review findings."),
       );
     }
     if (finding.status !== "New" && finding.status !== "Unresolved") {
@@ -821,10 +828,12 @@ export function renderReviewBrief(
         : contexts.some((context) => context.verdict === "NOT-READY")
           ? "The review did not complete with actionable findings."
           : "No blocking concerns were found.";
+  // `stale` also covers a conductor edit that self-invalidated the receipt, so naming
+  // only upstream change misleads; the accurate cause is appended below either way.
   const why = {
     first: "First review completed.",
     revision: "Revision re-checked.",
-    stale: "Re-check required after upstream work changed.",
+    stale: "Re-check required: the previous review receipt is no longer valid.",
   }[reason];
 
   const lines = [
