@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,18 +15,21 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
   commandPath,
+  type InstalledRuntimeIntegrity,
   projectPinTargetPath,
   readActiveExecutable,
   windowsUninstallFencePath,
 } from "../../core/tools/aidlc-install-paths.ts";
+import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
 import { activate } from "../../core/tools/aidlc-lifecycle.ts";
 import {
@@ -38,6 +42,8 @@ import {
   refreshUpdateState,
 } from "../../core/tools/aidlc-update.ts";
 import { _resetSettingsCacheForTests } from "../../core/tools/aidlc-settings.ts";
+import { transactionState } from "../../core/tools/aidlc-transaction.ts";
+import { assertSafeUninstallRoot } from "../../core/tools/aidlc-uninstall-plan.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { scanWindowsUninstallJournals } from "../../core/tools/aidlc-windows-uninstall.ts";
 import {
@@ -915,6 +921,36 @@ describe("t244 management lifecycle", () => {
     expect(
       existsSync(join(machine, "versions", AIDLC_VERSION, "plugins", "test-pro", "claude")),
     ).toBe(true);
+    const installedRoot = join(machine, "versions", AIDLC_VERSION);
+    const installedManifest = JSON.parse(
+      readFileSync(join(installedRoot, "version.json"), "utf-8"),
+    ) as {
+      installedRuntime: { schemaVersion: number; baseline: string; sha256: string };
+      installedFiles: { schemaVersion: number; baseline: string; sha256: string };
+    };
+    expect(installedManifest.installedRuntime).toEqual({
+      schemaVersion: 1,
+      baseline: "runtime-integrity.json",
+      sha256: sha256File(join(installedRoot, "runtime-integrity.json")),
+    });
+    expect(installedManifest.installedFiles).toEqual({
+      schemaVersion: 1,
+      baseline: "installed-files.json",
+      sha256: sha256File(join(installedRoot, "installed-files.json")),
+    });
+    const inventory = JSON.parse(
+      readFileSync(join(installedRoot, "installed-files.json"), "utf-8"),
+    ) as InstalledRuntimeIntegrity;
+    expect(inventory.schemaVersion).toBe(1);
+    expect(inventory.version).toBe(AIDLC_VERSION);
+    expect(inventory.files.map((file) => file.path)).toEqual(
+      walkFiles(installedRoot)
+        .map((path) => path.replaceAll("\\", "/"))
+        .filter((path) => !["installed-files.json", "version.json"].includes(path)),
+    );
+    for (const file of inventory.files) {
+      expect(file.sha256, file.path).toBe(sha256File(join(installedRoot, file.path)));
+    }
     const missingChoice = run(DISPATCHER, [
       "config", "--project-dir", project, "--mcp", "none",
     ], project, env);
@@ -1004,6 +1040,20 @@ describe("t244 management lifecycle", () => {
       `Updated aidlc from ${AIDLC_VERSION} to ${NEXT_VERSION}.`,
     );
     expect(updated.stdout).toContain(`Pruned unprotected releases: ${REMOVABLE_VERSION}.`);
+    expect(run(LIFECYCLE, [
+      "versions", "install", REMOVABLE_VERSION, "--from", removableRelease,
+    ], project, env).status).toBe(0);
+    const pruneSentinel = join(machine, "versions", REMOVABLE_VERSION, "user-kept.txt");
+    writeFileSync(pruneSentinel, "keep unowned version data\n");
+    const refusedPrune = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
+    expect(refusedPrune.status, refusedPrune.stdout + refusedPrune.stderr).toBe(4);
+    expect(readFileSync(pruneSentinel, "utf-8")).toBe("keep unowned version data\n");
+    expect(existsSync(join(machine, "versions", REMOVABLE_VERSION, "version.json"))).toBe(true);
+    // Only this test-created sentinel is removed before retrying the file plan.
+    unlinkSync(pruneSentinel);
+    const safePrune = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
+    expect(safePrune.status, safePrune.stdout + safePrune.stderr).toBe(0);
+    expect(existsSync(join(machine, "versions", REMOVABLE_VERSION))).toBe(false);
     const noop = run(LIFECYCLE, [
       "update", "--version", NEXT_VERSION, "--from", nextRelease,
     ], project, env);
@@ -1188,6 +1238,121 @@ describe("t244 management lifecycle", () => {
     }
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
   }, process.platform === "win32" ? 180_000 : 60_000);
+
+  for (const purge of [false, true]) {
+    test(`uninstall${purge ? " --purge" : ""} preserves unowned and changed files within and outside the install`, async () => {
+      const release = fixture(AIDLC_VERSION, { binary: "executable" });
+      const workspace = temp("aidlc-t244-bounded-uninstall-");
+      const machine = join(workspace, "install");
+      const project = join(workspace, "project");
+      const outside = join(workspace, "outside");
+      const bin = join(outside, "bin");
+      mkdirSync(join(project, ".git"), { recursive: true });
+      mkdirSync(bin, { recursive: true });
+      const env = { ...envFor(machine), AIDLC_BIN_DIR: bin };
+      const installed = run(LIFECYCLE, [
+        "update", "--version", AIDLC_VERSION, "--from", release,
+      ], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const installedRoot = join(machine, "versions", AIDLC_VERSION);
+      const pluginRoot = join(installedRoot, "plugins", "test-pro", "claude");
+      const changedPlugin = join(pluginRoot, walkFiles(pluginRoot)[0]);
+      const preserved = [
+        join(machine, "keep.txt"),
+        join(machine, "completions", "keep.txt"),
+        join(machine, "completions", "aidlc.fish"),
+        join(installedRoot, "keep.txt"),
+        changedPlugin,
+      ];
+      const outsideSentinels = [
+        join(project, "keep.txt"),
+        join(outside, "keep.txt"),
+        join(bin, "keep.txt"),
+      ];
+      for (const path of [...preserved, ...outsideSentinels]) {
+        writeFileSync(path, `user-owned: ${path}\n`);
+      }
+      const links = process.platform === "win32" ? [] : [
+        join(machine, "outside-link"),
+        join(machine, "completions", "project-link"),
+        join(installedRoot, "outside-link"),
+      ];
+      for (const path of links) symlinkSync(outside, path, "dir");
+
+      const cancelled = run(LIFECYCLE, [
+        "uninstall", ...(purge ? ["--purge"] : []),
+      ], project, env);
+      expect(cancelled.status, cancelled.stdout + cancelled.stderr).toBe(2);
+      expect(cancelled.stdout + cancelled.stderr).toContain("unowned or changed path(s)");
+      for (const path of preserved) {
+        expect(cancelled.stdout + cancelled.stderr).toContain(path);
+      }
+      const removed = [
+        join(bin, process.platform === "win32" ? "aidlc.cmd" : "aidlc"),
+        join(installedRoot, process.platform === "win32" ? "aidlc.exe" : "aidlc"),
+        join(machine, "completions", "aidlc.bash"),
+        join(installedRoot, "runtime"),
+      ];
+      for (const path of removed) expect(existsSync(path), path).toBe(true);
+      const uninstalled = run(LIFECYCLE, [
+        "uninstall", "--yes", ...(purge ? ["--purge", "--json"] : []),
+      ], project, env);
+      expect(uninstalled.status, uninstalled.stdout + uninstalled.stderr).toBe(0);
+      expect(uninstalled.stdout).not.toContain("all retained releases");
+      if (purge) {
+        const result = JSON.parse(uninstalled.stdout) as {
+          message: string;
+          data: { preservedUnowned: string[]; preservedUnownedCount: number };
+        };
+        expect(result.data.preservedUnowned).toEqual(expect.arrayContaining(preserved));
+        expect(result.data.preservedUnownedCount).toBe(result.data.preservedUnowned.length);
+        expect(result.message).toContain("unowned or changed path(s)");
+      } else {
+        expect(uninstalled.stdout).toContain("unowned or changed path(s)");
+        for (const path of preserved) expect(uninstalled.stdout).toContain(path);
+      }
+      await waitForAbsent(removed);
+      for (const path of [...preserved, ...outsideSentinels]) {
+        expect(readFileSync(path, "utf-8"), path).toBe(`user-owned: ${path}\n`);
+      }
+      for (const path of links) expect(lstatSync(path).isSymbolicLink(), path).toBe(true);
+      expect(existsSync(installedRoot)).toBe(true);
+      expect(existsSync(join(machine, "completions"))).toBe(true);
+      expect(existsSync(machine)).toBe(true);
+    }, process.platform === "win32" ? 180_000 : 90_000);
+  }
+
+  test("uninstall root guard rejects home and filesystem roots through read-only validation", () => {
+    // Exercise only the guard: real shared roots must never reach uninstall.
+    for (const root of [homedir(), parse(homedir()).root]) {
+      expect(() => assertSafeUninstallRoot(root)).toThrow("refusing uninstall");
+    }
+  });
+
+  test("uninstall rejects disposable project and malformed roots without changing files", () => {
+    const workspace = temp("aidlc-t244-uninstall-root-guards-");
+    const project = join(workspace, "project");
+    const fileRoot = join(workspace, "not-a-directory");
+    mkdirSync(join(project, ".git"), { recursive: true });
+    writeFileSync(fileRoot, "keep the root file\n");
+    writeFileSync(join(project, "keep.txt"), "keep the project\n");
+    const roots = [project, ".", join(project, ".git"), fileRoot];
+    if (process.platform !== "win32") {
+      const malformed = join(workspace, "install\ninvalid");
+      mkdirSync(malformed);
+      writeFileSync(join(malformed, "keep.txt"), "keep the malformed root\n");
+      roots.push(malformed);
+    }
+    const before = transactionState(workspace);
+    for (const root of roots) {
+      const result = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, {
+        ...envFor(root),
+        AIDLC_BIN_DIR: join(workspace, "bin"),
+      });
+      expect(result.status, `${root}: ${result.stdout}${result.stderr}`).toBe(4);
+      expect(transactionState(workspace), root).toBe(before);
+    }
+  });
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
@@ -1497,7 +1662,6 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(script).toContain("$env:AIDLC_RELEASE_REPOSITORY");
     expect(script).toContain("$env:AIDLC_RELEASE_WORKFLOW");
     expect(script).toContain("$env:AIDLC_GH_BIN");
-    expect(script).toContain("$env:Path = \"$binDir;$env:Path\"");
     expect(script).toContain("exceeds the 1 MiB metadata limit");
     const release = fixture(AIDLC_VERSION, { binary: "bytes" });
     const manifest = JSON.parse(readFileSync(join(release, "version.json"), "utf-8")) as {
@@ -1508,32 +1672,30 @@ describe("t244 Windows and completion release surfaces", () => {
     );
   }, process.platform === "win32" ? 120_000 : 5_000);
 
+  test("PowerShell installer exposes PATH opt-out without an Administrator override", () => {
+    const script = readFileSync(INSTALL_PS1, "utf-8");
+    expect(script).toContain("[switch]$NoModifyPath");
+    expect(script).not.toContain("AIDLC_ALLOW_ADMIN_INSTALL");
+    expect(script).not.toContain("Confirm-NotAdministrator");
+    expect(script).not.toContain("refusing an Administrator install");
+  });
+
   test("PowerShell installer keeps analyzer suppressions narrow and helper calls named", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
-    expect(script).toContain("[switch]$Yes");
-    expect(script).toContain("[switch]$NoColor");
-    expect(script).toContain(
-      "'PSReviewUnusedParameter',\n  'Yes',\n" +
-        "  Justification = 'Public parity flag; the installer is non-interactive and never prompts.'",
-    );
-    expect(script).toContain(
-      "'PSReviewUnusedParameter',\n  'NoColor',\n" +
-        "  Justification = 'Public parity flag; this installer emits no ANSI color.'",
-    );
-    expect(script).toContain(
-      "'PSAvoidUsingWriteHost',\n  '',\n" +
-        "  Justification = 'The PATH instruction is part of the pinned human-mode stdout contract under PowerShell 5.1.'",
-    );
-    expect(script).toContain(
-      "'PSAvoidUsingWriteHost',\n    '',\n" +
-        "    Justification = 'PASS output is part of the pinned human-mode stdout contract under PowerShell 5.1.'",
-    );
-    expect(script.match(/'PSAvoidUsingWriteHost'/g)).toHaveLength(2);
-    expect(script).toContain(
-      "'PSUseShouldProcessForStateChangingFunctions',\n    '',\n" +
-        "    Justification = 'This helper only emits the terminal result and exits; it performs no state mutation.'",
-    );
-    expect(script.match(/^\s*Write-Host\b/gm)).toHaveLength(2);
+    for (const flag of ["Yes", "NoColor"]) {
+      expect(script).toContain(`[switch]$${flag}`);
+      expect(script).toMatch(new RegExp(`'PSReviewUnusedParameter',\\s*'${flag}',`));
+    }
+    // Human output is covered behaviorally by the Windows helper tests.
+    // Suppressions must name a rule and give a reason, without pinning their
+    // wording, number of Write-Host calls, or the former PASS prefix.
+    const suppressions = [...script.matchAll(
+      /\[Diagnostics\.CodeAnalysis\.SuppressMessageAttribute\(([\s\S]*?)\)\]/g,
+    )];
+    for (const [, suppression] of suppressions) {
+      expect(suppression).toMatch(/^\s*'PS[A-Za-z]+',/);
+      expect(suppression).toMatch(/Justification\s*=\s*'[^']+'/);
+    }
     for (const helper of [
       "Stop-Install",
       "Write-Result",
@@ -1605,7 +1767,7 @@ describe("t244 Windows and completion release surfaces", () => {
       `PowerShell installer param binding ${accepted ? "accepts" : "rejects"} ${label}`,
       () => {
         // Exercise the real parameter block, including the iex default, without
-        // reaching the installer's admin/network checks.
+        // reaching the installer's network or installation steps.
         const script = readFileSync(INSTALL_PS1, "utf-8");
         const bodyStart = script.indexOf("$ErrorActionPreference");
         expect(bodyStart).toBeGreaterThan(0);
@@ -2189,7 +2351,7 @@ describe("t244 Windows and completion release surfaces", () => {
       "& $command config --project-dir $project --harness $harness --mcp none --quiet",
     );
     expect(windows).toContain("& $command doctor --project-dir $project --quiet");
-    expect(windows).toContain("$deadline = [DateTime]::UtcNow.AddSeconds(60)");
+    expect(windows).toContain("$deadline = [DateTime]::UtcNow.AddSeconds(180)");
     expect(windows).toContain("$commandExists = Test-Path -LiteralPath $command");
     expect(windows).toContain(
       "$rootExists = Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT",
