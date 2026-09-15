@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 985,
+    "total": 986,
     "enumeratedByClass": {
-      "function": 675,
+      "function": 676,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 404,
+      "function": 405,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -2202,6 +2202,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbScopeChangedFiles",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
           "mechanism": "cli"
         }
       ],
