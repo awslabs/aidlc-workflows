@@ -74,6 +74,8 @@ Reply with a number (or just tell me).
 
 ## Mandatory consolidated-summary checkpoint
 
+This checkpoint applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers: no summary-confirmation prompt, confirmation entry, or receipt. Required stage questions and other human decisions, including Plan Approval and the stage approval gate, are unchanged.
+
 After guided or chat file-backed Q&A (and whenever a stage definition requires
 it explicitly, such as Requirements Analysis), the stage protocol requires a
 separate confirmation before any stage artifact is generated. Append or update

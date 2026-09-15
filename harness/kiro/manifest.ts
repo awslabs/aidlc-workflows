@@ -135,6 +135,8 @@ const manifest: HarnessManifest = {
       legacySignatures: {
         wholeFileHashes: [
           "sha256:83449fdda4644b319cbea5dcbde11919722b5dd6761f4edb4caf0e0e53dc9c6b",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:469dbf89f83865b58b2ae4c51dd2f2fe51fd80a9e2033bfb233688141d0cf632",
         ],
       },
     },
@@ -163,6 +165,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before this branch rewrote the shared onboarding
           // skeleton; an install from that release must still be recognised.
           "sha256:1989d45c43801ae58a6f0c9830d593a8ab17f5ada4cfa2cf03891b307a9d7634",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
+          "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
         ],
       },
     },

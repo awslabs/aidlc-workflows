@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
@@ -1480,8 +1480,9 @@ describe("t265b hook lifecycle", () => {
       expect(runHook(proj, STAGE_DISPATCH(proj, "Implement")).code).toBe(2);
 
       const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      mkdirSync(dirname(join(proj, RECORD_REL, ".aidlc-engine/active-directive.json")), { recursive: true });
       writeFileSync(
-        join(proj, RECORD_REL, ".aidlc-active-directive.json"),
+        join(proj, RECORD_REL, ".aidlc-engine/active-directive.json"),
         `${JSON.stringify({
           version: 1,
           stage: "code-generation",

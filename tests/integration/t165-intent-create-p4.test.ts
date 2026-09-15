@@ -170,7 +170,7 @@ function readIntentAudit(p: string, record: string): string {
 }
 
 function hookHeartbeat(p: string, record: string, name: string): string {
-  return join(intentsDir(p), record, ".aidlc-hooks-health", name);
+  return join(intentsDir(p), record, ".aidlc-engine/hooks-health", name);
 }
 
 // ============================================================
@@ -1362,9 +1362,18 @@ describe("t164 doctor readiness against the shipped shell", () => {
       force: true,
     });
     const r = util(["doctor"]);
-    // The row fails and points at `aidlc config` (the native channel).
+    // The row fails and names the refresh that actually rebuilds the shell. A
+    // bare `aidlc config` was circular: on a project that already has a harness
+    // directory it takes the interactive existing-projection walk, which does
+    // not recreate a missing shell. Only `--harness <name>` reaches the refresh
+    // transaction. The command prefix is channel-dependent, and `config
+    // --harness` alone also appears in the installed-runtime row's fix, so
+    // match the flag together with the suffix only this row prints.
     expect(r.out).toContain("workspace shell ready");
-    expect(r.out).toContain("run `aidlc config`");
+    expect(r.out).toContain("config --harness");
+    expect(r.out).toContain(
+      "in the project root to recreate the harness tree and workspace shell",
+    );
   });
 });
 

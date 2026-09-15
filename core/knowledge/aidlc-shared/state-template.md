@@ -29,6 +29,9 @@ Authoritative generated views:
 - **Depth**: [Minimal/Standard/Comprehensive]
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
 - **Change Control**: [strict/relaxed, then its source in parentheses: `(from scope <name>)`, `(from <layer>.md)`, or `(set by you)`; written at intent creation with the resolved value, rewritten by `/aidlc --change-control` or the plain-chat request, read by value only]
+- **Sensors**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --sensors`, read by value only]
+- **Learnings**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --learnings`, read by value only]
+- **Summary Confirmation**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --summary-confirmation`, read by value only]
 
 ## Workspace State
 - **Project Root**: [project-relative path, normally `.`; re-derived at runtime, never trusted as an absolute path]

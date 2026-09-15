@@ -105,11 +105,16 @@ function legacy28ManifestError(manifest: {
   return undefined;
 }
 
+// Relative paths from walkFiles carry the host separator; normalize so the
+// hooks/tools exclusion holds on Windows as well as POSIX.
+function isInvocationSurfaceFile(path: string): boolean {
+  const rel = path.replaceAll("\\", "/");
+  if (!/\.(?:hook|json|md|toml|ts)$/.test(rel) || rel === "install.ts") return false;
+  return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(rel);
+}
+
 function invocationSurfaceFiles(root: string): string[] {
-  return walkFiles(root).filter((path) => {
-    if (!/\.(?:hook|json|md|toml|ts)$/.test(path) || path === "install.ts") return false;
-    return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(path);
-  });
+  return walkFiles(root).filter(isInvocationSurfaceFile);
 }
 
 function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
@@ -172,6 +177,23 @@ describe("t238 build-binaries release builder", () => {
       "file:///$bunfs\\root\\aidlc.ts",
       "C:\\Users\\Administrator\\.bun\\bin\\bun.exe",
     )).toBe(true);
+  });
+
+  test("invocation-surface selector excludes hook and tool sources under either separator", () => {
+    for (const sep of ["/", "\\"] as const) {
+      const p = (...parts: string[]): string => parts.join(sep);
+      expect(isInvocationSurfaceFile(p(".claude", "hooks", "aidlc-session-start.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".claude", "tools", "aidlc-utility.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".kiro", "tools", "aidlc-init.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".github", "hooks", "aidlc.json"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "tools", "data", "harness.json"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".codex", "config.toml"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "settings.json"))).toBe(true);
+    }
+    expect(isInvocationSurfaceFile("install.ts")).toBe(false);
+    expect(isInvocationSurfaceFile("AGENTS.md")).toBe(true);
+    expect(isInvocationSurfaceFile("README")).toBe(false);
   });
 
   test("native build compiles, gates, and runs version plus a delegate from an isolated project", () => {
@@ -766,6 +788,12 @@ describe("t238 build-binaries release builder", () => {
       expect(readdirSync(output).filter((name) => name === expectedName)).toEqual([
         expectedName,
       ]);
+      expect(readFileSync(join(output, "install.sh"), "utf-8")).toContain(
+        `PACKAGED_VERSION='${AIDLC_VERSION}'`,
+      );
+      expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
+        `$PackagedVersion = '${AIDLC_VERSION}'`,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

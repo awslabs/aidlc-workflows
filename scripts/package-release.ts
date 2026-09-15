@@ -66,6 +66,18 @@ function sameNames(actual: readonly string[], expected: readonly string[]): bool
     actual.every((name, index) => name === expected[index]);
 }
 
+function versionedInstaller(
+  sourcePath: string,
+  marker: string,
+  replacement: string,
+): string {
+  const source = readFileSync(sourcePath, "utf-8");
+  if (source.split(marker).length !== 2) {
+    throw new Error(`${relative(REPO_ROOT, sourcePath)} must contain exactly one ${marker}`);
+  }
+  return source.replace(marker, replacement);
+}
+
 function sourceHarnesses(): string[] {
   return directoryNames(join(REPO_ROOT, "harness"))
     .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")));
@@ -374,7 +386,14 @@ function build(argv: string[]): void {
   }
 
   const installer = join(output, "install.sh");
-  copyFileSync(join(REPO_ROOT, "scripts", "install.sh"), installer);
+  writeFileSync(
+    installer,
+    versionedInstaller(
+      join(REPO_ROOT, "scripts", "install.sh"),
+      "PACKAGED_VERSION=''",
+      `PACKAGED_VERSION='${BUILD_VERSION}'`,
+    ),
+  );
   chmodSync(installer, 0o755);
   assets.push({
     name: "install.sh",
@@ -384,7 +403,14 @@ function build(argv: string[]): void {
   });
 
   const powershellInstaller = join(output, "install.ps1");
-  copyFileSync(join(REPO_ROOT, "scripts", "install.ps1"), powershellInstaller);
+  writeFileSync(
+    powershellInstaller,
+    versionedInstaller(
+      join(REPO_ROOT, "scripts", "install.ps1"),
+      "$PackagedVersion = ''",
+      `$PackagedVersion = '${BUILD_VERSION}'`,
+    ),
+  );
   assets.push({
     name: "install.ps1",
     sha256: digest(powershellInstaller),

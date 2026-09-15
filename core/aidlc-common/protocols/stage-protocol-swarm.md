@@ -6,8 +6,7 @@ harness.
 
 **Settled-swarm re-entry.** `swarm_settled: true` is a gate-only directive
 emitted after every Unit body and reviewer receipt has converged. Do not run the
-stage body, dispatch builders, or dispatch a reviewer again. Run only the
-stage-level learnings ritual and approval gate, then report the human's result.
+stage body, dispatch builders, or dispatch a reviewer again. Run the stage-level learnings ritual only when `directive.protocol_modules` lists `learnings`, then the approval gate, and report the human's result. With learnings off, go directly to the single approval gate.
 This rule is self-contained so a fresh session cannot repeat reviews after
 losing the earlier swarm conversation.
 

@@ -72,7 +72,7 @@
     "tool_name": "delete_file",
     "tool_input": {
       "explanation": "Closing the reviewer read-scope enforcement window.",
-      "targetFile": "aidlc/spaces/default/intents/example/.aidlc-reviewer-dispatch.json"
+      "targetFile": "aidlc/spaces/default/intents/example/.aidlc-engine/reviewer-dispatch.json"
     }
   },
   "postToolUse_fs_write_str_replace": {

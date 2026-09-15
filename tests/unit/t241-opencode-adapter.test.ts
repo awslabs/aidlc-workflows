@@ -246,7 +246,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         "spaces",
         "default",
         "intents",
-        ".aidlc-hooks-health",
+        ".aidlc-engine/hooks-health",
         "hook-debug.log",
       ),
       "utf-8",
@@ -303,8 +303,9 @@ describe("t241 OpenCode adapter reviewer scope", () => {
     mkdirSync(dirname(sibling), { recursive: true });
     writeFileSync(current, "# current\n", "utf-8");
     writeFileSync(sibling, "# sibling\n", "utf-8");
+    mkdirSync(dirname(join(recordRoot, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(recordRoot, ".aidlc-reviewer-dispatch.json"),
+      join(recordRoot, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",

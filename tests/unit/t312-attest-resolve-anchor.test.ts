@@ -706,7 +706,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     if (evidenceName === undefined) return;
     const committedPath = join(evidenceDir, evidenceName);
     const hash12 = /^reviewed-source-([0-9a-f]{12})\.tsv$/.exec(evidenceName)?.[1] as string;
-    const localPath = join(record, ".aidlc-source-review", "code-generation", `unit-alpha-${hash12}.tsv`);
+    const localPath = join(record, ".aidlc-engine/source-review", "code-generation", `unit-alpha-${hash12}.tsv`);
 
     // Review dual-writes: the record carries committed evidence, and the machine
     // keeps a byte-identical gitignored copy that resolution must never consult.

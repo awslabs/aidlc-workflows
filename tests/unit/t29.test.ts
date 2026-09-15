@@ -10,7 +10,7 @@
 //
 // The hook resolves the project dir from CLAUDE_PROJECT_DIR (aidlc-lib.ts:116)
 // and, on a qualifying TaskUpdate, (a) writes a health heartbeat at
-// aidlc-docs/.aidlc-hooks-health/sync-statusline.last and (b) shells out to
+// aidlc-docs/.aidlc-engine/hooks-health/sync-statusline.last and (b) shells out to
 // <projectDir>/.claude/tools/aidlc-utility.ts set-status, which rewrites
 // Current Stage / Lifecycle Phase / Active Agent / Status / Last Updated in
 // aidlc-state.md (aidlc-utility.ts:2432-2456). For the hook to find that tool,
@@ -93,7 +93,7 @@ function hookProject(): string {
 // and the set-status tool it shells out to both anchor under that record).
 const statePath = (p: string): string => seededStateFile(p);
 const heartbeatPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-hooks-health", "sync-workflow-state.last");
+  join(seededRecordDir(p), ".aidlc-engine/hooks-health", "sync-workflow-state.last");
 
 interface HookResult {
   status: number;

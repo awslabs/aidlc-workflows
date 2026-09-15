@@ -144,7 +144,7 @@ function readAudit(dir: string): string {
 
 /** The adapter's own drop log, one line per recorded degradation. */
 function dropLines(dir: string): string[] {
-  const path = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+  const path = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf-8").split("\n").filter((l) => l.trim().length > 0);
 }
@@ -1217,8 +1217,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // record instead.
     const dir = scratchProject(true);
     try {
+      mkdirSync(dirname(join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json"),
         JSON.stringify({
           reviewer: "aidlc-architecture-reviewer-agent",
           stage: "nfr-design",
@@ -1275,8 +1276,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // adapter could not attribute the call, so the gap is recorded.
     const dir = scratchProject(true);
     try {
+      mkdirSync(dirname(join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json"),
         JSON.stringify({
           reviewer: "aidlc-quality-reviewer-agent",
           stage: "nfr-design",
@@ -1310,8 +1312,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // ships has to match the names too, or the hook is never invoked at all.
     const dir = scratchProject(true);
     try {
+      mkdirSync(dirname(join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json"),
         JSON.stringify({
           reviewer: "aidlc-architecture-reviewer-agent",
           stage: "nfr-design",
@@ -1441,9 +1444,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("5f: defensive read and mutation shapes reach the scoped guard adapters", () => {
     const dir = scratchProject(true);
     try {
-      const healthDir = join(seededRecordDir(dir), ".aidlc-hooks-health");
+      const healthDir = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
+      mkdirSync(dirname(join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json"),
         JSON.stringify({
           reviewer: "aidlc-architecture-reviewer-agent",
           stage: "nfr-design",
@@ -1595,7 +1599,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("7: write-like adapter inputs reach audit and sensors while delete stays out", () => {
     const dir = scratchProject(true);
     try {
-      const healthDir = join(seededRecordDir(dir), ".aidlc-hooks-health");
+      const healthDir = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
       const auditHeartbeat = join(healthDir, "write-audit-log.last");
       const sensorHeartbeat = join(healthDir, "run-sensors.last");
       for (const tool_name of ADAPTER_TOOL_NAMES.writes) {

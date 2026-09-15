@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro (IDE and CLI), Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.8.2-blue)
+![version](https://img.shields.io/badge/version-2.9.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -80,8 +80,9 @@ guide in the table below. The complete walkthrough is in
 
 Model-provider setup belongs to the harness. Claude Code and the shipped Codex
 configuration default to Amazon Bedrock; GitHub Copilot uses GitHub sign-in or
-BYOK; Kiro, Cursor, and opencode use their configured provider. The methodology
-itself is provider-independent.
+BYOK; Cursor and opencode use their configured provider; Kiro CLI and Kiro IDE
+need none, because model access comes with Kiro. The methodology itself is
+provider-independent.
 
 ## Recommended Model
 
@@ -99,7 +100,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 98-event audit trail plus persistent state, team knowledge, and learned rules
+- 99-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare

@@ -25,7 +25,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   activeSummaryAuthorizationForRecordPath,
@@ -597,32 +597,32 @@ describe("t332 authorization scope resolution", () => {
 
   test("stage and Unit scopes use distinct explicit store paths", () => {
     expect(summaryAuthorizationRelativePath("functional-design", null)).toBe(
-      ".aidlc-summary-authorization/functional-design/stage.json",
+      ".aidlc-engine/summary-authorization/functional-design/stage.json",
     );
     expect(summaryAuthorizationRelativePath("functional-design", "stage-level")).toBe(
-      ".aidlc-summary-authorization/functional-design/units/stage-level.json",
+      ".aidlc-engine/summary-authorization/functional-design/units/stage-level.json",
     );
     expect(reviewRecordRelativePath("functional-design", undefined, "0123456789abcdef", 1)).toBe(
-      ".aidlc-reviews/functional-design/stage/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/stage/0123456789abcdef/1.json",
     );
     expect(reviewRecordRelativePath("functional-design", "stage-level", "0123456789abcdef", 1)).toBe(
-      ".aidlc-reviews/functional-design/units/stage-level/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/units/stage-level/0123456789abcdef/1.json",
     );
     expect(reviewDraftRelativePath("functional-design", "Unit.Name_1", "0123456789abcdef", 2)).toBe(
-      ".aidlc-reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.review.md",
+      ".aidlc-engine/reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.review.md",
     );
     for (const path of [
-      ".aidlc-reviews/functional-design/stage/0123456789abcdef/1.json",
-      ".aidlc-reviews/functional-design/units/stage-level/0123456789abcdef/1.json",
-      ".aidlc-reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.json",
+      ".aidlc-engine/reviews/functional-design/stage/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/units/stage-level/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.json",
     ]) {
       expect(isReviewRecordRelativePath(path), path).toBe(true);
     }
     for (const path of [
-      ".aidlc-reviews/functional-design/stage-level/0123456789abcdef/1.json",
-      ".aidlc-reviews/functional-design/units/0123456789abcdef/1.json",
-      ".aidlc-reviews/functional-design/stage/extra/0123456789abcdef/1.json",
-      ".aidlc-reviews/functional-design/units/unit/0123456789abcdef/1.review.md",
+      ".aidlc-engine/reviews/functional-design/stage-level/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/units/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/stage/extra/0123456789abcdef/1.json",
+      ".aidlc-engine/reviews/functional-design/units/unit/0123456789abcdef/1.review.md",
     ]) {
       expect(isReviewRecordRelativePath(path), path).toBe(false);
     }
@@ -712,7 +712,8 @@ describe("t332 authorization scope resolution", () => {
     const outside = join(outsideRoot, "elsewhere");
     mkdirSync(outside, { recursive: true });
     // The registry directory is pre-created as a link out of the record.
-    symlinkSync(outside, join(record, ".aidlc-summary-authorization"));
+    mkdirSync(dirname(join(record, ".aidlc-engine/summary-authorization")), { recursive: true });
+    symlinkSync(outside, join(record, ".aidlc-engine/summary-authorization"));
 
     // The answer is refused before the receipt exists: no row, no id, no file.
     present(proj, questions);
@@ -770,8 +771,9 @@ describe("t332 authorization scope resolution", () => {
     const record = seededRecordDir(proj);
     // A regular file where the stage's registry directory belongs: the
     // authorization cannot be saved there.
-    mkdirSync(join(record, ".aidlc-summary-authorization"), { recursive: true });
-    const blocker = join(record, ".aidlc-summary-authorization", STAGE);
+    mkdirSync(join(record, ".aidlc-engine/summary-authorization"), { recursive: true });
+    const blocker = join(record, ".aidlc-engine/summary-authorization", STAGE);
+    mkdirSync(dirname(blocker), { recursive: true });
     writeFileSync(blocker, "not a directory\n", "utf-8");
 
     present(proj, questions);
@@ -857,7 +859,7 @@ describe("t332 authorization scope resolution", () => {
     const proj = project();
     const record = seededRecordDir(proj);
     const path = summaryAuthorizationRecordPath(record, STAGE, null);
-    mkdirSync(join(record, ".aidlc-summary-authorization", STAGE), { recursive: true });
+    mkdirSync(join(record, ".aidlc-engine/summary-authorization", STAGE), { recursive: true });
     for (const body of [
       "not json",
       JSON.stringify({ version: 2, id: "a".repeat(64), stage: STAGE, unit: null }),

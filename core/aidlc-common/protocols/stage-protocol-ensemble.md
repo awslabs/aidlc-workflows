@@ -41,6 +41,8 @@ On every topology, a reviewer NOT-READY (stage-protocol-reviewer.md §12a step 3
 
 When a subagent completes its work, it MUST return a structured summary to the orchestrator. This ensures no context is lost between subagent execution and orchestrator continuation.
 
+If the dispatch returns before that summary exists (a harness that runs agents in the background), do not write a shell loop or a sleep. Run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for collaborators` after dispatching support agents, or `--for artifacts` after dispatching the lead (add `--unit <directive.unit>` on a per-unit stage), and re-run that same command while it answers `status: waiting`. It returns within its bound and lists exactly what is still missing.
+
 ### Required return format:
 ```markdown
 ## Subagent Summary: [Stage Name]

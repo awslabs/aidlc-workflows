@@ -54,12 +54,12 @@ Distribution coverage is split by contract:
   switching back to stable, preview retention, and preview pins.
 - `t332-preview-release-pipeline.test.ts` covers the annotated-tag prerelease
   publication, the preview planner and notes, and the plan record. It checks
-  the cap of at most one published preview per UTC day even after `main`
-  advances or a later manual run starts, including overnight publication
-  timestamps. Unchanged sources skip; drafts and orphan tags permit retry
-  planning with unoccupied ids. Workflow assertions cover isolation of stable
-  tags from scheduled/manual previews, shared `release-preview` concurrency,
-  CI gate ancestry, channel-specific provenance signers, and build stamping.
+  multiple changed-source previews on one UTC day, including a later manual run
+  after a scheduled publication. Unchanged sources skip; drafts and orphan tags
+  permit retry planning with unoccupied ids. Workflow assertions cover
+  isolation of stable tags from scheduled/manual previews, shared
+  `release-preview` concurrency, CI gate ancestry, channel-specific provenance
+  signers, and build stamping.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.

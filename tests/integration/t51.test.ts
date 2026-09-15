@@ -198,6 +198,20 @@ function walkStage(proj: string, slug: string): void {
         `review completion ${slug} failed: ${completed.stdout ?? ""}${completed.stderr ?? ""}`,
       );
     }
+    // The verdict also leaves a readable copy for people beside the reviewed
+    // artifact; the JSON record under .aidlc-engine/reviews stays the engine's review.
+    const readableCopy = join(artifactDir, "reviews", "review-01.md");
+    if (!existsSync(readableCopy)) {
+      throw new Error(`readable review copy missing for ${slug}: ${readableCopy}`);
+    }
+    const copyText = readFileSync(readableCopy, "utf-8");
+    if (!copyText.includes("**Verdict:** READY") || !copyText.includes(`**Reviewer:** ${reviewerFor[slug]}`)) {
+      throw new Error(`readable review copy for ${slug} lacks the verdict block: ${copyText.slice(0, 200)}`);
+    }
+    const completedJson = JSON.parse(completed.stdout.trim().split("\n").pop() ?? "{}") as { reviewMarkdown?: string };
+    if (!completedJson.reviewMarkdown?.endsWith("/reviews/review-01.md")) {
+      throw new Error(`verdict JSON did not name the readable copy: ${completed.stdout}`);
+    }
   }
   const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
     encoding: "utf-8",

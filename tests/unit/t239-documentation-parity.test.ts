@@ -33,7 +33,7 @@ function filesBelow(root: string, suffix: string): string[] {
 }
 
 function numberWord(value: number): string {
-  const words = ["zero", "one", "two", "three", "four", "five"];
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
   return words[value] ?? String(value);
 }
 
@@ -153,7 +153,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(98);
+    expect(eventTypes.length).toBe(99);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -282,7 +282,7 @@ describe("documentation parity derives current behavior from authored implementa
     // Every shipped harness enforces reviewer-scope now, so the protocol carries
     // no carve-out naming one that does not.
     expect(reviewerProtocol).not.toContain("without reviewer-scope enforcement");
-    expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(skill).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     // The annex belongs to the row, not to one of its surfaces.
     expect(questionRendering).toContain("has no structured-question tool");
     expect(questionRendering).not.toContain("Kiro CLI harness annex");
@@ -440,6 +440,7 @@ describe("documentation parity derives current behavior from authored implementa
       "report",
       "park",
       "team-board",
+      "wait",
     ]);
     const expected =
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;

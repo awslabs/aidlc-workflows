@@ -2007,6 +2007,118 @@ describe("t243 release lifecycle", () => {
     }
   });
 
+  test("a packaged Unix preview installer downloads its own release without an explicit version", async () => {
+    if (process.platform === "win32") return;
+    const preview = `${NEXT_VERSION}-preview.20260914.7`;
+    const release = fixtureRelease(preview);
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    writeFileSync(
+      binaryPath,
+      [
+        "#!/bin/sh",
+        `if [ "$1" = "version" ]; then printf 'aidlc %s (runtime %s)\\n' '${preview}' '${preview}'; exit 0; fi`,
+        'if [ "$1" = "system" ] && [ "$2" = "lifecycle" ] && [ "$3" = "install-apply" ]; then',
+        '  mkdir -p "$AIDLC_BIN_DIR"',
+        '  cp "$0" "$AIDLC_BIN_DIR/aidlc"',
+        '  chmod 755 "$AIDLC_BIN_DIR/aidlc"',
+        "  exit 0",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      assets: Array<{ name: string; sha256: string; bytes: number }>;
+    };
+    const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+    expect(binaryAsset).toBeDefined();
+    if (!binaryAsset) return;
+    binaryAsset.sha256 = digest(binaryPath);
+    binaryAsset.bytes = statSync(binaryPath).size;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(
+      join(release, "checksums.txt"),
+      `${[
+        "version.json",
+        ...manifest.assets.map((asset) => asset.name),
+      ].map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+    );
+    const installer = join(temp("aidlc-t243-packaged-installer-"), "install.sh");
+    const marker = "PACKAGED_VERSION=''";
+    const source = readFileSync(INSTALLER, "utf-8");
+    expect(source.split(marker)).toHaveLength(2);
+    writeFileSync(
+      installer,
+      source.replace(marker, `PACKAGED_VERSION='${preview}'`),
+      { mode: 0o755 },
+    );
+    // The child PATH below is deliberately bare so the packaged installer proves
+    // it needs nothing beyond POSIX tools. That also drops tests/fixtures/bin,
+    // so `command -v gh` finds the runner's real GitHub CLI, whose attestation
+    // flags make install.sh verify the fixture bundle for real and fail. Hand
+    // the installer the fixture verifier through AIDLC_GH_BIN instead, spelled
+    // with the absolute Bun path so it resolves under that PATH, and log every
+    // call so the test proves provenance verification ran rather than the
+    // installer degrading to checksums because its help probe failed.
+    const ghDir = temp("aidlc-t243-packaged-installer-gh-");
+    const ghCalls = join(ghDir, "calls.log");
+    const ghBin = join(ghDir, "gh");
+    writeFileSync(
+      ghBin,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >>${JSON.stringify(ghCalls)}`,
+        `exec ${JSON.stringify(BUN)} ${JSON.stringify(FIXTURE_GH)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const server = serveReleaseFixture(release);
+    const machine = temp("aidlc-t243-packaged-installer-machine-");
+    try {
+      const child = Bun.spawn([
+        "sh",
+        installer,
+        "--release-base-url",
+        server.baseUrl,
+        "--quiet",
+      ], {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+          NO_PROXY: "127.0.0.1",
+          AIDLC_INSTALL_ROOT: machine,
+          AIDLC_BIN_DIR: join(machine, "bin"),
+          AIDLC_GH_BIN: ghBin,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect(status, `${stdout}${stderr}`).toBe(0);
+      expect(stdout).toContain(`installed AI-DLC ${preview}`);
+      expect(server.requests).toContain(`/download/v${preview}/version.json`);
+      expect(server.requests).not.toContain("/latest/download/version.json");
+      // Help probe, then the two verify passes install.sh runs: bare, and with
+      // the manifest's source ref and digest.
+      const calls = readFileSync(ghCalls, "utf-8").trim().split("\n");
+      expect(calls[0]).toBe("attestation verify --help");
+      expect(calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help")))
+        .toHaveLength(2);
+      expect(calls.at(-1)).toContain("--source-ref refs/heads/main --source-digest ");
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
+
   test("route network policy blocks acquisition before opening a socket", async () => {
     const priorPolicy = process.env.AIDLC_ROUTE_NETWORK_POLICY;
     const priorId = process.env.AIDLC_ROUTE_ID;
@@ -3817,6 +3929,7 @@ describe("t243 projection channel", () => {
           "sha256:f2affb8b34499f057284852456cb8a24ae586b8e816595bf98346141f3516281",
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
           "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
+          "sha256:1d51ae4ca4f74f842336dce75bc66bb4bbf55ce2de7c802ab059504cca99fd7b",
         ],
       },
       codex: {
@@ -3837,11 +3950,16 @@ describe("t243 projection channel", () => {
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
           "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
           "sha256:a505f2396863edc957b18779baa32e9c44a10d62c2472c3a309fec78c3cae3f4",
-          "sha256:77eccbf8a91947e4a8c625382a90d7648944aa97db56a2302441992b93ed547c",
+          "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
+          "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
+          "sha256:acda2a823dd60bc8e59e3388fe83aa12a277d65c7aeddf72bfdf31eeca298130",
         ],
       },
       kiro: {
         "AGENTS.md": [
+          // The current render. The packager appends it, so this list moves every
+          // time the onboarding text changes - which is the point: an install
+          // carrying any earlier variant must still be recognized as ours.
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
           "sha256:992307cc3fac05d81958851b2ca51db3723fea604c8d2636814ef9b2e9f7a848",
           "sha256:b886d5b375f9ebc33ef206c4f6ad20630a13eb83d0f5838e9f71f483c040f362",
@@ -3852,12 +3970,11 @@ describe("t243 projection channel", () => {
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
-          // The current render. The packager appends it, so this list moves every
-          // time the onboarding text changes - which is the point: an install
-          // carrying any earlier variant must still be recognized as ours.
           "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
           "sha256:1989d45c43801ae58a6f0c9830d593a8ab17f5ada4cfa2cf03891b307a9d7634",
-          "sha256:2f71266e84b8adca3c5dbfb848915cefaa483db5d48c02a31794de2a5c7ee52f",
+          "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
+          "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
+          "sha256:76871f4283e1b20498dda34e03d8baf1e2cc274d7e3bc27acd3f8adc888ea569",
         ],
       },
     };

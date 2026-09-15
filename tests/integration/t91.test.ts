@@ -16,7 +16,7 @@
 //      must match AND `aidlc-runtime\.ts` must NOT appear (the explicit
 //      recursion-guard reject fires FIRST, defeating composites).
 //   3. Audit-existence guard before the heartbeat write.
-//   4. Heartbeat at aidlc-docs/.aidlc-hooks-health/runtime-compile.last (only
+//   4. Heartbeat at aidlc-docs/.aidlc-engine/hooks-health/runtime-compile.last (only
 //      written once the command filter passes).
 //   5. Tail-read the LAST 3 audit blocks (split on /\n---\n/); if any carries
 //      `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|
@@ -185,7 +185,7 @@ const auditPath = (proj: string): string =>
 const graphPath = (proj: string): string =>
   join(seededRecordDir(proj), "runtime-graph.json");
 const heartbeatPath = (proj: string): string =>
-  join(seededRecordDir(proj), ".aidlc-hooks-health", "rebuild-stage-graph.last");
+  join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "rebuild-stage-graph.last");
 
 interface HookResult {
   status: number;

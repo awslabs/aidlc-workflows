@@ -685,7 +685,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(directive.kind).toBe("invoke-swarm");
     const marker = JSON.parse(
       readFileSync(
-        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
         "utf-8",
       ),
     ) as { kind?: string; stage?: string; code_generation_source_sha256?: string };
@@ -800,7 +800,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
     const recordPath = /\*\*Review Record\*\*: (\S+)/.exec(review)?.[1];
     const recordDigest = /\*\*Review Record Digest\*\*: (\S+)/.exec(review)?.[1];
-    expect(recordPath).toMatch(/^\.aidlc-reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
+    expect(recordPath).toMatch(/^\.aidlc-engine\/reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
     expect(recordDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     const mainRecord = join(seededRecordDir(wtproj), recordPath as string);
     expect(existsSync(mainRecord)).toBe(true);
@@ -882,7 +882,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     );
     const localEvidence = join(
       seededRecordDir(wt),
-      ".aidlc-source-review",
+      ".aidlc-engine/source-review",
       "code-generation",
       `unit-${unit}-${hash12}.tsv`,
     );

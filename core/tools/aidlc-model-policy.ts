@@ -92,9 +92,12 @@ const thoroughGroups = Object.freeze({
   reviewing: Object.freeze({ effort: "xhigh" as const }),
 });
 const balancedGroups = Object.freeze({
+  deciding: Object.freeze({ effort: "medium" as const }),
   reviewing: Object.freeze({ effort: "medium" as const }),
+  "writing-up": Object.freeze({ effort: "medium" as const }),
 });
 const minimalGroups = Object.freeze({
+  deciding: Object.freeze({ effort: "medium" as const }),
   reviewing: Object.freeze({ effort: "medium" as const }),
   "writing-up": Object.freeze({ effort: "low" as const }),
 });
@@ -133,7 +136,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: false,
     groupEffort: false,
     message:
-      "Kiro agents are Markdown and carry no model keys, so neither a per-agent model nor an effort dial has a surface to land on. The per-model effort default in settings/cli.json is projection-owned and read by Kiro CLI only; Kiro IDE reads neither, so set its chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
+      "Kiro agents are Markdown and carry no model keys, so neither a per-agent model nor an effort dial has a surface to land on. The per-model effort default in settings/cli.json is projection-owned and read by Kiro CLI only; Kiro IDE reads neither, so set its chat model in the IDE picker.",
   }),
   cursor: Object.freeze({
     model: false,
