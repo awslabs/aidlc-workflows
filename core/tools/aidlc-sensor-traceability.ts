@@ -262,14 +262,19 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
 }
 
 function resolveUnitContext(projectDir: string, outputPath: string, docsDir: string, stage: string): { context?: UnitContext; reason?: string } {
-  if (isZeroUnitOutput(stage, outputPath)) {
-    return { context: { unitName: "", units: [], unitIds: new Map() } };
-  }
   const unitName = extractUnitName(outputPath);
-  if (!unitName) return { reason: `cannot derive the construction unit from output path: ${outputPath}` };
+  if (!unitName && !isZeroUnitOutput(stage, outputPath)) {
+    return { reason: `cannot derive the construction unit from output path: ${outputPath}` };
+  }
   const dag = resolveBoltDag(projectDir);
   if (dag.state === "malformed") {
     return { reason: `unit-of-work-dependency.md is ${dag.reason}: ${dag.detail}` };
+  }
+  if (!unitName) {
+    if (dag.state === "ok") {
+      return { reason: `cannot derive the construction unit from output path while unit-of-work-dependency.md declares Units: ${outputPath}` };
+    }
+    return { context: { unitName: "", units: [], unitIds: new Map() } };
   }
   const units = dag.state === "ok" ? dag.units : [unitName];
   if (dag.state === "ok" && !units.includes(unitName)) {

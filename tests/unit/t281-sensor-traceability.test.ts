@@ -452,6 +452,27 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.missing_from_upstream_ids).toContain("BR1.1");
   });
 
+  test("code-generation rejects a stage-level location when a Unit DAG exists", () => {
+    const proj = project();
+    seedUserStories(proj);
+    seedUnits(proj);
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+    const file = trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["AC1.1.1", "AC1.1.2", "AC1.2.1"],
+      coverage: [
+        { id: "AC1.1.1", status: "OK", target: "src/auth.ts" },
+        { id: "AC1.1.2", status: "OK", target: "src/auth.ts" },
+        { id: "AC1.2.1", status: "OK", target: "src/auth.ts" },
+      ],
+    });
+    const out = run(proj, "code-generation", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("cannot derive the construction unit");
+  });
+
   test("missing file and missing output-path keep the CLI error contract", () => {
     const proj = project();
     let spawned = spawnSync("bun", [SCRIPT, "--stage", "user-stories", "--output-path", join(proj, "missing.json")], {
