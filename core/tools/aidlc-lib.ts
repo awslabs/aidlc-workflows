@@ -27773,13 +27773,27 @@ export interface ChangeControlResolution {
 // both memory sections read the same grammar.
 export function structuredField(section: string, field: string): string | null {
   const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = section.match(
-    new RegExp(
-      `^[ \\t]*(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.+?)[ \\t]*$`,
-      "im",
-    ),
+  const lines = section.split(/\r?\n/);
+  const head = new RegExp(
+    `^[ \\t]*(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.*?)[ \\t]*$`,
+    "i",
   );
-  return match?.[1].trim() || null;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(head);
+    if (!match) continue;
+    const parts = [match[1].trim()];
+    // A wrapped value continues on indented lines until the next bullet,
+    // heading, blank line, or unindented line. Markdown authors and
+    // formatters wrap long bullets this way; the value is the joined prose.
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (!/^[ \t]+\S/.test(line) || /^[ \t]*(?:[-*][ \t]|#)/.test(line)) break;
+      parts.push(line.trim());
+    }
+    const value = parts.filter(Boolean).join(" ");
+    return value || null;
+  }
+  return null;
 }
 
 // The visible body of one `## Heading` memory section: headings hidden in HTML
