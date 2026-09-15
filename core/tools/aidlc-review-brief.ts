@@ -991,7 +991,7 @@ if (import.meta.main) {
   try {
     main(process.argv.slice(2));
   } catch (error) {
-    process.stderr.write(`aidlc-review-brief: ${String(error)}\n`);
+    process.stderr.write(`${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}\n`);
     process.exit(1);
   }
 }
