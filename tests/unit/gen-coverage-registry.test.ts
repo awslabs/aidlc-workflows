@@ -906,6 +906,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t337 spawns the shipped doctor to pin the "Workspace source boundary
     // binds" row, which reads a real source walk against a real workspace.
     "unit/t337-source-boundary-reason.test.ts",
+    "unit/t338-consumes-kinds.test.ts",
     "unit/t339-construction-autonomy-gates.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
