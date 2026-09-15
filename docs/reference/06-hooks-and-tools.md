@@ -410,6 +410,34 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 8. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn. Failing open never means falling through to a write: the probe path has no write to fall through to, and a barrier violation is one of the non-zero exits this step absorbs.
 
+Cursor applies one harness-local authority check before this shared hook:
+the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
+`sessionEnd` is persisted as `background` in
+`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker`.
+`beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
+`conversation_id`, updated by each lifecycle event, and retained after
+`sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
+payloads omit the flag and consult this protected record instead. Unknown
+identity (no lifecycle event seen) retains foreground behavior. Background stops
+are silent and never invoke the core loop. A prompt whose identity cannot be
+saved is rejected so runtime-directory access can be restored and retried.
+
+Background PreToolUse shell classification is allowlist-literal-only, separate
+from ordinary delegated-agent classification: every token must be literal, the
+execution host must be direct `bun` or the compiled `aidlc` dispatcher, and the
+script/verb must select a supported read-only command. Installed script identity
+is checked by the Cursor adapter. Variables (including known literal bindings),
+substitutions, backticks, `eval`, nested shells, other interpreters, `find -exec`,
+`xargs`, helper scripts, Bun eval/print/preload flags, and shell control syntax
+are denied rather than interpreted. Unknown commands are denied as well.
+Background tools cannot modify protected identity or dispatch untracked child
+Tasks. This prevents background reviews from issuing `next`, consuming a
+continuation, or resetting the foreground conversation's steering cursor while
+preserving direct read-only utilities and native read/search tools.
+The ordinary delegated-agent mode keeps benign Bun eval/print
+validation available and continues to block only identified lifecycle/routing
+commands.
+
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
 `next`, `continue`, `report`, or `park` result. On Stop, the shared hook may use
