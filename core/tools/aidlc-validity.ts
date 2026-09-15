@@ -6,7 +6,7 @@ import {
   parseCheckboxes,
   readAllAuditShards,
 } from "./aidlc-lib.js";
-import { loadGraph } from "./aidlc-graph.ts";
+import { loadGraph, type RecheckIf } from "./aidlc-graph.ts";
 import {
   resolveArtifactInstances,
   type ArtifactResolutionOptions,
@@ -40,10 +40,11 @@ export interface ArtifactBasis {
   presentCount: number;
   structureHash: string;
   contentHash: string;
-  // POC (feat/typed-dependency-edges): only set on INPUT basis rows when the
-  // consuming stage declared a sensitivity. Absence means pre-PoC pessimistic
-  // "any change propagates". See propagateStageInvalidation.
-  sensitivity?: "structure" | "content";
+  /** Only set on INPUT basis rows and only when the consuming stage
+   *  declared a `recheck_if` value on its `consumes` entry. Absence means
+   *  the pessimistic default (`changed`), preserving pre-RFC behavior.
+   *  See docs/rfcs/typed-dependency-edges.md. */
+  recheck_if?: RecheckIf;
 }
 
 export interface StageValidationBasis {
@@ -88,9 +89,9 @@ export interface StageValidityNode {
     artifact: string;
     required?: boolean;
     conditional_on?: string;
-    // POC (feat/typed-dependency-edges): mirrors Consume.sensitivity in
-    // aidlc-graph.ts. Optional; absent = pessimistic propagation.
-    sensitivity?: "structure" | "content";
+    /** Mirrors Consume.recheck_if in aidlc-graph.ts. Optional; absent =
+     *  `changed` (pessimistic, the pre-RFC default). */
+    recheck_if?: RecheckIf;
   }>;
   requires_stage?: readonly string[];
 }
@@ -112,20 +113,24 @@ interface CompletionReceipts {
 interface ObservedDependency {
   to: string;
   artifact: string;
-  // POC (feat/typed-dependency-edges): consumer's sensitivity declaration.
-  // Absent = pessimistic (any producer change propagates).
-  sensitivity?: "structure" | "content";
+  /** Consumer's declared recheck_if value on this edge. Absent = `changed`
+   *  (pessimistic, the pre-RFC default). */
+  recheck_if?: RecheckIf;
 }
 
 /**
- * POC: per-artifact change classification for a producer's outputs, computed
- * by comparing the receipt basis vs the current basis. Used by
- * propagateStageInvalidation to filter edges whose sensitivity does not match
- * the actual change class.
+ * Per-artifact change classification for a producer's outputs, computed by
+ * comparing the receipt basis with the currently-recomputed basis. Consumed
+ * by propagateStageInvalidation to filter edges whose declared recheck_if
+ * does not intersect the actual change class.
+ *
+ * `filesAddedOrRemoved` mirrors `structureHash` movement; `edited` mirrors
+ * `contentHash` movement. A byte-identical re-execution moves neither, so
+ * consumers of a re-run producer are never flagged by change class alone.
  */
 export interface ProducerOutputChange {
-  structure: boolean;
-  content: boolean;
+  filesAddedOrRemoved: boolean;
+  edited: boolean;
 }
 export type ProducerOutputChanges = Map<string, Map<string, ProducerOutputChange>>;
 
@@ -354,9 +359,11 @@ function captureInputBasis(
       instances,
     );
     if (basis) {
-      // POC: carry declared sensitivity through the receipt so downstream
-      // propagation can filter by it. Undeclared = pessimistic (absent).
-      if (consume.sensitivity) basis.sensitivity = consume.sensitivity;
+      // Carry declared recheck_if through the receipt so downstream
+      // propagation can filter by it. Undeclared = `changed` (pessimistic,
+      // pre-RFC default). The explicit "changed" value is preserved too:
+      // it lets advisories name the effective policy honestly.
+      if (consume.recheck_if !== undefined) basis.recheck_if = consume.recheck_if;
       inputs.push(basis);
     }
   }
@@ -627,9 +634,9 @@ function observedDependencyEdges(
       outgoing.push({
         to: consumer,
         artifact: input.artifact,
-        // POC: carry consumer sensitivity through the edge. Absent =
-        // pessimistic propagation (any producer change flows through).
-        sensitivity: input.sensitivity,
+        // Carry consumer recheck_if through the edge. Absent = `changed`
+        // (pessimistic; any producer change flows through).
+        recheck_if: input.recheck_if,
       });
       edges.set(input.producer, outgoing);
     }
@@ -645,10 +652,17 @@ function observedDependencyEdges(
 }
 
 /**
- * POC: compute per-artifact change classification for each producer stage.
+ * Compute per-artifact change classification for each producer stage.
  * Compares the receipt's OUTPUT basis with the currently-recomputed OUTPUT
- * basis. Only outputs are considered here — inputs feed the producer's OWN
+ * basis. Only outputs are considered — inputs feed the producer's OWN
  * direct staleness, not what its consumers should filter on.
+ *
+ * `filesAddedOrRemoved` reports a structureHash movement (the file set /
+ * paths / kinds changed); `edited` reports a contentHash movement (any
+ * observed instance's bytes changed, appeared, or disappeared). A byte-
+ * identical re-execution moves neither, so consumers of a re-run producer
+ * are never flagged by change class alone — the trigger is a changed
+ * result, not a re-run.
  */
 export function computeProducerOutputChanges(
   before: ReadonlyMap<string, StageValidationBasis>,
@@ -673,8 +687,8 @@ export function computeProducerOutputChanges(
       const p = prevByArtifact.get(key);
       const c = currByArtifact.get(key);
       perArtifact.set(key, {
-        structure: p?.structureHash !== c?.structureHash,
-        content: p?.contentHash !== c?.contentHash,
+        filesAddedOrRemoved: p?.structureHash !== c?.structureHash,
+        edited: p?.contentHash !== c?.contentHash,
       });
     }
     result.set(slug, perArtifact);
@@ -688,11 +702,24 @@ export function computeProducerOutputChanges(
  * requires_stage is not used because v2 does not yet distinguish semantic and
  * ordering-only requires edges.
  *
- * POC (feat/typed-dependency-edges): when producerOutputChanges is supplied
- * AND an edge carries a sensitivity, the edge only fires when the producer's
- * actual change class intersects the consumer sensitivity. Absent sensitivity
- * or absent change info falls back to pessimistic propagation (unchanged
- * pre-PoC behavior).
+ * When producerOutputChanges is supplied AND an edge carries a `recheck_if`
+ * declaration, the edge only fires when the producer's actual change class
+ * matches the declared trigger:
+ *
+ *   - `edited`                → fire iff contentHash moved
+ *   - `files-added-or-removed`→ fire iff structureHash moved
+ *   - `changed` (explicit)    → fire on any change (top of lattice)
+ *   - omitted (undefined)     → fire on any change (== `changed`, pre-RFC default)
+ *
+ * Producer re-execution with byte-identical outputs moves neither hash and
+ * therefore never flags a consumer. The trigger is a changed result, not a
+ * re-run.
+ *
+ * Always-recheck classes are handled OUTSIDE this filter: own-output
+ * mutation, graph-contract change, and project-type change all mark the
+ * producing stage directly stale via diffStageValidationBasis; the filter
+ * only narrows how that stale flag propagates onward through observed
+ * consumer edges.
  */
 export function propagateStageInvalidation(
   stages: readonly StageValidityNode[],
@@ -737,16 +764,17 @@ export function propagateStageInvalidation(
 
     for (const edge of edges.get(current.slug) ?? []) {
       if (!known.has(edge.to)) continue;
-      // POC (feat/typed-dependency-edges): sensitivity-aware edge filter.
-      // Only applies at DIRECT producer edges where we have concrete
-      // before/after output change info. Transitive hops (where current.slug
-      // is not itself in producerOutputChanges) remain pessimistic.
-      if (edge.sensitivity && producerOutputChanges) {
+      // Typed-edge filter: only applies at DIRECT producer edges where we
+      // have concrete before/after output change info. Transitive hops
+      // (where current.slug is not itself in producerOutputChanges) remain
+      // pessimistic — a false-negative there is impossible because the
+      // producer at hop N is already marked stale by hop N-1's propagation.
+      if (edge.recheck_if && edge.recheck_if !== "changed" && producerOutputChanges) {
         const changes = producerOutputChanges.get(current.slug)?.get(edge.artifact);
         if (changes) {
-          const passes = edge.sensitivity === "content"
-            ? changes.content
-            : changes.structure;
+          const passes = edge.recheck_if === "edited"
+            ? changes.edited
+            : changes.filesAddedOrRemoved;
           if (!passes) continue;
         }
       }
@@ -814,8 +842,8 @@ export function inspectStageValidity(
   const directReasons = new Map<string, string[]>();
   const warnings: string[] = [];
   const unavailable = new Set<string>();
-  // POC (feat/typed-dependency-edges): collect current bases so we can
-  // classify producer output changes for sensitivity-aware propagation.
+  // Collect current bases so we can classify per-artifact producer output
+  // changes for the typed-edge filter in propagateStageInvalidation.
   const currentBases = new Map<string, StageValidationBasis>();
 
   for (const [slug, previous] of receipts.latestKnown) {
