@@ -1365,6 +1365,168 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("a bare numeric reply reaches the offered-choice match instead of being parsed away", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "plan-session",
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "plan-session" },
+        proj,
+      );
+      expect(
+        runLog([
+          "decision",
+          ...identity,
+          "--decision",
+          "Approve this plan?",
+          "--options",
+          "Approve Plan,Request Changes",
+        ]).status,
+      ).toBe(0);
+
+      // The challenge does not require exact option labels, so "1" is an offered
+      // choice by offeredPlanApprovalChoice. The reply must survive extraction to
+      // get there: JSON-parsing it turned it into a number and reported no text.
+      const numeric = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: "plan-session",
+            prompt: "1",
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(numeric.status).toBe(0);
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const approved = runLog(["answer", ...identity, "--details", "Approve Plan"]);
+      expect(
+        approved.status,
+        `${approved.stdout}\n${approved.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+      expect(approved.stdout).toContain("PLAN_APPROVAL_RECORDED");
+
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a JSON-quoted reply still unwraps to the offered label", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "plan-session",
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "plan-session" },
+        proj,
+      );
+      expect(
+        runLog([
+          "decision",
+          ...identity,
+          "--decision",
+          "Approve this plan?",
+          "--options",
+          "Approve Plan,Request Changes",
+        ]).status,
+      ).toBe(0);
+
+      // The envelope shapes still hand over to the parse: a picker that delivers
+      // its selection as a JSON string must arrive as the label, not as the label
+      // wrapped in quotes, or it would match no offered choice.
+      const quoted = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: "plan-session",
+            prompt: JSON.stringify("Approve Plan"),
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(quoted.status).toBe(0);
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const approved = runLog(["answer", ...identity, "--details", "Approve Plan"]);
+      expect(
+        approved.status,
+        `${approved.stdout}\n${approved.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("Plan Approval rechecks the source floor after acquiring the audit lock", async () => {
     const proj = scratchProject();
     try {
