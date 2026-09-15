@@ -574,8 +574,8 @@ compose a second time to prove idempotency. Any compose drop, graph failure,
 missing plugin node, or second-pass file change exits `1`. The live install is
 hashed before and after and is never a compose target.
 
-Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
-Kiro IDE) and `.aidlc` (Copilot vs OpenCode). `--dist <version>` is reserved
+Pass `--harness` when the install is ambiguous, which now means `.aidlc`
+(Copilot vs OpenCode); `.kiro` is one row serving both Kiro surfaces. `--dist <version>` is reserved
 until RFC #722 milestone 2 defines a released runtime-bundle channel.
 
 1. **Content validation** is the always-on baseline. Run

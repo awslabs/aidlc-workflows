@@ -4216,6 +4216,79 @@ describe("t243 projection channel", () => {
     expect(edited.detail).toContain("locally modified");
   }, 120_000);
 
+  test("read-only config sections and a machine default accept the retired distribution", () => {
+    // Reviewers reproduced exit 2 here: a project still stamped with the retired row
+    // could not even be inspected, so the user could not see the state they were
+    // being asked to upgrade. `modelHarness` resolves the retired id at the gate now,
+    // which is why one change covers every section that reads a persisted identity.
+    const project = temp("aidlc-t240-retired-read-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASE,
+      "--harness",
+      "kiro",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const dataDir = join(project, ".kiro", "tools", "data");
+    for (const name of ["aidlc-stamp.json", "harness.json"]) {
+      const path = join(dataDir, name);
+      const doc = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      doc.distribution = "kiro-ide";
+      writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
+    }
+    const baselinePath = join(dataDir, "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8")) as {
+      distribution: string;
+      files: Record<string, string>;
+    };
+    baseline.distribution = "kiro-ide";
+    for (const name of ["aidlc-stamp.json", "harness.json"]) {
+      baseline.files[`.kiro/tools/data/${name}`] = sha256Bytes(readFileSync(join(dataDir, name)));
+    }
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    for (const section of ["providers", "models"]) {
+      const shown = run(INIT, [
+        "config",
+        section,
+        "--show",
+        "--project-dir",
+        project,
+      ], project);
+      expect(shown.status, `${section}: ${shown.stdout}${shown.stderr}`).toBe(0);
+      // Resolved, not echoed: the section reports the row it will write.
+      expect(shown.stdout, section).toContain("kiro");
+      expect(shown.stdout + shown.stderr, section).not.toContain("kiro-ide");
+    }
+
+    // A machine whose recorded default is the retired row still configures a fresh
+    // project without the user naming a harness.
+    const machine = temp("aidlc-t240-retired-default-");
+    mkdirSync(machine, { recursive: true });
+    writeFileSync(join(machine, "default-harness"), "kiro-ide\n");
+    const fresh = temp("aidlc-t240-retired-default-project-");
+    mkdirSync(join(fresh, ".git"), { recursive: true });
+    const configured = run(INIT, [
+      "config",
+      "--project-dir",
+      fresh,
+      "--from",
+      KIRO_RELEASE,
+      "--yes",
+    ], fresh, { AIDLC_INSTALL_ROOT: machine });
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(join(fresh, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+      ).distribution,
+    ).toBe("kiro");
+  }, 180_000);
+
   test("release runtime-generated commands remain binary-invoked", () => {
     const project = temp("aidlc-t240-release-invoke-");
     mkdirSync(join(project, ".git"));

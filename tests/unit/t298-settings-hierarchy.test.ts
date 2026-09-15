@@ -114,6 +114,45 @@ function install(): string {
 }
 
 describe("t298 aidlc.settings hierarchy", () => {
+  test("a retired harness key in a model map reads as its successor, and the current key wins", () => {
+    // The previous release accepted `kiro-ide` in this map. Throwing on it puts the
+    // upgrade out of reach, because `aidlc config --harness kiro` resolves settings
+    // before it rewrites the project stamp — the command that would remove the key
+    // cannot run while the key is present.
+    const retired = normalizeAidlcSettings({
+      schemaVersion: 1,
+      models: {
+        schemaVersion: 1,
+        agents: { architect: { model: { "kiro-ide": "vendor/retired" } } },
+      },
+    }, "project", "aidlc.settings.json");
+    expect(retired.models?.agents?.architect?.model).toEqual({ kiro: "vendor/retired" });
+
+    // Residue, not a second opinion: the current key wins, and the outcome does not
+    // depend on which key the file happens to list first.
+    for (const model of [
+      { "kiro-ide": "vendor/retired", kiro: "vendor/current" },
+      { kiro: "vendor/current", "kiro-ide": "vendor/retired" },
+    ]) {
+      const both = normalizeAidlcSettings({
+        schemaVersion: 1,
+        models: { schemaVersion: 1, agents: { architect: { model } } },
+      }, "project", "aidlc.settings.json");
+      expect(both.models?.agents?.architect?.model).toEqual({ kiro: "vendor/current" });
+    }
+
+    // A key that never existed is still a hard error, named as the user wrote it.
+    expect(() =>
+      normalizeAidlcSettings({
+        schemaVersion: 1,
+        models: {
+          schemaVersion: 1,
+          agents: { architect: { model: { "kiro-desktop": "vendor/x" } } },
+        },
+      }, "project", "aidlc.settings.json")
+    ).toThrow(/unknown harness "kiro-desktop"/);
+  });
+
   test("the generated schema ships identically in every harness", () => {
     for (const [harness, harnessDir] of [
       ["claude", ".claude"],

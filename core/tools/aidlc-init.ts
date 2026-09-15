@@ -95,8 +95,10 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
+  currentModelHarness,
   HARNESS_HONESTY,
   harnessHonestyNotes,
+  harnessUpgradesTo,
   isModelEffort,
   isModelPreset,
   MODEL_EFFORTS,
@@ -511,15 +513,22 @@ function configPositionals(argv: readonly string[]): Array<{ value: string; inde
 }
 
 function modelHarness(value: string): ModelHarness {
+  // This gate READS an identity a previous release persisted - a project stamp, a
+  // machine default, a settings key - so a retired id resolves to its successor
+  // here rather than at each of the 20-odd call sites. Resolving at the gate is
+  // what makes the diagnostics sections, the models section and the setup walk
+  // accept a project that has not been refreshed yet; the returned type still has
+  // no retired member, so every WRITE keeps emitting the current id.
+  const value_ = currentModelHarness(value);
   if (
-    value === "claude" ||
-    value === "codex" ||
-    value === "copilot" ||
-    value === "cursor" ||
-    value === "kiro" ||
-    value === "opencode"
+    value_ === "claude" ||
+    value_ === "codex" ||
+    value_ === "copilot" ||
+    value_ === "cursor" ||
+    value_ === "kiro" ||
+    value_ === "opencode"
   ) {
-    return value;
+    return value_;
   }
   throw new Error(`models policy is not supported for harness ${JSON.stringify(value)}`);
 }
@@ -1290,7 +1299,7 @@ function selectedDiagnosticHarness(
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error(
@@ -4108,25 +4117,6 @@ function installedSourceCandidates(
     : candidates;
 }
 
-// The unified Kiro row replaces the retired `kiro-ide` distribution: both render
-// the same `.kiro` directory, so an install stamped with the retired id upgrades
-// into its successor. One direction only - a map rather than an equivalence set,
-// because re-stamping a `kiro` project as the retired row must stay refused.
-// Deliberately NOT applied to the read-only diagnostics and models sections
-// (`selectedDiagnosticHarness`, `prepareModelsSection`): those keep asking for the
-// id the project actually carries, and the upgrade is what changes it.
-const RETIRED_DISTRIBUTION_SUCCESSOR: Readonly<Record<string, string>> = {
-  "kiro-ide": "kiro",
-};
-
-function currentDistribution(distribution: string): string {
-  return RETIRED_DISTRIBUTION_SUCCESSOR[distribution] ?? distribution;
-}
-
-function distributionUpgradesTo(existing: string, next: string): boolean {
-  return existing === next || RETIRED_DISTRIBUTION_SUCCESSOR[existing] === next;
-}
-
 function selectSource(
   requested: string | undefined,
   from: string | undefined,
@@ -4142,7 +4132,7 @@ function selectSource(
     }
     if (
       existingDistribution &&
-      !distributionUpgradesTo(existingDistribution, stamp.distribution)
+      !harnessUpgradesTo(existingDistribution, stamp.distribution)
     ) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
@@ -4151,7 +4141,7 @@ function selectSource(
   }
   const candidates = installedSourceCandidates(requiredVersion);
   const selectedName = existingDistribution
-    ? currentDistribution(existingDistribution)
+    ? currentModelHarness(existingDistribution)
     : requested;
   const versionFiltered = candidates;
   if (selectedName) {
@@ -4169,8 +4159,11 @@ function selectSource(
   }
   const configuredDefault = configuredDefaultHarness();
   if (configuredDefault) {
+    // A machine that recorded the retired row as its default still resolves to the
+    // successor; without this, `aidlc config` on a fresh project fails until the
+    // user passes `--harness` explicitly.
     const selected = versionFiltered.filter((candidate) =>
-      candidate.stamp.distribution === configuredDefault
+      harnessUpgradesTo(configuredDefault, candidate.stamp.distribution)
     );
     if (selected.length === 1) return selected[0];
     if (versionFiltered.length > 0) {
@@ -4215,7 +4208,7 @@ function copiedProjectSource(
 ): ConfigSource {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
+    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error("the project does not contain a copied AI-DLC projection");
@@ -5206,7 +5199,7 @@ function existingProject(projectDir: string, requested?: string): {
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const harness = requested
-    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
+    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!harness && requested && harnesses.length > 0) {
     throw new Error(
@@ -5776,7 +5769,7 @@ function prepareModelsSection(
   const requested = valueAfter(argv, "--harness");
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => harnessUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     emitResult(
@@ -6397,7 +6390,7 @@ export async function main(
     const { stamp, descriptor } = selected;
     if (
       existing.distribution &&
-      !distributionUpgradesTo(existing.distribution, stamp.distribution)
+      !harnessUpgradesTo(existing.distribution, stamp.distribution)
     ) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
