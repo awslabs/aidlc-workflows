@@ -252,7 +252,7 @@ describe("t296 first-run config setup walk", () => {
     );
     expect(section.status, section.stdout + section.stderr).toBe(0);
     expect(section.stdout).toContain(
-      "Model access comes with Kiro CLI; AI-DLC configures no model provider for it.",
+      "Model access comes with Kiro; AI-DLC configures no model provider for it.",
     );
     expect(section.stdout).toContain("Nothing to answer");
     expect(section.stdout).not.toContain("Provider [");
@@ -321,7 +321,7 @@ describe("t296 first-run config setup walk", () => {
     expect(setupRows(result.stdout).find((line) => line.includes("Providers")))
       .toContain("[ok]");
     expect(result.stdout).toContain(
-      "model access comes with Kiro CLI; nothing for AI-DLC to configure",
+      "model access comes with Kiro; nothing for AI-DLC to configure",
     );
     expect(result.stdout).not.toContain("provider access unverified");
     expect(result.stdout).not.toContain("Choose and configure a model provider");
@@ -352,7 +352,7 @@ describe("t296 first-run config setup walk", () => {
     const providers = setupRows(walk.stdout).find((line) => line.includes("Providers"));
     expect(providers).toContain("[ok]");
     expect(providers).toContain(
-      "model access comes with Kiro CLI; nothing for AI-DLC to configure",
+      "model access comes with Kiro; nothing for AI-DLC to configure",
     );
     expect(walk.stdout).not.toContain("Fix the");
     expect(walk.stdout).not.toContain("config providers");

@@ -4108,6 +4108,25 @@ function installedSourceCandidates(
     : candidates;
 }
 
+// The unified Kiro row replaces the retired `kiro-ide` distribution: both render
+// the same `.kiro` directory, so an install stamped with the retired id upgrades
+// into its successor. One direction only - a map rather than an equivalence set,
+// because re-stamping a `kiro` project as the retired row must stay refused.
+// Deliberately NOT applied to the read-only diagnostics and models sections
+// (`selectedDiagnosticHarness`, `prepareModelsSection`): those keep asking for the
+// id the project actually carries, and the upgrade is what changes it.
+const RETIRED_DISTRIBUTION_SUCCESSOR: Readonly<Record<string, string>> = {
+  "kiro-ide": "kiro",
+};
+
+function currentDistribution(distribution: string): string {
+  return RETIRED_DISTRIBUTION_SUCCESSOR[distribution] ?? distribution;
+}
+
+function distributionUpgradesTo(existing: string, next: string): boolean {
+  return existing === next || RETIRED_DISTRIBUTION_SUCCESSOR[existing] === next;
+}
+
 function selectSource(
   requested: string | undefined,
   from: string | undefined,
@@ -4121,14 +4140,19 @@ function selectSource(
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`source is ${stamp.distribution}, not requested harness ${requested}`);
     }
-    if (existingDistribution && stamp.distribution !== existingDistribution) {
+    if (
+      existingDistribution &&
+      !distributionUpgradesTo(existingDistribution, stamp.distribution)
+    ) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
     }
     return { ...source, stamp, descriptor };
   }
   const candidates = installedSourceCandidates(requiredVersion);
-  const selectedName = existingDistribution || requested;
+  const selectedName = existingDistribution
+    ? currentDistribution(existingDistribution)
+    : requested;
   const versionFiltered = candidates;
   if (selectedName) {
     const selected = versionFiltered.filter((candidate) =>
@@ -4191,7 +4215,7 @@ function copiedProjectSource(
 ): ConfigSource {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error("the project does not contain a copied AI-DLC projection");
@@ -5182,7 +5206,7 @@ function existingProject(projectDir: string, requested?: string): {
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const harness = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!harness && requested && harnesses.length > 0) {
     throw new Error(
@@ -6371,7 +6395,10 @@ export async function main(
       }
     }
     const { stamp, descriptor } = selected;
-    if (existing.distribution && existing.distribution !== stamp.distribution) {
+    if (
+      existing.distribution &&
+      !distributionUpgradesTo(existing.distribution, stamp.distribution)
+    ) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
     if (existing.distribution) assertRefreshSafe(projectDir);
