@@ -441,15 +441,12 @@ describe("t294 provider diagnostics", () => {
       expect(readFileSync(path), harness).toEqual(original);
     }
 
-    // Staging preservation: this row's registry ships no `aws-mcp` launcher, so
-    // there is no endpoint or metadata to carry into the staged copy. The
-    // preserver must leave the staged bytes alone rather than invent an entry.
-    // Read this as the no-op it is, not as preservation coverage:
-    // `preserveKiroMcpRegion` returns before touching anything when either side
-    // lacks an `aws-mcp` entry (aidlc-config-diagnostics.ts), which on this row is
-    // always, while the refresh still calls it (aidlc-init.ts). Whether that call
-    // and the region promise in the install guide should go is a separate change,
-    // not something this case decides.
+    // Staging: this row ships no `aws-mcp` launcher, so there is no endpoint or
+    // metadata for `preserveKiroMcpRegion` to carry - it returns before touching
+    // anything when either side lacks that entry, which here is always. The
+    // behaviour that matters instead is what happens to a project still carrying
+    // the retired launcher registry, and that is pinned in the migration case
+    // below rather than asserted as preservation here.
     const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
     cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
     const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");

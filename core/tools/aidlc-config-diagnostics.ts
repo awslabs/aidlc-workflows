@@ -41,8 +41,9 @@ export type RuntimeRecord = {
 // answers are only recorded for Bedrock-oriented harnesses.
 export type ProviderKind = "amazon-bedrock" | "builtin" | "other";
 
-// Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
-// decision to ask, write, or check for them, even when a legacy answer exists.
+// Kiro provides its own model access on both of its surfaces, IDE and CLI, which
+// one row serves. AI-DLC has no provider decision to ask, write, or check for it,
+// even when a legacy answer exists.
 //
 // Every OTHER harness is Bedrock-oriented and must still be asked. Claude Code,
 // Codex CLI, and OpenCode take region and profile bytes directly. GitHub
@@ -1222,8 +1223,10 @@ export function applyConfigDiagnosticRecords(
   records: ConfigDiagnosticRecords,
 ): void {
   // Owned harnesses record no provider answer; a legacy record is not applied
-  // anywhere. The Kiro CLI MCP region is carried by preserveKiroMcpRegion from
-  // the project's own file during staging, not from a record.
+  // anywhere. `preserveKiroMcpRegion` still runs during staging, but this row's
+  // registry ships no `aws-mcp` launcher, so it has no region to carry: a project
+  // still holding the retired launcher registry has it replaced when the project
+  // never edited it, and reported as a conflict when it did.
   if (harnessOwnsModelAccess(harness)) return;
   const provider = records.providers;
   if (provider?.provider !== "amazon-bedrock" || !provider.region) return;

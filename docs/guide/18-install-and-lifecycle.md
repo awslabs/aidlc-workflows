@@ -274,8 +274,8 @@ command also carries
 a native install refreshes from its installed runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
-row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
-their own model access. Runtime leads with the immediate action and points to
+row reads `[ok]` with no recorded answer on Kiro, which provides its own model
+access on both of its surfaces. Runtime leads with the immediate action and points to
 `aidlc config runtime --show` for diagnostics. The closing ledger is a compact
 label-to-command list. Section-named commands, non-TTY runs, `--dry-run`,
 `--json`, and `--quiet` keep their deterministic output and never render the
@@ -444,8 +444,8 @@ interactive section offers only the two answers that have distinct effects for
 the harness in front of you. `amazon-bedrock` records the region and profile the
 harness should use, and leads on every harness whose models AI-DLC can point at
 Bedrock. The second answer is `unchanged` on every harness the section asks,
-recording nothing and keeping what is already in place. Kiro CLI and Kiro IDE
-are not asked at all because model access comes with Kiro. The shipped fallback
+recording nothing and keeping what is already in place. Kiro is not asked at
+all because model access comes with it. The shipped fallback
 bytes remain valid when this section has never run.
 
 `other` is available as `--provider other --acknowledge` but is not offered
@@ -498,18 +498,19 @@ the two paths that actually exist for it:
 | Cursor | that you configure the provider in Cursor yourself |
 
 
-Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures no
-model provider for them. Both the first-run wizard and `aidlc config providers`
+Kiro provides its own model access on both of its surfaces, so AI-DLC configures
+no model provider for it. Both the first-run wizard and `aidlc config providers`
 state that model access comes with Kiro and ask nothing. Provider flags are
 refused, and the Providers row reads `[ok]` regardless of a legacy record.
 `aidlc config providers --reset --yes` clears a record left by an earlier build.
 `builtin` records from the previous build still load and read as harness-managed,
 with no pending actions. Legacy Kiro Bedrock records are also ignored, including
-their pending actions, and nothing is written from them. The `aws-mcp` region in
-`.kiro/settings/mcp.json` is plain MCP configuration, not a model-provider
-answer: whatever region that file carries, whether an earlier build's Bedrock
-answer put it there or you did, is kept across refreshes, and `--reset` leaves
-the file alone.
+their pending actions, and nothing is written from them. This row's registry ships
+`context7` and `aws-knowledge-mcp-server` and no `aws-mcp` launcher, so there is no
+provider region in `.kiro/settings/mcp.json` to keep: a project still carrying the
+retired launcher registry has it replaced by this one when the project never edited
+it, and reported as a conflict when it did. `--reset` leaves the file alone either
+way.
 
 Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
 credentials are never read as evidence that you are on your own subscription.

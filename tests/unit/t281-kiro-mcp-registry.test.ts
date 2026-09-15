@@ -102,6 +102,21 @@ describe("t281 Kiro MCP registry integrity", () => {
     expect(Array.isArray(servers)).toBe(false);
   });
 
+  test("shipped onboarding states the registry's own server count", () => {
+    // The onboarding text is what a user reads before opening the file, so a count
+    // it states must be the count the registry ships. This row dropped the four uvx
+    // launchers; prose that still promises five sends people looking for entries
+    // that are not there.
+    const { servers } = loadRegistry(MCP_JSON);
+    const shipped = Object.keys(servers).length;
+    expect(shipped).toBe(EXPECTED_SERVERS.length);
+    const onboarding = readFileSync(join(REPO_ROOT, "dist", "kiro", "AGENTS.md"), "utf-8");
+    const claim = /\*\*MCP servers\*\*: (\w+) ship in/.exec(onboarding);
+    expect(claim, "onboarding must state a server count").not.toBeNull();
+    const WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+    expect(WORDS[claim![1]], `onboarding says "${claim![1]}"`).toBe(shipped);
+  });
+
   test("registry declares exactly the two expected servers", () => {
     const { servers } = loadRegistry(MCP_JSON);
     expect(Object.keys(servers).sort()).toEqual([...EXPECTED_SERVERS].sort());

@@ -3986,7 +3986,7 @@ describe("t243 projection channel", () => {
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
-          "sha256:76871f4283e1b20498dda34e03d8baf1e2cc274d7e3bc27acd3f8adc888ea569",
+          "sha256:08950191e0303b76ea325c3940cc8a2018abd191535df62470bb736f8e76bc2f",
         ],
       },
     };
@@ -4125,6 +4125,95 @@ describe("t243 projection channel", () => {
     expect(
       JSON.parse(readFileSync(join(dataDir, "aidlc-stamp.json"), "utf-8")).distribution,
     ).toBe("kiro");
+  }, 120_000);
+
+  test("a project carrying the retired launcher MCP registry migrates, and a modified one conflicts", () => {
+    // The retired Kiro registry shipped `context7` plus four uvx AWS launchers.
+    // This row ships two keyless HTTP entries, so an existing project's registry
+    // has to move - and only when the project did not edit it. `preserveKiroMcpRegion`
+    // carries nothing here: it reads the `aws-mcp` arguments, and the staged file has
+    // no such entry, so the outcome below is the planner's ownership rule, not a
+    // region rewrite.
+    const RETIRED_REGISTRY = `${JSON.stringify({
+      mcpServers: {
+        context7: { type: "http", url: "https://mcp.context7.com/mcp", disabled: true },
+        "aws-mcp": {
+          command: "uvx",
+          args: [
+            "mcp-proxy-for-aws@latest",
+            "https://aws-mcp.us-east-1.api.aws/mcp",
+            "--metadata",
+            "AWS_REGION=us-east-1",
+          ],
+          disabled: true,
+        },
+        "aws-pricing": { command: "uvx", args: ["awslabs.aws-pricing-mcp-server@latest"], disabled: true },
+        "aws-iac": { command: "uvx", args: ["awslabs.aws-iac-mcp-server@latest"], disabled: true },
+        "aws-serverless": { command: "uvx", args: ["awslabs.aws-serverless-mcp-server@latest"], disabled: true },
+      },
+    }, null, 2)}\n`;
+
+    const plan = (edit?: (registry: string) => string): {
+      status: number;
+      action?: string;
+      detail?: string;
+    } => {
+      const project = temp("aidlc-t240-kiro-mcp-migrate-");
+      mkdirSync(join(project, ".git"));
+      const installed = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASE,
+        "--harness",
+        "kiro",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const registryPath = join(project, ".kiro", "settings", "mcp.json");
+      writeFileSync(registryPath, RETIRED_REGISTRY);
+      // The install shipped those bytes, so the baseline records them; without this
+      // the fixture would only prove that a hand-written file is unowned.
+      const baselinePath = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+      const baseline = JSON.parse(readFileSync(baselinePath, "utf-8")) as {
+        files: Record<string, string>;
+      };
+      baseline.files[".kiro/settings/mcp.json"] = sha256Bytes(RETIRED_REGISTRY);
+      writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+      if (edit) writeFileSync(registryPath, edit(RETIRED_REGISTRY));
+      const dry = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASE,
+        "--harness",
+        "kiro",
+        "--dry-run",
+        "--verbose",
+        "--json",
+      ], project);
+      const actions = (JSON.parse(dry.stdout).data.actions ?? []) as Array<{
+        path: string;
+        action: string;
+        detail?: string;
+      }>;
+      const registry = actions.find((item) => item.path.endsWith("settings/mcp.json"));
+      return { status: dry.status, action: registry?.action, detail: registry?.detail };
+    };
+
+    const owned = plan();
+    expect(owned.status).toBe(0);
+    expect(owned.action).toBe("update");
+
+    const edited = plan((registry) => {
+      const doc = JSON.parse(registry) as { mcpServers: Record<string, unknown> };
+      doc.mcpServers["team-docs"] = { type: "http", url: "https://docs.example.test/mcp" };
+      return `${JSON.stringify(doc, null, 2)}\n`;
+    });
+    expect(edited.status).toBe(4);
+    expect(edited.action).toBe("conflict");
+    expect(edited.detail).toContain("locally modified");
   }, 120_000);
 
   test("release runtime-generated commands remain binary-invoked", () => {
