@@ -11,8 +11,10 @@
 // Cases covered (per the brief):
 //   1. 3 testcases / 1 failure   => TESTS=3 FAILED=1 STATUS=FAIL
 //   2. 5 testcases / 3 failures  => TESTS=5 FAILED=3 STATUS=FAIL
-//   3. N testcases / 0 failures  => FAILED=0 STATUS=PASS
-//   4. 0 testcases (empty suite) => TESTS=0 FAILED=0 STATUS=PASS RC=0
+//   3. N passing testcases       => FAILED=0 STATUS=PASS
+//   4. mixed pass/skip           => STATUS=PASS
+//   5. all skipped               => STATUS=SKIP
+//   6. 0 testcases (empty suite) => TESTS=0 FAILED=0 STATUS=PASS RC=0
 // Plus: emitted .meta is exactly 6 lines, bash-sourceable (KEY=value), NAME
 // matches the requested input, and DURATION carries bun's float verbatim.
 
@@ -36,6 +38,17 @@ const _rcTmps: string[] = [];
 afterEach(() => {
   for (const d of _rcTmps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
+function bashPath(path: string): string {
+  if (process.platform !== "win32") return path;
+  return path
+    .replace(/^([A-Za-z]):[\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`)
+    .replaceAll("\\", "/");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 function writeAndSourceRc(xml: string, name: string, bunRc: number | null) {
   const dir = mkdtempSync(join(tmpdir(), "junit-meta-rc-"));
   _rcTmps.push(dir);
@@ -44,7 +57,10 @@ function writeAndSourceRc(xml: string, name: string, bunRc: number | null) {
   writeFileSync(metaPath, content, "utf8");
   const out = execFileSync(
     "bash",
-    ["-c", `set -eu; source "${metaPath}"; echo "$NAME|$STATUS|$TESTS|$FAILED|$DURATION|$RC"`],
+    [
+      "-c",
+      `set -eu; source ${shellQuote(bashPath(metaPath))}; echo "$NAME|$STATUS|$TESTS|$FAILED|$DURATION|$RC"`,
+    ],
     { encoding: "utf8" },
   ).trim();
   return { metaPath, content, sourced: out };
@@ -107,6 +123,16 @@ const XML_9_0 = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`;
 
+// Mixed pass/skip with no failures: the file executed one real test, so it is
+// PASS rather than SKIP.
+const XML_PASS_SKIP = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="2" assertions="1" failures="0" skipped="1" time="0.004000">
+  <testsuite name="t.test.ts" file="t.test.ts" tests="2" assertions="1" failures="0" skipped="1" time="0" hostname="h">
+    <testcase name="passes" classname="" time="0" file="t.test.ts" line="2" assertions="1" />
+    <testcase name="skips" classname="" time="0" file="t.test.ts" line="3" assertions="0"><skipped /></testcase>
+  </testsuite>
+</testsuites>`;
+
 // Mixed: 2 pass + 2 fail + 1 skip = 5 tests, 2 failures. `tests` INCLUDES the
 // skip (verified against the real probe). STATUS must be FAIL (failures>0),
 // skips do not flip it.
@@ -129,7 +155,7 @@ const XML_SKIP_MIX = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`;
 
-// All-skip: 2 tests, 0 failures, exit 0 in real bun => PASS.
+// All-skip: 2 tests, 0 failures, exit 0 in real bun => SKIP.
 const XML_ALL_SKIP = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="2" assertions="0" failures="0" skipped="2" time="0.010998">
   <testsuite name="t.test.ts" file="t.test.ts" tests="2" assertions="0" failures="0" skipped="2" time="0" hostname="h">
@@ -142,23 +168,61 @@ const XML_ALL_SKIP = `<?xml version="1.0" encoding="UTF-8"?>
 
 describe("parseJUnit reads root totals", () => {
   test("3 testcases / 1 failure", () => {
-    expect(parseJUnit(XML_3_1)).toEqual({ tests: 3, failed: 1, duration: "0.012345" });
+    expect(parseJUnit(XML_3_1)).toEqual({
+      tests: 3,
+      failed: 1,
+      skipped: 0,
+      duration: "0.012345",
+    });
   });
   test("5 testcases / 3 failures", () => {
-    expect(parseJUnit(XML_5_3)).toEqual({ tests: 5, failed: 3, duration: "0.020000" });
+    expect(parseJUnit(XML_5_3)).toEqual({
+      tests: 5,
+      failed: 3,
+      skipped: 0,
+      duration: "0.020000",
+    });
   });
   test("9 testcases / 0 failures", () => {
-    expect(parseJUnit(XML_9_0)).toEqual({ tests: 9, failed: 0, duration: "0.028891" });
+    expect(parseJUnit(XML_9_0)).toEqual({
+      tests: 9,
+      failed: 0,
+      skipped: 0,
+      duration: "0.028891",
+    });
+  });
+  test("mixed pass/skip counts one skipped testcase", () => {
+    expect(parseJUnit(XML_PASS_SKIP)).toEqual({
+      tests: 2,
+      failed: 0,
+      skipped: 1,
+      duration: "0.004000",
+    });
   });
   test("skip is counted in tests but not in failures", () => {
-    expect(parseJUnit(XML_SKIP_MIX)).toEqual({ tests: 5, failed: 2, duration: "0.013767" });
+    expect(parseJUnit(XML_SKIP_MIX)).toEqual({
+      tests: 5,
+      failed: 2,
+      skipped: 1,
+      duration: "0.013767",
+    });
   });
   test("all-skip: tests counted, zero failures", () => {
-    expect(parseJUnit(XML_ALL_SKIP)).toEqual({ tests: 2, failed: 0, duration: "0.010998" });
+    expect(parseJUnit(XML_ALL_SKIP)).toEqual({
+      tests: 2,
+      failed: 0,
+      skipped: 2,
+      duration: "0.010998",
+    });
   });
   test("empty/missing XML => 0 tests, 0 failures, 0 duration", () => {
-    expect(parseJUnit("")).toEqual({ tests: 0, failed: 0, duration: "0" });
-    expect(parseJUnit("   \n  ")).toEqual({ tests: 0, failed: 0, duration: "0" });
+    expect(parseJUnit("")).toEqual({ tests: 0, failed: 0, skipped: 0, duration: "0" });
+    expect(parseJUnit("   \n  ")).toEqual({
+      tests: 0,
+      failed: 0,
+      skipped: 0,
+      duration: "0",
+    });
   });
 });
 
@@ -182,12 +246,17 @@ describe("buildMeta derives STATUS and RC", () => {
     expect(m.failed).toBe(0);
     expect(m.rc).toBe(0);
   });
+  test("mixed pass/skip => PASS / RC=0", () => {
+    const m = buildMeta(XML_PASS_SKIP, "t");
+    expect(m.status).toBe("PASS");
+    expect(m.rc).toBe(0);
+  });
   test("skip-mix with failures => FAIL", () => {
     expect(buildMeta(XML_SKIP_MIX, "t").status).toBe("FAIL");
   });
-  test("all-skip => PASS / RC=0 (skips never fail a file)", () => {
+  test("all-skip => SKIP / RC=0", () => {
     const m = buildMeta(XML_ALL_SKIP, "t");
-    expect(m.status).toBe("PASS");
+    expect(m.status).toBe("SKIP");
     expect(m.rc).toBe(0);
   });
   test("empty suite => TESTS=0 FAILED=0 PASS RC=0", () => {
@@ -241,14 +310,15 @@ describe("emitted .meta is bash-sourceable and round-trips", () => {
     tmps.push(dir);
     const metaPath = join(dir, `${name}.meta`);
     const content = renderMeta(buildMeta(xml, name));
-    Bun.write(metaPath, content);
-    // Force the write to land synchronously before sourcing.
-    require("node:fs").writeFileSync(metaPath, content, "utf8");
+    writeFileSync(metaPath, content, "utf8");
     // Source the .meta in a clean bash and echo back the variables. If any line
     // were not a valid assignment, `source` would error / produce wrong output.
     const out = execFileSync(
       "bash",
-      ["-c", `set -eu; source "${metaPath}"; echo "$NAME|$STATUS|$TESTS|$FAILED|$DURATION|$RC"`],
+      [
+        "-c",
+        `set -eu; source ${shellQuote(bashPath(metaPath))}; echo "$NAME|$STATUS|$TESTS|$FAILED|$DURATION|$RC"`,
+      ],
       { encoding: "utf8" },
     ).trim();
     return { metaPath, content, sourced: out };
