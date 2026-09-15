@@ -454,7 +454,30 @@ function die(msg: string): never {
 function validateIntentCreateFlagValues(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
+  positional: string[] = [],
+  verbTokens = 1,
 ): void {
+  // Creation takes every input as a flag and never a positional, so anything past the
+  // verb means the shell split a value that was not quoted. The common case is
+  // `--arguments=deploy this and that`: the shell hands over `--arguments=deploy` plus
+  // orphaned words, and the description is silently stored as "deploy".
+  // project-description.json is written once and is the [desc] source register for the
+  // whole run, so a silent prefix is unrecoverable data loss - refuse instead.
+  //
+  // verbTokens is 2 for the `intent create` alias, whose second token is part of the
+  // verb rather than an orphan; `intent-create` and `init` spell it in one.
+  if (positional.length > verbTokens) {
+    const orphans = positional.slice(verbTokens);
+    const hint = flags.arguments !== undefined
+      ? ` This usually means an unquoted --arguments=... was split by the shell: ` +
+        `only ${JSON.stringify(flags.arguments)} would have been kept. ` +
+        `Quote the whole value, e.g. --arguments="<full description>".`
+      : " Pass every value through a flag, quoting any value that contains spaces.";
+    die(
+      `intent-create does not accept positional arguments, but received ` +
+        `${orphans.map((word) => JSON.stringify(word)).join(", ")}.${hint}`,
+    );
+  }
   // Creation names the new intent itself, so an --intent selector has nothing
   // to select; --space is the one selector creation takes (the target space).
   if (flags.intent !== undefined || missingValueFlags.has("intent")) {
@@ -9056,7 +9079,12 @@ export async function main(argv: string[]): Promise<void> {
     space: missingValueFlags.has("space") ? undefined : flags.space,
   };
   if (isIntentCreate) {
-    validateIntentCreateFlagValues(flags, missingValueFlags);
+    validateIntentCreateFlagValues(
+      flags,
+      missingValueFlags,
+      positional,
+      subcommand === "intent" ? 2 : 1,
+    );
   }
   if (subcommand === "config-change" || subcommand === "scope-change") {
     validateIntentSettingsArgs(subcommand, rawArgs, positional, flags, missingValueFlags);
