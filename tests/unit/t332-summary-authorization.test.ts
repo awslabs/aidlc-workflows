@@ -67,17 +67,58 @@ import {
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STAGE = "requirements-analysis";
+const NFR_STAGE = "nfr-requirements";
 const tempDirs: string[] = [];
+
+type SummaryTarget = {
+  stage?: typeof STAGE | typeof NFR_STAGE;
+  unit?: string;
+};
 
 afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
 });
 
-function project(): string {
+function project(
+  options: Pick<SummaryTarget, "stage"> & {
+    scope?: "infra" | "feature";
+    unitsGeneration?: "SKIP" | "EXECUTE";
+  } = {},
+): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   seedStateFile(proj, "state-mid-inception.md");
+  if (options.stage || options.scope || options.unitsGeneration) {
+    const file = seededStateFile(proj);
+    let state = readFileSync(file, "utf-8");
+    if (options.scope) {
+      state = state.replace("- **Scope**: bugfix", `- **Scope**: ${options.scope}`);
+      // No explicit suffix exercises the scope default; a supplied suffix is
+      // the approved plan override, independent of the stock scope mapping.
+      state = state.replace(
+        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [S] units-generation",
+      );
+    }
+    if (options.unitsGeneration) {
+      state = state.replace(
+        /^- \[[^\]]+\] units-generation.*$/m,
+        `- [${options.unitsGeneration === "SKIP" ? "S" : " "}] units-generation — ${options.unitsGeneration}`,
+      );
+    }
+    if (options.stage === NFR_STAGE) {
+      state = state
+        .replace("- **Inception**: Active", "- **Inception**: Verified")
+        .replace("- **Construction**: Pending", "- **Construction**: Active")
+        .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
+        .replace(`- **Current Stage**: ${STAGE}`, `- **Current Stage**: ${NFR_STAGE}`)
+        .replace(`- **In Progress**: ${STAGE}`, `- **In Progress**: ${NFR_STAGE}`)
+        .replace(`- [-] ${STAGE} — EXECUTE`, `- [x] ${STAGE} — EXECUTE`)
+        .replace(`- [S] ${NFR_STAGE} — SKIP (bugfix scope)`, `- [-] ${NFR_STAGE} — EXECUTE`);
+    }
+    writeFileSync(file, state);
+  }
   return proj;
 }
 
@@ -97,13 +138,14 @@ function run(args: string[], proj: string) {
   };
 }
 
-function paths(proj: string) {
-  const dir = join(seededRecordDir(proj), "inception", STAGE);
+function paths(proj: string, { stage = STAGE, unit }: SummaryTarget = {}) {
+  const phase = stage === STAGE ? "inception" : "construction";
+  const dir = join(seededRecordDir(proj), phase, ...(unit ? [unit] : []), stage);
   mkdirSync(dir, { recursive: true });
   return {
     dir,
-    artifact: join(dir, "requirements.md"),
-    questions: join(dir, `${STAGE}-questions.md`),
+    artifact: join(dir, stage === STAGE ? "requirements.md" : "security-requirements.md"),
+    questions: join(dir, `${stage}-questions.md`),
   };
 }
 
@@ -126,13 +168,19 @@ function questionsBody(answer: string, requirement = "Keep the login flow."): st
 }
 
 /** Present the summary and record the human's turn; the answer is the caller's. */
-function present(proj: string, questions: string, requirement?: string): void {
+function present(
+  proj: string,
+  questions: string,
+  requirement?: string,
+  { stage = STAGE, unit }: SummaryTarget = {},
+): void {
   writeFileSync(questions, questionsBody("", requirement));
   const decision = run(
     [
       "decision",
       "--stage",
-      STAGE,
+      stage,
+      ...(unit ? ["--unit", unit] : []),
       "--checkpoint",
       "summary-confirmation",
       "--questions-file",
@@ -146,12 +194,18 @@ function present(proj: string, questions: string, requirement?: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
-function answer(proj: string, questions: string, choice: "Looks correct" | "Request changes") {
+function answer(
+  proj: string,
+  questions: string,
+  choice: "Looks correct" | "Request changes",
+  { stage = STAGE, unit }: SummaryTarget = {},
+) {
   return run(
     [
       "answer",
       "--stage",
-      STAGE,
+      stage,
+      ...(unit ? ["--unit", unit] : []),
       "--checkpoint",
       "summary-confirmation",
       "--questions-file",
@@ -169,41 +223,13 @@ function confirm(
   questions: string,
   choice: "Looks correct" | "Request changes" = "Looks correct",
   requirement?: string,
+  target: SummaryTarget = {},
 ): string | null {
-  writeFileSync(questions, questionsBody("", requirement));
-  const decision = run(
-    [
-      "decision",
-      "--stage",
-      STAGE,
-      "--checkpoint",
-      "summary-confirmation",
-      "--questions-file",
-      questions,
-      "--decision",
-      "Does this all look correct?",
-    ],
-    proj,
-  );
-  expect(decision.status, decision.stderr).toBe(0);
-  appendAuditEntry("HUMAN_TURN", {}, proj);
+  present(proj, questions, requirement, target);
   writeFileSync(questions, questionsBody(choice, requirement));
-  const answer = run(
-    [
-      "answer",
-      "--stage",
-      STAGE,
-      "--checkpoint",
-      "summary-confirmation",
-      "--questions-file",
-      questions,
-      "--details",
-      choice,
-    ],
-    proj,
-  );
-  expect(answer.status, answer.stderr).toBe(0);
-  const parsed = JSON.parse(answer.stdout) as { summary_authorization_id?: string };
+  const result = answer(proj, questions, choice, target);
+  expect(result.status, result.stderr).toBe(0);
+  const parsed = JSON.parse(result.stdout) as { summary_authorization_id?: string };
   return parsed.summary_authorization_id ?? null;
 }
 
@@ -213,13 +239,14 @@ function writeArtifact(proj: string, artifact: string, content = "# Requirements
   recordArtifactWriteViaHook(proj, artifact, tool);
 }
 
-function evidence(proj: string) {
+function evidence(proj: string, { stage: slug = STAGE, unit }: SummaryTarget = {}) {
   const prior = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
   delete process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
   try {
-    const stage = loadStageGraphAll().find((entry) => entry.slug === STAGE)!;
+    const stage = loadStageGraphAll().find((entry) => entry.slug === slug)!;
     return checkSummaryConfirmationEvidence(proj, stage, {
       stateContent: readFileSync(seededStateFile(proj), "utf-8"),
+      unit,
     });
   } finally {
     if (prior !== undefined) process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = prior;
@@ -561,6 +588,110 @@ describe("t332 summary authorization id", () => {
       expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
     });
   }
+});
+
+describe("t332 stage-level questions for per-unit stages", () => {
+  const target = { stage: NFR_STAGE } as const;
+
+  test.each([
+    ["infra", undefined],
+    ["feature", "SKIP"],
+  ] as const)(
+    "%s accepts confirmed stage-level questions and generated outputs when Units Generation is skipped",
+    (scope, unitsGeneration) => {
+      const proj = project({ ...target, scope, unitsGeneration });
+      const { dir, artifact, questions } = paths(proj, target);
+      const id = confirm(proj, questions, "Looks correct", "Encrypt stored credentials.", target);
+      expect(isSummaryAuthorizationId(id)).toBe(true);
+      expect(readSummaryAuthorization(proj, NFR_STAGE, null)?.id).toBe(id as string);
+      const [receipt] = receipts(proj);
+      expect(auditBlockField(receipt.block, "Stage")).toBe(NFR_STAGE);
+      expect(auditBlockField(receipt.block, "Unit")).toBeNull();
+      const outputs = [artifact, join(dir, "tech-stack-decisions.md")];
+      for (const output of outputs) writeArtifact(proj, output, "# Confirmed NFR output\n");
+      const writes = artifactWrites(proj);
+      expect(writes).toHaveLength(outputs.length);
+      for (const write of writes) {
+        expect(auditBlockField(write.block, SUMMARY_AUTHORIZATION_FIELD)).toBe(id as string);
+      }
+
+      // Before the lookup fix, this returns SUMMARY_QUESTIONS_MISSING even
+      // though the stage-level questions, human receipt, and writes all exist.
+      expect(evidence(proj, target)).toMatchObject({ ok: true, required: true });
+
+      // Obsolete Unit folders must not be mixed into the approved stage-level plan.
+      const obsolete = paths(proj, { ...target, unit: "old-unit" });
+      writeFileSync(obsolete.questions, questionsBody(""));
+      expect(evidence(proj, target)).toMatchObject({ ok: true, required: true });
+    },
+  );
+
+  test.each([
+    ["missing receipt", "SUMMARY_RECEIPT_MISSING", "missing"],
+    ["stale content", "SUMMARY_CONTENT_STALE", "stale"],
+    ["Request changes", "SUMMARY_ANSWER_INVALID", "stale"],
+    ["unauthorized output", "SUMMARY_ARTIFACT_UNAUTHORIZED", "stale"],
+  ] as const)(
+    "stage-level question presence does not bypass confirmation: %s",
+    (condition, code, summaryCoverage) => {
+      const proj = project({ ...target, scope: "infra" });
+      const { artifact, questions } = paths(proj, target);
+      if (condition === "missing receipt") {
+        writeFileSync(questions, questionsBody("Looks correct"));
+        writeArtifact(proj, artifact);
+        expect(receipts(proj)).toHaveLength(0);
+      } else {
+        if (condition === "unauthorized output") writeArtifact(proj, artifact, "# Unconfirmed draft\n");
+        confirm(proj, questions, "Looks correct", undefined, target);
+        if (condition !== "unauthorized output") writeArtifact(proj, artifact);
+        if (condition === "stale content") {
+          writeFileSync(questions, questionsBody("Looks correct", "Require hardware-backed keys."));
+        } else if (condition === "Request changes") {
+          expect(confirm(proj, questions, "Request changes", undefined, target)).toBeNull();
+          expect(readSummaryAuthorization(proj, NFR_STAGE, null)).toBeNull();
+        }
+      }
+      expect(evidence(proj, target)).toMatchObject({
+        ok: false,
+        summaryCoverage,
+        refusal: { code },
+      });
+    },
+  );
+
+  test("infra with an EXECUTE override requires the specified Unit's own questions and confirmation", () => {
+    const proj = project({ ...target, scope: "infra", unitsGeneration: "EXECUTE" });
+    const stageLevel = paths(proj, target);
+    const stageId = confirm(proj, stageLevel.questions, "Looks correct", undefined, target);
+    expect(isSummaryAuthorizationId(stageId)).toBe(true);
+    writeArtifact(proj, stageLevel.artifact);
+
+    const unitTarget = { ...target, unit: "api" };
+    expect(evidence(proj, unitTarget)).toMatchObject({
+      ok: false,
+      summaryCoverage: "missing",
+      refusal: { code: "SUMMARY_QUESTIONS_MISSING" },
+    });
+
+    const perUnit = paths(proj, unitTarget);
+    writeFileSync(perUnit.questions, questionsBody("Looks correct"));
+    writeArtifact(proj, perUnit.artifact);
+    expect(auditBlockField(artifactWrites(proj).at(-1)!.block, SUMMARY_AUTHORIZATION_FIELD)).toBeNull();
+    // A stage-level receipt cannot confirm a Unit's questions either.
+    expect(evidence(proj, unitTarget)).toMatchObject({
+      ok: false,
+      summaryCoverage: "missing",
+      refusal: { code: "SUMMARY_RECEIPT_MISSING" },
+    });
+
+    const unitId = confirm(proj, perUnit.questions, "Looks correct", undefined, unitTarget);
+    expect(isSummaryAuthorizationId(unitId)).toBe(true);
+    expect(unitId).not.toBe(stageId);
+    expect(readSummaryAuthorization(proj, NFR_STAGE, "api")?.id).toBe(unitId as string);
+    writeArtifact(proj, perUnit.artifact, "# Confirmed Unit NFR output\n");
+    expect(auditBlockField(artifactWrites(proj).at(-1)!.block, SUMMARY_AUTHORIZATION_FIELD)).toBe(unitId as string);
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: true, required: true });
+  });
 });
 
 describe("t332 authorization scope resolution", () => {
