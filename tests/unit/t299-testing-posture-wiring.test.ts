@@ -811,7 +811,6 @@ describe("t299 (5) authored consumers use the same contract", () => {
     for (const harness of [
       "claude",
       "kiro",
-      "kiro-ide",
       "codex",
       "cursor",
       "opencode",

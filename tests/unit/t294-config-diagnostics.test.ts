@@ -303,9 +303,12 @@ describe("t294 runtime diagnostics", () => {
       status: "missing",
     }));
 
-    expect(probeHarnessCli("kiro-ide")).toEqual(expect.objectContaining({
+    // The Kiro row serves the IDE as well as the CLI, so `kiro-cli` is optional:
+    // a project opened only in Kiro IDE needs no separate CLI.
+    expect(probeHarnessCli("kiro", { which: () => null })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
       required: false,
-      status: "not-applicable",
+      status: "missing",
     }));
   });
 });
@@ -416,12 +419,12 @@ describe("t294 provider diagnostics", () => {
     );
     expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
 
-    // Owned harnesses: no record writes anything, Kiro CLI included. The aws-mcp
-    // region there is carried from the project's own file during staging, and a
-    // record's region never reaches it, even when the file says something else.
+    // Owned harnesses: no record writes anything, Kiro included. This row's
+    // registry ships two keyless HTTP entries and no `aws-mcp` launcher, so a
+    // record's region has nothing to reach there in the first place.
     for (const [harness, dir, file] of [
       ["kiro", ".kiro", "settings/mcp.json"],
-      ["kiro-ide", ".kiro", "tools/data/harness.json"],
+      ["kiro", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
     ] as const) {
@@ -438,21 +441,21 @@ describe("t294 provider diagnostics", () => {
       expect(readFileSync(path), harness).toEqual(original);
     }
 
-    // Staging preservation: the project's aws-mcp endpoint and metadata replace
-    // the release values in the staged copy, argument by argument, and a project
-    // without that entry leaves the staged bytes alone.
+    // Staging: this row ships no `aws-mcp` launcher, so there is no endpoint or
+    // metadata for `preserveKiroMcpRegion` to carry - it returns before touching
+    // anything when either side lacks that entry, which here is always. The
+    // behaviour that matters instead is what happens to a project still carrying
+    // the retired launcher registry, and that is pinned in the migration case
+    // below rather than asserted as preservation here.
     const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
     cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
     const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
-    writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
+    expect(readFileSync(projectMcpPath, "utf-8")).not.toContain("aws-mcp");
     const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
     cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
-    preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
     const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
-    expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
-    expect(stagedMcp).not.toContain("us-east-1");
-    expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
+    preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
+    expect(readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(stagedMcp);
     const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
     mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
     writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
@@ -533,8 +536,8 @@ describe("t294 trust diagnostics", () => {
   });
 
   test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
-    const project = temp("aidlc-t294-trust-kiro-ide-");
-    cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
+    const project = temp("aidlc-t294-trust-kiro-");
+    cpSync(join(DIST, "kiro"), project, { recursive: true });
     mkdirSync(join(project, ".vscode"), { recursive: true });
     writeFileSync(
       join(project, ".vscode", "settings.json"),
@@ -542,9 +545,9 @@ describe("t294 trust diagnostics", () => {
         "kiroAgent.trustedCommands": ["aidlc engine *"],
       }, null, 2)}\n`,
     );
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues).toEqual([]);
+    expect(trustStatus(project, ".kiro", "kiro").issues).toEqual([]);
     writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues.map((item) => item.id))
+    expect(trustStatus(project, ".kiro", "kiro").issues.map((item) => item.id))
       .toContain("kiro-ide-trusted-command-missing");
 
     const codex = temp("aidlc-t294-siblings-codex-");
@@ -975,7 +978,7 @@ describe("t294 config diagnostics CLI", () => {
   }, 90_000);
 
   test("a legacy Kiro record with pending actions reads as harness-managed everywhere", () => {
-    const project = install("kiro-ide");
+    const project = install("kiro");
     const env = runtimeEnv();
     const record: ProvidersRecord = {
       schemaVersion: 1,
@@ -996,7 +999,7 @@ describe("t294 config diagnostics CLI", () => {
     const show = run([...args, "--show"], project, env);
     expect(show.status, show.stdout + show.stderr).toBe(0);
     expect(show.stdout).toContain(
-      "Model access: comes with Kiro IDE; AI-DLC configures no model provider",
+      "Model access: comes with Kiro; AI-DLC configures no model provider",
     );
     expect(show.stdout).toContain("Legacy provider answer present and ignored;");
     expect(show.stdout).toContain("config providers --reset");
@@ -1017,9 +1020,9 @@ describe("t294 config diagnostics CLI", () => {
     const check = run([...args, "--check"], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain(
-      "providers needs no answer for kiro-ide; its model access is harness-managed",
+      "providers needs no answer for kiro; its model access is harness-managed",
     );
-    expect(postApplyOutstandingActions(project, ".kiro", "kiro-ide", {
+    expect(postApplyOutstandingActions(project, ".kiro", "kiro", {
       skipSections: ["runtime", "trust"],
     }).filter((action) => action.section === "providers")).toEqual([]);
     expect(providerDoctorCheck(project, ".kiro")).toEqual(expect.objectContaining({
@@ -1099,13 +1102,14 @@ describe("t294 config diagnostics CLI", () => {
     expect(readConfigDiagnosticRecords(join(kiro, ".kiro")).providers).toBeNull();
     expect(readFileSync(mcpPath, "utf-8")).toBe(projectMcp);
 
-    // The preservation must not turn mcp.json into a runtime-generated file: with
-    // the nondefault region still in place, enabling aws-mcp by hand and adding a
-    // server is a local modification the refresh has to refuse, not overwrite.
+    // The preservation must not turn mcp.json into a runtime-generated file:
+    // enabling a shipped server by hand and adding one of your own is a local
+    // modification the refresh has to refuse, not overwrite. This row ships no
+    // `aws-mcp` launcher, so the hand-enabled entry is one it does ship.
     const parsedMcp = JSON.parse(projectMcp) as {
       mcpServers: Record<string, Record<string, unknown>>;
     };
-    parsedMcp.mcpServers["aws-mcp"].disabled = false;
+    parsedMcp.mcpServers["context7"].disabled = false;
     parsedMcp.mcpServers["team-docs"] = { type: "http", url: "https://docs.example.test/mcp" };
     const editedMcp = `${JSON.stringify(parsedMcp, null, 2)}\n`;
     writeFileSync(mcpPath, editedMcp);
@@ -1174,7 +1178,7 @@ describe("t294 config diagnostics CLI", () => {
   }, 90_000);
 
   test("only Kiro owns its own model access; every other harness is Bedrock-oriented", () => {
-    for (const harness of ["kiro", "kiro-ide"] as const) {
+    for (const harness of ["kiro"] as const) {
       expect(harnessOwnsModelAccess(harness)).toBe(true);
     }
     // Copilot and Cursor reach Bedrock through their own BYOK/provider settings,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // scripts/package.ts — THE build entry for the one-core-N-harnesses layout.
 //
-//   bun scripts/package.ts            regenerate dist/{claude,kiro,kiro-ide,codex}
+//   bun scripts/package.ts            regenerate dist/{claude,kiro,codex}
 //   bun scripts/package.ts --check     determinism guard (exit 1 on mismatch)
 //   bun scripts/package.ts <name>      regenerate just one harness
 //   bun scripts/package.ts <name> --check
@@ -83,7 +83,6 @@ import {
   modelAgentName,
   resolveModelPolicy,
   serializeAgentTiers,
-  writeKiroAgentSurface,
   writeKiroCliSurface,
   writeMarkdownAgentSurface,
 } from "../core/tools/aidlc-model-policy.ts";
@@ -161,6 +160,10 @@ const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
 const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
+// A harness whose agent config allowlists shell commands needs a REGEX for this
+// channel's invocation, which no other token can compose: the copy channel's
+// pattern ends in `.ts` and the native channel's must not mention it at all.
+const TOOL_COMMAND_PATTERN_TOKEN = /\{\{TOOL_COMMAND_PATTERN\}\}/g;
 const TRUSTED_NAMESPACE_TOKEN = /\{\{TRUSTED_NAMESPACE\}\}/g;
 // Matched by PREFIX (mirroring aidlc-init.ts's marker scan): the begin marker
 // embeds the harness-projected invocation, so its tail varies per channel.
@@ -199,9 +202,18 @@ function substituteInvocationTokens(
   invoke = `bun ${harnessDir}/tools/aidlc.ts`,
 ): string {
   const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  // Single quotes are doubled because this value lands inside a single-quoted
+  // YAML scalar, and the dot in the harness dir is escaped because the value is
+  // read as a regex by the host, not as a path.
+  const toolCommandPattern = invoke === "aidlc"
+    ? String.raw`${TRUSTED_COMMAND_PREFIX}( .*)?`
+    : String.raw`bun (run )?["'']?${
+      escapeRegExp(harnessDir)
+    }/tools/[A-Za-z0-9._-]+\.ts["'']?( .*)?`;
   return s
     .replace(INVOKE_TOKEN, invoke)
     .replace(TOOL_PREFIX_TOKEN, toolPrefix)
+    .replace(TOOL_COMMAND_PATTERN_TOKEN, toolCommandPattern)
     .replace(TRUSTED_NAMESPACE_TOKEN, TRUSTED_ROUTE_NAMESPACE);
 }
 
@@ -298,37 +310,6 @@ function projectTierFrontmatter(
   return writeMarkdownAgentSurface(s, effective, {
     effortKey: harness === "opencode" ? "variant" : "effort",
   });
-}
-
-// Project the `"model"` field of an authored Kiro agent .json from the tier
-// table. The JSONs stay hand-written (tools, resources, sandbox settings) but
-// the model dial is projection-owned: the authored files carry NO "model"
-// field at all (so nobody edits a value the build would overwrite), and the
-// tier comes from the same-name core/agents/<slug>.md (single source of
-// truth). A pinned tier ADDS the field; a null projected model leaves it
-// absent - the agent-v1 schema documents the fallback ("If not specified,
-// uses the default model"), which is exactly the judgment-tier inherit
-// contract. Files with no core .md counterpart (the aidlc.json orchestrator
-// config) pass through untouched: the orchestrator is not a tier-carrying
-// persona. Never writes any effort-like key - kiro-cli fail-closes on
-// unknown agent-JSON fields.
-function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
-  const name = srcPath.split(sep).join("/").split("/").pop() ?? "";
-  if (!name.endsWith("-agent.json")) return content;
-  const coreMd = join(CORE_ROOT, "agents", name.replace(/\.json$/, ".md"));
-  if (!existsSync(coreMd)) return content;
-  const tier = agentTierFromMd(readFileSync(coreMd, "utf-8"), coreMd);
-  const effective = resolveModelPolicy(
-    null,
-    modelAgentName(name),
-    tier as Tier,
-    "kiro",
-    TIER_CAP,
-  );
-  return Buffer.from(
-    writeKiroAgentSurface(content.toString("utf-8"), effective),
-    "utf-8",
-  );
 }
 
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
@@ -789,7 +770,14 @@ function buildTree(
       const fmLines = fmAdditions.get(harnessRel);
       if (fmLines) {
         out = Buffer.from(
-          applyFrontmatterAdditions(out.toString("utf-8"), fmLines, harnessRel),
+          applyFrontmatterAdditions(
+            out.toString("utf-8"),
+            // Additions are authored text like every other projected line, so
+            // they take the same substitution. A manifest runs once and cannot
+            // know which channel it is being built for.
+            fmLines.map((line) => substituteToken(line, harnessDir, invoke)),
+            harnessRel,
+          ),
           "utf-8",
         );
         fmApplied.add(harnessRel);
@@ -824,12 +812,10 @@ function buildTree(
       harnessKind,
       invoke,
     );
-    if (harnessKind === "kiro") {
-      if (src.startsWith("agents/") && src.endsWith(".json")) {
-        out = projectKiroAgentJson(srcPath, out);
-      } else if (src === "settings/cli.json") {
-        out = projectKiroCliJson(out);
-      }
+    if (harnessKind === "kiro" && src === "settings/cli.json") {
+      // The row's agents are Markdown and carry no model keys, so cli.json is
+      // the only Kiro surface the tier table projects onto.
+      out = projectKiroCliJson(out);
     }
     writeFileSync(outPath, out);
   }
@@ -951,13 +937,22 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
   const agentsDir = join(outRoot, m.harnessDir, "agents");
   for (const file of walk(agentsDir)) {
     if (file.endsWith(".md")) {
-      // Kiro IDE persona surfaces carry a YAML shell allowlist; the native
-      // channel replaces the bun tool glob with the aidlc command prefix.
+      // Kiro persona and conductor surfaces carry a YAML shell allowlist; the
+      // native channel replaces the bun tool glob with the aidlc command prefix.
+      // The conductor carries a second entry for the dispatcher — a path glob
+      // cannot express a route namespace that lives in the arguments — and on
+      // this channel both entries project to the same command, so the second
+      // becomes a duplicate and is dropped.
       const value = readFileSync(file, "utf-8");
-      const rewritten = value.replaceAll(
-        `- "bun ${m.harnessDir}/tools/aidlc-*"`,
-        `- "${trustedCommand("*")}"`,
-      );
+      const native = `- "${trustedCommand("*")}"`;
+      const rewritten = value
+        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, native)
+        .replace(
+          new RegExp(
+            `( *)${escapeRegExp(native)}\\n(?:[^\\n]*\\n)*? *${escapeRegExp(native)}\\n`,
+          ),
+          `$1${native}\n`,
+        );
       if (rewritten !== value) writeFileSync(file, rewritten);
       continue;
     }
@@ -1276,7 +1271,7 @@ function rewriteNativeInvocations(
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
     const value = readFileSync(file, "utf-8");
-    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}"]) {
+    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}", "{{TOOL_COMMAND_PATTERN}}"]) {
       if (value.includes(token)) {
         leftovers.push(`${relative(outRoot, file)}: unexpanded ${token}`);
       }

@@ -5,6 +5,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { installRoot } from "./aidlc-install-paths.ts";
+import { currentDistribution } from "./aidlc-runtime-paths.ts";
 import type {
   ModelAgentPolicy,
   ModelHarness,
@@ -110,7 +111,6 @@ const MODEL_HARNESSES = [
   "copilot",
   "cursor",
   "kiro",
-  "kiro-ide",
   "opencode",
 ] as const;
 const PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
@@ -202,14 +202,25 @@ function normalizeHarnessModelMap(value: unknown, where: string): HarnessModelMa
     throw new Error(`${where} must be an object keyed by harness`);
   }
   const out: HarnessModelMap = {};
+  const retired: Array<[ModelHarness, string]> = [];
   for (const [harness, model] of Object.entries(value)) {
-    if (!(MODEL_HARNESSES as readonly string[]).includes(harness)) {
+    const resolved = currentDistribution(harness);
+    if (!(MODEL_HARNESSES as readonly string[]).includes(resolved)) {
       throw new Error(`${where} has unknown harness ${JSON.stringify(harness)}`);
     }
     if (typeof model !== "string" || model.trim().length === 0) {
       throw new Error(`${where}.${harness} must be a non-empty model ID`);
     }
-    out[harness as ModelHarness] = model.trim();
+    // A key the previous release accepted must not make the file unreadable: the
+    // whole upgrade runs through this parser, so throwing here refuses the very
+    // command that would rewrite the key. The current key wins when both are
+    // present - the retired one is residue, not a second opinion - and it is
+    // applied after the loop so the outcome does not depend on key order.
+    if (resolved === harness) out[resolved as ModelHarness] = model.trim();
+    else retired.push([resolved as ModelHarness, model.trim()]);
+  }
+  for (const [harness, model] of retired) {
+    if (out[harness] === undefined) out[harness] = model;
   }
   return out;
 }
@@ -704,7 +715,7 @@ export const AIDLC_SETTINGS_SCHEMA = {
                 type: "object",
                 additionalProperties: false,
                 properties: Object.fromEntries(
-                  ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]
+                  ["claude", "codex", "copilot", "cursor", "kiro", "opencode"]
                     .map((name) => [name, { type: "string", minLength: 1 }]),
                 ),
               },

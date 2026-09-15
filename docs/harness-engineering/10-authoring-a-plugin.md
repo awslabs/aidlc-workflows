@@ -431,11 +431,12 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE >= 1.0; its folder-drop
-> includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
-> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
-> so run one of the explicit composer commands above. Neither projection emits the
+> **Kiro note.** One `kiro` projection serves both surfaces, and its folder-drop
+> includes one v2 `.kiro/hooks/aidlc-<plugin>-compose.json` manifest carrying BOTH
+> triggers — `SessionStart` for the IDE and `AgentSpawn` for the CLI — each running
+> the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from the workspace
+> root. Registering both is what lets one file serve a surface that fires only one of
+> them. The explicit composer commands above remain available. The projection emits no
 > retired `.kiro.hook` plugin registration.
 
 ### Trust
@@ -573,8 +574,8 @@ compose a second time to prove idempotency. Any compose drop, graph failure,
 missing plugin node, or second-pass file change exits `1`. The live install is
 hashed before and after and is never a compose target.
 
-Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
-Kiro IDE) and `.aidlc` (Copilot vs OpenCode). `--dist <version>` is reserved
+Pass `--harness` when the install is ambiguous, which now means `.aidlc`
+(Copilot vs OpenCode); `.kiro` is one row serving both Kiro surfaces. `--dist <version>` is reserved
 until RFC #722 milestone 2 defines a released runtime-bundle channel.
 
 1. **Content validation** is the always-on baseline. Run

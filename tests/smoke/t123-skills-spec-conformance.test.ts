@@ -119,8 +119,7 @@ const FRESH_SESSION_TEXT: Record<string, string> = {
   claude: "use `/clear` (or restart Claude Code)",
   codex: "exit or restart Codex CLI and start a new session",
   cursor: "start a new Cursor chat (IDE) or restart agent (CLI)",
-  kiro: "exit or restart Kiro CLI and start a new session",
-  "kiro-ide": "open a new Kiro IDE chat",
+  kiro: "start a new Kiro CLI session or open a new Kiro IDE chat",
   opencode: "exit or restart OpenCode and start a new session",
   copilot: "start a new Copilot CLI session or open a new VS Code agent chat",
 };

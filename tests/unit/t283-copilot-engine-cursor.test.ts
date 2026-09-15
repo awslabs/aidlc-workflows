@@ -29,7 +29,6 @@ const HARNESSES = [
   { name: "copilot", dir: ".aidlc" },
   { name: "cursor", dir: ".cursor" },
   { name: "kiro", dir: ".kiro" },
-  { name: "kiro-ide", dir: ".kiro" },
   { name: "opencode", dir: ".aidlc" },
 ] as const;
 

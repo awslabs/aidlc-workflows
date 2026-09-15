@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { PREVIEW_CHANNEL, STABLE_CHANNEL } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
@@ -368,6 +369,29 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
+  test("the preview lifecycle roster matches the stable release roster", () => {
+    // The preview jobs run `config --harness <name>` for every shipped row. A row
+    // this repository no longer projects makes that command exit 4, so the preview
+    // fails before publication - and the stable workflow having been updated while
+    // this one was not is exactly how that lands unnoticed. Both rosters are read
+    // here, in both shells the preview workflow uses.
+    const shipped = HARNESS_MATRIX.map((harness) => harness.name).sort();
+    const preview = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
+    const stable = readFileSync(STABLE_RELEASE_WORKFLOW, "utf-8");
+
+    const powershell = /\$harnesses = @\(([^)]*)\)/.exec(preview);
+    expect(powershell, "preview workflow must declare a PowerShell harness list").not.toBeNull();
+    const powershellRoster = [...powershell![1].matchAll(/'([^']+)'/g)]
+      .map((match) => match[1]).sort();
+    expect(powershellRoster).toEqual(shipped);
+
+    for (const [label, workflow] of [["preview", preview], ["stable", stable]] as const) {
+      const bash = /for harness in ([a-z0-9 -]+); do/.exec(workflow);
+      expect(bash, `${label} workflow must declare a bash harness list`).not.toBeNull();
+      expect(bash![1].trim().split(/\s+/).sort(), label).toEqual(shipped);
+    }
+  });
+
   test("the tag message binds a preview to its source commit and parses back", () => {
     const message = previewTagMessage({
       version: PREVIEW_ID,

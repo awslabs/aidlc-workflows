@@ -78,7 +78,6 @@ const SKILL_REL: Record<string, string> = {
   copilot: ".github/skills",
   cursor: ".cursor/skills",
   kiro: ".kiro/skills",
-  "kiro-ide": ".kiro/skills",
   opencode: ".aidlc/skills",
 };
 

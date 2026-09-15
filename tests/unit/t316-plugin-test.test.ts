@@ -29,7 +29,6 @@ const SOURCE_TOOLS = join(
 );
 const SOURCE_PLUGIN = join(REPO_ROOT, "plugins", "test-pro");
 const CLAUDE_INSTALL = join(REPO_ROOT, "dist", "claude");
-const KIRO_INSTALL = join(REPO_ROOT, "dist", "kiro");
 const OPENCODE_INSTALL = join(REPO_ROOT, "dist", "opencode");
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t316-"));
 const copiedTools = join(scratch, "runtime", "tools");
@@ -345,10 +344,13 @@ describe("t316 standalone plugin compose test", () => {
     expect(treeDigest(poisonRoot)).toBe(beforePoison);
   });
 
-  test("shared .kiro leaf requires --harness disambiguation", () => {
+  // opencode and Copilot both install into a `.aidlc` leaf, so that leaf alone
+  // cannot say which payload to drop. (Kiro was the pair here until its two rows
+  // became one.)
+  test("shared .aidlc leaf requires --harness disambiguation", () => {
     const { pluginRoot, installRoot } = copyFixture(
-      "kiro-ambiguity",
-      KIRO_INSTALL,
+      "aidlc-leaf-ambiguity",
+      OPENCODE_INSTALL,
     );
     const result = run([pluginRoot, "--install", installRoot]);
     expect(result.status).toBe(2);

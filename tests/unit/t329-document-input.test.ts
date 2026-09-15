@@ -101,7 +101,6 @@ describe("t329 project-description and document-input boundaries", () => {
       "copilot",
       "cursor",
       "kiro",
-      "kiro-ide",
       "opencode",
     ]) {
       const dir = project();

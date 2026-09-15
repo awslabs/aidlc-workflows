@@ -138,7 +138,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     });
 
     for (const harness of HARNESS_MATRIX.filter(
-      (candidate) => candidate.name !== "kiro" && candidate.name !== "kiro-ide",
+      (candidate) => candidate.name !== "kiro",
     )) {
       test(`${harness.name}: scoped new prose retains the pre-existing untyped picker contract`, () => {
         seedTwoIntentsNoCursor();
@@ -170,7 +170,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.question).toContain("fix the broken login button");
     });
 
-    for (const harnessName of ["kiro", "kiro-ide"] as const) {
+    for (const harnessName of ["kiro"] as const) {
       test(`${harnessName}: scoped new prose emits the typed routing ask with record selectors`, () => {
         seedTwoIntentsNoCursor();
         const harness = harnessByName(harnessName);

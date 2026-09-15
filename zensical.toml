@@ -48,8 +48,7 @@ nav = [
     ] },
     { "Other Harnesses" = [
       { "Overview" = "guide/harnesses/README.md" },
-      "guide/harnesses/kiro-cli.md",
-      "guide/harnesses/kiro-ide.md",
+      "guide/harnesses/kiro.md",
       "guide/harnesses/codex-cli.md",
       "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",

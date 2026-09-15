@@ -88,6 +88,8 @@ import {
   renderStageTable,
 } from "./aidlc-utility.ts";
 import {
+  currentDistribution,
+  distributionUpgradesTo,
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
@@ -511,16 +513,22 @@ function configPositionals(argv: readonly string[]): Array<{ value: string; inde
 }
 
 function modelHarness(value: string): ModelHarness {
+  // This gate READS an identity a previous release persisted - a project stamp, a
+  // machine default, a settings key - so a retired id resolves to its successor
+  // here rather than at each of the 20-odd call sites. Resolving at the gate is
+  // what makes the diagnostics sections, the models section and the setup walk
+  // accept a project that has not been refreshed yet; the returned type still has
+  // no retired member, so every WRITE keeps emitting the current id.
+  const value_ = currentDistribution(value);
   if (
-    value === "claude" ||
-    value === "codex" ||
-    value === "copilot" ||
-    value === "cursor" ||
-    value === "kiro" ||
-    value === "kiro-ide" ||
-    value === "opencode"
+    value_ === "claude" ||
+    value_ === "codex" ||
+    value_ === "copilot" ||
+    value_ === "cursor" ||
+    value_ === "kiro" ||
+    value_ === "opencode"
   ) {
-    return value;
+    return value_;
   }
   throw new Error(`models policy is not supported for harness ${JSON.stringify(value)}`);
 }
@@ -1291,7 +1299,7 @@ function selectedDiagnosticHarness(
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error(
@@ -4122,14 +4130,19 @@ function selectSource(
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`source is ${stamp.distribution}, not requested harness ${requested}`);
     }
-    if (existingDistribution && stamp.distribution !== existingDistribution) {
+    if (
+      existingDistribution &&
+      !distributionUpgradesTo(existingDistribution, stamp.distribution)
+    ) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
     }
     return { ...source, stamp, descriptor };
   }
   const candidates = installedSourceCandidates(requiredVersion);
-  const selectedName = existingDistribution || requested;
+  const selectedName = existingDistribution
+    ? currentDistribution(existingDistribution)
+    : requested;
   const versionFiltered = candidates;
   if (selectedName) {
     const selected = versionFiltered.filter((candidate) =>
@@ -4146,8 +4159,11 @@ function selectSource(
   }
   const configuredDefault = configuredDefaultHarness();
   if (configuredDefault) {
+    // A machine that recorded the retired row as its default still resolves to the
+    // successor; without this, `aidlc config` on a fresh project fails until the
+    // user passes `--harness` explicitly.
     const selected = versionFiltered.filter((candidate) =>
-      candidate.stamp.distribution === configuredDefault
+      distributionUpgradesTo(configuredDefault, candidate.stamp.distribution)
     );
     if (selected.length === 1) return selected[0];
     if (versionFiltered.length > 0) {
@@ -4192,7 +4208,7 @@ function copiedProjectSource(
 ): ConfigSource {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     throw new Error("the project does not contain a copied AI-DLC projection");
@@ -4515,16 +4531,14 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["codex                         open Codex CLI in this repo", '$aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro") {
-    return ["kiro-cli chat                  open Kiro CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
+    // One row, two ways in - the same pair the manifest's configNextStep names.
+    return ["kiro . | kiro-cli              open this repo in Kiro IDE or Kiro CLI", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "opencode") {
     return ["opencode                       open opencode in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "cursor") {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
-  }
-  if (distribution === "kiro-ide") {
-    return ["kiro                          open Kiro IDE in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "copilot") {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
@@ -5185,7 +5199,7 @@ function existingProject(projectDir: string, requested?: string): {
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
   const harness = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!harness && requested && harnesses.length > 0) {
     throw new Error(
@@ -5755,7 +5769,7 @@ function prepareModelsSection(
   const requested = valueAfter(argv, "--harness");
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = requested
-    ? harnesses.find((candidate) => candidate.distribution === requested)
+    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
     : harnesses[0];
   if (!selected) {
     emitResult(
@@ -6374,7 +6388,10 @@ export async function main(
       }
     }
     const { stamp, descriptor } = selected;
-    if (existing.distribution && existing.distribution !== stamp.distribution) {
+    if (
+      existing.distribution &&
+      !distributionUpgradesTo(existing.distribution, stamp.distribution)
+    ) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
     if (existing.distribution) assertRefreshSafe(projectDir);

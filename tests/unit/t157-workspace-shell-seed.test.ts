@@ -128,13 +128,6 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       if (harness.capabilities.memoryInclude === "claude-import") {
         const stub = readFileSync(join(harness.engineRoot, "rules", "aidlc.md"), "utf-8");
         expect(stub).toContain("@../../aidlc/spaces/default/memory/org.md");
-      } else if (harness.capabilities.memoryInclude === "kiro-resources") {
-        const agent = JSON.parse(
-          readFileSync(join(harness.engineRoot, "agents", "aidlc.json"), "utf-8"),
-        ) as { resources: string[] };
-        expect(agent.resources, harness.name).toContain(
-          "file://aidlc/spaces/default/memory/**/*.md",
-        );
       } else if (harness.capabilities.memoryInclude === "kiro-steering") {
         const steering = readFileSync(
           join(harness.engineRoot, "steering", "aidlc-active-memory.md"),

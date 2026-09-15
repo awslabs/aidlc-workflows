@@ -41,19 +41,19 @@ export type RuntimeRecord = {
 // answers are only recorded for Bedrock-oriented harnesses.
 export type ProviderKind = "amazon-bedrock" | "builtin" | "other";
 
-// Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
-// decision to ask, write, or check for them, even when a legacy answer exists.
+// Kiro provides its own model access on both of its surfaces, IDE and CLI, which
+// one row serves. AI-DLC has no provider decision to ask, write, or check for it,
+// even when a legacy answer exists.
 //
 // Every OTHER harness is Bedrock-oriented and must still be asked. Claude Code,
 // Codex CLI, and OpenCode take region and profile bytes directly. GitHub
 // Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
 // which is manual work AI-DLC tracks rather than performs. Never assume those
 // are on the harness's own access.
-export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
+export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro">;
 
 const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
   "kiro",
-  "kiro-ide",
 ]);
 
 export function harnessOwnsModelAccess(
@@ -741,12 +741,9 @@ const HARNESS_CLI: Record<
   },
   kiro: {
     command: "kiro-cli",
-    required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
-  },
-  "kiro-ide": {
     required: false,
-    install: "Kiro IDE has no required separate CLI for this project surface.",
+    install:
+      "Open this project in Kiro IDE, or install Kiro CLI and ensure `kiro-cli --version` works.",
   },
   opencode: {
     command: "opencode",
@@ -1227,8 +1224,10 @@ export function applyConfigDiagnosticRecords(
   records: ConfigDiagnosticRecords,
 ): void {
   // Owned harnesses record no provider answer; a legacy record is not applied
-  // anywhere. The Kiro CLI MCP region is carried by preserveKiroMcpRegion from
-  // the project's own file during staging, not from a record.
+  // anywhere. `preserveKiroMcpRegion` still runs during staging, but this row's
+  // registry ships no `aws-mcp` launcher, so it has no region to carry: a project
+  // still holding the retired launcher registry has it replaced when the project
+  // never edited it, and reported as a conflict when it did.
   if (harnessOwnsModelAccess(harness)) return;
   const provider = records.providers;
   if (provider?.provider !== "amazon-bedrock" || !provider.region) return;
@@ -1518,13 +1517,29 @@ export function completionInstruction(
   return `eval "$(${invoke} system completions ${shell})"`;
 }
 
-const SHIPPED_MCP_SERVERS = [
+// The shipped registry differs per harness, so the drift checks below cannot use
+// one list. Claude ships the four uvx AWS servers plus context7; the Kiro row
+// ships two keyless HTTP entries. A single list would report a false
+// `project-mcp-defaults-drift` on whichever harness ships fewer.
+const SHIPPED_MCP_SERVERS_CLAUDE = [
   "aws-iac",
   "aws-mcp",
   "aws-pricing",
   "aws-serverless",
   "context7",
 ] as const;
+const SHIPPED_MCP_SERVERS_KIRO = [
+  "aws-knowledge-mcp-server",
+  "context7",
+] as const;
+
+// Only Claude and Kiro ship a registry. Cursor reaches the `defaults` drift check
+// too when a user-owned `.cursor/mcp.json` exists, and it has been measured against
+// Claude's list since before this split — a pre-existing mismatch this change
+// neither introduces nor fixes, left alone rather than silently widened here.
+function shippedMcpServers(harness: ModelHarness): readonly string[] {
+  return harness === "kiro" ? SHIPPED_MCP_SERVERS_KIRO : SHIPPED_MCP_SERVERS_CLAUDE;
+}
 
 export function projectChoiceFiles(
   projectDir: string,
@@ -1631,7 +1646,7 @@ export function projectChoiceIssues(
   }
   if (
     record.mcp === "defaults" &&
-    SHIPPED_MCP_SERVERS.some((name) => !servers.has(name))
+    shippedMcpServers(harness).some((name) => !servers.has(name))
   ) {
     issues.push({
       id: "project-mcp-defaults-drift",
@@ -1642,7 +1657,7 @@ export function projectChoiceIssues(
   if (
     surface.kind === "claude" &&
     record.mcp === "none" &&
-    SHIPPED_MCP_SERVERS.some((name) => servers.has(name))
+    shippedMcpServers(harness).some((name) => servers.has(name))
   ) {
     issues.push({
       id: "project-mcp-none-drift",
@@ -1855,27 +1870,21 @@ export function trustFilesForHarness(
       join(process.env.CODEX_HOME || join(process.env.HOME || homedir(), ".codex"), "config.toml"),
     );
   }
-  if (harness === "kiro" || harness === "kiro-ide") {
-    const agentsDir = join(projectDir, harnessDir, "agents");
-    if (existsSync(agentsDir)) {
-      files.push(
-        ...readdirSync(agentsDir)
-          .filter((name) => name.endsWith(".json"))
-          .sort()
-          .map((name) => join(agentsDir, name)),
-      );
-    }
+  if (harness === "kiro") {
+    // Follow the channel that declares commands. Agent surfaces are Markdown and
+    // carry no command, and the 0.12-era `.kiro.hook` manifests are gone; the
+    // standalone `hooks/*.json` manifests are what a host is asked to trust.
     const hooksDir = join(projectDir, harnessDir, "hooks");
     if (existsSync(hooksDir)) {
       files.push(
         ...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(".json") || name.endsWith(".kiro.hook"))
           .sort()
           .map((name) => join(hooksDir, name)),
       );
     }
   }
-  if (harness === "kiro-ide") {
+  if (harness === "kiro") {
     files.push(join(projectDir, ".vscode", "settings.json"));
   }
   if (harness === "cursor") {
@@ -1899,7 +1908,7 @@ export function trustStatus(
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
   }
-  if (harness === "kiro-ide") {
+  if (harness === "kiro") {
     const path = join(projectDir, ".vscode", "settings.json");
     try {
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;

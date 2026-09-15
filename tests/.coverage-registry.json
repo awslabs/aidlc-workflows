@@ -2050,7 +2050,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "file": "tests/unit/t218-kiro-hook-adapter-channel.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2109,7 +2109,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "file": "tests/unit/t218-kiro-hook-adapter-channel.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4292,7 +4292,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "file": "tests/unit/t218-kiro-hook-adapter-channel.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5206,7 +5206,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "file": "tests/unit/t218-kiro-hook-adapter-channel.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8294,6 +8294,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -8314,6 +8318,10 @@
         {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -8384,6 +8392,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         },
@@ -8434,6 +8446,10 @@
         {
           "file": "tests/unit/t276-cursor-adapter.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -8466,6 +8482,10 @@
         {
           "file": "tests/unit/t321-source-recovery-freeze.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
@@ -8558,6 +8578,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -8674,6 +8698,10 @@
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/unit/t332-summary-authorization.test.ts",
@@ -10150,7 +10178,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t-kiro-ide-native-recovery.test.ts",
+          "file": "tests/unit/t-kiro-native-recovery.test.ts",
           "mechanism": "cli"
         },
         {
