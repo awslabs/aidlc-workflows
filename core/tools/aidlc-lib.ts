@@ -8744,10 +8744,13 @@ export function checkSummaryConfirmationEvidence(
     return { ok: true, required: false };
   }
 
+  // Isolated review callers also supply parent state for ceremony, refusal,
+  // and Change Control policy. Its plan must not redirect isolated questions;
+  // retain the same discovery as isolated completion without discarding policy.
   let questions = summaryQuestionFiles(
     projectDir,
     stage,
-    options.stateContent ?? null,
+    options.workflow === undefined ? options.stateContent ?? null : null,
   );
   if (options.unit !== undefined) {
     questions = questions.filter(

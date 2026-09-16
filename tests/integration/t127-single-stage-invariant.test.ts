@@ -61,7 +61,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -76,6 +76,8 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  artifactFilename,
+  loadStageGraphAll,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationContentHash,
   stateDigest,
@@ -127,8 +129,9 @@ function run(tool: string, args: string[]): { out: string; status: number } {
 function runSummaryGuarded(
   tool: string,
   args: string[],
+  extraEnv: NodeJS.ProcessEnv = {},
 ): { out: string; status: number } {
-  const env = { ...process.env };
+  const env = { ...process.env, ...extraEnv };
   delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8", env });
@@ -597,6 +600,136 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       proj,
     ]);
     expect(result.out).toContain('"kind":"done"');
+  });
+
+  describe("isolated NFR review with a parent plan that skips Units Generation", () => {
+    const stage = "nfr-requirements";
+    const guardedEnv = {
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+      AIDLC_SKIP_ARTIFACT_GUARD: "0",
+    };
+
+    function prepare(
+      parentScope: "feature" | "classic",
+      confirmation: "single" | "main" | "none" = "single",
+    ) {
+      const proj = freshProject();
+      seedStateFile(proj, STATE_FIXTURE);
+      seedAuditFile(proj);
+      const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+      const parentState = readFileSync(statePath, "utf-8")
+        .replace("- **Scope**: feature", `- **Scope**: ${parentScope}`)
+        .replace(
+          /^- \[[^\]]+\] units-generation.*$/m,
+          "- [S] units-generation — SKIP",
+        )
+        .replace(
+          "## Scope Configuration",
+          "## Scope Configuration\n- **Summary Confirmation**: on (set by you)",
+        );
+      writeFileSync(statePath, parentState);
+      const started = runOrchestrateNext(
+        TOOL,
+        proj,
+        ["--stage", stage, "--single"],
+        { env: { ...process.env, ...guardedEnv } },
+      );
+      expect(started.status, started.out).toBe(0);
+      expect(started.directive).toMatchObject({
+        kind: "run-stage",
+        single: true,
+        ceremony: { summary_confirmation: parentScope === "classic" ? "off" : "on" },
+      });
+      expect(started.directive?.produces).toContain(
+        `${relative(proj, seededRecordDir(proj)).replaceAll("\\", "/")}/construction/{unit-name}/${stage}/security-requirements.md`,
+      );
+      const stageDir = join(seededRecordDir(proj), "construction", "api", stage);
+      mkdirSync(stageDir, { recursive: true });
+      const questions = join(stageDir, `${stage}-questions.md`);
+      const body = "# Questions\n\n## Q1\nEncrypt stored credentials.\n\n" +
+        "## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: ";
+      writeFileSync(questions, `${body}\n`);
+      const identity = [
+        "--stage", stage, "--checkpoint", "summary-confirmation",
+        "--questions-file", questions,
+        ...(confirmation === "single" ? ["--single"] : []),
+        "--project-dir", proj,
+      ];
+      if (confirmation !== "none") {
+        const decision = runSummaryGuarded(LOG_TOOL, [
+          "decision", ...identity, "--decision", "Does this all look correct?",
+        ], guardedEnv);
+        expect(decision.status, decision.out).toBe(0);
+        appendAuditEntry("HUMAN_TURN", {}, proj);
+      }
+      writeFileSync(questions, `${body}Looks correct\n`);
+      if (confirmation !== "none") {
+        const answer = runSummaryGuarded(LOG_TOOL, [
+          "answer", ...identity, "--details", "Looks correct",
+        ], guardedEnv);
+        expect(answer.status, answer.out).toBe(0);
+      }
+      const node = loadStageGraphAll().find((entry) => entry.slug === stage)!;
+      for (const name of node.produces ?? []) {
+        const artifact = join(stageDir, artifactFilename(name));
+        writeFileSync(artifact, `# ${name}\n`);
+        recordArtifactWriteViaHook(proj, artifact);
+      }
+      return { proj, questions, statePath, parentState };
+    }
+
+    function requestReview(proj: string) {
+      return runSummaryGuarded(LOG_TOOL, [
+        "review", "--stage", stage, "--single",
+        "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1",
+        "--project-dir", proj,
+      ], guardedEnv);
+    }
+
+    test(
+      "review and completion accept the isolated Unit's confirmation",
+      () => {
+        const { proj, statePath, parentState } = prepare("feature");
+        const review = requestReview(proj);
+        expect(review.status, review.out).toBe(0);
+        expect(review.out).toContain('"emitted":"REVIEW_REQUESTED"');
+        const report = runSummaryGuarded(TOOL, [
+          "report", "--single", "--stage", stage, "--result", "completed",
+          "--project-dir", proj,
+        ], guardedEnv);
+        expect(report.out).toContain('"kind":"done"');
+        expect(readFileSync(statePath, "utf-8")).toBe(parentState);
+      },
+    );
+
+    test.each([
+      ["none", "no fresh human-backed"],
+      ["main", "no fresh human-backed"],
+      ["stale", "changed after the human confirmed"],
+    ] as const)("review still refuses %s confirmation evidence", (condition, message) => {
+      const { proj, questions } = prepare("feature", condition === "stale" ? "single" : condition);
+      if (condition === "stale") {
+        writeFileSync(questions, readFileSync(questions, "utf-8").replace(
+          "Encrypt stored credentials.", "Require hardware-backed keys.",
+        ));
+      }
+      const review = requestReview(proj);
+      expect(review.status, review.out).not.toBe(0);
+      expect(review.out).toContain(message);
+      expect(countEvent(proj, "REVIEW_REQUESTED")).toBe(0);
+    });
+
+    test("placement isolation preserves the review caller's explicit ceremony setting", () => {
+      const { proj, questions, statePath, parentState } = prepare("classic", "none");
+      writeFileSync(statePath, parentState.replace(
+        "**Summary Confirmation**: on (set by you)",
+        "**Summary Confirmation**: off (set by you)",
+      ));
+      rmSync(questions);
+      const review = requestReview(proj);
+      expect(review.status, review.out).toBe(0);
+      expect(review.out).toContain('"emitted":"REVIEW_REQUESTED"');
+    });
   });
 
   test("12f: isolated hash recovery stays on the --single workflow", () => {
