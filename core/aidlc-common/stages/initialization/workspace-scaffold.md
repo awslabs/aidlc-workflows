@@ -11,6 +11,7 @@ consumes: []
 requires_stage: []
 sensors: []
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp
