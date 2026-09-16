@@ -11018,12 +11018,17 @@ export function reviewCompletionMatchesRequest(
 export const REVIEW_RECORDS_DIR = toPosix(join(engineDirFor(""), "reviews"));
 const REVIEW_RECORD_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+const REVIEW_FINDING_FIXED_STATUS_VALUES = [
+  "New",
+  "Unresolved",
+  "Resolved",
+  "Accepted risk",
+] as const;
+const REVIEW_FINDING_REJECTED_PREFIX = "Rejected: ";
+
 export type ReviewFindingStatus =
-  | "New"
-  | "Unresolved"
-  | "Resolved"
-  | "Accepted risk"
-  | `Rejected: ${string}`;
+  | (typeof REVIEW_FINDING_FIXED_STATUS_VALUES)[number]
+  | `${typeof REVIEW_FINDING_REJECTED_PREFIX}${string}`;
 
 export interface ReviewFinding {
   artifact: string;
@@ -11091,18 +11096,18 @@ function splitMarkdownRow(line: string): string[] {
   return cells;
 }
 
-/** The accepted statuses, in one place so a refusal can name them without
- *  restating the predicate below and drifting from it. */
+/** Human-readable form of the same values used by the type and predicate. */
 export const REVIEW_FINDING_STATUS_VALUES =
-  'New, Unresolved, Resolved, Accepted risk, or "Rejected: <reason>"';
+  `${REVIEW_FINDING_FIXED_STATUS_VALUES.join(", ")}, or ` +
+  `"${REVIEW_FINDING_REJECTED_PREFIX}<reason>"`;
 
 export function validReviewFindingStatus(value: string): value is ReviewFindingStatus {
+  const rejectedReason = value.startsWith(REVIEW_FINDING_REJECTED_PREFIX)
+    ? value.slice(REVIEW_FINDING_REJECTED_PREFIX.length)
+    : null;
   return (
-    value === "New" ||
-    value === "Unresolved" ||
-    value === "Resolved" ||
-    value === "Accepted risk" ||
-    /^Rejected: \S[\s\S]*$/.test(value)
+    REVIEW_FINDING_FIXED_STATUS_VALUES.some((status) => status === value) ||
+    (rejectedReason !== null && /^\S[\s\S]*$/.test(rejectedReason))
   );
 }
 

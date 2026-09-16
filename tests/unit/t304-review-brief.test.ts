@@ -930,11 +930,14 @@ describe("t304 executable review brief scenarios", () => {
     expect(brief).toContain(`${artifacts.get("unit-a")}#Review`);
   });
 
-  test("an unknown reject selector names the current findings (#1082)", () => {
+  test("an unknown reject selector names only rejectable current findings (#1082)", () => {
     // The accepted selectors are in hand at the throw. Without them a stem-vs-full-path
     // mismatch in the artifact is invisible: the reader is told their selector is wrong
     // and has to guess which identifier the gate actually holds.
-    const { proj, relativeArtifact } = requirementProject([ROW_NEW]);
+    const { proj, relativeArtifact } = requirementProject([
+      ROW_RESOLVED,
+      ROW_NEW_SECOND,
+    ]);
     const stage = findStageBySlug("requirements-analysis")!;
     let message = "";
     try {
@@ -943,8 +946,9 @@ describe("t304 executable review brief scenarios", () => {
       message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain("not a current review finding");
-    expect(message).toContain("Current findings:");
-    expect(message).toContain(`${relativeArtifact}#R-01`);
+    expect(message).toContain("Current rejectable findings:");
+    expect(message).toContain(`${relativeArtifact}#R-02`);
+    expect(message).not.toContain(`${relativeArtifact}#R-01`);
   });
 
   test("reviewer-free stages cannot record finding dispositions", () => {

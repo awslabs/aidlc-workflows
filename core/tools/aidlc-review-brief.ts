@@ -380,13 +380,18 @@ export function rejectedFindingDispositionField(
     if (!finding) {
       // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
       const available = findings
+        .filter((candidate) =>
+          candidate.status === "New" || candidate.status === "Unresolved"
+        )
         .map((candidate) => `${candidate.artifact}#${candidate.id}`)
         .sort();
       throw new Error(
         `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for this gate. ` +
           (available.length > 0
-            ? `Current findings: ${available.join(", ")}.`
-            : "This gate has no current review findings."),
+            ? `Current rejectable findings: ${available.join(", ")}.`
+            : findings.length > 0
+              ? "This gate has no New or Unresolved review findings to reject."
+              : "This gate has no current review findings."),
       );
     }
     if (finding.status !== "New" && finding.status !== "Unresolved") {

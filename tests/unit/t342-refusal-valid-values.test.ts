@@ -41,30 +41,19 @@ describe("t342 refusals name their accepted values", () => {
     }
   });
 
-  test("the named enum is the one the predicate enforces", () => {
-    // The refusal quotes a constant rather than restating the predicate, so the two
-    // cannot drift. Prove the constant describes exactly what is accepted.
+  test("the fixed status source drives the predicate and rendered message", () => {
     for (const accepted of ["New", "Unresolved", "Resolved", "Accepted risk", "Rejected: too costly"]) {
       expect(validReviewFindingStatus(accepted), `${accepted} should be valid`).toBe(true);
       const label = accepted.startsWith("Rejected:") ? "Rejected: <reason>" : accepted;
       expect(REVIEW_FINDING_STATUS_VALUES).toContain(label);
     }
-    for (const rejected of ["Fixed", "Done", "", "Rejected:"]) {
-      expect(validReviewFindingStatus(rejected), `${rejected} should be invalid`).toBe(false);
-    }
   });
 
-  test("every status the constant advertises is actually accepted", () => {
-    // Guards the other direction: advertising a value the predicate refuses would
-    // send the reader in a circle.
-    const advertised = REVIEW_FINDING_STATUS_VALUES
-      .split(",")
-      .map((part) => part.replace(/^\s*or\s+/, "").trim().replace(/^"|"$/g, ""))
-      .map((part) => (part === "Rejected: <reason>" ? "Rejected: some reason" : part));
-    for (const value of advertised) {
-      expect(validReviewFindingStatus(value), `advertised ${value} must be accepted`)
-        .toBe(true);
+  test("rejected status requires a non-whitespace reason", () => {
+    for (const rejected of ["Fixed", "Done", "", "Rejected:", "Rejected: ", "Rejected:  reason"]) {
+      expect(validReviewFindingStatus(rejected), `${rejected} should be invalid`).toBe(false);
     }
+    expect(validReviewFindingStatus("Rejected: reason")).toBe(true);
   });
 
   test("a valid status still parses, so the message change did not alter behaviour", () => {
