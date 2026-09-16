@@ -11,10 +11,12 @@
 //
 // This test pins the two halves that make that safe:
 //
-//   1. The RECORD FORMAT round-trips. A record is exactly the harness identity
-//      `.md` plus one appended `## Stage Grid` section, so projecting is a pure
-//      strip and back-filling is a pure append - neither direction re-renders
-//      frontmatter, so no authored identity or prose is lost or reformatted.
+//   1. The RECORD FORMAT round-trips. A record the writer produced is exactly the
+//      harness identity `.md` plus one appended sentinel-fenced grid region, so
+//      projecting is a pure strip and back-filling is a pure append - neither
+//      direction re-renders frontmatter, so no authored identity or prose is
+//      reformatted. The identity is what sits ABOVE the region; content appended
+//      below the END sentinel stays in the record but is not projected.
 //      Malformed input THROWS with the path named: a record's whole purpose is to
 //      survive, so a silent skip would reintroduce the quiet loss it prevents.
 //
@@ -100,6 +102,32 @@ describe("t340 record format round-trip", () => {
     expect(parsed.identity).not.toContain(BEGIN);
     expect(parsed.identity).not.toContain(END);
     expect(parsed.identity).not.toContain("```json");
+  });
+
+  // Appending to the end of one's own Markdown file is the ordinary way to add to
+  // it, so what the format owes a user is a straight answer about which areas it
+  // carries. The identity is what sits ABOVE the region; anything below the END
+  // sentinel stays in the record on disk (no shipped path rewrites an existing
+  // record) but is not part of the projection. Pinned because it is the one place
+  // the round trip is deliberately not symmetric, and because every other identity
+  // assertion here compares with trimEnd() and so would not notice.
+  test("content below the END sentinel stays in the record but is not projected", () => {
+    const trailing = "\n## My own appendix\n\nWritten after the region.\n";
+    const record = RECORD + trailing;
+    const parsed = parseComposedScopeRecord(record, "aidlc/scopes/lean-feature.md");
+
+    // The grid and the identity above the region are unaffected by it.
+    expect(parsed.stages).toEqual(STAGES);
+    expect(parsed.identity.trimEnd()).toBe(IDENTITY.trimEnd());
+    // The projection does NOT carry it — this is the asymmetry.
+    expect(parsed.identity).not.toContain("My own appendix");
+    // Nor does it leak into the grid region on the way back out.
+    expect(renderComposedScopeRecord(parsed.identity, parsed.stages)).not.toContain(
+      "My own appendix",
+    );
+    // And it is still on disk in the record we were handed: re-rendering is not
+    // what preserves it, the write guard is (compile skips an existing record).
+    expect(record).toContain("My own appendix");
   });
 
   // A scope owns its ceremony (#1151): sensors, learnings, and
@@ -252,6 +280,21 @@ describe("t340 authored prose cannot capture the grid boundary", () => {
       /already contains an aidlc composed-scope-grid sentinel/,
     );
   });
+
+  // The refusal aborts compile AFTER stage-graph.json and scope-grid.json are
+  // written, so every later compile fails the same way and this message is the
+  // whole diagnosis. Every other error in this feature names its file; the caller
+  // is reading the offending one, so this one can too.
+  test("the sentinel refusal names the offending file when the caller knows it", () => {
+    const record = renderComposedScopeRecord(hostile, real);
+    expect(() =>
+      renderComposedScopeRecord(record, real, ".claude/scopes/aidlc-hostile.md"),
+    ).toThrow(/\.claude\/scopes\/aidlc-hostile\.md/);
+    // Still refuses without one, rather than making the path load-bearing.
+    expect(() => renderComposedScopeRecord(record, real)).toThrow(
+      /already contains an aidlc composed-scope-grid sentinel/,
+    );
+  });
 });
 
 describe("t340 record parse failures name the file and never degrade silently", () => {
@@ -319,6 +362,25 @@ describe("t340 record parse failures name the file and never degrade silently", 
     expect(() => parseComposedScopeRecord("---\nname: x\n---\n", "aidlc/scopes/x.md")).toThrow(
       /deleting this record and re-running compile/,
     );
+  });
+
+  test("the missing-region message prints both sentinels byte-exact", () => {
+    // It also offers restoring the region by hand, and a record does not parse
+    // unless the sentinels match byte for byte. An elided sentinel would leave
+    // that route named but unreachable, so the full pair has to be printed.
+    let message = "";
+    try {
+      parseComposedScopeRecord("---\nname: x\n---\n", "aidlc/scopes/x.md");
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toContain(BEGIN);
+    expect(message).toContain(END);
+    // Not the elided form it used to print. (A bare "..." check would be wrong:
+    // the message legitimately carries a `{"stages": {...}}` placeholder.)
+    expect(message).not.toContain(`${BEGIN.slice(0, 42)}...`);
+    // And the sentinels quoted are the ones the emitter actually writes.
+    expect(renderComposedScopeRecord(IDENTITY, STAGES)).toContain(BEGIN);
   });
 });
 

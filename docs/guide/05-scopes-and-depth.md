@@ -293,7 +293,7 @@ If you have a composed scope from an earlier release it lives only in the harnes
 
 #### The record's shape
 
-Everything above the sentinel comment is yours to edit — frontmatter and prose alike, including your own Markdown headings and fenced code. Everything between the sentinels is generated:
+Everything above the sentinel comment is yours to edit — frontmatter and prose alike, including your own Markdown headings and fenced code. Everything between the sentinels is generated. Treat the region as the **end** of the file: write your prose above it, because that is the part `graph compile` projects into the harness tree. Anything you append *below* the END sentinel stays in the record — nothing rewrites a record that already exists — but it is not carried into the harness scope file:
 
 ````markdown
 ---

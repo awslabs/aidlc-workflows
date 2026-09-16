@@ -4909,7 +4909,10 @@ export async function collectDoctorReport(
   //       back to `{}` for a missing column, so the scope stays "valid" and
   //       resolves as an all-SKIP plan. Scope validation cannot catch it: an
   //       all-SKIP grid walks no consumes, so it reports zero errors. This is the
-  //       shape a copy-channel reinstall leaves behind.
+  //       shape a copy-channel reinstall leaves behind. Reported in two arms,
+  //       because a record makes it compile-recoverable and its absence does not:
+  //       the transpose emits a column only for a name some stage declares, so
+  //       naming compile for a recordless one would be a remedy that never lands.
   //   (b) UNPROJECTED — a durable record whose harness identity file is absent,
   //       so `--scope <name>` does not resolve at all until the next compile.
   //   (c) DANGLING — a RUNNABLE workflow whose recorded Scope has no definition
@@ -4938,11 +4941,19 @@ export async function collectDoctorReport(
     const enabled = loadScopeMetadata();
     const compileFix = `run \`${aidlcToolInvocation("graph")} compile\``;
 
+    // A missing column is reported either way, but the two causes have different
+    // exits, so they are counted apart. With a record, compile rebuilds the column
+    // from it. Without one there is nothing to project and the transpose emits a
+    // column only for a name some stage declares in its `scopes:` frontmatter, so
+    // compile will keep exiting 0 and leaving the row red — telling the user to run
+    // it would be a remedy that cannot reach the cause.
     const phantoms: string[] = [];
+    const phantomsNoRecord: string[] = [];
     for (const [name, meta] of Object.entries(enabled)) {
       if (meta.plugin !== undefined || stockScopeNames.has(name)) continue;
       const stages = grid[name]?.stages;
-      if (stages === undefined || Object.keys(stages).length === 0) phantoms.push(name);
+      if (stages !== undefined && Object.keys(stages).length > 0) continue;
+      (records[name] === undefined ? phantomsNoRecord : phantoms).push(name);
     }
     const unprojected = Object.keys(records)
       .filter((name) => enabled[name] === undefined)
@@ -4972,7 +4983,8 @@ export async function collectDoctorReport(
       }
     }
 
-    const total = phantoms.length + unprojected.length + dangling.length;
+    const total =
+      phantoms.length + phantomsNoRecord.length + unprojected.length + dangling.length;
     if (total === 0) {
       const count = Object.keys(records).length;
       results.push({
@@ -4986,6 +4998,9 @@ export async function collectDoctorReport(
         phantoms.length > 0
           ? `${phantoms.length} with no grid column (resolves as an empty all-SKIP plan) [${phantoms.join(", ")}]`
           : "",
+        phantomsNoRecord.length > 0
+          ? `${phantomsNoRecord.length} with no grid column and no record to rebuild it from (resolves as an empty all-SKIP plan) [${phantomsNoRecord.join(", ")}]`
+          : "",
         unprojected.length > 0
           ? `${unprojected.length} recorded but not projected into ${harnessDir()}/scopes/ [${unprojected.join(", ")}]`
           : "",
@@ -4995,6 +5010,9 @@ export async function collectDoctorReport(
       ].filter(Boolean).join("; ");
       const fixes = [
         phantoms.length > 0 || unprojected.length > 0 ? compileFix : "",
+        phantomsNoRecord.length > 0
+          ? `${compileFix} cannot rebuild a column with no record behind it: one is emitted only for a scope some stage declares in its \`scopes:\` frontmatter. Either restore the scope's \`aidlc/scopes/<name>.md\` record and ${compileFix}, finish authoring the scope by tagging the stages that belong to it (see the harness-engineering scopes guide) and ${compileFix}, or delete ${harnessDir()}/scopes/aidlc-<name>.md`
+          : "",
         dangling.length > 0
           ? `for an unresolvable scope, restore its \`aidlc/scopes/<name>.md\` record (a composed scope travels with the shared \`aidlc/\` tree, so pull it from the collaborator or checkout that composed it), then ${compileFix}`
           : "",

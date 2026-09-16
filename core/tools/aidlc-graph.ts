@@ -446,11 +446,21 @@ function composedScopesDir(): string {
   return resolveDistributionPath(COMPOSED_SCOPES_SEGMENTS);
 }
 
-// The generated region that carries a record's EXECUTE/SKIP grid. A record is
-// exactly the harness scope `.md` plus this one appended region, so projecting a
-// record into the harness tree is a pure strip and back-filling a record from an
+// The generated region that carries a record's EXECUTE/SKIP grid. A record the
+// writer produced is exactly the harness scope `.md` plus this one appended region,
+// so projecting it into the harness tree is a pure strip and back-filling from an
 // existing harness pair is a pure append — neither direction re-renders
-// frontmatter, so no authored identity or prose is ever lost or reformatted.
+// frontmatter, so no authored identity or prose is reformatted.
+//
+// The identity is everything ABOVE the region. Anything a user appends BELOW the
+// END sentinel stays in the record — nothing rewrites an existing record, so it is
+// never lost from disk — but it is not part of the identity and so does not reach
+// the harness projection. Read the region as the end of the authored file, not as
+// a divider with authored territory on both sides; the guide says so where it
+// describes the record's shape. For the same reason the byte-stability this format
+// guarantees is a property of records the writer produced: a hand-compacted grid
+// fence or extra blank lines before the region re-render to different bytes, and a
+// hand-authored region is indistinguishable from a generated one by design.
 //
 // The boundary is an HTML-comment sentinel pair, not a Markdown heading, because
 // the identity half is PROSE THE USER WROTE. A heading like "## Stage Grid" is
@@ -498,8 +508,11 @@ export function parseComposedScopeRecord(
   const ends = body.split(COMPOSED_GRID_END).length - 1;
   if (begins === 0 || ends === 0) {
     throw new Error(
+      // Both sentinels are printed in full, not elided. A record does not parse
+      // unless they are byte-exact, so a truncated one would leave the hand-restore
+      // route named here unreachable.
       `Composed scope record ${filePath} has no generated grid region. It must end with ` +
-        `the \`${COMPOSED_GRID_BEGIN.slice(0, 42)}...\` / \`${COMPOSED_GRID_END}\` sentinel pair ` +
+        `the \`${COMPOSED_GRID_BEGIN}\` / \`${COMPOSED_GRID_END}\` sentinel pair ` +
         `wrapping a \`\`\`json fence with {"stages": {...}}. Recover by deleting this record and ` +
         `re-running compile (the harness pair is back-filled), or by restoring the region by hand.`,
     );
@@ -566,10 +579,16 @@ export function parseComposedScopeRecord(
 export function renderComposedScopeRecord(
   identity: string,
   stages: Record<string, "EXECUTE" | "SKIP">,
+  identityPath?: string,
 ): string {
   if (identity.includes(COMPOSED_GRID_BEGIN) || identity.includes(COMPOSED_GRID_END)) {
+    // Named like every other error in this feature: the throw aborts compile after
+    // stage-graph.json and scope-grid.json are already written, so every later
+    // compile fails the same way and this message is all the user gets. The caller
+    // is reading the offending file, so it can always say which one.
     throw new Error(
-      "Composed scope identity already contains an aidlc composed-scope-grid sentinel; " +
+      `Composed scope identity${identityPath === undefined ? "" : ` ${identityPath}`}` +
+        " already contains an aidlc composed-scope-grid sentinel; " +
         "it must hold only the authored scope file, not a generated grid region.",
     );
   }
@@ -721,6 +740,7 @@ export function backfillComposedScopeRecords(
       renderComposedScopeRecord(
         readFileSync(identityPath, "utf-8"),
         stages as Record<string, "EXECUTE" | "SKIP">,
+        identityPath,
       ),
     );
     written.push(name);

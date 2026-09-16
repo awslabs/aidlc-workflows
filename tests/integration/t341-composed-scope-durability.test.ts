@@ -36,8 +36,10 @@
 // task t192 drives). A hand-written imitation would have missed what the real
 // composer actually emits - `skeleton:` and `change_control:` frontmatter this
 // test's author did not know to include, and a 40-line body carrying its own
-// `##` headings next to which the record's `## Stage Grid` section has to be
-// unambiguous. Using the real bytes is what proves the projection round-trips
+// `##` headings next to which the record's generated grid region has to be
+// unambiguous - which is why that region is fenced by a sentinel pair a user will
+// not type rather than by a heading they might. Using the real bytes is what
+// proves the projection round-trips
 // the artifact users actually have. Refresh it by re-driving t192 and copying
 // out the composed `.md` + its grid column.
 //
@@ -295,6 +297,74 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(state.split("\n")).toContain(`- **Scope**: ${SCOPE}`);
     expect(state).toContain(`${AUTHORED_SKIP} — SKIP`);
     expect(state).toContain(`${AUTHORED_EXECUTE} — EXECUTE`);
+  });
+
+  // The one error in this feature that used to carry no path. The way in is a
+  // hand-restore that copies a RECORD into the harness scopes directory - where a
+  // scope file must hold only the authored half - and then loses the record. The
+  // throw lands after stage-graph.json and scope-grid.json are already written, so
+  // every later compile fails identically and this message is the whole diagnosis.
+  // Driven through the real compile CLI rather than by calling the writer directly,
+  // because what P3 asked for is that the SHIPPED path name the file.
+  test("a harness scope file carrying a generated region names itself when compile refuses", () => {
+    const proj = freshProject();
+    authorLegacyComposedScope(proj);
+    expect(compile(proj).status).toBe(0);
+    // A real record, so the region below is the emitter's own bytes, not a guess.
+    const recordBytes = readFileSync(recordPath(proj), "utf-8");
+    expect(recordBytes).toContain("BEGIN aidlc composed-scope-grid");
+
+    const probe = "sentinel-probe";
+    const probePath = join(proj, ".claude", "scopes", `aidlc-${probe}.md`);
+    writeFileSync(probePath, recordBytes.replace(`name: ${SCOPE}`, `name: ${probe}`), "utf-8");
+    // A grid column but no record, so back-fill reaches this file and refuses it.
+    const grid = readGrid(proj);
+    grid[probe] = { stages: { ...LIVE_STAGES } };
+    writeFileSync(gridPath(proj), JSON.stringify(grid, null, 2), "utf-8");
+    expect(existsSync(join(proj, "aidlc", "scopes", `${probe}.md`))).toBe(false);
+
+    const refused = compile(proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("already contains an aidlc composed-scope-grid sentinel");
+    // The point of the case: which file.
+    expect(refused.out).toContain(`aidlc-${probe}.md`);
+  });
+
+  // The other way a scope file ends up with no grid column: nobody tagged a stage
+  // with it. The transpose emits a column only for a name some stage declares, so
+  // there is nothing for compile to build and no record to project — which is step
+  // 1 of authoring a scope by hand, and step 4 of that workflow is running doctor.
+  // Detecting it is right (an untagged scope really does resolve all-SKIP), but the
+  // row used to name `graph compile` as the remedy, which exits 0 and leaves the
+  // row red forever. So the two causes are reported apart and this one names what
+  // actually reaches it.
+  test("an untagged scope with no record is reported as unbuildable, not as compile's job", () => {
+    const proj = freshProject();
+    const probe = join(proj, ".claude", "scopes", "aidlc-untagged-probe.md");
+    writeFileSync(
+      probe,
+      "---\nname: untagged-probe\ndepth: Minimal\nkeywords: []\ndescription: no stage declares this\n---\n\n# untagged-probe\n",
+      "utf-8",
+    );
+
+    expect(compile(proj).status).toBe(0);
+    expect(readGrid(proj)["untagged-probe"]).toBeUndefined();
+
+    const row = durabilityRow(doctor(proj).out);
+    expect(row).toContain("untagged-probe");
+    expect(row).toContain("no record to rebuild it from");
+
+    // The remedy has to say compile will not reach this, and name a route that
+    // does. Before this it said only "run graph compile".
+    const report = doctor(proj).out;
+    expect(report).toContain("cannot rebuild a column with no record behind it");
+    expect(report).toContain("scopes:");
+
+    // And the claim is true: compiling again changes nothing, which is exactly why
+    // pointing the user at it would have been a dead end.
+    expect(compile(proj).status).toBe(0);
+    expect(readGrid(proj)["untagged-probe"]).toBeUndefined();
+    expect(durabilityRow(doctor(proj).out)).toContain("no record to rebuild it from");
   });
 
   test("a project with no composed scope reports the clean row and gains no aidlc/scopes/", () => {
