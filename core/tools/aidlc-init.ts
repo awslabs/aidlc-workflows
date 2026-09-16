@@ -3841,18 +3841,18 @@ function prepareRefreshSource(
     modelHarness(distribution),
     modelPolicy,
   );
-  applyProjectFlagsToProjection(
-    root,
-    descriptor.harnessDir,
-    modelHarness(distribution),
-    projectFlags,
-  );
   preserveUserProviderFields(
     projectDir,
     root,
     descriptor.harnessDir,
     modelHarness(distribution),
     previousProvider,
+  );
+  applyProjectFlagsToProjection(
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    projectFlags,
   );
   applyConfigDiagnosticRecords(
     root,
