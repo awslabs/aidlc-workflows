@@ -158,7 +158,8 @@ function invocationForHarness(harnessDir: string): string {
 // The one command that rebuilds a missing workspace shell: an explicit
 // `--harness` refresh, which goes through the refresh transaction instead of the
 // interactive existing-projection walk. Every surface that names the rebuild
-// (doctor row, setup map, trust issue) renders it from here.
+// (doctor row, setup map, trust issue, and the copy-channel refresh failure in
+// `aidlc config`) renders it from here.
 //
 // The `--from` clause is added only for a projection that invokes through the
 // bun dispatcher, because a native install refreshes from its installed runtime

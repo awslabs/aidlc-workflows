@@ -349,8 +349,14 @@ describe("t304 copied projection configuration", () => {
     ]);
     expect(result.status).toBe(4);
     expect(result.stdout).toContain("copy-channel project");
-    expect(result.stdout).toContain("Install the native aidlc command");
-    expect(result.stdout).toContain("re-copy the matching dist/<harness>/ tree");
+    expect(result.stdout).toContain("Install the native aidlc command and rerun this command");
+    // The second option is the explicit --from refresh, rendered by the same
+    // helper as the doctor row and setup map, not a re-copy that would fail again.
+    expect(result.stdout).toContain(
+      "config --harness claude --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+    );
+    expect(result.stdout).not.toContain("dist/<harness>/");
+    expect(result.stdout).not.toContain("when a release is available");
     expect(result.stdout).not.toContain("harness claude is not installed");
   });
 

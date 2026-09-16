@@ -579,4 +579,30 @@ describe("t296 first-run config setup walk", () => {
     expect(dry.stdout).not.toContain("Setup check -");
     expect(existsSync(join(dryProject, ".claude"))).toBe(false);
   }, 60_000);
+
+  test("section --show --quiet emits one line instead of the human report", () => {
+    const path = project("aidlc-t296-show-quiet-");
+    const env = hookPathEnv("aidlc", false);
+    const scaffold = run(scaffoldArgs(path), path, env);
+    expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+    const expected: Array<[string, string]> = [
+      ["runtime", "runtime configuration for claude"],
+      ["providers", "providers configuration for claude"],
+      ["trust", "trust configuration for claude"],
+      ["models", "model policy for claude"],
+      ["flags", "flags configuration for claude"],
+      ["project", "project configuration for claude"],
+    ];
+    for (const [section, line] of expected) {
+      const quiet = run(
+        ["config", section, "--project-dir", path, "--show", "--quiet"],
+        path,
+        env,
+      );
+      expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+      // One line, the same message the JSON result carries; the human report
+      // (heading plus indented detail lines) must not leak under --quiet.
+      expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
+    }
+  }, 120_000);
 });
