@@ -950,6 +950,15 @@ describe("t230 dispatcher route parity", () => {
     mkdirSync(join(runtime, ".git"), { recursive: true });
     mkdirSync(join(root, "bin"), { recursive: true });
     const projectDir = makeProject();
+    const registry = join(
+      projectDir,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "intents.json",
+    );
+    const registryBefore = readFileSync(registry, "utf-8");
     const env = {
       AIDLC_INSTALL_ROOT: install,
       AIDLC_BIN_DIR: join(root, "bin"),
@@ -975,10 +984,13 @@ describe("t230 dispatcher route parity", () => {
         projectDir,
         env,
       );
-      expect(result.exitCode, literal.join(" ")).toBe(0);
+      expect(result.exitCode, literal.join(" ")).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "intent-create does not accept positional arguments",
+      );
     }
     expect(existsSync(join(runtime, "aidlc", "spaces"))).toBe(false);
-    expect(existsSync(join(projectDir, "aidlc", "spaces", "default", "intents"))).toBe(true);
+    expect(readFileSync(registry, "utf-8")).toBe(registryBefore);
   });
 
   test("optional-project public commands run from a home directory that contains the machine roots", () => {
