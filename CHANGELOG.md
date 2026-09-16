@@ -1,6 +1,10 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] - 2026-09-15
+
+* `codekb-scope-diff` now reports a per-file delta on a `STALE` verdict: the status output carries a `changed_files` list (the analyzed-scope files that changed between the store's recorded fingerprint and the current working tree), so an iteration can re-derive only what moved instead of re-scanning the whole tree. Both the stored fingerprint and the recomputed value are git tree objects (verified via `git cat-file`), so the delta is a `git diff --name-only --no-renames -z` between them; `changed_files: null` means the delta was not computable and the full analyzed scope should be rescanned. Read-only and additive: the CURRENT/STALE/UNVERIFIED/UNKNOWN_SCOPE verdicts are unchanged, and only the STALE payload gains the new `changed_files` field.
+
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
