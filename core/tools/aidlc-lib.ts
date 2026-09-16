@@ -8264,10 +8264,22 @@ function questionFilesInDir(
 function summaryQuestionFiles(
   projectDir: string,
   stage: SummaryConfirmationStage,
+  stateContent: string | null,
 ): SummaryQuestionFile[] {
   const rec = recordDir(projectDir);
   if (rec === null) return [];
-  if (!isPerUnitStage(stage)) {
+  // Follow the approved plan's artifact placement. Without workflow state,
+  // isolated per-unit stages retain their existing unit-directory discovery.
+  if (
+    !isPerUnitStage(stage) ||
+    (
+      stateContent !== null &&
+      usesStageLevelPerUnitArtifacts(
+        getField(stateContent, "Scope"),
+        stateContent,
+      )
+    )
+  ) {
     return questionFilesInDir(join(rec, stage.phase, stage.slug), null);
   }
 
@@ -8732,7 +8744,14 @@ export function checkSummaryConfirmationEvidence(
     return { ok: true, required: false };
   }
 
-  let questions = summaryQuestionFiles(projectDir, stage);
+  // Isolated review callers also supply parent state for ceremony, refusal,
+  // and Change Control policy. Its plan must not redirect isolated questions;
+  // retain the same discovery as isolated completion without discarding policy.
+  let questions = summaryQuestionFiles(
+    projectDir,
+    stage,
+    options.workflow === undefined ? options.stateContent ?? null : null,
+  );
   if (options.unit !== undefined) {
     questions = questions.filter(
       (question) => question.unit === options.unit,
