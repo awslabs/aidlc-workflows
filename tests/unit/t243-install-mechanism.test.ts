@@ -4111,6 +4111,15 @@ describe("t243 projection channel", () => {
     }
     writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
 
+    // BEFORE the migration runs, the diagnostics must survive the retired stamp.
+    // They did not: the runtime probe indexed the CLI table with the raw stamp and
+    // threw `undefined is not an object (evaluating 'spec.command')`, so the user
+    // holding the row that needs upgrading could not even ask what state it was in.
+    // A report is the contract here - reported problems are fine, a stack trace is not.
+    const diagnosed = run(DISPATCHER, ["doctor", "--project-dir", project], project);
+    expect(diagnosed.stdout + diagnosed.stderr).not.toContain("TypeError");
+    expect(diagnosed.stdout + diagnosed.stderr).toMatch(/problems?,/);
+
     const migrated = run(INIT, [
       "config",
       "--project-dir",

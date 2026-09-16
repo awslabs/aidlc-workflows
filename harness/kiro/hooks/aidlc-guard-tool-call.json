@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-guard-tool-call",
+      "trigger": "PreToolUse",
+      "matcher": "^(execute_bash|execute_pwsh|shell)$",
+      "description": "Refuses the two shell calls a turn must not make: a first `next` that dropped the user's arguments the verb seam latched, and a bare advancing `next` in the same turn as a read-only command AIDLC already ran. PreToolUse because both must block, and the terminal spellings are matched because the adapter canonicalizes all three to Bash.",
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro guard-tool-call"
+      }
+    }
+  ]
+}

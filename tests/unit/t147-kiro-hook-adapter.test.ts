@@ -187,6 +187,10 @@ function runAdapter(
   payload: unknown,
   extraArgs: string[] = [],
   envOverrides: NodeJS.ProcessEnv = {},
+  // Defaults to the project, which is where a manifest-invoked hook runs. Spelled
+  // out only by the case that has to prove a guard reads the RESOLVED project
+  // rather than whatever directory the host happened to launch it from.
+  cwd: string = projectDir,
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
@@ -196,7 +200,7 @@ function runAdapter(
       ...extraArgs,
     ],
     {
-      cwd: projectDir,
+      cwd,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
       encoding: "utf-8",
       env: {
@@ -1207,6 +1211,91 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       ).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d5: a REFUSED dispatch leaves no window, so the main session keeps its verbs", () => {
+    // Measured on this head before the fix: the log-subagent PreToolUse edge opens
+    // the window before any sibling guard has decided, and a refusal makes Kiro
+    // block the tool WITHOUT sending PostToolUse - so the only close that dispatch
+    // would ever get never arrived and the open lived for DELEGATION_TTL_MS. Every
+    // ledger consumer then read a delegate that was never running: the main
+    // session's own `next` was refused with the delegate named as the caller, and a
+    // later human turn did not clear it.
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const dispatch = {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-developer-agent",
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+        },
+      };
+      expect(runAdapter(dir, "log-subagent", dispatch).code, "the opening edge").toBe(0);
+      const refused = runAdapter(dir, "plan-approval-guard", dispatch);
+      expect(refused.code, "the dispatch must be refused: that is this guard's job").toBe(2);
+      expect(
+        runAdapter(dir, "state-transition-guard", {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next" },
+        }).code,
+        "a refused dispatch never ran, so it cannot own the main session's verbs",
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5h: the guards read the RESOLVED project, not the process cwd", () => {
+    // This row now also serves the CLI, where a hook is invoked with the project
+    // named explicitly and the cwd is whatever the host had. Three merged-in guards
+    // still read process.cwd() for their state and audit, so the same guarded
+    // payload was refused from the project root and allowed from anywhere else -
+    // the guard's own answer depended on a directory that carries no authority.
+    //
+    // Arming this floor takes three things, and missing any one of them makes the
+    // case pass for the wrong reason: the runner's global off-switch removed, a
+    // stage actually at [?], and an audit that tracks presence WITHOUT a HUMAN_TURN
+    // (humanActedSinceGate fails OPEN on a ledger with no events at all).
+    const dir = scratchProject(true);
+    const foreign = mkdtempSync(join(tmpdir(), "t147-foreign-cwd-"));
+    try {
+      writeFileSync(
+        seededStateFile(dir),
+        readFileSync(seededStateFile(dir), "utf-8").replace(/^- \[x\] /m, "- [?] "),
+      );
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain("- [?] ");
+      writeFileSync(
+        join(seededAuditDir(dir), pinnedShardName()),
+        "# AI-DLC Audit Log\n\n## Stage Awaiting Approval\n" +
+          "**Timestamp**: 2026-01-01T00:00:00Z\n" +
+          "**Event**: STAGE_AWAITING_APPROVAL\n\n---\n",
+      );
+      const armed: NodeJS.ProcessEnv = {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+        AIDLC_PROJECT_DIR: dir,
+      };
+      const payload = {
+        hook_event_name: "PreToolUse",
+        tool_name: "execute_bash",
+        tool_input: { command: "echo not-a-human" },
+      };
+      expect(
+        runAdapter(dir, "enforce-approval-gate", payload, [], armed).code,
+        "the floor must refuse while a gate is open and no human has acted",
+      ).toBe(2);
+      expect(
+        runAdapter(dir, "enforce-approval-gate", payload, [], armed, foreign).code,
+        "same payload, same project, different cwd: the verdict must not move",
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(foreign, { recursive: true, force: true });
     }
   });
 

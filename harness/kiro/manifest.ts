@@ -258,6 +258,13 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-review-freeze.json", dst: "hooks/aidlc-review-freeze.json" },
     { src: "hooks/aidlc-state-transition-guard.json", dst: "hooks/aidlc-state-transition-guard.json" },
     { src: "hooks/aidlc-reviewer-scope.json", dst: "hooks/aidlc-reviewer-scope.json" },
+    // Carried in from the pre-merge kiro row, where it rode a registration this
+    // row does not have. Without this file the adapter's guard-tool-call branch
+    // was reachable only by a hand-typed dispatcher call: both of its exit-2
+    // branches - the first-`next` argument fidelity check and the same-turn
+    // roll-forward backstop - enforced nothing in production while t180 kept
+    // asserting them by invoking the target directly.
+    { src: "hooks/aidlc-guard-tool-call.json", dst: "hooks/aidlc-guard-tool-call.json" },
     // The ONE legacy `.kiro.hook` that still ships. It fires only on an
     // unsupported Kiro IDE 0.x host - that generation is the only one that reads
     // this manifest format - and its sole job is to say so and stop the turn.

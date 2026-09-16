@@ -159,6 +159,7 @@ describe("t308 hook registration matchers select captured fixture tool names", (
   // adding a matcher-bearing hook has to be a deliberate edit here — a bare count
   // would let one silently replace another.
   const KIRO_MATCHER_MANIFESTS = [
+    "aidlc-guard-tool-call.json",
     "aidlc-log-subagent.json",
     "aidlc-rebuild-stage-graph.json",
     "aidlc-review-freeze.json",

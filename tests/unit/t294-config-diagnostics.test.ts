@@ -538,6 +538,27 @@ describe("t294 trust diagnostics", () => {
   test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
     const project = temp("aidlc-t294-trust-kiro-");
     cpSync(join(DIST, "kiro"), project, { recursive: true });
+
+    // A SOURCE projection does not ship .vscode/settings.json - the manifest emits
+    // it from nativeRootIntegrations, and that projection invokes Bun rather than
+    // the `aidlc engine *` the file trusts. So the check must not fire here: it
+    // used to, and an untouched source tree failed `config trust --check` with
+    // exit 1 while `doctor` on the same tree reported zero problems.
+    expect(trustStatus(project, ".kiro", "kiro").issues).toEqual([]);
+
+    // Become the NATIVE channel the way the release build does: declare the file
+    // in the projection descriptor's rootIntegrations.
+    const descriptorPath = join(project, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<Record<string, unknown>>;
+    };
+    descriptor.rootIntegrations.push({
+      path: ".vscode/settings.json",
+      policy: "json-array",
+      jsonKey: "kiroAgent.trustedCommands",
+    });
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+
     mkdirSync(join(project, ".vscode"), { recursive: true });
     writeFileSync(
       join(project, ".vscode", "settings.json"),
@@ -549,6 +570,10 @@ describe("t294 trust diagnostics", () => {
     writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
     expect(trustStatus(project, ".kiro", "kiro").issues.map((item) => item.id))
       .toContain("kiro-ide-trusted-command-missing");
+    // And the native channel still reports a file it cannot read at all.
+    rmSync(join(project, ".vscode", "settings.json"));
+    expect(trustStatus(project, ".kiro", "kiro").issues.map((item) => item.id))
+      .toContain("kiro-ide-trust-unreadable");
 
     const codex = temp("aidlc-t294-siblings-codex-");
     cpSync(join(DIST, "codex"), codex, { recursive: true });

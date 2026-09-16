@@ -14,6 +14,7 @@ import { delimiter, extname, join, relative, resolve } from "node:path";
 import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
+  currentDistribution,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
 import type { ModelHarness } from "./aidlc-model-policy.ts";
@@ -775,6 +776,18 @@ export function probeHarnessCli(
   options: RuntimeProbeOptions = {},
 ): HarnessCliProbe {
   const spec = HARNESS_CLI[harness];
+  // A diagnostic must never be the thing that crashes: an id this table does not
+  // know (a retired stamp that reached here unresolved, a row added to the roster
+  // before this table) used to throw on the property access below, which turned
+  // `doctor` from a report into a stack trace. Report it instead.
+  if (!spec) {
+    return {
+      harness,
+      required: false,
+      status: "not-applicable",
+      remediation: `No CLI probe is defined for harness "${harness}".`,
+    };
+  }
   if (!spec.command) {
     return {
       harness,
@@ -1898,6 +1911,27 @@ export function trustFilesForHarness(
   return [...new Set(files)];
 }
 
+/** True when THIS projection is the channel that ships `.vscode/settings.json`.
+ *  Read from the descriptor rather than inferred from the running invocation, so a
+ *  diagnostic on a project reports on that project rather than on whichever binary
+ *  happens to be asking. Unreadable or malformed: treat as not shipped, because a
+ *  file the descriptor cannot vouch for is not a trust contract this row owns. */
+function shipsNativeTrustFile(projectDir: string, harnessDir: string): boolean {
+  try {
+    const descriptor = JSON.parse(
+      readFileSync(
+        join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
+        "utf-8",
+      ),
+    ) as { rootIntegrations?: Array<{ path?: unknown }> };
+    return (descriptor.rootIntegrations ?? []).some(
+      (item) => item.path === ".vscode/settings.json",
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function trustStatus(
   projectDir: string,
   harnessDir: string,
@@ -1908,7 +1942,16 @@ export function trustStatus(
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
   }
-  if (harness === "kiro") {
+  // Only the channel that ships the file is judged on it, and the projection
+  // descriptor is where that channel declares itself: the release build adds
+  // `.vscode/settings.json` to rootIntegrations (scripts/package.ts,
+  // projectNativeRootIntegrations), a source projection does not. The file trusts
+  // the literal `aidlc engine *`, which only the native channel runs - Bun is the
+  // command in a source projection, so the entry would trust something that never
+  // executes. Requiring it of every `kiro` install made an untouched source
+  // projection fail `config trust --check` with exit 1 while `doctor` on that same
+  // tree reported zero problems: two diagnostics disagreeing about one workspace.
+  if (harness === "kiro" && shipsNativeTrustFile(projectDir, harnessDir)) {
     const path = join(projectDir, ".vscode", "settings.json");
     try {
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -2211,7 +2254,11 @@ function selectedHarness(
   return {
     root: selected.root,
     harnessDir: selected.harnessDir,
-    harness: selected.distribution as ModelHarness,
+    // A project a previous release stamped still carries the retired id, and this
+    // is a READ of that stamp, so it resolves to the successor exactly like every
+    // other reader. Casting the raw value instead made `doctor` throw on the one
+    // project that needs it most - the one waiting to be upgraded.
+    harness: currentDistribution(selected.distribution) as ModelHarness,
   };
 }
 

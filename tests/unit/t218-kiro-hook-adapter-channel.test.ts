@@ -3613,6 +3613,40 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("F4g: the SAME failure with a POPULATED input path is still not audited", () => {
+    // F4d covers the empty-input shape only, and that was the whole gap: this row
+    // now also serves the CLI, which populates tool_input even when the tool
+    // REFUSES the edit. Once the path came from the input rather than the prose,
+    // an empty path stopped standing in for "the write failed", so the identical
+    // failure reached the success path and the audit recorded ARTIFACT_UPDATED for
+    // a file whose bytes never changed - a receipt for work that did not happen.
+    const dir = scratchProject(true);
+    try {
+      const failure =
+        "Caught an error while replacing string String '[Answer]:' found multiple times in the file";
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      const r = runIdeStdin(
+        dir,
+        "audit-and-sensors",
+        JSON.stringify({
+          session_id: "sess_t218_f4g",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "str_replace",
+          tool_input: { path: file },
+          tool_response: failure,
+        }),
+      );
+      expect(r.code).toBe(0); // still fail-open
+      expect(readAudit(dir)).not.toContain("ARTIFACT_UPDATED");
+      // And it is not decay either: a refused write is the tool working correctly.
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("t218 log-subagent identity extraction (#459)", () => {

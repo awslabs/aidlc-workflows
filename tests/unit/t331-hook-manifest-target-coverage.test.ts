@@ -102,6 +102,16 @@ const REQUIRED: Array<{
     blocking: true,
     why: "refuses a dispatched reviewer's work outside the artifact it was asked to review",
   },
+  {
+    target: "guard-tool-call",
+    triggers: ["PreToolUse"],
+    blocking: true,
+    why:
+      "refuses the two shell calls a turn must not make - a first `next` that dropped the " +
+      "arguments the verb seam latched, and a bare advancing `next` in the same turn as a " +
+      "read-only command the harness already ran; t180 asserts both by invoking the target " +
+      "directly, so only a registration makes them enforce anything in production",
+  },
   { target: "audit-and-sensors", triggers: ["PostToolUse"], why: "audits the write and runs sensors" },
   { target: "rebuild-stage-graph", triggers: ["PostToolUse"], why: "rebuilds the compiled graph after a shell step" },
   { target: "sync-workflow-state", triggers: ["PostToolUse"], why: "reconciles Current Stage from the audit tail" },
@@ -148,6 +158,11 @@ const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: stri
     target: "audit-and-sensors",
     tools: ["write", "fs_write", "create_file", "str_replace", "fs_append", "apply_patch", "edit_file"],
     why: "every write spelling the audit hook records; a delete is not an artifact write",
+  },
+  {
+    target: "guard-tool-call",
+    tools: ["execute_bash", "execute_pwsh", "shell"],
+    why: "every terminal spelling, because the engine call it must inspect can arrive through any of them",
   },
   {
     target: "sync-workflow-state",

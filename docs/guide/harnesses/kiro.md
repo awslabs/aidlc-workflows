@@ -241,6 +241,7 @@ guard below that must refuse sits on `PreToolUse`.
 | `aidlc-terminal-command-guard.json` | `PreToolUse` (terminal tools) | `terminal-command-guard` |
 | `aidlc-review-freeze.json` | `PreToolUse` (write + terminal tools) | `review-freeze` |
 | `aidlc-state-transition-guard.json` | `PreToolUse` (terminal tools) | `state-transition-guard` |
+| `aidlc-guard-tool-call.json` | `PreToolUse` (terminal tools) | `guard-tool-call` |
 | `aidlc-reviewer-scope.json` | `PreToolUse` (read + write + terminal tools) | `reviewer-scope` |
 | `aidlc-write-audit-log.json` | `PostToolUse` (write tools) | `audit-and-sensors` |
 | `aidlc-rebuild-stage-graph.json` | `PostToolUse` (`execute_bash`) | `rebuild-stage-graph` |

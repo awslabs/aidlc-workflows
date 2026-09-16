@@ -1390,11 +1390,15 @@ if (target === "terminal-command-guard") {
 // HUMAN_TURN, and without it the floor would block the mandated same-turn
 // continuation into the next stage. Carve-outs mirror the core gate: autonomous
 // Construction (swarm/Bolt has no human at the gate) and the deterministic
-// off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
+// off-switch. The project dir is the RESOLVED one, not process.cwd(): the IDE
+// gives no cwd payload, but resolveProjectDirFromHook already falls back to the
+// cwd for that case, and this row also serves the CLI - where the project is named
+// explicitly and the cwd is whatever the host had, so reading the cwd made this
+// floor answer differently for the same payload depending on the launch directory.
 // All read from disk. Fail-open on any read/parse error (advisory).
 if (target === "enforce-approval-gate") {
   try {
-    const pd = process.cwd();
+    const pd = projectDir;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
@@ -1431,10 +1435,7 @@ if (target === "enforce-approval-gate") {
 // the composer had finished.
 if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
   const dispatchTool = ide.toolName ?? "";
-  const isDispatch =
-    DISPATCH_TOOL_NAMES.has(dispatchTool) ||
-    (dispatchTool.startsWith("subagent_") && dispatchTool !== "subagent_response");
-  if (isDispatch) {
+  if (isDispatchToolName(dispatchTool)) {
     const latchSession = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
     const payload: KiroHookInput = {
       tool_name: dispatchTool,
@@ -1950,7 +1951,7 @@ if (target === "state-transition-guard") {
   if (!TERMINAL_TOOLS.has(tool)) return 0;
   const command = typeof ide.toolArgs?.command === "string" ? ide.toolArgs.command : "";
   if (!command) return 0;
-  const pd = process.cwd();
+  const pd = projectDir;
   // The core hook enforces only when it knows a DELEGATE is acting (an empty
   // agent_type returns 0), because the main session is allowed to run these
   // verbs. The pre-merge row got that identity from the persona argv of a
@@ -1988,7 +1989,7 @@ if (target === "review-freeze") {
   // write reached the core hook with an empty tool_name.
   if (!shell && write === "") return 0;
   const paths = inputPaths(args);
-  const pd = process.cwd();
+  const pd = projectDir;
   // No state file means no workflow record yet, so there is no receipt to protect
   // and nothing for core to decide. Core arrives at the same answer by reading the
   // state file and failing open on the throw — but that path records a drop, and a
@@ -2293,15 +2294,66 @@ function closeDelegation(sessionId: string, input: KiroHookInput): void {
   ]);
 }
 
+/** The dispatch tool spellings that open a delegation window. */
+function isDispatchToolName(name: string): boolean {
+  return (
+    DISPATCH_TOOL_NAMES.has(name) ||
+    (name.startsWith("subagent_") && name !== "subagent_response")
+  );
+}
+
+/** A refused dispatch NEVER RUNS, so the window the log-subagent PreToolUse edge
+ *  opened for it must not outlive the refusal. Kiro blocks the tool on exit 2 and
+ *  sends no PostToolUse, so the only close that dispatch will ever get is this
+ *  one - without it the open lived until DELEGATION_TTL_MS and every consumer of
+ *  the ledger (state-transition-guard, reviewer-scope) then read a delegate that
+ *  was never running, refusing the MAIN session's own verbs. Called from the two
+ *  places this adapter turns a refusal into Kiro's reject contract, so a guard
+ *  added later inherits it. Ordering is not a concern: liveDelegationOpens counts
+ *  a close whose open has not been appended yet. */
+function cancelRefusedDispatchWindow(
+  event: string | undefined,
+  toolName: string | undefined,
+  toolArgs: Record<string, unknown> | undefined,
+  sessionId: string | undefined,
+): void {
+  if (event !== "PreToolUse") return;
+  const dispatchTool = toolName ?? "";
+  if (!isDispatchToolName(dispatchTool)) return;
+  closeDelegation(sessionId?.trim() || rememberedKiroIdeSessionId(), {
+    tool_name: dispatchTool,
+    tool_input: toolArgs ?? {},
+  });
+}
+
 /** Opens that no close has cancelled and that have not expired. */
 function liveDelegationOpens(
   sessionId: string,
 ): Array<{ agent: string; key: string; group: string; ts: number }> {
   const now = Date.now();
   const opens: Array<{ agent: string; key: string; group: string; ts: number }> = [];
+  // A close whose open is not on the ledger YET. Hook order across sibling
+  // registrations is not guaranteed, so a refusal that cancels the window can be
+  // appended before the log-subagent edge that opens it; dropping such a close
+  // (the previous behaviour) left the window inflight until its TTL. Counting it
+  // instead makes the replay order-independent, which is what append-only
+  // accounting has to be when two hooks write the same ledger in one event.
+  const pendingCloses = new Map<string, number>();
+  // Groups an out-of-order close already cancelled. One dispatch names several
+  // personas in ONE group, so the pending close must consume the group, not the
+  // first persona of it - otherwise the remaining personas stayed live and the
+  // wedge survived in a crew dispatch.
+  const cancelledGroups = new Set<string>();
   for (const record of readDelegationLedger(sessionId)) {
     if (record.op === "open") {
       if (now - record.ts > DELEGATION_TTL_MS) continue;
+      if (cancelledGroups.has(record.group)) continue;
+      const pending = pendingCloses.get(record.key) ?? 0;
+      if (pending > 0) {
+        pendingCloses.set(record.key, pending - 1);
+        cancelledGroups.add(record.group);
+        continue;
+      }
       opens.push({ agent: record.agent, key: record.key, group: record.group, ts: record.ts });
       continue;
     }
@@ -2315,7 +2367,10 @@ function liveDelegationOpens(
         break;
       }
     }
-    if (group === null) continue;
+    if (group === null) {
+      pendingCloses.set(record.key, (pendingCloses.get(record.key) ?? 0) + 1);
+      continue;
+    }
     for (let i = opens.length - 1; i >= 0; i--) {
       if (opens[i].group === group) opens.splice(i, 1);
     }
@@ -2943,6 +2998,25 @@ function buildForward(): Forward {
       // surface that has nothing else.
       const inputWritePaths = inputPaths(ide.toolArgs ?? {});
       const rawPath = inputWritePaths[0] ?? extractWrittenPath(ide.toolResult ?? "");
+      // CLASSIFY THE FAILURE FIRST, whatever the path came from. This check used to
+      // live inside the `!rawPath` branch below, which was sound only while the
+      // path could come from prose alone: a failed write yields no path, so an
+      // empty path stood in for "it failed". Preferring the tool input broke that
+      // proxy - the CLI populates the input even when the tool refuses, so a
+      // str_replace that matched multiple times arrived WITH a path and was audited
+      // as ARTIFACT_UPDATED for a file whose bytes never changed. The flag stays
+      // authoritative: only a payload with no success flag at all is judged by prose.
+      if (
+        rawPath &&
+        ide.toolSuccess === undefined &&
+        isFailedWriteResult(ide.toolResult ?? "")
+      ) {
+        hookDebug(projectDir, "kiro-adapter", "audit-and-sensors: write failed, nothing to audit", {
+          toolName: ide.toolName ?? "?",
+          toolResult: (ide.toolResult ?? "").slice(0, 160),
+        });
+        return null;
+      }
       if (!rawPath) {
         // TWO DISTINCT CASES REACH HERE, and conflating them is what made the
         // drop log useless as a health signal:
@@ -3273,6 +3347,7 @@ if (fwd === null) {
   return 0;
 }
 if (fwd.hook === "__legacy_plan_approval_block__") {
+  cancelRefusedDispatchWindow(ide.event, ide.toolName, ide.toolArgs, ide.sessionId);
   process.stderr.write(`${String(fwd.input.reason ?? "Plan Approval blocked this tool.")}\n`);
   return 2;
 }
@@ -3370,7 +3445,13 @@ if (target === "session-start" || target === "record-human-turn") {
 // Kiro IDE 1.x the host discards Stop-hook output, so this relay does not imply
 // a shared `{"decision":"block","reason"}` contract.
 if (result.stdout) process.stdout.write(result.stdout);
-if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
+if (result.code === 2) {
+  // Any guard that refuses a dispatch cancels its window here, not just the
+  // legacy branch above: the refusal is the only signal that the PostToolUse
+  // close will never arrive.
+  cancelRefusedDispatchWindow(ide.event, ide.toolName, ide.toolArgs, ide.sessionId);
+  if (result.stderr) process.stderr.write(result.stderr);
+}
 return result.code;
 }
 

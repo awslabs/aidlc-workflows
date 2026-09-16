@@ -52,6 +52,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
 }> = [
   { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
   { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
+  { file: "aidlc-guard-tool-call.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "guard-tool-call" },
   { file: "aidlc-log-subagent.json", trigger: "PreToolUse", matcher: "^(subagent|subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
   { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "^(subagent|subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
   { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
