@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 985,
+    "total": 987,
     "enumeratedByClass": {
-      "function": 675,
+      "function": 677,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 404,
+      "function": 406,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -5617,6 +5617,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:relativeUnderRoot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t07-hook-audit-logger.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-relative-under-root.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:releaseAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -6361,6 +6377,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:runtimePlatform",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-relative-under-root.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

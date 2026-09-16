@@ -32,9 +32,11 @@ import {
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
+  relativeUnderRoot,
   resolveCeremony,
   resolveProjectFlag,
   resolveProjectDirFromHook,
+  runtimePlatform,
   sensorsDir,
   sensorsReadDir,
   stateFilePath,
@@ -86,11 +88,13 @@ const filePath = isAbsolute(rawFilePath)
 // Step 5 - Recursion guard. Cover new output and the readable legacy findings
 // directory, including the older flat aidlc-docs location. Writers always use
 // sensorsDir; resolving a legacy read never creates or moves either directory.
+// Containment comparisons are case-insensitive on Windows.
+const platform = runtimePlatform();
 const sensorsLeaves = [sensorsDir(projectDir), sensorsReadDir(projectDir)]
   .map((path) => path.replace(/\\/g, "/").replace(/\/$/, ""));
 const filePathNorm = filePath.replace(/\\/g, "/");
 if (
-  sensorsLeaves.some((leaf) => filePathNorm === leaf || filePathNorm.startsWith(`${leaf}/`)) ||
+  sensorsLeaves.some((leaf) => relativeUnderRoot(leaf, filePath, platform) !== null) ||
   filePathNorm.includes(`aidlc-docs/${LEGACY_SENSORS_DIR}/`)
 ) {
   return 0;
