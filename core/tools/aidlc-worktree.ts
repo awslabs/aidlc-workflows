@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -217,19 +217,41 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
   return null;
 }
 
-// --- Sibling-worktree detection ---
+// --- Nested-worktree detection ---
 //
-// `aidlc-worktree` must run from the main repo checkout, not from a sibling
-// worktree (e.g. `.claude/worktrees/<dev>/`). The main checkout is the
-// directory whose `.git` is the same as `git rev-parse --git-common-dir`'s
-// parent. macOS symlinks `/var → /private/var`, so canonicalise both sides
-// via `realpathSync` before comparing.
+// `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
+// checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
+// `.claude/worktrees/<dev>`) shape the error names. Creating a Bolt worktree from
+// there would place one worktree inside another's tracked tree, which is exactly
+// what "Bolt worktrees are siblings of the main checkout, not nested" forbids.
+// The main checkout is the directory whose `.git` is `git rev-parse
+// --git-common-dir`'s parent. macOS symlinks `/var → /private/var`, so
+// canonicalise both sides via `realpathSync` before comparing.
+//
+// A linked worktree that lives OUTSIDE the main checkout is ALLOWED (#567). The
+// one-worktree-per-branch layout is ordinary, and nothing about it breaks the
+// invariant above: git registers such a worktree under the same common dir (so
+// `gitCommonDirHash` and the creating-repo binding are unchanged), the Bolt
+// worktrees it creates hang off ITS root rather than inside anyone else's tree,
+// and `--base` / the merge target stay bound to the invoking checkout — which is
+// the property that keeps a unit forking from the branch holding approved work
+// rather than from whatever the main checkout happens to have checked out.
 //
 // P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
-// git probe runs there — so "must run from the main checkout" is evaluated against
-// the sibling repo, not the (non-git) workspace root. Absent `--repo` (legacy
-// single-repo), `repoCwd` is the projectDir and the behaviour is unchanged.
+// git probe runs there — so the nesting test is evaluated against the sibling
+// repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
+// `repoCwd` is the projectDir and the behaviour is unchanged.
+
+// True when `child` is strictly inside `parent` (never for equal paths). Compares
+// on a separator boundary so `/x/repo-feature` is NOT read as inside `/x/repo`.
+function isNestedInside(parent: string, child: string): boolean {
+  if (child === parent) return false;
+  const rel = relative(parent, child);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+  return true;
+}
+
 function assertNotSiblingWorktree(repoCwd?: string): void {
   const top = runGit(["rev-parse", "--show-toplevel"], repoCwd);
   if (!top.ok) {
@@ -245,9 +267,9 @@ function assertNotSiblingWorktree(repoCwd?: string): void {
   const commonAbs = resolve(cwdTop, commonRaw);
   const mainCheckout = canonicalise(dirname(commonAbs));
 
-  if (cwdTop !== mainCheckout) {
+  if (cwdTop !== mainCheckout && isNestedInside(mainCheckout, cwdTop)) {
     error(
-      `aidlc-worktree must run from the main repo checkout, not from a sibling worktree at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
+      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
     );
   }
 }

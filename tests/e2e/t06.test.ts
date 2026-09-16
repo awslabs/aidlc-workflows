@@ -37,7 +37,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -50,7 +50,11 @@ const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
 const fixtures: string[] = [];
+// Worktrees created OUTSIDE a fixture's tree: cleanupWorktreeFixture prunes a
+// fixture's own children, so these are removed here.
+const outsideWorktrees: string[] = [];
 afterAll(() => {
+  for (const w of outsideWorktrees) rmSync(w, { recursive: true, force: true });
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
@@ -140,5 +144,47 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(boltSlugRows(fixture)).not.toContain("demo");
     expect(existsSync(wtPath(sibling, "demo"))).toBe(false);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
+  }, 30000);
+
+  // #567: the rule is NESTING, not "is a linked worktree". A worktree that lives
+  // OUTSIDE the main checkout is the ordinary one-worktree-per-branch layout and
+  // is allowed — the case above stays refused because it is nested INSIDE the
+  // fixture's working tree. This also pins the property that makes the allowance
+  // safe: the Bolt forks from the INVOKING worktree's HEAD, so a unit is built
+  // from the branch holding approved work rather than from whatever the main
+  // checkout has checked out. The feature branch is deliberately one commit ahead
+  // of `main` so the two are distinguishable.
+  test("4: create from a worktree OUTSIDE the main checkout is allowed and forks from ITS head", () => {
+    const fixture = freshFixture();
+    // Commit the workspace shell so it travels into the new worktree (the fixture
+    // seeds it after its own seed commit, which is why the nested case above has
+    // no record).
+    const git = (cwd: string, ...args: string[]): string => {
+      const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
+      return r.stdout ?? "";
+    };
+    git(fixture, "add", "--", "aidlc");
+    git(fixture, "commit", "-qm", "seed aidlc workspace shell");
+
+    const outside = `${fixture}-feature`;
+    outsideWorktrees.push(outside);
+    git(fixture, "worktree", "add", "-q", outside, "-b", "feature-x");
+    writeFileSync(join(outside, "feature.txt"), "approved work\n");
+    git(outside, "add", "--", "feature.txt");
+    git(outside, "commit", "-qm", "work the main checkout does not have");
+
+    const featureHead = git(outside, "rev-parse", "HEAD").trim();
+    const mainHead = git(fixture, "rev-parse", "HEAD").trim();
+    expect(featureHead).not.toBe(mainHead); // fixture precondition
+
+    const r = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
+
+    expect(r.status, r.out).toBe(0);
+    expect(existsSync(wtPath(outside, "demo"))).toBe(true);
+    // The Bolt forks from the invoking worktree's branch, NOT the main checkout's.
+    const boltHead = git(wtPath(outside, "demo"), "rev-parse", "HEAD").trim();
+    expect(boltHead).toBe(featureHead);
+    expect(boltHead).not.toBe(mainHead);
   }, 30000);
 });
