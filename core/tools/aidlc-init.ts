@@ -1730,10 +1730,15 @@ function diagnosticWizard(
     const args = ["--provider", "amazon-bedrock"];
     const skipMarkDone = new Set<string>();
     if (choice === 1) {
-      const region = promptTextDefault("  AWS region", detected.region);
+      // Re-entry leads with the recorded answer where one exists, so Enter keeps
+      // it; detection and the default chain are the fallbacks for a first answer.
+      const region = promptTextDefault(
+        "  AWS region",
+        recorded?.region ?? detected.region,
+      );
       const profileAnswer = promptTextDefault(
         "  AWS profile",
-        "default credential chain",
+        recorded?.profile || "default credential chain",
       );
       const profile = profileAnswer === "default credential chain"
         ? ""
@@ -1748,7 +1753,7 @@ function diagnosticWizard(
       if (selected.harness === "opencode") {
         const offer = promptYesDefault(
           "  Write amazon-bedrock provider options to opencode.json?",
-          false,
+          recorded?.opencodeDefault ?? false,
         );
         args.push("--opencode-default", offer ? "yes" : "no");
       }
