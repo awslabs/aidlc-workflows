@@ -228,7 +228,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "team-board [--snapshot]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -1027,7 +1027,7 @@ export const ROUTES: readonly Route[] = [
     group: "orchestrate",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park", "wait"],
+    verbs: ["next", "continue", "report", "park", "wait", "team-board"],
     tool: TOOLS.orchestrate,
     ...HIDDEN_ENGINE,
     all: [
@@ -1036,6 +1036,7 @@ export const ROUTES: readonly Route[] = [
       "report [args]",
       "park [args]",
       "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
