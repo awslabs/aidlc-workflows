@@ -51,7 +51,7 @@
 //       scopeChangedCount(audit) === 1 (STRONGER: counts the row against the
 //       seeded audit-sample.md baseline — which contains NO SCOPE_CHANGED —
 //       rather than a bare presence grep) + res.status === 0.
-//   - .sh Test 3  loop: each of 11 scopes -> state '\*\*Scope\*\*: <t>'  ->
+//   - .sh Test 3  loop: each of 12 scopes -> state '\*\*Scope\*\*: <t>'  ->
 //       Test 3: per-scope sub-test, getField(state,"Scope") === target exact,
 //       all 10 targets (the .sh emitted a single `ok` after the loop; we keep
 //       one expect per scope so a single bad scope is pinpointed — STRONGER).
@@ -71,7 +71,7 @@
 //       assert is a STRONGER addition matching the .sh's stated intent).
 //
 // 7 .sh asserts -> 7 expect()-bearing test() cases here (Test 3 keeps its
-// single .sh `ok` semantics but iterates 11 scopes inside one case with one
+// single .sh `ok` semantics but iterates 12 scopes inside one case with one
 // expect per scope).
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_audit_file

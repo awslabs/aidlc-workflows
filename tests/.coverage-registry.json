@@ -20,18 +20,18 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 992,
+    "total": 987,
     "enumeratedByClass": {
-      "function": 682,
+      "function": 676,
       "audit": 99,
-      "scope": 11,
+      "scope": 12,
       "stage": 33,
       "hook": 18,
       "subcommand": 142,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 409,
+      "function": 404,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -1600,18 +1600,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:backfillComposedScopeRecords",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t341-composed-scope-durability.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:BLOCKING_SENSOR_OVERRIDE_CHOICE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2349,18 +2337,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:composedFoldBack",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4152,13 +4128,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:loadComposedScopeRecords",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:loadGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -4348,18 +4317,6 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:materializeComposedScopeIdentities",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t341-composed-scope-durability.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4683,18 +4640,6 @@
       "coveredBy": [
         {
           "file": "tests/unit/t107.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:parseComposedScopeRecord",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t344-composed-scope-record.test.ts",
           "mechanism": "none"
         }
       ],
@@ -5736,18 +5681,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:renderComposedScopeRecord",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8975,6 +8908,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "express-plus",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "scope",

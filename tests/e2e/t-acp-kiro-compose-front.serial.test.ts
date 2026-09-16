@@ -88,7 +88,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
       try {
         const scopesDir = join(root, ".kiro", "scopes");
         const gridPath = join(root, ".kiro", "tools", "data", "scope-grid.json");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(12);
 
         // --- turn 1: compose -> proposal -> gate (turn ends at the ask) -----
         const r1 = await driveKiroAcp({
@@ -99,7 +99,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           keepAlive: true,
         });
         // No write and no creation before approval (P0's no-write contract).
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(12);
 
         // --- turn 2: approve -> composer writes -> same-turn creation ----------
         const r2 = await driveKiroAcp({
