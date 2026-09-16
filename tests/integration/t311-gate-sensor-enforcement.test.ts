@@ -40,6 +40,7 @@ import {
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const projects: string[] = [];
 const externalPaths: string[] = [];
 
@@ -528,6 +529,27 @@ describe("t311 gate-bound sensor enforcement", () => {
         "- [-] probe",
       );
     }
+  }, 30_000);
+
+  test("compiled dispatch fires sensors through the engine namespace", () => {
+    const fixture = setupFixture("blocking", "**/*", true);
+    const seen = join(fixture.project, "native-argv.log");
+    const executable = join(fixture.project, "aidlc-native-stub");
+    writeFileSync(
+      executable,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(seen)}\nexec ${JSON.stringify(BUN)} ${JSON.stringify(DISPATCHER)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const result = gate(fixture, [], { AIDLC_COMPILED_EXECUTABLE: executable });
+    expect(result.status).toBe(0);
+    const calls = readFileSync(seen, "utf-8").trim().split("\n");
+    const fires = calls.filter((call) => call.includes("sensor fire "));
+    expect(fires).toHaveLength(2);
+    for (const call of fires) expect(call.startsWith("engine sensor fire gate-probe ")).toBe(true);
+    expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(2);
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
+      "- [?] probe",
+    );
   }, 30_000);
 
   test("gate dispatch skips deliverables outside the sensor matches capability", () => {

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 985,
+    "total": 986,
     "enumeratedByClass": {
-      "function": 675,
+      "function": 676,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -4746,6 +4746,10 @@
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-refusal-valid-values.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -5994,6 +5998,13 @@
     {
       "unitClass": "function",
       "unitId": "function:REVIEW_CLASSES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:REVIEW_FINDING_STATUS_VALUES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -7681,6 +7692,10 @@
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-refusal-valid-values.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
