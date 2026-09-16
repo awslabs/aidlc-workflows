@@ -110,7 +110,7 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         );
         const scopesDir = join(proj, ".claude", "scopes");
         console.log(`t193 initial scope evidence: ${JSON.stringify(scopeEvidence(proj))}`);
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(12);
 
         const r = await driveAidlc(
           "/aidlc compose --report scan-report-sample.json",
@@ -168,16 +168,16 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // Matched-stock path: NO scope write (still exactly the 11 stock files
-        // and 11 grid keys).
+        // Matched-stock path: NO scope write (still exactly the 12 stock files
+        // and 12 grid keys).
         expect(
           readdirSync(scopesDir).filter((f) => f.startsWith("aidlc-") && f.endsWith(".md"))
             .length,
-        ).toBe(11);
+        ).toBe(12);
         const grid = JSON.parse(
           readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(11);
+        expect(Object.keys(grid).length).toBe(12);
 
         // The created workflow rides the triaged route: a compact incremental
         // scope (bugfix, or security-patch if the composer judged the hotspot
