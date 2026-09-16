@@ -32,9 +32,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
+  cleanupWorktreeFixture,
   createTestProject,
   DEFAULT_SPACE,
   resetAidlcEnv,
@@ -43,6 +44,7 @@ import {
   seededStateFile,
   seedStateFile,
   sedReplaceInFile,
+  setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import {
   codekbDir,
@@ -288,3 +290,49 @@ function rewriteIntentRepos(proj: string, repos: string[]): void {
   rows[0].repos = repos;
   writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
 }
+
+// ============================================================================
+// 4. LINKED WORKTREE identity. With nothing recorded, the repo name must come
+// from the MAIN checkout, not from the directory the caller happens to stand in:
+// `git worktree add` names its directory after a BRANCH, so basename(projectDir)
+// there is a branch name and the store lands beside the repository's real store
+// instead of in it. The gate reads the same resolver, so a store written under
+// the true repository name is invisible to it and reverse-engineering cannot be
+// approved (the defect this case pins).
+//
+// Mechanism: a real `git worktree add` off the fixture repo, then codekbRepoName
+// in-process from inside the worktree. The control asserts the main checkout is
+// unchanged, which is the backwards-compatibility claim: outside a linked
+// worktree, dirname(--git-common-dir) IS projectDir, so nothing moves.
+// ============================================================================
+describe("t182 codekb repo name — project root inside a linked git worktree", () => {
+  const repo = setupWorktreeFixture();
+  const repoName = basename(repo);
+  const linked = join(dirname(repo), `${repoName}-feature-x`);
+  const added = spawnSync(
+    "git",
+    ["worktree", "add", "-q", linked, "-b", "feature-x"],
+    { cwd: repo, encoding: "utf-8" },
+  );
+
+  afterAll(() => cleanupWorktreeFixture(repo));
+
+  test("git worktree add succeeded (fixture precondition)", () => {
+    expect(added.status, added.stderr).toBe(0);
+  });
+
+  test("codekbRepoName from the linked worktree resolves the REPOSITORY name", () => {
+    // Not basename(linked) — that is `<repo>-feature-x`, a branch-derived name.
+    expect(codekbRepoName(linked)).toBe(repoName);
+  });
+
+  test("codekbRepoName from the main checkout is unchanged (no-op outside worktrees)", () => {
+    expect(codekbRepoName(repo)).toBe(repoName);
+  });
+
+  test("both checkouts therefore resolve to ONE codekb store", () => {
+    expect(relativeCodekbDir(linked, codekbRepoName(linked), DEFAULT_SPACE)).toBe(
+      relativeCodekbDir(repo, codekbRepoName(repo), DEFAULT_SPACE),
+    );
+  });
+});

@@ -2083,9 +2083,47 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
+// The repository NAME for a checkout whose project root may be a LINKED GIT
+// WORKTREE. `--git-common-dir` names the shared git dir, which lives inside the
+// MAIN checkout, so its parent's basename is the repository name. For a normal
+// checkout that parent IS projectDir, which makes this a no-op everywhere except
+// a linked worktree — the one topology where basename(projectDir) is a branch
+// name rather than a repository name. Null whenever git cannot answer (no git,
+// not a repository), so the caller keeps today's basename behaviour.
+//
+// Deliberately NOT the `origin` remote: that would also cover a clone whose
+// directory name differs from the repository, but remote names are mutable (a
+// rename or a re-point would move a workspace's store) and it would change
+// resolution for every checkout whose remote and directory names differ. A
+// location is stable; widening identity to the remote is a separate decision.
+function mainCheckoutRepoName(projectDir: string): string | null {
+  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: projectDir,
+    encoding: "utf-8",
+  });
+  if (top.status !== 0) return null;
+  const common = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+    cwd: projectDir,
+    encoding: "utf-8",
+  });
+  if (common.status !== 0) return null;
+  const topPath = top.stdout?.trim();
+  const commonRaw = common.stdout?.trim();
+  if (!topPath || !commonRaw) return null;
+  try {
+    const name = basename(dirname(realpathSync(resolvePath(topPath, commonRaw))));
+    return name.length > 0 ? name : null;
+  } catch {
+    return null;
+  }
+}
+
 // The deterministic repo NAME for codekb keying (NOT the intent slug):
 //   1 recorded repo  -> that name
-//   0 recorded repos (workspace root IS the repo) -> basename(projectDir)
+//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
+//                       (mainCheckoutRepoName), falling back to basename(projectDir)
+//                       when git cannot answer. Identical to basename(projectDir)
+//                       for every root that is not a linked worktree.
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
@@ -2100,7 +2138,12 @@ export function codekbRepoName(
     selection.intent ?? undefined,
     selection.space,
   );
-  return repos.length === 1 ? repos[0] : basename(projectDir);
+  if (repos.length === 1) return repos[0];
+  // Multi-repo (2+) keeps the basename namespace unchanged; only the
+  // NOTHING-RECORDED case consults git, where the project root is the repo and a
+  // worktree basename is otherwise mistaken for the repository name.
+  if (repos.length > 1) return basename(projectDir);
+  return mainCheckoutRepoName(projectDir) ?? basename(projectDir);
 }
 
 // --- Codekb scope of analysis -------------------------------------------------
