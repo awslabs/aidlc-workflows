@@ -1,6 +1,6 @@
 # Orchestrator
 
-Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly five subcommands: `next`, `continue`, `report`, `park`, and `team-board`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
+Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly six subcommands: `next`, `continue`, `report`, `park`, `team-board`, and `wait`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query, and `wait` is the bounded read-only wait for dispatched work) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
 
 This chapter documents the workflow behaviour from the conductor's side — entry points, session management, scope-to-stage mapping, the stage execution and advancement protocol, and the deliberate deviations. For the engine internals — the `next`/`report` contract, the typed directive union, the conductor persona, plural skills, scope shape, and the swarm referee — see [Engine and Skill System](17-skill-system.md). For user-facing command usage, see the [User Guide -- CLI Commands](../guide/12-cli-commands.md).
 
@@ -66,7 +66,8 @@ When the argument is freeform text (not a known scope keyword):
      cold-start path offers composition first for no-match or rich prose
 3. Disambiguation rule: descriptions longer than five words receive the compose offer unless an affirmative high-specificity keyword (`refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE`) matches. The exemption checks every keyword, including those after an earlier generic match in the same scope, and rejects occurrences with nearby preceding negation. Eligible scopes retain the alphabetical tie-break. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent) for examples and limitations.
 4. On a clear keyword match, confirms with the user, naming the effective ceremony from the compiled grid and workspace scan: `Starting a "[scope]" workflow for: "[text]" - [N] of [T] stages, [G] approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.` Greenfield previews apply the same reverse-engineering skip as intent creation. A per-unit clause is appended only when the scope executes `units-generation` and its Construction stages fan out over the resulting Unit DAG.
-5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 26, feature = all 33`) so the magnitude difference is visible before choosing.
+   The cost clause also names disabled effective policy, including creation flags and environment kill switches: classic defaults add `; no summary confirmation`, while opting summary confirmation in removes the clause (an advisory review cap is not a disabled ceremony). Scopes with none disabled omit this clause.
+5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 18, feature = all 33`) so the magnitude difference is visible before choosing.
 6. On confirmation, proceeds as with an explicit scope. The original freeform text is stored as `Initial Intent` in `aidlc-state.md`.
 7. If the user overrides the detected scope, uses the user's chosen scope instead.
 
@@ -134,7 +135,7 @@ There is no separate scaffold command (the earlier `init` flag was retired; the 
 When the active intent's `aidlc-state.md` exists and a new harness session re-enters with bare `/aidlc`, the session-start context tells the conductor to present the standard Resume / Redo / Jump / Start Fresh menu. The conductor feeds that choice to `report --result resumed --user-input`; the engine keeps the per-choice routing deterministic.
 
 1. The session-start hook reads the state file and injects the persisted scope, phase, stage, status, agent, and next action.
-2. It flags `.aidlc-recovery.md` (in the intent's record dir) when present so the conductor can check for compaction-related state corruption.
+2. It flags `.aidlc-engine/recovery.md` (in the intent's record dir) when present so the conductor can check for compaction-related state corruption.
 3. On bare `/aidlc` re-entry, the conductor presents the four-option menu.
 4. The engine routes the reported choice; Resume re-runs normal `next`, while Redo, Jump, and Start Fresh return the exact follow-up move.
 
@@ -153,7 +154,7 @@ flowchart TD
     START(["/aidlc invoked"])
     MODE{"Invocation"}
     STATE_EXISTS{"Active intent\nexists?"}
-    RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
+    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
     RESUME_MENU["AskUserQuestion:\nResume Options"]
@@ -243,8 +244,8 @@ Construction stage has a checkbox per Unit from `unit-of-work-dependency.md`;
 Unit and one cell per applicable per-Unit Construction stage plus its Unit gate;
 the Stage Progress rows remain one row per stage and become derived from those
 columns. `Construction Autonomy Mode: [unset|autonomous|gated]` is recorded
-under **Current Status** — written after the ladder prompt fires and honoured
-on session resume.
+under **Current Status** — written by a ladder answer or an explicit on-demand
+grant or revocation, and honoured on session resume.
 
 During active team fan-out, unscoped main emits a turn-terminal `notice` whose
 message is the deterministic Team Construction board: Unit Progress, locally
@@ -254,7 +255,7 @@ invokes the same pure board query in snapshot mode.
 
 ### Recovery Breadcrumb
 
-The recovery breadcrumb (`.aidlc-recovery.md` in the intent's record dir) is written by the `validate-state.ts` PreCompact hook. It records a snapshot of the workflow's last known-good state before context compaction occurs.
+The recovery breadcrumb (`.aidlc-engine/recovery.md` in the intent's record dir) is written by the `validate-state.ts` PreCompact hook. It records a snapshot of the workflow's last known-good state before context compaction occurs.
 
 On session resume, the orchestrator compares the breadcrumb's "Current stage" with the state file's "Current Stage". If they differ, it warns the user that compaction may have caused state corruption. This is important because PreCompact hooks are informational-only and cannot block compaction.
 
@@ -305,7 +306,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 | `refactor` | 0.1-0.3, 2.1 (always), 2.3 (minimal), 3.1 (refactoring plan), 3.5, 3.6, 4.1, 4.3 | 10 / 33 | Minimal | Minimal |
 | `infra` | 0.1-0.3, 2.2, 2.3 (infra requirements), 3.2, 3.3, 3.4, 3.7, 4.1, 4.2, 4.3, 4.4 | 13 / 33 | Standard | Standard |
 | `security-patch` | 0.1-0.3, 2.1 (find vulnerability context), 2.3 (minimal), 3.2, 3.5, 3.6, 4.1, 4.3 | 10 / 33 | Minimal | Minimal |
-| `classic` | 0.1-0.3, 2.1-2.9, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 33 | Standard | Standard |
+| `classic` | 0.1-0.3, 2.1-2.9, 3.1-3.6 (skips all Ideation, CI Pipeline, and Operation) | 18 / 33 | Standard | Standard |
 | `workshop` | 0.1-0.3, 2.1-2.9, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 33 | Standard | Minimal |
 | `express` | 0.1-0.3, 2.1 (if brownfield), 2.3, 3.5, 3.6, 4.1, 4.3, 4.4 | 10 / 33 | Minimal | Minimal |
 
@@ -319,8 +320,8 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 - **refactor** -- No Ideation. Same Inception start as bugfix. Adds Functional Design (as refactoring plan), then uses the same build, test, and deployment tail.
 - **infra** -- No Ideation. Infra-focused Requirements Analysis. NFR stages + Infrastructure Design + CI Pipeline from Construction. Deployment and Observability from Operation.
 - **security-patch** -- No Ideation. Reverse Engineering to find vulnerability context plus minimal Requirements Analysis (the auditable statement of the vulnerability and its remediation criteria). NFR Requirements, Code Generation, Build and Test. Deployment Pipeline and Deployment Execution from Operation.
-- **classic** -- The implicit default (when neither the user nor `AWS_AIDLC_DEFAULT_SCOPE` names a scope): the v1-style lifecycle with no Ideation, and all Inception, Construction, and Operation stages in the grid. Only Initialization, Requirements Analysis, Units Generation, Delivery Planning, Code Generation, and Build and Test are ALWAYS; the remaining stages self-select. Standard depth and Standard test strategy preserve the production test floor.
-- **workshop** -- The compatible facilitated-session lifecycle: the same stage grid as Classic, with the established `workshop` / `lab` / `training` keywords and a Minimal test-strategy override.
+- **classic** -- The implicit default (when neither the user nor `AWS_AIDLC_DEFAULT_SCOPE` names a scope): v1-style ceremony through Inception and Construction, with one human approval per stage. Ideation is skipped and Operation remains a placeholder; stage-declared execution modes and support agents are unchanged. Only the three Initialization stages, Requirements Analysis, Units Generation, Delivery Planning, Code Generation, and Build and Test are ALWAYS; the remaining stages self-select. Standard depth and Standard test strategy preserve the production test floor. Walking-skeleton ceremony and summary confirmation are off. Sensors run and the learnings ritual runs. Reviews are advisory (one pass per stage, findings at the approval gate); explicit autonomy keeps the single pre-merge review. Per-intent `/aidlc --sensors on|off`, `--learnings on|off`, and `--summary-confirmation on|off` override the scope, while `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force their ceremony off. Approval gates, Plan Approval, human-turn authority, audit, and team write protection remain.
+- **workshop** -- The compatible facilitated-session lifecycle: Inception, Construction, and Operation, with the established `workshop` / `lab` / `training` keywords, advisory stage reviews, and a Minimal test-strategy override.
 - **express** -- The lightest requirements-to-deploy route: conditional Reverse Engineering, Requirements Analysis, one zero-Unit Code Generation iteration, Build and Test, and a conditional deploy/observability tail. It skips Units Generation, so Bolt, skeleton, ladder, per-Unit, and swarm paths are structurally unreachable. Code Generation artifact paths and validity receipts use the stage-level Construction directory. `review_cap: none` disables reviewers.
 
 ### Depth Levels
@@ -481,7 +482,30 @@ Shipped per-stage structure:
 2. After the last Unit of that stage settles, the engine re-emits the stage with `gate: true` — one stage-level approval.
 3. Code Generation's per-Unit completion gate inside `code-generation.md` is **suppressed**; Step 3 Plan Approval remains a hard stop. Under an autonomous swarm the Code Generation stage gate is presented only after the **final** DAG batch has converged.
 
-The **walking-skeleton gate** is the first in-scope Construction EXECUTE stage (`isSkeletonGateStage`). Immediately after that gate approves, the orchestrator fires the **ladder prompt** exactly once per workflow, records `Construction Autonomy Mode: autonomous|gated` in `aidlc-state.md`, and emits `AUTONOMY_MODE_SET`. On the default walk, `autonomous` skips the remaining Construction *stage* gates (except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle `gate: true` re-entry, which the conductor auto-approves under autonomy). Opt-in `Construction Iteration: unit-major` suppresses swarm and **retains** the per-stage gate cascade.
+The first in-scope Construction EXECUTE stage always requires its own human
+approval, including under `skeleton: off` and when autonomy was granted earlier.
+Under skeleton-on with a non-empty Unit DAG, this is the **walking-skeleton
+gate**. After it approves, the conductor presents the **ladder prompt** once per
+intent if no autonomy choice has already been recorded. Skeleton-off has no
+automatic ladder prompt.
+
+The human can grant or revoke autonomy on demand at any point during
+Construction, under either skeleton stance: "run the rest autonomously" or
+"gate every stage from here". The conductor records either an on-demand request
+or a ladder answer through `aidlc engine bolt set-autonomy --mode autonomous|gated`,
+which writes `Construction Autonomy Mode` and emits `AUTONOMY_MODE_SET`. Escalation
+requires a fresh human turn; revocation to `gated` does not. An existing choice
+is honoured on resume and is not repeated at the ladder. See the
+[command reference](../guide/12-cli-commands.md#aidlc-engine-bolt-set-autonomy-change-construction-approvals)
+for invocation examples.
+
+On the default stage-major walk, `autonomous` skips subsequent eligible
+Construction *stage* gates. The first stage's approval and each Unit's Code
+Generation Plan Approval remain human-owned. Halt-and-ask and the Build-and-Test
+loop-back's rung 4 still stop for the human; the swarm settle `gate: true`
+re-entry is auto-approved by the conductor under autonomy. Existing opt-in
+`Construction Iteration: unit-major` stays serial, suppresses swarm, and
+**retains human stage gates for per-unit stages**.
 
 Units eligible to run in parallel (dependency prerequisites satisfied, no mutual dependency) form a **batch**. The orchestrator may dispatch stage 3.5 Code Generation for a batch by issuing **N `Task` calls in a single assistant message**. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
 
@@ -489,10 +513,14 @@ The engine-driven per-unit loop for the design stages (3.1–3.4) and non-autono
 
 Wave builders inherit the parent directive's stage metadata, inline persona/knowledge roster, context warnings, accumulated steering content, and effective review class. They use only their entry's paths and do not enter the serial single-active-Unit lifecycle. Instead, after build and paired review settlement, `aidlc-state.ts unit complete --wave` verifies the live entry, copies its Unit diary into the parent diary with deterministic deduplication, and emits `UNIT_COMPLETED`. The engine keeps a batch active until every applicable Unit has artifacts, valid summary confirmation, terminal review evidence when required, memory fan-in, and a completion receipt; dependent batches and the single stage gate cannot overtake any of them. Code-generation remains excluded because it writes the shared workspace and carries a mandatory Plan Approval hard stop. Unit-major iteration remains serial. See `stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
+Diary fan-in leaves an absent parent diary absent when the Unit has no entries. In particular, waves with the learnings ritual off create neither stage nor Unit diaries.
+
 Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 
 - Solo Code Generation failure: halt, emit `BOLT_FAILED` on the swarm/worktree path, present retry / skip / abort.
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Unit. Retry re-runs only the failed Unit; the batch siblings stay `[x]`.
+
+This example assumes skeleton-on and no previously recorded autonomy choice:
 
 ```mermaid
 sequenceDiagram
@@ -512,6 +540,8 @@ sequenceDiagram
 
     Note over O,T: Remaining design stages stage-major, then Code Generation
     Note over O,T: Units B + C eligible in parallel CG batch
+    O->>U: Plan Approval for each Unit in the batch
+    U->>O: Approve each Unit's plan
     O->>T: Task(B code-gen) + Task(C code-gen) in ONE message
     par Parallel execution
         T->>UB: spawn subagent for Unit B
@@ -525,7 +555,7 @@ sequenceDiagram
     O->>O: All Units done → run 3.6 Build and Test, then 3.7 CI Pipeline
 ```
 
-<!-- Text fallback: The orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
+<!-- Text fallback: With skeleton-on and no recorded autonomy choice, the orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the user approves each Unit's plan before the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
 
 State and audit safety under parallel dispatch: `aidlc-audit.ts` uses mkdir-based locking so concurrent appends are safe. Lifecycle writes happen only after all required Task results return and the conductor reports one outcome; the engine serialises the internal state transition. No state-race risk.
 
@@ -685,7 +715,7 @@ If `aidlc-state.md` exists but cannot be parsed:
 3. Rebuild the state file from artifact evidence.
 4. Inform the user: "State file was corrupted. Rebuilt from artifacts. Please verify."
 
-If `.aidlc-recovery.md` disagrees with `aidlc-state.md` on resume, warn the user of possible compaction-related corruption.
+If `.aidlc-engine/recovery.md` disagrees with `aidlc-state.md` on resume, warn the user of possible compaction-related corruption.
 
 ### Missing Artifact Recovery
 
@@ -781,7 +811,7 @@ The framework hooks are registered project-wide in `settings.json` (the v0.6.0 h
 
 - **Matcher**: (empty -- matches all compaction events)
 - **Trigger**: Before Claude Code performs context compaction.
-- **Behavior**: Exits silently if no state file exists. Validates `aidlc-state.md` contains "Stage Progress" and "Current Status" sections. Writes `.aidlc-recovery.md` breadcrumb.
+- **Behavior**: Exits silently if no state file exists. Validates `aidlc-state.md` contains "Stage Progress" and "Current Status" sections. Writes `.aidlc-engine/recovery.md` breadcrumb.
 
 ### SubagentStop: log-subagent.ts
 

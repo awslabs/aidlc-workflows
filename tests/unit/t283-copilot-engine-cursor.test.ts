@@ -97,14 +97,14 @@ function project(
     harness,
     tool,
     markerPath: withState
-      ? join(seededRecordDir(dir), ".aidlc-active-directive.json")
+      ? join(seededRecordDir(dir), ".aidlc-engine/active-directive.json")
       : join(
           dir,
           "aidlc",
           "spaces",
           "default",
           "intents",
-          ".aidlc-active-directive.json",
+          ".aidlc-engine/active-directive.json",
         ),
   };
 }
@@ -481,7 +481,7 @@ describe("t283 engine-owned continuation cursor", () => {
       const token = first.continue_token ?? "";
       const lockDir = join(
         seededRecordDir(installed.dir),
-        ".aidlc-active-directive.lock",
+        ".aidlc-engine/active-directive.lock",
       );
       const lockToken = randomUUID();
       mkdirSync(join(lockDir, lockToken), { recursive: true });
@@ -518,7 +518,7 @@ describe("t283 engine-owned continuation cursor", () => {
     rmSync(markerPath(installed));
     const lockDir = join(
       seededRecordDir(installed.dir),
-      ".aidlc-active-directive.lock",
+      ".aidlc-engine/active-directive.lock",
     );
     const token = randomUUID();
     mkdirSync(join(lockDir, token), { recursive: true });
@@ -548,7 +548,7 @@ describe("t283 engine-owned continuation cursor", () => {
     const before = readFileSync(markerPath(installed), "utf-8");
     const lockDir = join(
       seededRecordDir(installed.dir),
-      ".aidlc-active-directive.lock",
+      ".aidlc-engine/active-directive.lock",
     );
     const token = randomUUID();
     mkdirSync(join(lockDir, token), { recursive: true });
@@ -586,7 +586,7 @@ describe("t283 engine-owned continuation cursor", () => {
       const before = readFileSync(markerPath(installed), "utf-8");
       const lockDir = join(
         seededRecordDir(installed.dir),
-        ".aidlc-active-directive.lock",
+        ".aidlc-engine/active-directive.lock",
       );
       const lockToken = randomUUID();
       mkdirSync(join(lockDir, lockToken), { recursive: true });

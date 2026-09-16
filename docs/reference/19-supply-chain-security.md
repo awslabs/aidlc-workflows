@@ -1,9 +1,11 @@
 # Release supply chain
 
-AI-DLC releases are created in `awslabs/aidlc-workflows` by
-`.github/workflows/release.yml`. The workflow uses the repository-provided
-`GITHUB_TOKEN`. It does not require a GitHub App, a personal access token, a
-second repository, or repository secrets.
+AI-DLC releases are created in `awslabs/aidlc-workflows` by two isolated
+workflows: `.github/workflows/release.yml` for stable tags and
+`.github/workflows/preview-release.yml` for scheduled or manually dispatched
+previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
+GitHub App, a personal access token, a second repository, or repository
+secrets.
 
 ## Release trigger
 
@@ -30,13 +32,17 @@ The workflow:
    PSScriptAnalyzer;
 3. builds native binaries for Linux, macOS, and Windows;
 4. runs native and installer smoke tests;
-5. creates `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and
-   `checksums.txt`;
+5. creates the out-of-band manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` and
+   its `.sha256` sidecar, the manifest-listed native
+   `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
 6. verifies the staged release inventory and checksums.
 
-The release manifest records the tag ref and exact source commit. The runtime
-archive name includes the release version so users can download the matching
-distribution explicitly.
+The release manifest records the tag ref and exact source commit. Both runtime
+archive names include the release version. Manual-copy users download
+`aidlc-copy-runtime-X.Y.Z.tar.gz`; native installers select
+`aidlc-runtime-X.Y.Z.tar.gz`. The copy archive stays outside the manifest and
+main checksum inventory so 2.8.x clients retain forward-compatible update
+discovery; its sidecar and release provenance authenticate it independently.
 
 ## Provenance
 
@@ -45,12 +51,48 @@ after the build and lifecycle jobs pass. GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
+The preview workflow schedules `main` daily at 22:00 in `Europe/Lisbon` and
+accepts manual dispatch. Scheduled and manual runs serialize through the
+`release-preview` workflow concurrency group without cancelling the active run.
+Each later run re-reads the release list: the planner skips if the source commit
+is unchanged since the latest published preview. If `main` advances again on
+the same UTC date, another preview can publish with the next build counter.
+
+The planner reads the current stable `x.y.z` from
+`core/tools/aidlc-version.ts` and allocates
+`<x.y.(z+1)>-preview.<YYYYMMDD>.<N>` using the UTC date at planning and ids
+occupied by existing tags or release records. It calculates the next patch in
+memory and never edits release metadata. Drafts and orphan tags reserve their
+ids, so retry planning and later same-day publications advance `N` past their
+occupied ids. Leftover `aidlc-staging-*` drafts still require inspection and
+removal before the publisher stages another candidate.
+
+The planner renders notes from changes since the previous preview. Callable
+CI gates the authorized commit before the normal release build chain.
+`AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,
+`version.json`, both versioned runtime archives, and the packaged installers
+while the source tree keeps its stable `x.y.z` version. A packaged installer
+therefore defaults to the release that carried it instead of rediscovering
+`latest`. The preview publisher verifies a staging draft,
+creates an annotated tag that records the source repository and commit, then
+publishes the draft as a prerelease with `make_latest: false`; stable
+`latest/download` discovery therefore remains unchanged.
+
+Stable and preview publication use the protected `release` and unattended
+`preview` environments respectively. The preview environment must keep the
+same `main` deployment policy but no required reviewers; merge approval plus
+callable CI are its human and deterministic gates. Stable runs use a separate
+concurrency group. The preview publisher stages and byte-verifies the complete
+candidate before publication and works with either mutable or immutable
+repository releases.
+
 When a compatible GitHub CLI is available, installers verify `checksums.txt`
 against that bundle and bind verification to:
 
 - `awslabs/aidlc-workflows`;
-- `.github/workflows/release.yml`;
-- the release tag;
+- `.github/workflows/release.yml` for stable versions or
+  `.github/workflows/preview-release.yml` for preview versions;
+- the version tag for stable releases or `refs/heads/main` for previews;
 - the exact source commit from `version.json`.
 
 Missing or older GitHub CLI versions do not block installation. In that mode,
@@ -96,6 +138,7 @@ git push origin vX.Y.Z
 
 3. Monitor the `Release` workflow.
 4. Confirm that the GitHub Release contains the binaries, installers,
+   `aidlc-copy-runtime-X.Y.Z.tar.gz`, its `.sha256` sidecar,
    `aidlc-runtime-X.Y.Z.tar.gz`, `version.json`, `checksums.txt`, and the
    provenance bundle.
 

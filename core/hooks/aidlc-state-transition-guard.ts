@@ -760,6 +760,9 @@ function workspaceMutation(prefix: string, args: string[]): string | null {
     return `${prefix} ${workspace.noun} ${workspace.explicit ? "switch" : workspace.name}`;
   }
   if (workspace.kind === "create-intent") return `${prefix} intent create`;
+  if (workspace.kind === "archive" || workspace.kind === "unarchive") {
+    return `${prefix} intent ${workspace.kind}`;
+  }
   if (workspace.kind === "create") {
     return `${prefix} ${args[0] === "space-create" ? "space-create" : "space create"}`;
   }

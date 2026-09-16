@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -60,6 +60,7 @@ import {
   auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
+  refuseEngineObserverWrite,
   gridCostSummary,
   loadAgents,
   loadScopeMapping,
@@ -1093,7 +1094,7 @@ export function nearestStockScopes(
 /** Resolve a scope's plan: the EXECUTE/SKIP slice over the full graph in
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
- *  `aidlc-graph resolve` subcommand writes this to .aidlc-plan.json. The
+ *  `aidlc-graph resolve` subcommand writes this to .aidlc-engine/plan.json. The
  *  parity test asserts this matches the legacy plan across all 11 scopes. */
 export function resolvePlanForScope(
   scope: string
@@ -2879,7 +2880,7 @@ const COMMANDS: Record<string, Handler> = {
     }
   },
   resolve: (args) => {
-    // resolve <scope> — emit the active scope's plan (.aidlc-plan.json) to
+    // resolve <scope> - emit the active scope's plan (.aidlc-engine/plan.json) to
     // the project dir. The plan is the EXECUTE/SKIP slice for the scope,
     // derived from the compiled grid (the same transpose runtime reads).
     // Feature-flagged via AIDLC_GRAPH_RESOLVE=1 so it ships
@@ -2899,6 +2900,10 @@ const COMMANDS: Record<string, Handler> = {
     if (args.includes("--stdout")) {
       process.stdout.write(planJson);
       return;
+    }
+    refuseEngineObserverWrite("writeFileAtomic");
+    if (process.env.AIDLC_PLAN_PATH === undefined) {
+      mkdirSync(dirname(outPath), { recursive: true });
     }
     writeFileAtomic(outPath, planJson);
     console.log(outPath);
@@ -2971,7 +2976,7 @@ Common forms:
                                        two gate tables (data: tools/data/ars-priors.json)
   aidlc-graph compile                  Regenerate stage-graph.json + scope-grid.json from YAML
   aidlc-graph compile --check          CI drift guard (exit 1 on mismatch)
-  aidlc-graph resolve <name>           Emit .aidlc-plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)
+  aidlc-graph resolve <name>           Emit .aidlc-engine/plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)
   aidlc-graph export                   Emit designer-facing bundle (stdout)
   aidlc-graph export --check           CI drift guard against fixture
 

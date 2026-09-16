@@ -259,10 +259,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // t221's ordering (read verdict AFTER deleting the dispatch record)
       // still holds around the record write.
       expect(labelled).toMatch(
-        /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validates it/s,
+        /Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`.*validates it/s,
       );
       expect(labelled).toContain(
-        "writes the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
+        "writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
       );
       expect(labelled).toContain("The record is the review; only this command writes one");
       // Partial and duplicated reviews are named incomplete, not guessed at.
@@ -371,13 +371,38 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("Before every dispatch, not only the first");
       expect(labelled).toContain("returns `requestId` and `reviewFile`");
       expect(labelled).toContain("aidlc-review-brief.ts context");
+      // The reviewer half of the bookkeeping rule lives in the dispatch list, the
+      // only text a dispatched reviewer receives. Every shipped copy must carry it.
+      // The reviewer half must be INSIDE the dispatch list, not merely somewhere in
+      // the module: that list is the only text a dispatched reviewer receives, so a
+      // copy that moved the clause out of it would ship a rule no reviewer reads.
+      // Scope the assertion to `Pass:` .. `Do NOT pass:` and normalise whitespace,
+      // so re-wrapping the bullet cannot break the pin and relocating it cannot pass.
+      const passStart = module.indexOf("\n   Pass:\n");
+      const passEnd = module.indexOf("Do NOT pass:", passStart);
+      expect(
+        `harness ${harness.name}: Pass: .. Do NOT pass: anchors\n${passStart} ${passEnd}`,
+      ).not.toContain("-1");
+      const dispatchList = module.slice(passStart, passEnd).replace(/\s+/g, " ");
+      const inList = `harness ${harness.name} dispatch list\n${dispatchList}`;
+      expect(inList).toContain("The review-content boundary: tell the reviewer");
+      expect(inList).toContain(
+        "a tag naming this stage's own finding is bookkeeping",
+      );
+      // The two forms a live run produced: a stage-review-state header line, and an
+      // applied-findings table. The reviewer half must name them too, or the pass
+      // that reads only this list still reports them.
+      expect(inList).toContain("to state the stage's own review state");
+      expect(inList).toContain(
+        "in any form including a table or a section of its own",
+      );
       expect(labelled).toContain(
         "durable human dispositions from the audit ledger",
       );
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
       expect(labelled).toContain("Writes NOTHING else");
       // The record write and canonical-verdict validation.
-      expect(labelled).toContain("writes the review record `<record>/.aidlc-reviews/");
+      expect(labelled).toContain("writes the review record `<record>/.aidlc-engine/reviews/");
       expect(labelled).toContain("The record is the review; only this command writes one");
       expect(labelled).toMatch(/no canonical verdict line/);
       // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
@@ -407,7 +432,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
   test("kiro-ide SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the module pointer)", () => {
     const body = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", SKILL), "utf-8");
     expect(body).toContain("stage-protocol-reviewer.md");
-    expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(body).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     // The shared module keeps the guard prose and grants kiro-ide its
     // no-dispatch-record carve-out explicitly.
     const module = readFileSync(

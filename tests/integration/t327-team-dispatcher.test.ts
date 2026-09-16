@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:team-board, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -36,6 +36,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+// Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
+setDefaultTimeout(60_000);
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");

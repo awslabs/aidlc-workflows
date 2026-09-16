@@ -47,7 +47,7 @@
 //       creating a shard/heartbeat. Tests 3c-3e prove completed and malformed
 //       state also fail closed. Test 3f proves that running state opens the gate:
 //       appendAuditEntry creates a missing shard.
-//   - .sh Test 4  assert_file_exists .aidlc-hooks-health/log-subagent.last -> Test 4:
+//   - .sh Test 4  assert_file_exists .aidlc-engine/hooks-health/log-subagent.last -> Test 4:
 //       heartbeat file exists (same observable) + STRONGER: its contents are an
 //       ISO timestamp (the hook writes isoTimestamp()).
 //   - .sh Test 5  empty stdin -> exit 0 ($RC == 0)                     -> Test 5:
@@ -164,7 +164,7 @@ function proj(
 
 const auditDirOf = (p: string): string => seededAuditDir(p);
 const heartbeatPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-hooks-health", "log-subagent.last");
+  join(seededRecordDir(p), ".aidlc-engine/hooks-health", "log-subagent.last");
 
 /** Concatenate every shard (sorted) — the settled per-intent audit read. */
 function readShards(p: string): string {

@@ -37,6 +37,7 @@ const LIB_SIBLINGS = [
   "aidlc-settings.ts",
   "aidlc-install-paths.ts",
   "aidlc-distribution.ts",
+  "aidlc-channel.ts",
   "aidlc-artifact-vocabulary.ts",
   "aidlc-graph.ts",
   "aidlc-runtime-paths.ts",

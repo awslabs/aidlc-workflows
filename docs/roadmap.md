@@ -153,9 +153,29 @@ but do not yet have committed release versions.
   ([#299](https://github.com/awslabs/aidlc-workflows/issues/299)/[#300](https://github.com/awslabs/aidlc-workflows/pull/300)).
 - Preserve progressive enrichment as the North Star destination: downstream
   stages enrich upstream artefacts in place, with ADRs as a core design artefact.
-- Commit-level provenance remains an open design question; the current audit
-  chain does not provide a durable reverse lookup from an arbitrary source commit
-  to its intent and workflow.
+- Commit-level provenance is implemented as content-derived attribution:
+  reviewed-source evidence is committed into the intent record and
+  `aidlc attest resolve` maps any commit or diff range back to its owning
+  units, intents, and drift status — receipts and evidence are read out of a
+  git tree, so no hooks, trailers, session state, or local record state are
+  required (see [Commit Provenance](reference/20-commit-provenance.md)).
+  Resolution reports integrity; authority over the record is the verifier's to
+  supply, via `--record-ref` (a record source the change cannot write) and
+  `--require-trust` (a gate on the report's own basis). `SOURCE_COMMITTED`
+  anchoring is enrichment and stays explicit (`attest anchor`), with an opt-in
+  session-start sweep behind `AIDLC_SESSION_ANCHOR=1`.
+- One commit-provenance fidelity gap stays open behind that foundation,
+  reported in `resolve`'s `warnings[]` today (see
+  [Commit Provenance §10](reference/20-commit-provenance.md)):
+  **one byte form** — review evidence hashes working-tree bytes while commit
+  listings read repository blobs, so LFS, `core.autocrlf`, working-tree
+  encodings, and submodule gitlinks can report unchanged content as `drifted`.
+  Reconciling them changes what the `Unit Source Fingerprint` is computed over,
+  so it needs its own change with a migration story for existing receipts.
+  Beyond it, richer trust roots remain future work: per-approval signatures and
+  an identity policy for who may approve (today's `signed` level checks git's
+  commit-level `%G?` on whoever last wrote each authority-bearing file — the
+  receipt's audit shard and the evidence it selects — not a reviewer identity).
 
 ### Governed feedback loops
 

@@ -4,9 +4,14 @@ on:
   push:
     tags:
       - "v*.*.*"
+      - "!v*-preview.*"
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-stable
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -642,3 +647,18 @@ jobs:
           gh release view "$RELEASE_TAG" --json assets --jq ".assets[].name" |
             LC_ALL=C sort >"$RUNNER_TEMP/remote-assets.txt"
           diff -u "$RUNNER_TEMP/local-assets.txt" "$RUNNER_TEMP/remote-assets.txt"
+
+  release-result:
+    name: Release result
+    if: ${{ !cancelled() }}
+    needs: [validate, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require stable publication
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          test "$VALIDATE_RESULT" = success
+          test "$RELEASE_RESULT" = success

@@ -65,12 +65,16 @@
 // once in a guard test so a structurally-broken copy can't make every case
 // trivially "catch".
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+// The default also governs afterAll removal of multiple dist-sized sandboxes,
+// which exceeds bun's 5s hook default under --parallel 4.
+setDefaultTimeout(60_000);
 
 const BUN = process.execPath; // the bun running this test drives the t48 twin
 const T48_REL = join("tests", "integration", "t48-audit-event-emitters.test.ts");

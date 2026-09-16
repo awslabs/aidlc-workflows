@@ -163,7 +163,7 @@ conductor and filters cheaply:
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
-3. **Heartbeat** — write `<record>/.aidlc-hooks-health/rebuild-stage-graph.last`
+3. **Heartbeat** - write `<record>/.aidlc-engine/hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
 4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
    last 3 entries.
@@ -491,7 +491,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 95-event taxonomy
+- **The audit log this graph is derived from** - the 99-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

@@ -194,7 +194,7 @@ describe("parseWorkspaceCommand", () => {
       message: "Usage: aidlc space switch <name>",
     });
     for (const noun of ["intent", "space"] as const) {
-      for (const verb of ["archive", "rename", "show"]) {
+      for (const verb of ["rename", "show"]) {
         const parsed = parseWorkspaceCommand([noun, verb, "foo"]);
         expect(parsed).toMatchObject({
           kind: "error",
@@ -205,6 +205,92 @@ describe("parseWorkspaceCommand", () => {
         expect(parsed.kind === "error" ? parsed.message : "").toContain(`${noun} switch ${verb}`);
       }
     }
+  });
+
+  test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
+    expect(parseWorkspaceCommand(["intent", "archive", "260903-old-spike"])).toEqual({
+      kind: "archive",
+      noun: "intent",
+      name: "260903-old-spike",
+      rest: [],
+    });
+    // Trailing flags ride along untouched, so `--reason` reaches the utility.
+    const withReason = parseWorkspaceCommand([
+      "intent", "archive", "260903-old-spike", "--reason", "superseded by the v2 design",
+    ]);
+    expect(withReason).toEqual({
+      kind: "archive",
+      noun: "intent",
+      name: "260903-old-spike",
+      rest: ["--reason", "superseded by the v2 design"],
+    });
+    expect(workspaceCommandUtilityArgv(withReason)).toEqual([
+      "intent", "archive", "260903-old-spike", "--reason", "superseded by the v2 design",
+    ]);
+    expect(parseWorkspaceCommand(["intent", "unarchive", "260903-old-spike"])).toEqual({
+      kind: "unarchive",
+      noun: "intent",
+      name: "260903-old-spike",
+      rest: [],
+    });
+    // A missing name (or a flag where the name should be) is a usage error, not
+    // a switch to a record named "archive".
+    for (const verb of ["archive", "unarchive"] as const) {
+      expect(parseWorkspaceCommand(["intent", verb])).toMatchObject({
+        kind: "error",
+        noun: "intent",
+        code: "missing-name",
+        verb,
+        message: `Usage: aidlc intent ${verb} <name>`,
+      });
+      expect(parseWorkspaceCommand(["intent", verb, "--reason", "x"])).toMatchObject({
+        kind: "error",
+        code: "missing-name",
+        verb,
+      });
+    }
+    // Spaces have no lifecycle verbs: `space archive x` stays a bare-name switch
+    // sugar (no space is ever named "archive", so it reads as an unknown space).
+    expect(parseWorkspaceCommand(["space", "archive", "x"])).toEqual({
+      kind: "switch",
+      noun: "space",
+      name: "archive",
+      explicit: false,
+    });
+  });
+
+  test("intent list --all includes archived records; the plain list shape is unchanged", () => {
+    expect(parseWorkspaceCommand(["intent", "list", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: false,
+      all: true,
+    });
+    expect(parseWorkspaceCommand(["intent", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: false,
+      all: true,
+    });
+    expect(parseWorkspaceCommand(["intent", "list", "--json", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: true,
+      all: true,
+    });
+    expect(parseWorkspaceCommand(["intent", "--all", "--json"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: true,
+      all: true,
+    });
+    expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["intent", "list", "--json", "--all"]))).toEqual([
+      "intent", "--json", "--all",
+    ]);
+    // The two-field shape every existing consumer matches is untouched.
+    expect(parseWorkspaceCommand(["intent", "list"])).toEqual({ kind: "list", noun: "intent", json: false });
+    expect(parseWorkspaceCommand(["intent", "--json"])).toEqual({ kind: "list", noun: "intent", json: true });
+    expect(parseWorkspaceCommand(["space", "list", "--all"])).toEqual({ kind: "list", noun: "space", json: false });
   });
 
   test("help and not-workspace cases are preserved", () => {
@@ -222,6 +308,7 @@ describe("parseWorkspaceCommand", () => {
       "switch",
       "create",
       "archive",
+      "unarchive",
       "rename",
       "show",
       "birth",
@@ -284,7 +371,9 @@ describe("classifier and next parser parity", () => {
       { args: ["space", "create"], message: "Usage: aidlc space create <name>" },
       { args: ["space", "switch"], message: "Usage: aidlc space switch <name>" },
       { args: ["intent", "switch"], message: "Usage: aidlc intent switch <name>" },
-      { args: ["intent", "archive", "foo"], message: "intent archive is reserved for a future workspace verb" },
+      { args: ["intent", "archive"], message: "Usage: aidlc intent archive <name>" },
+      { args: ["intent", "unarchive"], message: "Usage: aidlc intent unarchive <name>" },
+      { args: ["intent", "rename", "foo"], message: "intent rename is reserved for a future workspace verb" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);

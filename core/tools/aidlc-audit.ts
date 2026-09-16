@@ -63,6 +63,8 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_COMPLETED",
   "WORKFLOW_PARKED",
   "WORKFLOW_UNPARKED",
+  "WORKFLOW_ARCHIVED",
+  "WORKFLOW_UNARCHIVED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -150,13 +152,12 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
-  // Change Control: the per-intent value moved (the change-control verb, or a
-  // memory layer edit observed by a governed checkpoint), and a governed
-  // checkpoint accepted an input change under `relaxed` instead of refusing.
-  // Emitted through the library by aidlc-utility.ts and the checkpoint owners
-  // (aidlc-state.ts, aidlc-log.ts, aidlc-testing-posture.ts).
+  // Change Control: config-change/scope-change set the per-intent value, and
+  // governed checkpoints observe memory changes or accept changed input.
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  // Per-intent ceremony settings, emitted by utility config-change/scope-change.
+  "CEREMONY_SET",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
@@ -215,6 +216,11 @@ const VALID_EVENT_TYPES = new Set([
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
+  // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
+  // commit observed to land reviewed unit claims. Enrichment ONLY: attest
+  // resolve derives attribution purely from committed receipts + evidence and
+  // never reads these anchors, so an unanchored manual commit still resolves.
+  "SOURCE_COMMITTED",
 ]);
 // --- Event type to human-readable heading ---
 
@@ -233,6 +239,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_COMPLETED: "Workflow Completion",
   WORKFLOW_PARKED: "Workflow Parked",
   WORKFLOW_UNPARKED: "Workflow Unparked",
+  WORKFLOW_ARCHIVED: "Workflow Archived",
+  WORKFLOW_UNARCHIVED: "Workflow Unarchived",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",
@@ -275,6 +283,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   REVIEW_CLASS_CHANGED: "Review Class Change",
   CHANGE_CONTROL_SET: "Change Control Set",
   CHANGE_ACCEPTED: "Change Accepted",
+  CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -314,6 +323,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
   SWARM_DEGRADED: "Swarm Degraded",
+  SOURCE_COMMITTED: "Source Committed",
 };
 
 // --- Helpers ---
@@ -421,11 +431,18 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Commit-provenance anchors: `aidlc-attest.ts anchor` derives attribution
+  // from receipts + evidence and deduplicates on (Commit, Repo). A CLI-forged
+  // row would suppress the genuine derived anchor the same way a forged
+  // DOCUMENT_INDEXED suppresses provenance repair.
+  "SOURCE_COMMITTED",
   // Change Control provenance: a governed checkpoint owns the acceptance row
   // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
   // a change look already reported and suppress the genuine row.
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  // Ceremony provenance belongs to the setting verb, not a public audit append.
+  "CEREMONY_SET",
 ]);
 // Events a WORKTREE DELTA may never carry into the main intent shard. This is
 // deliberately an explicit enumeration, not prefix families: a Bolt/swarm

@@ -290,10 +290,10 @@ if (target === "verb-intercept") {
   // workflow state existing (same self-gate as the core record-human-turn hook) so a prompt in
   // a project that never ran the framework does not scaffold audit shards.
   //
-  // The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+  // The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
   // what makes the Stop hook's conversational carve-out work on this harness.
   // kiro-cli delivers no `transcript_path`, so the carve-out cannot read the turn
-  // history; it compares this marker's mtime against .aidlc-engine-touch instead.
+  // history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
   // Both writes ride this seam, but AIDLC_UNATTENDED=1 deliberately withholds
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
@@ -981,7 +981,7 @@ function buildForward(): Forward {
       // hook joining an in-flight block sequence starts its count at 1, not 2.
       //
       // The absent transcript no longer makes the conversational carve-out inert:
-      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // the core hook falls back to the `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch`
       // mtime comparison, and the userPromptSubmit seam above writes the former.
       //
       // Kiro CLI 2.16.0 legacy/V2 was measured live consuming this
@@ -994,7 +994,7 @@ function buildForward(): Forward {
       // discarding Stop-hook stdout and stderr.
       //
       // The core hook also records the `continue-workflow.drops` carve-out and
-      // maintains the `.aidlc-stop-hook/` counter on this legacy/V2 path.
+      // maintains the `.aidlc-engine/stop-hook/` counter on this legacy/V2 path.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {

@@ -513,8 +513,10 @@ the complete native/final-layout gate set; a cross artifact is explicitly
 
 `scripts/package-release.ts` first regenerates the local projections, runs the
 two-build package determinism guard, validates those records (and the complete
-seven-target matrix in release mode), archives each
-`dist-release/<harness>/`, and emits the flat `version.json` plus
+seven-target matrix in release mode), archives each `dist/<harness>/` into the
+out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
+`dist-release/<harness>/` into the manifest-listed native
+`aidlc-runtime-X.Y.Z.tar.gz`, and emits the flat `version.json` plus
 `checksums.txt`, both installers, and binaries. The staging job re-verifies and
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
 its checksums and test it. `publish` downloads the same candidate, re-verifies
@@ -694,6 +696,13 @@ the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
 
+SessionStart retires each visited PID's previous session before checking its
+process identity. Until that check succeeds, a record with `sessionId: null`
+stops ancestry fallback at that PID. A failed or timed-out refresh therefore
+cannot restore the previous session when process inspection recovers; explicit
+payload identity, environment identity, and the shared-cursor fallback still
+apply. A later successful SessionStart replaces the null record.
+
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
 `ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
@@ -735,7 +744,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 4. **State tracking via aidlc-state.md** -- A single markdown state file tracks stage completion, current status, workspace context, scope configuration, execution plan, and runtime state (revision counts). Stages report outcomes to the orchestration engine; its internal state transition updates the file, emits lifecycle audit rows, and routes atomically. Stage prose never edits lifecycle checkboxes directly. A PostToolUse hook validates the state file structure after each write. Stage-level task IDs are resolved at runtime via `TaskList` (matching by subject like "Inception - Requirements Analysis") rather than stored in the state file -- this is more robust after context compaction since it reflects actual task system state.
 
-5. **Stage protocol as shared contract** -- All 33 stages load `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, state tracking, and the §13 Learnings Ritual. Recovery and phase governance remain conditional files; reviewer, ensemble, Construction, and swarm machinery live in four additional conditional modules selected by `directive.protocol_modules`. This preserves consistent behavior without paying the rare-path context cost on every stage.
+5. **Stage protocol as shared contract** -- All 33 stages load `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, and state tracking. Recovery and phase governance remain conditional files; reviewer, ensemble, Construction, swarm, and §13 learnings machinery live in five additional conditional modules selected by `directive.protocol_modules`. The learnings module owns the diary and ritual; when absent, neither runs. This preserves consistent behavior without paying the rare-path context cost on every stage.
 
 6. **Two-tier knowledge architecture** -- Methodology knowledge ships with the framework in `knowledge/` (shared principles + per-agent methodology). User-managed team knowledge lives at the space level in `aidlc/knowledge/` (a sibling of the space's `intents/`), created empty by the engine and populated by the team. This separates framework upgrades from team customization.
 
@@ -749,7 +758,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 95-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 99-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

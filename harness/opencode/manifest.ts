@@ -37,8 +37,29 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
   rootIntegrations: [
-    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
-    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
+          "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
+        ],
+      },
+    },
     { path: "opencode.json", policy: "whole-file" },
   ],
 

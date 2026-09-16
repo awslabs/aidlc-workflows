@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.8.2-blue)
+![version](https://img.shields.io/badge/version-2.9.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -30,10 +30,12 @@ The installer adds the native `aidlc` command and every harness runtime. Bun
 and Node.js are not required. If your shell cannot find `aidlc`, follow the PATH
 instruction printed by the installer or start a new shell.
 
-Prefer to manage the project files manually? Install the matching native
-`aidlc` command, download `aidlc-runtime-X.Y.Z.tar.gz` from the
+Cannot install a native executable, or prefer to manage the project files
+manually? Install [Bun](https://bun.sh/), download
+`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-`runtime/<harness>/` into your project.
+the complete `runtime/<harness>/` directory into your project. This path does
+not require the native `aidlc` command.
 
 ### 2. Configure a project
 
@@ -80,7 +82,8 @@ guide in the table below. The complete walkthrough is in
 Model-provider setup belongs to the harness. Shipped project configuration
 keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
-record the manual setup needed by other harnesses. The methodology itself is
+record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
+answer because model access comes with Kiro. The methodology itself is
 provider-independent.
 
 ## Recommended Model
@@ -99,7 +102,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 95-event audit trail plus persistent state, team knowledge, and learned rules
+- 99-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -125,7 +128,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 68 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 70 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling

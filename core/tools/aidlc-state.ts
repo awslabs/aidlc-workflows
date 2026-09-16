@@ -45,6 +45,7 @@ import {
   governedChangeControl,
   recordAcceptedChanges,
   resolveChangeControl,
+  resolveCeremony,
   claimAttemptFields,
   codekbDir,
   codekbRepoName,
@@ -80,7 +81,7 @@ import {
   humanPresenceGuardDisabled,
   unattendedHumanPresenceHint,
   intentRepos,
-  isAutonomousConstructionDecision,
+  isAutonomousConstructionGate,
   isAutonomousMode,
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
@@ -659,6 +660,14 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+function assertWorkflowNotArchived(content: string, operation: string): void {
+  if (getField(content, "Status") !== "Archived") return;
+  error(
+    `Workflow is Archived, so ${operation} is refused. Bring it back first with ` +
+      "`/aidlc intent unarchive <name>`.",
+  );
+}
+
 // A serial verb refused by a live wave must leave the audit unchanged too.
 // Unwind the transaction lock before reporting this error without ERROR_LOGGED.
 class UnitWaveRouteRefusalError extends StateCommandError {}
@@ -717,6 +726,37 @@ export function main(argv: string[]): void {
   }
 
   try {
+    const archivedProtectedCommands = new Set([
+      "set",
+      "set-skeleton-stance",
+      "set-construction-iteration",
+      "set-unit-ownership",
+      "set-unit-gate-rhythm",
+      "refresh-unit-progress",
+      "sync-unit-scope-stage",
+      "fold-unit-merge",
+      "checkbox",
+      "advance",
+      "finalize",
+      "complete-workflow",
+      "gate-start",
+      "approve",
+      "reject",
+      "revise",
+      "skip",
+      "resume",
+      "acknowledge-compaction",
+      "reuse-artifact",
+      "unit",
+      "park",
+      "unpark",
+    ]);
+    if (subcommand && archivedProtectedCommands.has(subcommand)) {
+      assertWorkflowNotArchived(
+        readStateFile(resolveProjectDir(projectDir)),
+        `aidlc-state.ts ${subcommand}`,
+      );
+    }
     switch (subcommand) {
       case "get":
         handleGet(args.slice(1));
@@ -1803,6 +1843,12 @@ function handlePark(_args: string[]): void {
     if (status === "Completed") {
       error("Workflow is already Completed - nothing to park.");
     }
+    if (status === "Archived") {
+      error(
+        "Workflow is Archived - nothing to park. Bring it back first with " +
+          "`/aidlc intent unarchive <name>`.",
+      );
+    }
     const currentSlug = getField(content, "Current Stage") ?? "";
     if (currentSlug.length === 0) {
       error("State file has no Current Stage - cannot park.");
@@ -2331,6 +2377,7 @@ function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
   const parentPath = join(rec, "construction", stage, "memory.md");
   const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
   const entries = parseMemoryEntries(unitContent);
+  if (entries.length === 0 && !existsSync(parentPath)) return 0;
 
   let parentContent = existsSync(parentPath)
     ? readFileSync(parentPath, "utf-8")
@@ -2926,11 +2973,15 @@ function artifactFingerprint(path: string): string | null {
 function fireGateSensors(
   pd: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  stateContent: string,
   artifacts?: string,
 ): GateSensorEvaluation {
-  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
   const issues: BlockingSensorIssue[] = [];
   const fingerprints = new Map<string, string>();
+  if (
+    resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent).value === "off"
+  ) return { issues, fingerprints };
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
   if (paths.length === 0) return { issues, fingerprints };
 
   const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
@@ -5024,6 +5075,7 @@ function admitStageAction(
   stage: StageEntry,
   options: StageAdmissionOptions,
 ): void {
+  assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
   if (options.unit !== undefined) {
     const team = teamGateContext(
       stateContent,
@@ -5182,6 +5234,7 @@ function handleGateStart(args: string[]): void {
   const gateSensorEvaluation = fireGateSensors(
     pd,
     preflightStage,
+    preflightContent,
     artifacts,
   );
   enforceBlockingGateSensors(
@@ -5327,7 +5380,7 @@ function verifyApprovalDecision(
   forceHuman = false,
 ): { approvalInput: string | undefined; autonomousDecision: boolean } {
   const autonomousDecision =
-    !forceHuman && isAutonomousConstructionDecision(content, stage.phase);
+    !forceHuman && isAutonomousConstructionGate(content, stage);
   const approvalInput = userInput?.trim();
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
@@ -5424,7 +5477,7 @@ function handleApprove(args: string[]): void {
     !preflightDecision.autonomousDecision &&
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
   const backstopSensorEvaluation = preflightBackstop
-    ? fireGateSensors(pd, preflightStage)
+    ? fireGateSensors(pd, preflightStage, preflightContent)
     : { issues: [], fingerprints: new Map<string, string>() };
 
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
@@ -5799,7 +5852,7 @@ function handleReject(args: string[]): void {
     );
   }
   const autonomousDecision =
-    !teamGate && isAutonomousConstructionDecision(content, stage.phase);
+    !teamGate && isAutonomousConstructionGate(content, stage);
   if (
     !autonomousDecision &&
     feedbackStatus === "not-applicable" &&
@@ -6021,7 +6074,7 @@ function handleRevise(args: string[]): void {
     action: "revise",
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
   });
-  const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
+  const gateSensorEvaluation = fireGateSensors(pd, preflightStage, preflightContent);
   enforceBlockingGateSensors(
     pd,
     preflightContent,
@@ -7173,6 +7226,7 @@ function handleFork(args: string[]): void {
       errorWithSlug(slug, `failed to read main state: ${errorMessage(e)}`);
       return ""; // unreachable
     }
+    assertWorkflowNotArchived(mainContent, "fork");
     const sha = sha256(mainContent);
 
     // Dedup BEFORE emit: if the slug is already in Bolt Refs, fail without
@@ -7331,6 +7385,7 @@ function handleMerge(args: string[]): void {
     // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
     const mainContent = readStateFile(pd, resolvedIntent, space);
+    assertWorkflowNotArchived(mainContent, "merge");
 
     // Idempotency: if slug is not in main's Bolt Refs, this is a re-run after
     // a prior successful merge (or a never-forked slug). Either way, no work

@@ -94,17 +94,30 @@ export function launcherRouteUsesPin(argv: readonly string[]): boolean {
 
 type DispatcherWorkspaceNoun = "intent" | "space";
 
-const DISPATCHER_INTENT_VERBS = new Set(["list", "switch", "create"]);
+const DISPATCHER_INTENT_VERBS = new Set([
+  "list",
+  "switch",
+  "create",
+  "archive",
+  "unarchive",
+]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
 const DISPATCHER_RESERVED_FUTURE = new Set([
-  "archive",
   "rename",
   "show",
   "birth",
 ]);
 
+type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
+
 export type DispatcherWorkspaceCommand =
-  | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean }
+  | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean; all?: true }
+  | {
+      kind: DispatcherIntentLifecycleVerb;
+      noun: "intent";
+      name: string;
+      rest: string[];
+    }
   | {
       kind: "switch";
       noun: DispatcherWorkspaceNoun;
@@ -123,7 +136,7 @@ export type DispatcherWorkspaceCommand =
 
 function missingDispatcherWorkspaceName(
   noun: DispatcherWorkspaceNoun,
-  verb: "switch" | "create" | "space-create",
+  verb: "switch" | "create" | "space-create" | DispatcherIntentLifecycleVerb,
 ): DispatcherWorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -141,6 +154,29 @@ function isDispatcherWorkspaceNoun(
   return token === "intent" || token === "space";
 }
 
+function isDispatcherIntentLifecycleVerb(
+  token: string | undefined,
+): token is DispatcherIntentLifecycleVerb {
+  return token === "archive" || token === "unarchive";
+}
+
+// `intent list [--json] [--all]` / `space list [--json]`: the flags may appear
+// in either order after the verb. `--all` (intents only) includes archived
+// records, which the default listing hides.
+function dispatcherWorkspaceList(
+  noun: DispatcherWorkspaceNoun,
+  tokens: string[],
+): DispatcherWorkspaceCommand {
+  const flags = tokens.slice(2);
+  const command: DispatcherWorkspaceCommand = {
+    kind: "list",
+    noun,
+    json: flags.includes("--json"),
+  };
+  if (noun === "intent" && flags.includes("--all")) command.all = true;
+  return command;
+}
+
 export function parseDispatcherWorkspaceCommand(
   tokens: string[],
 ): DispatcherWorkspaceCommand {
@@ -155,7 +191,9 @@ export function parseDispatcherWorkspaceCommand(
   const noun = head;
   const verbOrName = tokens[1];
   if (verbOrName === undefined) return { kind: "list", noun, json: false };
-  if (verbOrName === "--json") return { kind: "list", noun, json: true };
+  if (verbOrName === "--json" || (noun === "intent" && verbOrName === "--all")) {
+    return dispatcherWorkspaceList(noun, [tokens[0], "list", ...tokens.slice(1)]);
+  }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
   }
@@ -169,7 +207,7 @@ export function parseDispatcherWorkspaceCommand(
     };
   }
   if (noun === "intent") {
-    if (verbOrName === "list") return { kind: "list", noun, json: tokens[2] === "--json" };
+    if (verbOrName === "list") return dispatcherWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
       return name === undefined
@@ -179,9 +217,15 @@ export function parseDispatcherWorkspaceCommand(
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
+    if (isDispatcherIntentLifecycleVerb(verbOrName)) {
+      const name = tokens[2];
+      return name === undefined || name.startsWith("--")
+        ? missingDispatcherWorkspaceName(noun, verbOrName)
+        : { kind: verbOrName, noun, name, rest: tokens.slice(3) };
+    }
   }
   if (noun === "space") {
-    if (verbOrName === "list") return { kind: "list", noun, json: tokens[2] === "--json" };
+    if (verbOrName === "list") return dispatcherWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
       return name === undefined
@@ -208,8 +252,17 @@ export function dispatcherWorkspaceUtilityArgv(
   command: DispatcherWorkspaceCommand,
 ): string[] | null {
   switch (command.kind) {
-    case "list":
-      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "list": {
+      const argv: string[] = [command.noun];
+      if (command.json) argv.push("--json");
+      if (command.all) argv.push("--all");
+      return argv;
+    }
+    case "archive":
+    case "unarchive":
+      // Lifecycle verbs forward verbatim, trailing flags included:
+      // `intent archive <name> --reason <text>`.
+      return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
       return command.explicit
         ? [command.noun, "switch", command.name]

@@ -85,9 +85,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type AskDirective,
@@ -110,12 +111,19 @@ import {
 } from "./aidlc-directive.ts";
 import {
   ActiveDirectiveLockContendedError,
+  activeDirectiveStorageDir,
   advanceContinuationCursor,
   activeUnitCheckpoint,
   artifactFilename,
   auditBlockField,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
+  CEREMONY_FLAGS,
+  CEREMONY_KEYS,
+  type CeremonyPolicy,
+  ceremonyOffClause,
+  ceremonyOffList,
+  ceremonyPolicyValues,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
@@ -137,6 +145,7 @@ import {
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
+  isAutonomousConstructionGate,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -149,6 +158,7 @@ import {
   isPerUnitStage,
   isReadOnlyEngineProbe,
   isRegularFile,
+  isArchivedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -156,12 +166,12 @@ import {
   listIntents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
-  loadScopeMetadataAll,
   resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
   parseChangeControl,
+  parseCeremonySetting,
   pipelineLinkEvidence,
   parseBoltDag,
   type KnowledgeCommand,
@@ -184,16 +194,17 @@ import {
   relativeCodekbDir,
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
+  reviewArtifactEntries,
   resolveBoltDag,
   type BoltDagResolution,
+  resolveCeremony,
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
   scopeCostSummary,
-  selectionAwareDefaultScope,
   singleStageAttemptIsOpen,
-  resolveDefaultScope,
-  DEFAULT_SCOPE,
+  defaultScope,
+  defaultScopeResolution,
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
@@ -280,14 +291,6 @@ function loadStateFileIfPresent(projectDir: string): string | null {
   if (!existsSync(path)) return null;
   return readFileSync(path, "utf-8");
 }
-
-// The default scope when neither the state file, a --scope flag, nor the
-// AWS_AIDLC_DEFAULT_SCOPE env var supplies one lives in aidlc-lib.ts
-// (DEFAULT_SCOPE, imported above) so exactly one constant plus the env var
-// control the implicit default everywhere. Mirrors the prose orchestrator's
-// freeform-fallback default (SKILL.md detect-scope fallback).
-// selectionAwareDefaultScope() maps it to the sole enabled plugin's
-// nominated default on a plugin-only install where it is deselected.
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth
@@ -975,7 +978,7 @@ function roleInWords(agent: string): string {
 
 // Record that the engine was ADVANCED this turn, for the Stop hook's
 // conversational carve-out on transcript-free harnesses (Kiro, opencode). The
-// hook compares .aidlc-engine-touch's mtime against .aidlc-human-turn's: newer
+// hook compares .aidlc-engine/engine-touch's mtime against .aidlc-engine/human-turn's: newer
 // engine => the conductor engaged the workflow => a bail mid-loop must still be
 // nudged; older => the human's last prompt was answered as pure chat.
 //
@@ -1452,33 +1455,43 @@ function detectedProjectType(projectDir: string): string | null {
   return projectType;
 }
 
-function effectiveScopeCostSummary(scope: string, projectDir: string) {
+function effectiveScopeCostSummary(
+  scope: string,
+  projectDir: string,
+  overrides?: Partial<CeremonyPolicy>,
+) {
   const nominal = scopeCostSummary(scope);
   if (!nominal) return null;
+  const policy = {} as CeremonyPolicy;
+  for (const key of CEREMONY_KEYS) {
+    const base = resolveCeremony(key, scope, null);
+    policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
+  }
+  const off = ceremonyOffList(scope, policy);
   const definition = loadScopeMapping()[scope];
   if (
     definition?.stages["reverse-engineering"] !== "EXECUTE" ||
     detectedProjectType(projectDir) !== "greenfield"
   ) {
-    return nominal;
+    return { ...nominal, off };
   }
   const adjusted = { ...definition.stages, "reverse-engineering": "SKIP" as const };
-  return gridCostSummary(adjusted);
+  return { ...gridCostSummary(adjusted), off };
 }
 
-// The one-line ceremony preview for a scope, deterministic from the effective
-// compiled grid: "N of T stages, G approval gates" plus a per-unit clause when
-// Construction stages fan out per Unit of Work. Greenfield previews apply the
-// same reverse-engineering adjustment intent creation writes into state.
+// The one-line ceremony preview uses effective policy and the compiled grid:
+// "N of T stages, G approval gates" plus a per-unit clause when Construction
+// stages fan out per Unit of Work. Greenfield previews apply the same
+// reverse-engineering adjustment intent creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
-function costClause(scope: string, projectDir: string): string {
-  const c = effectiveScopeCostSummary(scope, projectDir);
+function costClause(scope: string, projectDir: string, overrides?: Partial<CeremonyPolicy>): string {
+  const c = effectiveScopeCostSummary(scope, projectDir, overrides);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
     : "";
-  return `${c.execute} of ${c.total} stages, ${c.gates} approval gates${perUnit}`;
+  return `${c.execute} of ${c.total} stages, ${c.gates} approval gates${perUnit}${ceremonyOffClause(c)}`;
 }
 
 // --- Flag parsing ---
@@ -1492,6 +1505,7 @@ interface ParsedFlags {
   testStrategy?: string;
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   changeControl?: string; // --change-control <strict|relaxed>: the per-intent Change Control value
+  ceremony?: Partial<CeremonyPolicy>;
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
@@ -1666,6 +1680,21 @@ function parseNextFlags(args: string[]): ParsedFlags {
         }
         i++;
       }
+    } else if (a === CEREMONY_FLAGS.sensors || a === CEREMONY_FLAGS.learnings || a === CEREMONY_FLAGS.summary_confirmation) {
+      const key = CEREMONY_KEYS.find((key) => CEREMONY_FLAGS[key] === a)!;
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `${a} requires <on|off>.`;
+      } else {
+        const parsed = parseCeremonySetting(value);
+        if (parsed === null) {
+          flags.parseError = `${a} requires <on|off>; received "${value}".`;
+        } else {
+          flags.ceremony ??= {};
+          flags.ceremony[key] = parsed;
+        }
+        i++;
+      }
     } else if (a === "--new-scope") {
       flags.newScope = true;
     } else if (a === "--report" && i + 1 < args.length) {
@@ -1783,10 +1812,13 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
   if (flags.changeControl) cmd.push(`--change-control ${flags.changeControl}`);
+  for (const key of CEREMONY_KEYS) {
+    if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
+  }
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir);
+  const clause = costClause(scope, projectDir, flags.ceremony);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -1907,7 +1939,12 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  const intents = listIntents(projectDir, space, selection.intent);
+  // Archived intents are retired work: they never block creation and are never
+  // offered as a pick (the listing shows them only under --all). A space whose
+  // every record is archived therefore reads as zero intents here.
+  const intents = listIntents(projectDir, space, selection.intent).filter(
+    (intent) => !isArchivedIntent(intent),
+  );
   if (intents.length === 0) return null; // zero intents → creation is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
@@ -2036,9 +2073,9 @@ function intentPickPromptIfRecordsExist(
 
 // Resolve the scope by the precedence ladder: state file Scope field wins (an
 // active workflow is authoritative), then an explicit --scope flag, then a
-// leading positional scope, then the AWS_AIDLC_DEFAULT_SCOPE env var, then the
-// default. Returns the resolved scope plus whether it was found in the valid
-// set (an unknown scope is the caller's to turn into an error directive).
+// leading positional scope, then the shared environment/project/default ladder.
+// Unknown scopes and default-resolution errors remain the caller's to turn into
+// error directives; the source preserves configured defaults' canonical errors.
 function resolveScope(
   stateContent: string | null,
   flags: ParsedFlags,
@@ -2053,30 +2090,12 @@ function resolveScope(
   if (flags.positionalScope && flags.positionalScope.length > 0) {
     return { scope: flags.positionalScope, source: "positional" };
   }
-  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
-  if (envScope.length > 0) {
-    if (validScopes().has(envScope)) return { scope: envScope, source: "env" };
-    // Only installed-but-disabled scopes participate in selection-aware
-    // fallback. The resolve-env-scope validator below owns the canonical error
-    // for an explicit unknown value.
-    if (loadScopeMetadataAll()[envScope] === undefined) {
-      return { scope: envScope, source: "env" };
-    }
-    const fallback = selectionAwareDefaultScope(envScope);
-    if (!fallback.error && fallback.note) {
-      process.stderr.write(
-        `AWS_AIDLC_DEFAULT_SCOPE="${envScope}" is not an enabled scope; using ${fallback.scope} (sole enabled plugin's first scope)\n`,
-      );
-    }
-    return { scope: fallback.scope, source: "env", error: fallback.error };
-  }
-  const fallback = selectionAwareDefaultScope(DEFAULT_SCOPE);
-  return { scope: fallback.scope, source: "default", error: fallback.error };
+  return defaultScopeResolution();
 }
 
-// Derive the memory diary path for a stage (SKILL.md: every stage keeps a
-// <record>/<phase>/<stage>/memory.md diary). `recordPrefix` is the RELATIVE
-// per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
+// Derive the memory diary path for a stage. When the learnings ritual is on,
+// each stage keeps a <record>/<phase>/<stage>/memory.md diary. `recordPrefix` is
+// the RELATIVE per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
 // threads in from the active intent (relativeRecordDir), or null → the bare space
 // record prefix (relativeSpaceRecordPrefix - a pre-creation shell with no intent
 // yet). These are agent-consumed RELATIVE paths the conductor resolves against
@@ -2099,10 +2118,10 @@ function unitMemoryPathFor(
   return `${prefix}/construction/${unit}/${slug}/memory.md`;
 }
 
-// Create the stage diary at the deterministic directive-emission boundary so
-// the conductor never has to probe a maybe-absent path. This is advisory: a
-// missing install template, unresolved placeholder, or filesystem failure must
-// not prevent the run-stage directive from being emitted.
+// Callers create the stage diary at the deterministic directive-emission boundary
+// only when the learnings ritual is on, so the conductor need not probe for it.
+// This is advisory: a missing install template, unresolved placeholder, or
+// filesystem failure must not prevent the run-stage directive from being emitted.
 export function bootstrapDirectiveMemory(
   memoryPath: string,
   codekbCtx?: { projectDir: string },
@@ -2429,10 +2448,17 @@ function scopeDefaultSkeletonStance(scope: string): SkeletonStance {
 // Both skeleton-on AND skeleton-off present a gate at Bolt 1: skeleton-on forces
 // an always-gate "regardless of Construction Autonomy Mode" (SKILL.md Step 5 /
 // "When skeleton-on" §1); skeleton-off runs Bolt 1 "as a regular Bolt with the
-// standard batch-gate path", and since `Construction Autonomy Mode` is `unset`
-// (treated as `gated`) until the post-Bolt-1 ladder prompt sets it, that batch
-// gate IS presented (it is only skipped when `autonomous`, which cannot be true
-// before Bolt 1 ships). The stance changes the CEREMONY (solo + always-gate +
+// standard batch-gate path". NOTE the NODE gate this function resolves is not
+// the Bolt-level gate: this one is the stage approval gate for the skeleton-gate
+// stage (the first in-scope Construction EXECUTE stage — a design stage such as
+// functional-design in scopes that run one, code-generation in scopes that do
+// not), and it stays `true` in every stance so that stage is always reviewed.
+// The autonomy-governed gates are the REMAINING Construction stage gates, and
+// the human can now grant autonomy ON DEMAND at any point in Construction (see
+// aidlc-common/protocols/stage-protocol-construction.md § Autonomy grant), so an
+// `autonomous` grant can predate the first of them. The earlier rationale here —
+// that autonomy "cannot be true before Bolt 1 ships" — no longer holds and must
+// not be relied on. The stance changes the CEREMONY (solo + always-gate +
 // ladder prompt vs regular Bolt + batch gate) — orchestration the conductor
 // runs — not whether a gate is presented at Bolt 1. The gate axis is on for all
 // construction work (only bootstrap init stages auto-proceed; gate-axis ≠
@@ -2453,8 +2479,9 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
       // skeleton-on: always-gate at Bolt 1.
       return true;
     case "off":
-      // skeleton-off: regular Bolt; the standard gate is still presented at
-      // Bolt 1 (autonomy is gated until the post-Bolt-1 ladder sets it).
+      // skeleton-off: regular Bolt. This NODE gate (the skeleton-gate stage's
+      // own approval gate) is still presented — the autonomy-governed gates are
+      // the REMAINING Construction stage gates.
       return true;
     case "scope-dependent": {
       // Fall back to the active scope's metadata to SELECT the ceremony.
@@ -3314,7 +3341,7 @@ function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
   unit: string | null = UNIT_NAME_PLACEHOLDER,
-  scope: string = resolveDefaultScope(DEFAULT_SCOPE),
+  scope: string = defaultScope(),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
@@ -3349,6 +3376,7 @@ function buildRunStageDirective(
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
+  const ceremony = ceremonyPolicyValues(scope, stateContent);
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
@@ -3374,7 +3402,10 @@ function buildRunStageDirective(
     rules_in_context:
       ruleEntries?.map((entry) => entry.rel) ??
       (node.rules_in_context ?? []).map((r) => r.path),
-    sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
+    ceremony,
+    sensors_applicable: ceremony.sensors === "off"
+      ? []
+      : (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
   if (node.mode === "pipeline" && codekbCtx) {
@@ -3437,6 +3468,7 @@ function buildRunStageDirective(
   if (node.phase === "construction") {
     protocolModules.push("construction");
   }
+  if (ceremony.learnings === "on") protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }
@@ -3471,7 +3503,9 @@ function buildRunStageDirective(
       forcePersona,
     });
   }
-  bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
+  if (ceremony.learnings === "on") {
+    bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
+  }
   return directive;
 }
 
@@ -3578,7 +3612,8 @@ type SteeringTokenEnvelope = {
 };
 
 const STEERING_TOKEN_KEY_BYTES = 32;
-const STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
+const STEERING_TOKEN_KEY_FILE = "steering-token-key";
+const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
 
 type SteeringTokenKeyResult = {
   key: Buffer | null;
@@ -3588,13 +3623,17 @@ type SteeringTokenKeyResult = {
 function steeringTokenKeyPath(projectDir: string): string {
   const statePath = engineStateFilePath(projectDir);
   if (existsSync(statePath)) {
-    return join(dirname(statePath), STEERING_TOKEN_KEY_FILE);
+    const record = dirname(statePath);
+    const storage = activeDirectiveStorageDir(projectDir);
+    return storage === record
+      ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
+      : join(storage, STEERING_TOKEN_KEY_FILE);
   }
   return join(
     projectDir,
     "aidlc",
     ".aidlc-sessions",
-    STEERING_TOKEN_KEY_FILE,
+    LEGACY_SESSION_STEERING_TOKEN_KEY_FILE,
   );
 }
 
@@ -4073,6 +4112,16 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  if (
+    flags.ceremony &&
+    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+      flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
+  ) {
+    emit(errorDirective(
+      "Cannot combine ceremony flags with read-only, workspace, compose, single-stage, jump, or resume modes. Apply the ceremony setting first, then run the other command.",
+    ));
+    return;
+  }
 
   if (flags.claim || flags.release) {
     if (flags.claim && flags.release) {
@@ -4297,6 +4346,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       emit(errorDirective(stale));
       return;
     }
+  }
+  // Archived is terminal for routing, including scoped Unit checkouts. Keep
+  // this before Unit jump/park handling so every next shape returns the same
+  // archived result instead of reviving or locally parking retired work.
+  if (
+    stateContent &&
+    !flags.newIntent &&
+    getField(stateContent, "Status") === "Archived"
+  ) {
+    const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+    emit({
+      kind: "done",
+      reason:
+        `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
+        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+    });
+    return;
   }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
@@ -4564,17 +4631,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 5 — natural-language scope/depth/test-strategy change against an
-  // existing workflow (SKILL.md:141/:144/:147 + step 7/8). Changing scope or
-  // config is a MUTATION, so `next` names the move (print) and the conductor
+  // Branch 5 — scope or configuration changes against an existing workflow.
+  // Changing scope or config is a MUTATION, so `next` names the move (print) and the conductor
   // runs the tool; it never mutates here. Fires only when a modifier is present
   // WITHOUT an explicit --stage/--phase jump (those take the jump path below).
   if (stateContent && !flags.stage && !flags.phase) {
+    const modifiers: string[] = [];
+    if (flags.depth) modifiers.push(`depth ${flags.depth}`);
+    if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
+    if (flags.review) modifiers.push(`review ${flags.review}`);
+    if (flags.changeControl) modifiers.push(`change-control ${flags.changeControl}`);
+    for (const key of CEREMONY_KEYS) {
+      if (flags.ceremony?.[key]) {
+        modifiers.push(`${CEREMONY_FLAGS[key].slice(2)} ${flags.ceremony[key]}`);
+      }
+    }
     // A scope-change requires a VALID --scope that DIFFERS from the active
-    // workflow's scope. An invalid or same-as-current --scope is not a change —
-    // state wins on the precedence ladder and we fall through to the happy path
-    // (this is also why an active workflow's scope is authoritative: a stray
-    // --scope flag never silently re-routes a live workflow).
+    // workflow's scope. Otherwise state remains authoritative and any supplied
+    // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
     if (
       flags.scope &&
@@ -4582,43 +4656,19 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       flags.scope !== currentStateScope
     ) {
       const parts = [`--scope ${flags.scope}`];
-      if (flags.depth) parts.push(`--depth ${flags.depth}`);
-      if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
-      if (flags.review) parts.push(`--review ${flags.review}`);
+      for (const modifier of modifiers) parts.push(`--${modifier}`);
       emit(printDirective(
         `Run \`${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
     }
-    // `--change-control <value>` against a live workflow names the verb that
-    // rewrites the intent's line; the verb owns the memory-strict refusal and
-    // the CHANGE_CONTROL_SET row. Ordered before config-change so the two
-    // never combine into one command line.
-    if (flags.changeControl) {
+    // Every setting belongs to one atomic config-change, including a
+    // same-as-current --scope: no sibling modifier may be silently discarded.
+    if (modifiers.length > 0) {
+      const command = [aidlcDispatcherInvocation(`config set ${modifiers[0]}`)];
+      for (let i = 1; i < modifiers.length; i++) command.push(`--${modifiers[i]}`);
       emit(printDirective(
-        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts change-control ${flags.changeControl}\` to update Change Control, then print its output verbatim and stop.`,
-      ));
-      return;
-    }
-    // A depth / test-strategy / review modifier with no scope change is a
-    // config-change. A same-as-current --scope is also config-only: dropping
-    // it here would silently discard the modifiers and run the current stage.
-    if (
-      (!flags.scope || flags.scope === currentStateScope) &&
-      (flags.depth || flags.testStrategy || flags.review)
-    ) {
-      const route = flags.depth
-        ? `config set depth ${flags.depth}`
-        : flags.testStrategy
-        ? `config set test-strategy ${flags.testStrategy}`
-        : `config set review ${flags.review}`;
-      const extra = flags.depth && flags.testStrategy
-        ? ` --test-strategy ${flags.testStrategy}`
-        : flags.review && (flags.depth || flags.testStrategy)
-        ? ` --review ${flags.review}`
-        : "";
-      emit(printDirective(
-        `Run \`${aidlcDispatcherInvocation(route)}${extra}\` to update the configuration, then print its output verbatim and stop.`,
+        `Run \`${command.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -4711,7 +4761,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       // Preview the ceremony the user is confirming: stage/gate counts from the
       // compiled grid (never estimates). Drop the clause if the scope does not
       // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope, pd);
+      const clause = costClause(inferred.scope, pd, flags.ceremony);
       const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
         `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
@@ -5115,6 +5165,7 @@ function applySettledSwarmShape(
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
   directive.protocol_modules = ["construction", "swarm"];
+  if (directive.ceremony.learnings === "on") directive.protocol_modules.push("learnings");
   directive.swarm_settled = true;
   return directive;
 }
@@ -5148,14 +5199,23 @@ function applySettledSwarmShape(
 //
 // On any trigger miss it returns false and emits nothing, so the caller falls
 // back to the normal run-stage emit (which keeps its computed gate, including the
-// skeleton round-trip sentinel). The skeleton Bolt 1 is protected two ways:
-// temporally (autonomy stays unset until the ladder fires after Bolt 1 ships) AND
-// structurally: the isSkeletonGateStage guard below refuses to swarm the
-// walking-skeleton gate stage regardless of autonomy state. The structural guard
-// matters for scopes where the per-unit build stage (code-generation) IS the
-// skeleton-gate stage (poc / bugfix / security-patch): there the skeleton's
-// always-gated approval must never be bypassed by a stray autonomous setting, so
-// the engine enforces it rather than trusting the conductor's ordering.
+// skeleton round-trip sentinel). The skeleton Bolt 1 is protected STRUCTURALLY:
+// the isSkeletonGateStage guard below refuses to swarm the walking-skeleton gate
+// stage regardless of autonomy state. That structural guard is now the only
+// protection, and it is sufficient: it matters for scopes where the per-unit
+// build stage (code-generation) IS the skeleton-gate stage (poc / bugfix /
+// security-patch), where the skeleton's always-gated approval must never be
+// bypassed by a stray autonomous setting, so the engine enforces it rather than
+// trusting the conductor's ordering.
+//
+// It used to ALSO be protected temporally ("autonomy stays unset until the
+// ladder fires after Bolt 1 ships"). That premise no longer holds: the human can
+// grant autonomy on demand at any point in Construction, so an autonomous grant
+// can predate the first Unit-building stage by design (see
+// aidlc-common/protocols/stage-protocol-construction.md § Autonomy grant).
+// Scopes whose first Construction EXECUTE stage is a design stage therefore DO
+// swarm code-generation from the first Unit; scopes where code-generation is
+// itself the skeleton-gate stage still cannot, via the structural guard.
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -5296,7 +5356,7 @@ function tryEmitSwarm(
 function emitRunStageForSlug(
   slug: string,
   projectType: "brownfield" | "greenfield" | null = null,
-  scope: string = resolveDefaultScope(DEFAULT_SCOPE),
+  scope: string = defaultScope(),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
@@ -5648,8 +5708,10 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
-  for (const entry of entries) {
-    bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+  if (directive.ceremony.learnings === "on") {
+    for (const entry of entries) {
+      bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+    }
   }
   return null;
 }
@@ -6993,20 +7055,49 @@ function emitForSlug(
 const SINGLE_INIT_ERROR =
   "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
+// Call only after confirming an open attempt. Match its boundary ordering and
+// never borrow ceremony policy from the main workflow; legacy rows return null.
+function singleStageAttemptScope(projectDir: string, slug: string): string | null {
+  const workflow = syntheticWorkflowId(slug);
+  const attemptStart = readAuditShardEvents(projectDir)
+    .filter((entry) =>
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === slug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    })
+    .pop();
+  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
+}
+
 function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
+  scope: string,
 ): string | null {
+  if (singleStageAttemptIsOpen(projectDir, node.slug)) {
+    const recordedScope = singleStageAttemptScope(projectDir, node.slug);
+    if (recordedScope !== null && recordedScope !== scope) {
+      return `The open isolated attempt uses scope "${recordedScope}", not requested scope "${scope}". ` +
+        `Complete it with \`report --single --stage ${node.slug} --result approved\`, ` +
+        `or re-run with \`--scope ${recordedScope}\`.`;
+    }
+    return null;
+  }
   // A query never appends a lifecycle event: an observer that opened a
   // single-stage attempt would move the run floor it came to read.
   if (isReadOnlyEngineProbe()) return null;
-  if (singleStageAttemptIsOpen(projectDir, node.slug)) return null;
   return appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
       Stage: node.slug,
       Agent: node.lead_agent,
       Workflow: syntheticWorkflowId(node.slug),
+      Scope: scope,
     },
   }]);
 }
@@ -7038,10 +7129,10 @@ function emitSingleRunStage(
     ));
     return;
   }
-  const startError = ensureSingleStageStarted(projectDir, node);
+  const startError = ensureSingleStageStarted(projectDir, node, scope);
   if (startError) {
     emit(errorDirective(
-      `Failed to record the isolated start boundary for "${node.slug}": ${startError}`,
+      `Cannot start isolated stage "${node.slug}": ${startError}`,
     ));
     return;
   }
@@ -8103,6 +8194,7 @@ function handleSingleReport(
   const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
     workflow: wfId,
     stateContent: null,
+    scope: singleStageAttemptScope(pd, node.slug),
   });
   if (!summaryEvidence.ok) {
     emit(errorDirective(summaryEvidence.message));
@@ -8284,6 +8376,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const stale = staleStateVersionError(sc);
       if (stale) {
         emit(errorDirective(stale));
+        return;
+      }
+      if (getField(sc, "Status") === "Archived") {
+        const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+        emit(errorDirective(
+          `Intent "${archivedIntent}" is archived, so report cannot mutate its workflow state. ` +
+            `Bring it back with /aidlc intent unarchive ${archivedIntent}.`,
+        ));
         return;
       }
     }
@@ -8509,7 +8609,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const protectedTeamHumanGate =
         stageCheckbox.state !== "completed" &&
-        readAutonomyMode(stateContent) !== "autonomous" &&
         process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
@@ -8621,7 +8720,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const protectedHumanGate =
     isGated &&
     stageCheckbox.state !== "completed" &&
-    readAutonomyMode(stateContent) !== "autonomous" &&
+    !isAutonomousConstructionGate(stateContent, node) &&
     resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
 
   if (flags.overrideBlockingSensors) {
@@ -9252,6 +9351,144 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
 }
 
+// --- wait: a bounded, read-only wait for dispatched work ----------------------
+// A harness that returns from an Agent/Task dispatch before the worker finishes
+// leaves the conductor with nothing to read. This verb is the sanctioned wait:
+// it polls the same on-disk evidence the engine itself checks (collaborator
+// contribution files, the stage's required artifacts, or the reviewer's review
+// file) and always returns within the bound, so the conductor re-runs one bare
+// engine command instead of minting its own shell loop. Read-only: it publishes
+// no directive, touches no marker, and writes no audit row.
+interface WaitFlags {
+  stage?: string;
+  unit?: string;
+  for?: string;
+  reviewFile?: string;
+  timeout?: number;
+}
+
+const WAIT_TARGETS = ["collaborators", "artifacts", "review"] as const;
+const WAIT_USAGE =
+  "Usage: wait --stage <slug> --for collaborators|artifacts|review " +
+  "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
+const WAIT_DEFAULT_SECONDS = 90;
+const WAIT_MAX_SECONDS = 540;
+
+function parseWaitFlags(args: string[]): WaitFlags {
+  const flags: WaitFlags = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const v = i + 1 < args.length ? args[i + 1] : undefined;
+    if (v === undefined) continue;
+    if (a === "--stage") { flags.stage = v; i++; }
+    else if (a === "--unit") { flags.unit = v; i++; }
+    else if (a === "--for") { flags.for = v; i++; }
+    else if (a === "--review-file") { flags.reviewFile = v; i++; }
+    else if (a === "--timeout") { flags.timeout = Number(v); i++; }
+  }
+  return flags;
+}
+
+function fileHasBytes(path: string): boolean {
+  try {
+    return statSync(path).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function handleWait(args: string[], projectDir: string | undefined): void {
+  const flags = parseWaitFlags(args);
+  const pd = resolveProjectDir(projectDir);
+  const target = flags.for as (typeof WAIT_TARGETS)[number] | undefined;
+  const node = flags.stage ? nodeForSlug(flags.stage) : undefined;
+  if (!flags.stage || !target || !WAIT_TARGETS.includes(target)) {
+    console.error(WAIT_USAGE);
+    process.exit(1);
+  }
+  if (!node) {
+    console.error(`Unknown stage "${flags.stage}". ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  if (target === "review" && !flags.reviewFile) {
+    console.error(`--for review needs --review-file <path>. ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  const seconds =
+    flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
+      ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
+      : WAIT_DEFAULT_SECONDS;
+  const started = Date.now();
+  const deadline = started + seconds * 1000;
+  const relativeRecord = engineRelativeRecordDir(pd);
+  if (target === "artifacts" && relativeRecord === null) {
+    // Without an intent record there is no declared-artifact location to watch;
+    // settling silently here would tell the conductor its work had landed.
+    console.error(
+      "No active intent record resolves for this project, so there are no declared " +
+        "artifacts to wait for. Run this from the workflow's project (or pass --project-dir).",
+    );
+    process.exit(1);
+  }
+  const prefix = relativeRecord ?? relativeSpaceRecordPrefix();
+  const contributionsDir = flags.unit
+    ? join(pd, prefix, "construction", flags.unit, node.slug, "contributions")
+    : join(pd, prefix, node.phase, node.slug, "contributions");
+  const reviewPath =
+    flags.reviewFile === undefined
+      ? null
+      : isAbsolute(flags.reviewFile) ? flags.reviewFile : join(pd, flags.reviewFile);
+  const missingNow = (): string[] => {
+    const missing: string[] = [];
+    if (target === "review") {
+      if (reviewPath !== null && !fileHasBytes(reviewPath)) {
+        missing.push(`review file ${flags.reviewFile} (absent or empty)`);
+      }
+    } else if (target === "collaborators") {
+      for (const agent of node.support_agents ?? []) {
+        let firstLine = "";
+        try {
+          firstLine = readFileSync(join(contributionsDir, `${agent}.md`), "utf-8").split("\n", 1)[0].trim();
+        } catch {
+          missing.push(`${agent} (no contribution file)`);
+          continue;
+        }
+        if (firstLine !== `**Collaborator:** ${agent}`) {
+          missing.push(`${agent} (missing identity-marker first line)`);
+        }
+      }
+    } else {
+      for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
+        if (!entry.required) continue;
+        if (entry.path === null) {
+          missing.push(`${entry.logicalPath} (location unresolved)`);
+          continue;
+        }
+        if (!fileHasBytes(entry.path)) missing.push(`${entry.logicalPath} (absent or empty)`);
+      }
+    }
+    return missing;
+  };
+  let missing = missingNow();
+  while (missing.length > 0 && Date.now() < deadline) {
+    Bun.sleepSync(Math.min(2000, Math.max(50, deadline - Date.now())));
+    missing = missingNow();
+  }
+  const settled = missing.length === 0;
+  console.log(JSON.stringify({
+    status: settled ? "settled" : "waiting",
+    stage: node.slug,
+    ...(flags.unit ? { unit: flags.unit } : {}),
+    for: target,
+    ...(flags.reviewFile ? { review_file: flags.reviewFile } : {}),
+    waited_ms: Date.now() - started,
+    missing,
+    next: settled
+      ? "The dispatched work has landed: read its outputs and continue the stage body."
+      : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
+  }));
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -9319,11 +9556,14 @@ export function main(argv: string[]): void {
       case "team-board":
         handleTeamBoard(subArgs, projectDir);
         break;
+      case "wait":
+        handleWait(subArgs, projectDir);
+        break;
       default:
         // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
         // stderr-only usage shape the sibling tools use for a bad subcommand.
         console.error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park, team-board`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park, team-board, wait`,
         );
         process.exit(1);
     }

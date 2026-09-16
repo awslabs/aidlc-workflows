@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { auditLockDir, stateDigest } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -318,7 +318,8 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
     const state = "- **Current Stage**: requirements-analysis\n";
     const stateSha256 = stateDigest(state);
     writeFileSync(join(recordDir, "aidlc-state.md"), state);
-    writeFileSync(join(recordDir, ".aidlc-active-directive.json"), `${JSON.stringify({
+    mkdirSync(dirname(join(recordDir, ".aidlc-engine/active-directive.json")), { recursive: true });
+    writeFileSync(join(recordDir, ".aidlc-engine/active-directive.json"), `${JSON.stringify({
       version: 2,
       revision: 1,
       project_sha256: createHash("sha256").update(realpathSync(proj)).digest("hex"),
@@ -367,7 +368,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
     ]);
     expect(codes, errors.join("\n")).toEqual(Array.from({ length: N }, () => 0));
     expect(outputs.every((output) => JSON.parse(output).shouldBlock === true)).toBe(true);
-    const final = JSON.parse(readFileSync(join(recordDir, ".aidlc-active-directive.json"), "utf-8"));
+    const final = JSON.parse(readFileSync(join(recordDir, ".aidlc-engine/active-directive.json"), "utf-8"));
     expect(final.stop_count).toBe(N);
     expect(final.revision).toBe(1 + N);
   }, 30000);

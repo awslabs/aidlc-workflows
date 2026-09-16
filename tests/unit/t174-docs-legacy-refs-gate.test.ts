@@ -120,7 +120,7 @@ function scanOccurrences(): Occurrence[] {
       // practice in `memory/{team,project}.md` (aidlc-learnings.ts); there is no
       // `*-learnings.md` surface. Filename-anchored so the live tool
       // `aidlc-learnings.ts` and the phrase "learnings ritual" never match.
-      const hasLearningsLog = /[a-z]+-learnings\.md/.test(line);
+      const hasLearningsLog = /(?:aidlc-)?(?:project|team)-learnings\.md/.test(line);
       if (hasAidlcDocs || hasInit || hasRulesDir || hasLearningsLog) {
         out.push({ file: rel, line: i + 1, text: line.trim() });
       }

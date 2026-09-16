@@ -198,6 +198,20 @@ function extractUnitName(outputPath: string): string | null {
   return match?.[1] ?? null;
 }
 
+// A zero-Unit directive writes code-generation artifacts directly under
+// construction/code-generation/ with no Unit segment (stage prose). Only that
+// stage runs without a Unit today; the other per-Unit stages keep deriving one.
+function isZeroUnitOutput(stage: string, outputPath: string): boolean {
+  return stage === "code-generation" &&
+    normalizePath(outputPath).endsWith("/construction/code-generation/traceability.json");
+}
+
+// Per-Unit artifacts live under construction/<unit>/<stage>/; a zero-Unit run
+// keeps the stage-level construction/<stage>/ location.
+function constructionDir(docsDir: string, unit: string, stage: string): string {
+  return unit ? join(docsDir, "construction", unit, stage) : join(docsDir, "construction", stage);
+}
+
 function markdownCells(line: string): string[] {
   if (!line.trimStart().startsWith("|") || /^\s*\|?[\s:|-]+\|?\s*$/.test(line)) return [];
   return line.split("|").slice(1, -1).map((cell) => cell.trim());
@@ -247,12 +261,20 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
     : { assignments };
 }
 
-function resolveUnitContext(projectDir: string, outputPath: string, docsDir: string): { context?: UnitContext; reason?: string } {
+function resolveUnitContext(projectDir: string, outputPath: string, docsDir: string, stage: string): { context?: UnitContext; reason?: string } {
   const unitName = extractUnitName(outputPath);
-  if (!unitName) return { reason: `cannot derive the construction unit from output path: ${outputPath}` };
+  if (!unitName && !isZeroUnitOutput(stage, outputPath)) {
+    return { reason: `cannot derive the construction unit from output path: ${outputPath}` };
+  }
   const dag = resolveBoltDag(projectDir);
   if (dag.state === "malformed") {
     return { reason: `unit-of-work-dependency.md is ${dag.reason}: ${dag.detail}` };
+  }
+  if (!unitName) {
+    if (dag.state === "ok") {
+      return { reason: `cannot derive the construction unit from output path while unit-of-work-dependency.md declares Units: ${outputPath}` };
+    }
+    return { context: { unitName: "", units: [], unitIds: new Map() } };
   }
   const units = dag.state === "ok" ? dag.units : [unitName];
   if (dag.state === "ok" && !units.includes(unitName)) {
@@ -326,7 +348,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
 
-  const resolvedUnit = resolveUnitContext(projectDir, outputPath, docsDir);
+  const resolvedUnit = resolveUnitContext(projectDir, outputPath, docsDir, stage);
   if (!resolvedUnit.context) {
     result.reasons.push(resolvedUnit.reason ?? "cannot resolve construction unit");
     return result;
@@ -399,7 +421,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
   }
   if (stage === "code-generation") {
     if (existsSync(stories)) {
-      if (existsSync(storyMap)) {
+      if (unit && existsSync(storyMap)) {
         const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds);
         if (mapped.reason) result.reasons.push(mapped.reason);
         result.storyAssignments = mapped.assignments;
@@ -421,7 +443,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
     }
-    const nfrDir = join(docsDir, "construction", unit, "nfr-requirements");
+    const nfrDir = constructionDir(docsDir, unit, "nfr-requirements");
     for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
       const path = join(nfrDir, name);
       if (existsSync(path)) {
@@ -431,14 +453,16 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
         }
       }
     }
-    const brPath = join(docsDir, "construction", unit, "functional-design", "rules.md");
+    const brPath = join(constructionDir(docsDir, unit, "functional-design"), "rules.md");
     if (existsSync(brPath)) {
       const read = readText(brPath);
       if (read.content !== null) {
         for (const id of extractIds(read.content, [ID_PATTERNS.BR])) result.ids.add(id);
       }
     }
-    if (result.ids.size === 0) result.reasons.push(`upstream ID set is empty for unit "${unit}"`);
+    if (result.ids.size === 0) {
+      result.reasons.push(unit ? `upstream ID set is empty for unit "${unit}"` : "upstream ID set is empty for the zero-Unit code-generation run");
+    }
     return result;
   }
 

@@ -47,6 +47,7 @@ function project(): string {
 }
 
 function writeRequest(dir: string, path: string): void {
+  mkdirSync(dirname(documentInputRequestFilePath(dir)), { recursive: true });
   writeFileSync(documentInputRequestFilePath(dir), `${path}\n`, "utf-8");
 }
 
@@ -81,7 +82,7 @@ describe("t329 project-description and document-input boundaries", () => {
       expect(body).toContain("aidlc-utility.ts project-description`");
       expect(body).toContain("aidlc-state.md#Project");
       expect(body).toContain("Do not reconstruct the description");
-      expect(body).toContain("<record>/.aidlc-document-input-path");
+      expect(body).toContain("<record>/.aidlc-engine/document-input-path");
       expect(body).toContain("aidlc-utility.ts document-input`");
       expect(body).toContain("Never interpolate a customer-chosen path");
       expect(body).toContain("Never search recursively");
@@ -116,10 +117,11 @@ describe("t329 project-description and document-input boundaries", () => {
       });
       expect(init.exitCode, `${harness}: ${init.stderr.toString()}`).toBe(0);
 
-      const record = dirname(documentInputRequestFilePath(dir));
+      const record = dirname(dirname(documentInputRequestFilePath(dir)));
       const durable = join(record, PROJECT_DESCRIPTION_FILE);
-      const transport = join(record, DOCUMENT_INPUT_REQUEST_FILE);
+      const transport = join(record, ".aidlc-engine", DOCUMENT_INPUT_REQUEST_FILE);
       writeFileSync(durable, '"exact description\\n"\n');
+      mkdirSync(dirname(transport), { recursive: true });
       writeFileSync(transport, "vision.md\n");
 
       const check = (path: string) =>
@@ -375,6 +377,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(missing.status).not.toBe(0);
     expect(missing.stderr).toContain(DOCUMENT_INPUT_REQUEST_FILE);
 
+    mkdirSync(dirname(documentInputRequestFilePath(dir)), { recursive: true });
     writeFileSync(
       documentInputRequestFilePath(dir),
       "docs/one.md\ndocs/two.md\n",
@@ -388,6 +391,7 @@ describe("t329 project-description and document-input boundaries", () => {
   test("bounds the transport file itself before decoding it", () => {
     const dir = project();
     const requestFile = documentInputRequestFilePath(dir);
+    mkdirSync(dirname(requestFile), { recursive: true });
     writeFileSync(requestFile, "");
     truncateSync(requestFile, 64 * 1024 * 1024);
 

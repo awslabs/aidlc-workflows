@@ -54,8 +54,9 @@ aidlc/.aidlc-cursor-subagent-*.json
 # state keyed by Claude Code session_id, never shared truth.
 aidlc/.aidlc-sessions/
 aidlc/spaces/*/intents/.aidlc-*
-# Engine-shaped sensor caches at any depth, mirroring the #646 fingerprint glob;
-# also covers legacy pre-2.6.94 trees without ignoring every .aidlc-sensors leaf.
+# Framework state at any depth, including the bare space intents root and
+# package-local record trees; keep unrelated application dot folders visible.
+**/aidlc/spaces/*/intents/**/.aidlc-engine/
 **/aidlc/spaces/*/intents/**/.aidlc-sensors/
 # DocumentKB staged-transaction scratch: `onboard` stages a document into
 # `.journal/<txn-id>/` and renames it into place under the audit lock. Per-clone

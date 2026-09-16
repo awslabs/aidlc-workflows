@@ -6,6 +6,12 @@ import {
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
+  parseVersion,
+  PREVIEW_CHANNEL,
+} from "../core/tools/aidlc-channel.ts";
+import {
+  digest,
+  releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../core/tools/aidlc-release.ts";
@@ -102,11 +108,15 @@ function verifyCandidate(args: string[]): void {
     "version.json",
   );
   if (typeof rawManifest.version !== "string") {
-    throw new Error("version.json version must be strict semver");
+    throw new Error("version.json version must be a release id");
   }
+  const parsedVersion = parseVersion(rawManifest.version);
   const expectedAssets = releaseAssets(rawManifest.version);
-  if (rawManifest.sourceRef !== `refs/tags/v${rawManifest.version}`) {
-    throw new Error("version.json sourceRef must match its version tag");
+  const expectedSourceRef = parsedVersion.channel === PREVIEW_CHANNEL
+    ? "refs/heads/main"
+    : `refs/tags/v${rawManifest.version}`;
+  if (rawManifest.sourceRef !== expectedSourceRef) {
+    throw new Error(`version.json sourceRef must be ${expectedSourceRef}`);
   }
   if (
     typeof rawManifest.sourceDigest !== "string" ||
@@ -188,8 +198,18 @@ function verifyCandidate(args: string[]): void {
   }
 
   const bundleName = "aidlc-release.intoto.jsonl";
+  const copyRuntimeName = releaseCopyRuntimeAsset(manifest.version);
+  const copyRuntimeChecksumName = `${copyRuntimeName}.sha256`;
+  const copyRuntimePath = join(directory, copyRuntimeName);
+  const copyRuntimeChecksumPath = join(directory, copyRuntimeChecksumName);
+  const expectedCopyRuntimeChecksum = `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`;
+  if (readFileSync(copyRuntimeChecksumPath, "utf-8") !== expectedCopyRuntimeChecksum) {
+    throw new Error(`${copyRuntimeChecksumName} does not authenticate ${copyRuntimeName}`);
+  }
   const expectedFiles = new Set([
     ...assetNames,
+    copyRuntimeName,
+    copyRuntimeChecksumName,
     "checksums.txt",
     "version.json",
     bundleName,

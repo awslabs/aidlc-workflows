@@ -38,6 +38,16 @@ export {
 // imports are erased at runtime so they don't create the cycle.
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 
+export const ENGINE_DIR = ".aidlc-engine";
+export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
+const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
+const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
+const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
+const LEGACY_ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
+const LEGACY_ACTIVE_DIRECTIVE_LOCK = ".aidlc-active-directive.lock";
+// Debris the pre-lock (#749-era) marker writer could leave at the record root.
+const LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE = ".aidlc-active-directive.json.transaction";
+
 // --- Types ---
 
 export interface StageEntry {
@@ -144,6 +154,8 @@ export interface ScopeDefinition {
   /** The scope's Change Control default (`change_control:` frontmatter);
    *  absent means strict. Resolution lives in resolveChangeControl. */
   changeControl?: ChangeControl;
+  /** Scope-owned ceremony defaults; omitted settings stay on. */
+  ceremony?: Partial<CeremonyPolicy>;
 }
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -208,8 +220,28 @@ export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cur
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
 // layout (lib copied loose in a test, a non-dotted parent) falls through to the
 // CWD probe instead of returning a bogus harness dir.
-function isHarnessDirName(name: string): boolean {
+export function isHarnessDirName(name: string): boolean {
   return /^\.[a-z0-9][a-z0-9._-]*$/i.test(name);
+}
+
+/** Where a harness shell announces itself, relative to the shell dir. */
+export const HARNESS_SHELL_MANIFEST_REL = "tools/data/harness.json";
+
+/** The manifest test that makes a dot-dir a harness shell rather than an
+ *  ordinary hidden directory someone reviewed. Exported alongside
+ *  HARNESS_SHELL_MANIFEST_REL so a caller that must judge a *git tree* instead
+ *  of the checkout (commit provenance) applies the identical rule: two answers
+ *  to "is this a shell?" would mean two answers to "is this path excluded?". */
+export function isHarnessShellManifest(bytes: Buffer | string): boolean {
+  if (bytes.length > 64 * 1024) return false;
+  try {
+    const parsed = JSON.parse(
+      typeof bytes === "string" ? bytes : bytes.toString("utf-8"),
+    ) as { name?: unknown };
+    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function deriveHarnessDir(): string {
@@ -710,6 +742,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
   "create",
+  "archive",
+  "unarchive",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -719,23 +753,32 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "archive",
   "rename",
   "show",
   "birth",
 ]);
 
+// The two intent lifecycle verbs that retire and revive a record without
+// touching its files: `archive` moves an in-flight intent to the terminal
+// `archived` status, `unarchive` brings it back to `in-flight`.
+export type IntentLifecycleVerb = "archive" | "unarchive";
+
 export type WorkspaceCommand =
-  | { kind: "list"; noun: WorkspaceNoun; json: boolean }
+  // `all` is only ever set (true) for `intent list --all`; a plain list omits
+  // it so existing shape consumers keep matching the two-field object.
+  | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
+  // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
+  // utility argv verbatim, the same way `create-intent` forwards its args.
+  | { kind: IntentLifecycleVerb; noun: "intent"; name: string; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name";
-      verb: "switch" | "create" | "space-create";
+      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
       message: string;
     }
   | {
@@ -749,7 +792,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create",
+  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb,
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -788,11 +831,19 @@ function isReservedFutureWorkspaceVerb(
   return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
-function explicitWorkspaceList(
-  noun: WorkspaceNoun,
-  tokens: string[],
-): WorkspaceCommand {
-  return { kind: "list", noun, json: tokens[2] === "--json" };
+function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
+  return token === "archive" || token === "unarchive";
+}
+
+// `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
+// in either order after the verb. `--all` (intents only) includes archived
+// records, which the default listing hides; the `all` field is set only when
+// requested so the plain list keeps its two-field shape.
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+  const flags = tokens.slice(2);
+  const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
+  if (noun === "intent" && flags.includes("--all")) command.all = true;
+  return command;
 }
 
 export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
@@ -813,8 +864,11 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
   if (verbOrName === undefined) {
     return { kind: "list", noun, json: false };
   }
-  if (verbOrName === "--json") {
-    return { kind: "list", noun, json: true };
+
+  if (verbOrName === "--json" || (noun === "intent" && verbOrName === "--all")) {
+    // A bare list with flags only (`intent --json`, `intent --all --json`):
+    // re-read the flags from the verb position onward.
+    return explicitWorkspaceList(noun, [tokens[0], "list", ...tokens.slice(1)]);
   }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
@@ -832,6 +886,13 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
+    }
+    if (isIntentLifecycleVerb(verbOrName)) {
+      const name = tokens[2];
+      if (name === undefined || name.startsWith("--")) {
+        return missingWorkspaceName(noun, verbOrName);
+      }
+      return { kind: verbOrName, noun, name, rest: tokens.slice(3) };
     }
   }
 
@@ -856,8 +917,17 @@ export function workspaceCommandUtilityArgv(
   command: WorkspaceCommand,
 ): string[] | null {
   switch (command.kind) {
-    case "list":
-      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "list": {
+      const argv: string[] = [command.noun];
+      if (command.json) argv.push("--json");
+      if (command.all) argv.push("--all");
+      return argv;
+    }
+    case "archive":
+    case "unarchive":
+      // The lifecycle verbs forward verbatim, trailing flags included:
+      // `intent archive <name> --reason <text>`.
+      return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
       return command.explicit
         ? [command.noun, "switch", command.name]
@@ -1430,31 +1500,28 @@ function canonicalEngineCommand(text: string): string {
 // conductor engaged the workflow this turn"; their presence in the turn that
 // answered the human disqualifies the turn from the conversational carve-out (a
 // conductor that ran the engine and then quit mid-loop must still be nudged).
-export function isEngineToolCall(name: string, input: unknown): boolean {
+export function isEngineToolCall(name: string, input: unknown, observedOutput?: unknown): boolean {
   const cmd =
     input !== null && typeof input === "object"
       ? String((input as Record<string, unknown>).command ?? "")
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const text = canonicalEngineCommand(
-    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
-  );
-  // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
-  // workflow engagement (a chat turn that ran git/cat/ls etc.).
-  if (
-    !/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(text) &&
-    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(text)
-  ) {
-    return false;
-  }
+  const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  const text = canonicalEngineCommand(rawText);
   // Split on shell separators so a CHAINED command is judged per sub-command,
   // not as one blob. Otherwise a read-only flag anywhere in the line
   // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
   for (const seg of segments) {
-    if (isEngineEngagementSegment(seg)) return true;
+    // Path normalization can remove substitutions from a quoted dispatcher path.
+    // Preserve that uncertainty rather than granting a terminal-command exemption.
+    if (isEngineEngagementSegment(
+      seg,
+      segments.length === 1 ? observedOutput : undefined,
+      !/\$\(|`/.test(rawText),
+    )) return true;
   }
   return false;
 }
@@ -1491,6 +1558,183 @@ function legacyEngineEngagementSegment(seg: string): boolean {
   return true;
 }
 
+// Kiro's prompt tokenizer deliberately preserves unquoted backslashes that a
+// shell removes. Use it only after ruling out that ambiguity and nested shell
+// execution throughout the segment, including executable prefixes/assignments.
+function literalEngineCommand(seg: string): { command: string; args: string[] } | "uncertain" | "opaque" | null {
+  // This one trailing descriptor merge changes output streams, not argv.
+  // Every other unquoted redirection remains outside literal classification.
+  seg = seg.replace(/(?:^|\s)2>&1\s*$/, "");
+  if (/\$\(|`/.test(seg)) return "uncertain";
+  let quote: "'" | '"' | null = null;
+  const rawTokens: string[] = [];
+  let tokenStart = -1;
+  for (let i = 0; i < seg.length; i++) {
+    const ch = seg[i];
+    if (quote === null && /\s/.test(ch)) {
+      if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart, i));
+      tokenStart = -1;
+      continue;
+    }
+    if (tokenStart < 0) tokenStart = i;
+    if (quote) {
+      if (ch === "\\" && quote === '"' && /["\\$`\n]/.test(seg[i + 1] ?? "")) {
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === "\\" || "()[]{}*?;|<>&$".includes(ch)) {
+      return "uncertain";
+    }
+  }
+  if (quote) return "uncertain";
+  if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart));
+  const tokens = splitKiroCommandArgs(seg);
+  if (tokens.length !== rawTokens.length) return "uncertain";
+  const base = (token: string): string => token.replaceAll("\\", "/").split("/").pop() ?? "";
+  // Only transparent prefixes establish an executable position. In particular,
+  // words following sh -c (or an arbitrary script) are data, not an executable.
+  let commandIndex = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rawTokens[commandIndex] ?? "")) commandIndex++;
+  if (["command", "exec"].includes(tokens[commandIndex])) {
+    commandIndex++;
+    if (tokens[commandIndex] === "--") commandIndex++;
+    if (tokens[commandIndex]?.startsWith("-")) return "uncertain";
+  }
+  if (base(tokens[commandIndex] ?? "") === "env") {
+    commandIndex++;
+    if (tokens[commandIndex] === "--") commandIndex++;
+    if (tokens[commandIndex]?.startsWith("-")) return "uncertain";
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex] ?? "")) commandIndex++;
+  }
+  if (commandIndex >= tokens.length) return null;
+  const viaBun = base(tokens[commandIndex]) === "bun";
+  if (viaBun) commandIndex++;
+  if (commandIndex >= tokens.length) return null;
+  if (!/^(?:aidlc|aidlc\.ts|aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?)$/.test(base(tokens[commandIndex]))) {
+    // Unsupported interpreters do not become Bun transports merely because a
+    // later argument names aidlc.ts. Opaque scripts remain conservative.
+    return "opaque";
+  }
+  let command = tokens[commandIndex].replaceAll("\\", "/").split("/").pop() ?? "";
+  if (command === "aidlc.ts") {
+    if (
+      !/(?:^|[/\\])bun$/.test(tokens[commandIndex - 1] ?? "") ||
+      !new RegExp(`${sourceEngineDispatcherPath}$`).test(tokens[commandIndex])
+    ) return "opaque";
+    command = "aidlc";
+  }
+  const native = command === "aidlc";
+  // Match dispatcher global extraction, then the orchestrator's own attempt
+  // selector extraction. Neither consumes options after the literal delimiter.
+  const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
+    const clean: string[] = [];
+    let literal = false;
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--") literal = true;
+      if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
+        if (i + 1 >= args.length) return null;
+        i++;
+      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
+        continue;
+      } else {
+        clean.push(arg);
+      }
+    }
+    return clean;
+  };
+  let args = stripGlobals(tokens.slice(commandIndex + 1), !native);
+  if (!args) return null;
+  if (native && args[0] === "engine") args.shift();
+  if (native && ["orchestrate", "next", "report", "park"].includes(args[0])) {
+    args = stripGlobals(args, true);
+    if (!args) return null;
+  }
+  return { command, args };
+}
+
+function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
+  const args = invocation.args.slice();
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") args.shift();
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return false;
+  }
+  if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  // Legacy entry points do not extract the dispatcher's bare global flags.
+  // Keep mixed positional/global forms conservative; trailing list flags remain valid.
+  if (
+    invocation.command !== "aidlc" &&
+    args.slice(0, -1).some((arg) =>
+      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
+    )
+  ) return false;
+  // The --config alias (including a refused section name) returns before
+  // workflow inspection. Depth/review modifiers do not share that guarantee.
+  if (args[0] === "--config" && args.length <= 2) return true;
+  const workspace = parseWorkspaceCommand(args);
+  return workspace.kind !== "not-workspace" && workspace.kind !== "create-intent";
+}
+
+// A modifier-only next can initialize work or dispatch configuration depending
+// on state. Its own successful result must prove the terminal branch ran; the
+// transcript reader owns call/result identity, ordering and human-turn binding.
+function isTerminalConfigurationDispatch(
+  invocation: { command: string; args: string[] },
+  observedOutput: unknown,
+): boolean {
+  let output: string;
+  if (typeof observedOutput === "string") {
+    output = observedOutput;
+  } else if (
+    Array.isArray(observedOutput) && observedOutput.length > 0 &&
+    observedOutput.every((part) => isPlainObject(part) && part.type === "text" && typeof part.text === "string")
+  ) {
+    output = observedOutput.map((part) => part.text).join("");
+  } else {
+    return false;
+  }
+  const args = invocation.args.slice();
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") args.shift();
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return false;
+  }
+  if (args.shift() !== "next" || args.length === 0 || args.length % 2 !== 0) return false;
+  const values = new Map<string, string>();
+  for (let i = 0; i < args.length; i += 2) {
+    if (!["--depth", "--test-strategy", "--review"].includes(args[i]) || values.has(args[i])) return false;
+    values.set(args[i], args[i + 1]);
+  }
+  const key = values.has("--depth") ? "depth" : values.has("--test-strategy") ? "test-strategy" : "review";
+  const expected = ["config", "set", key, values.get(`--${key}`)];
+  if (values.has("--depth") && values.has("--test-strategy")) {
+    expected.push("--test-strategy", values.get("--test-strategy"));
+  } else if (values.has("--review") && key !== "review") {
+    expected.push("--review", values.get("--review"));
+  }
+  try {
+    const parsed: unknown = JSON.parse(output);
+    // emit() uses canonical JSON; duplicate keys, concatenated objects and
+    // convenient embedded fragments cannot establish a dispatch receipt.
+    if (JSON.stringify(parsed) !== output.trim()) return false;
+    // Lazy load avoids the directive validator's import cycle with this module.
+    const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
+    const validated = validateDirective(parsed);
+    if (!validated.valid || validated.data.kind !== "print") return false;
+    const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
+    if (!match) return false;
+    const command = literalEngineCommand(canonicalEngineCommand(match[1]));
+    return command !== null && typeof command !== "string" && command.command === "aidlc" &&
+      JSON.stringify(command.args) === JSON.stringify(expected);
+  } catch {
+    return false;
+  }
+}
+
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately
 // ask "what stage am I on?" answered with `--status` / `next --status` /
@@ -1502,7 +1746,26 @@ function legacyEngineEngagementSegment(seg: string): boolean {
 // state/jump/bolt/swarm verb we do not specifically recognise is treated as
 // engagement (BLOCK), so an unrecognised mutating verb can never leak through as
 // "chat" - the conservative direction for loop integrity.
-export function isEngineEngagementSegment(seg: string): boolean {
+export function isEngineEngagementSegment(
+  seg: string,
+  observedOutput?: unknown,
+  allowLiteralCommand = true,
+): boolean {
+  const invocation = allowLiteralCommand ? literalEngineCommand(seg) : "uncertain";
+  if (invocation === "uncertain" || invocation === "opaque") {
+    // Retain the legacy name boundary even when a shell operator touches the
+    // executable; e.g. aidlc-state.ts>out approve still invokes the state tool.
+    return /\baidlc\s/.test(seg) ||
+      /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?(?=\s|[<>;&|()])/.test(seg) ||
+      (invocation === "uncertain" && (
+        /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) ||
+        /\baidlc\.ts\b/.test(seg)
+      ));
+  }
+  if (invocation) {
+    if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
+    seg = `${invocation.command} ${invocation.args.join(" ")}`;
+  }
   if (
     /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)
@@ -1737,7 +2000,18 @@ export function activeIntent(
   } catch {
     // no cursor → fall through to lone-intent
   }
-  const records = listIntentDirs(projectDir, sp);
+  // Archived records never resolve implicitly: a space whose only record was
+  // archived reads as "no active intent" (creation is correct), not as that
+  // retired record silently coming back. An explicit cursor naming an archived
+  // record still resolves above, so the engine can explain it instead of
+  // guessing. The registry is read ONCE and matched in memory: this is the
+  // hot path of intent resolution, and an unregistered (orphan) record has no
+  // status, so it stays live work.
+  const registry = readIntentRegistry(projectDir, sp);
+  const records = listIntentDirs(projectDir, sp).filter((dirName) => {
+    const row = registry.find((entry) => recordDirMatches(entry, dirName));
+    return row === undefined || !isArchivedIntent(row);
+  });
   if (records.length === 1) return records[0];
   // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
@@ -2446,6 +2720,18 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
   return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
 }
 
+// The intent status lifecycle is a registry-row field. Creation writes
+// `in-flight`; workflow completion flips it to `complete`; `intent archive`
+// flips an in-flight row to `archived` and `intent unarchive` restores
+// `in-flight`. `archived` is the only status a human moves a row INTO and back
+// OUT of, so it gets a named constant and predicate; the other two stay the
+// literals the creation and completion paths already write.
+export const ARCHIVED_INTENT_STATUS = "archived";
+
+export function isArchivedIntent(entry: { status: string }): boolean {
+  return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
+}
+
 export function intentsRegistryPath(projectDir: string, space?: string): string {
   return join(intentsDir(projectDir, space), "intents.json");
 }
@@ -2616,6 +2902,49 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
     writeFileSync(join(dir, ACTIVE_INTENT_POINTER), `${dirName}\n`, "utf-8");
   } catch {
     /* per-user cursor; best-effort */
+  }
+}
+
+// Remove a space's active-intent cursor so no record resolves implicitly until
+// the human picks one (`intent <name>`) or creates new work. Best-effort and
+// idempotent, like the writer: an absent cursor is already the desired state.
+export function clearActiveIntentCursor(
+  projectDir: string,
+  space?: string,
+  expectedIntent?: string,
+): void {
+  const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
+  if (expectedIntent !== undefined) {
+    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(path, staged);
+    } catch {
+      return;
+    }
+    try {
+      const captured = readFileSync(staged, "utf-8").trim();
+      if (captured !== expectedIntent && !existsSync(path)) {
+        try {
+          renameSync(staged, path);
+          return;
+        } catch {
+          // A concurrent switch won the destination. Keep its newer cursor.
+        }
+      }
+    } catch {
+      // An unreadable captured cursor is stale runtime state.
+    }
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* already moved or removed */
+    }
+    return;
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
@@ -3625,11 +3954,12 @@ export function clearSessionRebindOffer(
 }
 
 interface SessionPidEntry {
-  sessionId: string;
+  // A null session stops ancestry fallback while SessionStart refreshes a PID.
+  sessionId: string | null;
   startTime: string | null;
 }
 
-interface ProcessIdentity {
+export interface ProcessIdentity {
   ppid: number;
   startTime: string | null;
 }
@@ -3725,8 +4055,9 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
     if (parsed === null || typeof parsed !== "object") return null;
     const candidate = parsed as Partial<SessionPidEntry>;
     if (
-      typeof candidate.sessionId !== "string" ||
-      validSessionId(candidate.sessionId) === null ||
+      (candidate.sessionId !== null &&
+        (typeof candidate.sessionId !== "string" ||
+          validSessionId(candidate.sessionId) === null)) ||
       (candidate.startTime !== null && typeof candidate.startTime !== "string")
     ) {
       return null;
@@ -3737,6 +4068,22 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
   }
 }
 
+function writeSessionPidRecord(
+  projectDir: string,
+  pid: number,
+  entry: SessionPidEntry,
+): void {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return;
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    // Readers and GC must never mistake an in-progress refresh for bad JSON.
+    writeFileAtomic(path, `${JSON.stringify(entry)}\n`);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
 // Write one PID ownership record. Exported for deterministic ancestry tests;
 // production callers normally use writeSessionPidAncestry().
 export function writeSessionPidEntry(
@@ -3744,6 +4091,7 @@ export function writeSessionPidEntry(
   pid: number,
   sessionId: string,
   deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
   const path = sessionPidEntryPath(projectDir, pid);
@@ -3755,20 +4103,19 @@ export function writeSessionPidEntry(
   ) {
     return;
   }
-  const identity = processIdentity(pid, deadlineMs);
-  try {
-    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
-    const entry: SessionPidEntry = {
-      sessionId,
-      startTime: identity?.startTime ?? null,
-    };
-    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
-  } catch {
-    /* per-user runtime state; best-effort */
-  }
+  const resolvedIdentity =
+    identity === undefined ? processIdentity(pid, deadlineMs) : identity;
+  writeSessionPidRecord(projectDir, pid, {
+    sessionId,
+    startTime: resolvedIdentity?.startTime ?? null,
+  });
 }
 
-function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
+function gcSessionPidEntries(
+  projectDir: string,
+  deadlineMs: number,
+  skip: ReadonlySet<number> = new Set(),
+): void {
   let names: string[];
   try {
     names = readdirSync(sessionPidMapDir(projectDir));
@@ -3776,17 +4123,21 @@ function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
     return;
   }
   for (const name of names) {
-    if (Date.now() >= deadlineMs || !/^\d+$/.test(name)) continue;
+    if (!/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs) break;
     const pid = Number.parseInt(name, 10);
+    if (skip.has(pid)) continue;
     const entry = readSessionPidEntry(projectDir, pid);
-    const identity = processIdentity(pid, deadlineMs);
-    const stale =
-      !entry ||
-      !processIsAlive(pid) ||
-      (entry.startTime !== null &&
-        (identity?.startTime === null ||
-          identity?.startTime === undefined ||
-          identity.startTime !== entry.startTime));
+    let stale: boolean;
+    if (!entry || !processIsAlive(pid)) {
+      stale = true;
+    } else if (entry.startTime !== null) {
+      const identity = processIdentity(pid, deadlineMs);
+      if (identity === null) continue;
+      stale = identity.startTime !== entry.startTime;
+    } else {
+      stale = false;
+    }
     if (!stale) continue;
     try {
       unlinkSync(join(sessionPidMapDir(projectDir), name));
@@ -3803,17 +4154,25 @@ export function writeSessionPidAncestry(projectDir: string, sessionId: string): 
   sessionAncestryCache.delete(projectDir);
   if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
-  gcSessionPidEntries(projectDir, deadline);
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
-    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    if (pid <= 1 || seen.has(pid)) break;
     seen.add(pid);
+    // Retire this PID's previous session before the bounded lookup. If lookup
+    // fails, a null record stops later tools from falling through to an older
+    // ancestor when process inspection recovers. A verified write replaces it.
+    writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
+    if (Date.now() >= deadline) break;
     const identity = processIdentity(pid, deadline);
     if (!identity) break;
-    writeSessionPidEntry(projectDir, pid, sessionId, deadline);
+    writeSessionPidEntry(projectDir, pid, sessionId, deadline, identity);
     pid = identity.ppid;
   }
+  // GC is best-effort hygiene: dead pids are reaped without spawning, a live
+  // process whose identity cannot be read within the budget is left alone, and
+  // entries written by this ancestry walk are never re-examined.
+  gcSessionPidEntries(projectDir, deadline, seen);
 }
 
 // Resolve the nearest mapped ancestor of the calling process. Every failure is
@@ -4427,7 +4786,7 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
 // interleave later stages while the durable cursor stays on the first block
 // stage. Persist that transient fact per intent so path-only PostToolUse hooks
 // can attribute diagnostics to the directive the conductor is actually running.
-const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
+const ACTIVE_DIRECTIVE_MARKER = "active-directive.json";
 
 export type ActiveDirectiveKind =
   | "load-steering" | "run-stage" | "ask" | "print" | "error"
@@ -4520,7 +4879,7 @@ export type CopilotStopEvidence =
       stateSha256: string; tokenSha256: string; resumeStatus: string; resumeAction: string; ownerSession: string; ownerEpoch: number };
 
 const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
-const ACTIVE_DIRECTIVE_LOCK = ".aidlc-active-directive.lock";
+const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 
 export interface ActiveDirectiveTarget {
   canonicalProjectDir: string; space: string; recordDirName: string | null;
@@ -4957,7 +5316,33 @@ function resolveActiveDirectiveTarget(
   const intentUuid = recordDirName === null
     ? null
     : listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
-  const markerPath = join(root, ACTIVE_DIRECTIVE_MARKER);
+  const currentMarkerPath = join(engineDirFor(root), ACTIVE_DIRECTIVE_MARKER);
+  const currentLockDir = join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK);
+  const legacyMarkerPath = join(root, LEGACY_ACTIVE_DIRECTIVE_MARKER);
+  const legacyLockDir = join(root, LEGACY_ACTIVE_DIRECTIVE_LOCK);
+  let markerPath = currentMarkerPath;
+  let lockDir = currentLockDir;
+  try {
+    const engineEntry = lstatSync(engineDirFor(root), { throwIfNoEntry: false });
+    if (engineEntry === undefined || engineEntry.isDirectory()) {
+      const currentMarkerEntry = lstatSync(currentMarkerPath, { throwIfNoEntry: false });
+      const currentLockEntry = lstatSync(currentLockDir, { throwIfNoEntry: false });
+      if (currentMarkerEntry === undefined && currentLockEntry === undefined) {
+        const legacyMarkerEntry = lstatSync(legacyMarkerPath, { throwIfNoEntry: false });
+        const legacyLockEntry = lstatSync(legacyLockDir, { throwIfNoEntry: false });
+        if (
+          legacyMarkerEntry?.isFile() === true ||
+          legacyLockEntry?.isDirectory() === true
+        ) {
+          markerPath = legacyMarkerPath;
+          lockDir = legacyLockDir;
+        }
+      }
+    }
+  } catch {
+    // An unreadable or malformed new location is not absence. Stay on the new
+    // paths and fail closed instead of reviving legacy state through it.
+  }
   return {
     canonicalProjectDir,
     space: resolvedSpace,
@@ -4965,7 +5350,7 @@ function resolveActiveDirectiveTarget(
     intentUuid,
     statePath: join(root, "aidlc-state.md"),
     markerPath,
-    lockDir: join(root, ACTIVE_DIRECTIVE_LOCK),
+    lockDir,
     bucket: recordDirName === null ? `${resolvedSpace}/bare-space` : `${resolvedSpace}/${recordDirName}`,
   };
 }
@@ -4976,6 +5361,14 @@ function activeDirectiveMarkerPath(
   space?: string,
 ): string {
   return resolveActiveDirectiveTarget(projectDir, intent, space).markerPath;
+}
+
+export function activeDirectiveStorageDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return dirname(activeDirectiveMarkerPath(projectDir, intent, space));
 }
 
 // Bare sha256 of a UTF-8 string. Used for continuation tokens and cursor
@@ -7280,6 +7673,48 @@ export function isAutonomousConstructionDecision(
   return stagePhase === "construction" && isAutonomousMode(stateContent);
 }
 
+function firstConstructionApprovalStage(
+  scope: string,
+  stateContent: string,
+): StageEntry | null {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const overrides = parseStateStageSuffixes(stateContent);
+  const skipped = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
+  // Conditional skips move the first actual approval; completed stages do not.
+  // Keep [x] in the search so approving the anchor does not protect every
+  // subsequent stage in turn. Plan overrides use the router's precedence.
+  return loadStageGraph().find((stage) =>
+    stage.phase === "construction" &&
+    !skipped.has(stage.slug) &&
+    (overrides.get(stage.slug) ?? mapping.stages[stage.slug]) === "EXECUTE"
+  ) ?? null;
+}
+
+// Completion approvals have a narrower grant than ordinary Construction
+// decisions. In particular, an early on-demand grant cannot approve the first
+// Construction stage, and the existing unit-major walk keeps its stage gates.
+// Keep report and state mutation on the same policy instead of interpreting
+// gate:true independently in each caller.
+export function isAutonomousConstructionGate(
+  stateContent: string | null,
+  stage: { slug: string; phase: string; for_each?: string },
+): boolean {
+  if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
+  const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
+  if (!scope) return false;
+  const first = firstConstructionApprovalStage(scope, stateContent!);
+  if (first === null || first.slug === stage.slug) return false;
+  return !(
+    getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&
+    stage.for_each === "unit-of-work"
+  );
+}
+
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
 // "a gate is actually OPEN" predicate for the per-harness preToolUse floors.
 // Without it a floor would keep refusing tool calls AFTER a legitimate approval
@@ -7829,10 +8264,22 @@ function questionFilesInDir(
 function summaryQuestionFiles(
   projectDir: string,
   stage: SummaryConfirmationStage,
+  stateContent: string | null,
 ): SummaryQuestionFile[] {
   const rec = recordDir(projectDir);
   if (rec === null) return [];
-  if (!isPerUnitStage(stage)) {
+  // Follow the approved plan's artifact placement. Without workflow state,
+  // isolated per-unit stages retain their existing unit-directory discovery.
+  if (
+    !isPerUnitStage(stage) ||
+    (
+      stateContent !== null &&
+      usesStageLevelPerUnitArtifacts(
+        getField(stateContent, "Scope"),
+        stateContent,
+      )
+    )
+  ) {
     return questionFilesInDir(join(rec, stage.phase, stage.slug), null);
   }
 
@@ -7986,7 +8433,7 @@ export function removeRecordFileNoFollow(recordRoot: string, relativePath: strin
   rmSync(target, { force: true });
 }
 
-export const SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
+export const SUMMARY_AUTHORIZATION_DIR = toPosix(join(engineDirFor(""), "summary-authorization"));
 export const SUMMARY_AUTHORIZATION_FIELD = "Summary Authorization Id";
 const SUMMARY_AUTHORIZATION_ID_RE = /^[0-9a-f]{64}$/;
 
@@ -8041,7 +8488,7 @@ export function summaryAuthorizationRelativePath(stage: string, unit: string | n
     : `${SUMMARY_AUTHORIZATION_DIR}/${stage}/units/${unit}.json`;
 }
 
-/** The active authorization for one scope under `<record>/.aidlc-summary-authorization/`. */
+/** The active authorization for one scope under `<record>/.aidlc-engine/summary-authorization/`. */
 export function summaryAuthorizationRecordPath(
   recordRoot: string,
   stage: string,
@@ -8085,7 +8532,13 @@ export function clearSummaryAuthorization(
 ): void {
   const record = recordDir(projectDir);
   if (record === null) return;
-  removeRecordFileNoFollow(record, summaryAuthorizationRelativePath(stage, unit));
+  const relativePath = summaryAuthorizationRelativePath(stage, unit);
+  refuseEngineObserverWrite("clearSummaryAuthorization");
+  // Establish the new registry even on a clear, so an old authorization cannot
+  // reappear through the read fallback. Legacy files are never changed.
+  const registry = recordFileTargetOrThrow(record, SUMMARY_AUTHORIZATION_DIR);
+  mkdirSync(registry, { recursive: true });
+  removeRecordFileNoFollow(record, relativePath);
 }
 
 export function readSummaryAuthorization(
@@ -8099,7 +8552,15 @@ export function readSummaryAuthorization(
   try {
     // Reached through no symlinked component and read without following one:
     // a redirected registry is not this record's authorization.
-    const path = recordFileTargetOrThrow(record, summaryAuthorizationRelativePath(stage, unit));
+    const registry = recordFileTargetOrThrow(record, SUMMARY_AUTHORIZATION_DIR);
+    const readDir = engineReadDirFor(record, registry, LEGACY_SUMMARY_AUTHORIZATION_DIR);
+    const relativePath = summaryAuthorizationRelativePath(stage, unit);
+    const path = recordFileTargetOrThrow(
+      record,
+      readDir === registry
+        ? relativePath
+        : `${LEGACY_SUMMARY_AUTHORIZATION_DIR}${relativePath.slice(SUMMARY_AUTHORIZATION_DIR.length)}`,
+    );
     parsed = JSON.parse(readRegularFileNoFollowOrThrow(path, "summary authorization", 64 * 1024).toString("utf-8"));
   } catch {
     return null;
@@ -8197,6 +8658,7 @@ export function checkSummaryConfirmationEvidence(
   options: {
     workflow?: string;
     stateContent?: string | null;
+    scope?: string | null;
     unit?: string;
     selection?: WorkflowSelectionOptions;
   } = {},
@@ -8260,6 +8722,15 @@ export function checkSummaryConfirmationEvidence(
     return { ok: true, required: false };
   }
   if (
+    resolveCeremony(
+      "summary_confirmation",
+      options.scope ?? getField(options.stateContent ?? "", "Scope"),
+      options.stateContent,
+    ).value === "off"
+  ) {
+    return { ok: true, required: false };
+  }
+  if (
     stage.phase === "initialization" ||
     (
       stage.phase === "construction" &&
@@ -8273,7 +8744,14 @@ export function checkSummaryConfirmationEvidence(
     return { ok: true, required: false };
   }
 
-  let questions = summaryQuestionFiles(projectDir, stage);
+  // Isolated review callers also supply parent state for ceremony, refusal,
+  // and Change Control policy. Its plan must not redirect isolated questions;
+  // retain the same discovery as isolated completion without discarding policy.
+  let questions = summaryQuestionFiles(
+    projectDir,
+    stage,
+    options.workflow === undefined ? options.stateContent ?? null : null,
+  );
   if (options.unit !== undefined) {
     questions = questions.filter(
       (question) => question.unit === options.unit,
@@ -9076,6 +9554,29 @@ export interface AuditShardEvent {
 // can preserve append order only within one shard; equal second-precision
 // timestamps across shards are causally unordered and must not be resolved by
 // filename position when authority or attempt freshness depends on the result.
+// Split ONE shard's bytes into events, preserving append position. Factored out
+// of readAuditShardEvents so a reader whose shard bytes do not come from the
+// working tree shares this parser rather than reimplementing the block grammar:
+// aidlc-attest.ts reads shards out of a git tree (`git cat-file`) to resolve a
+// commit against the record as that commit carried it. Two copies of the
+// `\n---\n` split and the Event/Timestamp filter would be free to drift, and a
+// drifted audit parser silently changes which receipt counts as newest.
+export function parseAuditShardEvents(
+  content: string,
+  shard: string,
+  shardIndex: number,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  for (let pos = 0; pos < blocks.length; pos++) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const timestamp = auditBlockField(blocks[pos], "Timestamp");
+    if (!event || !timestamp) continue;
+    rows.push({ block: blocks[pos], event, pos, shard, shardIndex, timestamp });
+  }
+  return rows;
+}
+
 export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
@@ -9104,20 +9605,7 @@ export function readAuditShardEvents(
       unreadableShards?.push(shards[shardIndex]);
       continue; // vanished or refused shard; growth during read is tolerated
     }
-    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
-    for (let pos = 0; pos < blocks.length; pos++) {
-      const event = auditBlockField(blocks[pos], "Event");
-      const timestamp = auditBlockField(blocks[pos], "Timestamp");
-      if (!event || !timestamp) continue;
-      rows.push({
-        block: blocks[pos],
-        event,
-        pos,
-        shard: shards[shardIndex],
-        shardIndex,
-        timestamp,
-      });
-    }
+    rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
   }
   return rows;
 }
@@ -10545,7 +11033,7 @@ export function reviewCompletionMatchesRequest(
 // it: the request id, the artifact fingerprint the reviewer was dispatched on,
 // and the source fingerprints for workspace-writing stages.
 
-export const REVIEW_RECORDS_DIR = ".aidlc-reviews";
+export const REVIEW_RECORDS_DIR = toPosix(join(engineDirFor(""), "reviews"));
 const REVIEW_RECORD_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export type ReviewFindingStatus =
@@ -10771,11 +11259,12 @@ export function reviewDraftRelativePath(
 
 /** Whether `path` has exactly one supported stage or Unit record shape. */
 export function isReviewRecordRelativePath(path: string): boolean {
-  const parts = path.split("/");
-  if (
-    parts[0] !== REVIEW_RECORDS_DIR ||
-    !REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")
-  ) return false;
+  // Audit rows keep their original path and digest across an upgrade.
+  const prefix = [REVIEW_RECORDS_DIR, LEGACY_REVIEW_RECORDS_DIR]
+    .find((dir) => path.startsWith(`${dir}/`));
+  if (prefix === undefined) return false;
+  const parts = [prefix, ...path.slice(prefix.length + 1).split("/")];
+  if (!REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")) return false;
   if (parts[2] === "stage") {
     return parts.length === 5 &&
       /^[0-9a-f]{16}$/.test(parts[3]) &&
@@ -11341,7 +11830,7 @@ function hasDurableSourceBindingEvidence(
 ): boolean {
   const record = recordDir(projectDir, intent, space);
   if (record !== null) {
-    const snapshots = join(record, ".aidlc-source-review");
+    const snapshots = join(engineDirFor(record), "source-review");
     const hasSnapshot = (dir: string): boolean => {
       let entries: Dirent[];
       try {
@@ -13549,37 +14038,14 @@ export function repoDir(projectDir: string, repoName: string): string {
 // entries at the shell-carrying root.
 const AIDLC_SHELL_PATHS = ["aidlc", ".aidlc"];
 
-// The sensor-cache exclusion remains depth-tolerant for legacy and worktree
-// paths. Before 2.6.94, the type-check sensor anchored
-// `.aidlc-sensors/.tsbuildinfo` at the nearest tsconfig directory, so monorepo
-// package caches could appear anywhere under repoDir. Those stray trees persist
-// in upgraded repositories, and Bolt worktree record mirrors can also sit below
-// the workspace roof, while the shell names stay root-anchored.
-//
-// #646 review - the shell/any-depth split is deliberate, not an oversight: an
-// earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
-// nested-.aidlc-sensors leak, but that pathspec matches the literal directory
-// name at ANY depth - including a directory that is genuinely part of the
-// application, coincidentally named `aidlc`/`.aidlc` for reasons unrelated to
-// this framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
-// after the methodology). That silently dropped real source from the
-// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
-// adding tracked content under `src/aidlc/`.
-//
-// Depth tolerance is NOT permission to match the leaf name alone (#646 review,
-// later round): a bare `**/.aidlc-sensors/**` excludes ANY directory of that
-// name, so an application tracking source under a dot-prefixed,
-// framework-named directory (`src/.aidlc-sensors/shipped.ts`) could be edited
-// or deleted without moving the fingerprint. Match the cache by the path the
-// engine actually writes instead of by its leaf. Every writer resolves through
-// `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
-// cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
-// .aidlc-sensors/`. The `<anchor>` can be the roof, a Bolt worktree, or a
-// legacy pre-2.6.94 monorepo package tsconfig directory, which is exactly what
-// the leading `**/` absorbs. The inner `/**/` also matches zero directories,
-// covering the flat (no active record) form.
+// Framework-state exclusions are depth-tolerant for Bolt record mirrors and
+// package-local record trees. Match the engine's full aidlc/spaces/.../intents
+// path shape, never a bare dot-directory name: src/.aidlc-engine/ can be real
+// application source. The inner ** also covers the bare space intents root.
+// Legacy sensor caches remain excluded while upgraded intents can read them.
 const AIDLC_SENSOR_CACHE_GLOBS = [
-  ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+  `:(glob)**/aidlc/spaces/*/intents/**/${ENGINE_DIR}/**`,
+  `:(glob)**/aidlc/spaces/*/intents/**/${LEGACY_SENSORS_DIR}/**`,
 ];
 
 interface WorkspaceSourceExclusionContext {
@@ -14464,13 +14930,14 @@ function sourceIdentityBudget(name: string, fallback: number): number {
 function isSourceHarnessShellDir(root: string, name: string): boolean {
   if (!isHarnessDirName(name)) return false;
   try {
-    const manifestPath = join(root, name, "tools", "data", "harness.json");
+    const manifestPath = join(
+      root,
+      name,
+      ...HARNESS_SHELL_MANIFEST_REL.split("/"),
+    );
     const stat = lstatSync(manifestPath);
     if (!stat.isFile() || stat.size > 64 * 1024) return false;
-    const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
-      name?: unknown;
-    };
-    return typeof parsed.name === "string" && parsed.name.trim().length > 0;
+    return isHarnessShellManifest(readFileSync(manifestPath, "utf-8"));
   } catch {
     return false;
   }
@@ -14794,7 +15261,7 @@ function isAidlcSensorCachePath(path: string): boolean {
       parts[i] === "aidlc" &&
       parts[i + 1] === "spaces" &&
       parts[i + 3] === "intents" &&
-      parts.slice(i + 4).includes(".aidlc-sensors")
+      parts.slice(i + 4).some((part) => part === ENGINE_DIR || part === LEGACY_SENSORS_DIR)
     ) {
       return true;
     }
@@ -16545,7 +17012,7 @@ export function sourceListingSha256(serialized: string): string {
   return createHash("sha256").update(serialized, "utf-8").digest("hex");
 }
 
-function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
+export function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
   if (path.length === 0) return { reason: "writes[].path must be non-empty" };
   if (path.includes("\0")) return { reason: "writes[].path cannot contain a NUL byte" };
   if (path.includes("\\")) return { reason: "writes[].path must use POSIX '/' separators, not backslashes" };
@@ -16561,13 +17028,27 @@ function normalizeManifestSourcePath(path: string): { path: string; prefix: bool
   return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
 }
 
-function sourcePathIsExcluded(
+export interface SourceExclusionContext {
+  /** Harness shell dirs of the tree being judged, supplied instead of being
+   *  discovered under `projectDir`. Commit provenance passes this: shells found
+   *  on disk would make a commit's `excluded` paths depend on which harnesses
+   *  happen to be installed in the current checkout, so the same SHA would
+   *  classify `.claude/settings.json` differently in two clones. */
+  harnessShellDirs: ReadonlySet<string>;
+}
+
+export function sourcePathIsExcluded(
   path: string,
   carriesWorkspaceShell: boolean,
   projectDir?: string,
+  context?: SourceExclusionContext,
 ): boolean {
   const withoutTrailingSlash = path.replace(/\/+$/, "");
   const segments = withoutTrailingSlash.split("/");
+  const isShellDir = (name: string): boolean =>
+    context !== undefined
+      ? isHarnessDirName(name) && context.harnessShellDirs.has(name)
+      : projectDir !== undefined && isSourceHarnessShellDir(projectDir, name);
   if (
     carriesWorkspaceShell &&
     (
@@ -16575,10 +17056,7 @@ function sourcePathIsExcluded(
       path === ".aidlc/" ||
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
-      (
-        projectDir !== undefined &&
-        isSourceHarnessShellDir(projectDir, segments[0])
-      )
+      isShellDir(segments[0])
     )
   ) return true;
 
@@ -16601,7 +17079,7 @@ function sourcePathIsExcluded(
   for (let i = 0; i + 4 < segments.length; i++) {
     if (segments[i] !== "aidlc" || segments[i + 1] !== "spaces" || segments[i + 3] !== "intents") continue;
     if (segments[i + 2].length === 0) continue;
-    if (segments.slice(i + 4).includes(".aidlc-sensors")) return true;
+    if (segments.slice(i + 4).some((part) => part === ENGINE_DIR || part === LEGACY_SENSORS_DIR)) return true;
   }
   return false;
 }
@@ -16631,6 +17109,180 @@ interface GitPathModeIndex {
 }
 
 type GitPathModeIndexCache = Map<string, GitPathModeIndex | null>;
+
+interface GitSourceClaimValidationRepoCache {
+  head: string | null;
+  headAndTreeLoaded: boolean;
+  ignored: Map<string, boolean>;
+  ignoredBatchAttempted: boolean;
+  ignoredPathspecs: Set<string>;
+  treeModes: Map<string, string> | null;
+}
+
+type GitSourceClaimValidationCache =
+  Map<string, GitSourceClaimValidationRepoCache>;
+
+function gitSourceClaimRepoKey(sourceRepoDir: string): string {
+  try {
+    return realpathSync(sourceRepoDir);
+  } catch {
+    return resolvePath(sourceRepoDir);
+  }
+}
+
+function gitSourceClaimRepoCache(
+  sourceRepoDir: string,
+  cache: GitSourceClaimValidationCache,
+): GitSourceClaimValidationRepoCache {
+  const repoKey = gitSourceClaimRepoKey(sourceRepoDir);
+  let repoCache = cache.get(repoKey);
+  if (repoCache === undefined) {
+    repoCache = {
+      head: null,
+      headAndTreeLoaded: false,
+      ignored: new Map(),
+      ignoredBatchAttempted: false,
+      ignoredPathspecs: new Set(),
+      treeModes: null,
+    };
+    cache.set(repoKey, repoCache);
+  }
+  return repoCache;
+}
+
+function seedGitSourceClaimIgnorePath(
+  sourceRepoDir: string,
+  literalPath: string,
+  cache: GitSourceClaimValidationCache,
+): void {
+  gitSourceClaimRepoCache(sourceRepoDir, cache)
+    .ignoredPathspecs.add(`./${literalPath.replace(/\/+$/, "")}`);
+}
+
+function gitSourceClaimHeadAndTree(
+  sourceRepoDir: string,
+  cache: GitSourceClaimValidationCache,
+): {
+  head: string | null;
+  treeModes: Map<string, string> | null;
+} {
+  const repoCache = gitSourceClaimRepoCache(sourceRepoDir, cache);
+  if (!repoCache.headAndTreeLoaded) {
+    const head = spawnSync(
+      "git",
+      ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    repoCache.head =
+      head.status === 0 && head.stdout.trim() ? head.stdout.trim() : null;
+    if (repoCache.head === null) {
+      repoCache.treeModes = new Map();
+    } else {
+      const listed = spawnSync(
+        "git",
+        [
+          "-C",
+          sourceRepoDir,
+          "ls-tree",
+          "-r",
+          "-t",
+          "-z",
+          "--full-tree",
+          repoCache.head,
+        ],
+        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (listed.status !== 0) {
+        repoCache.treeModes = null;
+      } else {
+        const treeModes = new Map<string, string>();
+        for (const record of listed.stdout.split("\0")) {
+          const tab = record.indexOf("\t");
+          if (tab === -1) continue;
+          const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1];
+          if (mode !== undefined) treeModes.set(record.slice(tab + 1), mode);
+        }
+        repoCache.treeModes = treeModes;
+      }
+    }
+    repoCache.headAndTreeLoaded = true;
+  }
+  return { head: repoCache.head, treeModes: repoCache.treeModes };
+}
+
+function seedGitSourceClaimIgnoredPaths(
+  sourceRepoDir: string,
+  repoCache: GitSourceClaimValidationRepoCache,
+): void {
+  if (repoCache.ignoredBatchAttempted) return;
+  repoCache.ignoredBatchAttempted = true;
+  const pathspecs = [...repoCache.ignoredPathspecs];
+  if (pathspecs.length === 0) return;
+  const checked = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-z",
+      "--stdin",
+      "-n",
+      "-v",
+      "--no-index",
+      "--",
+    ],
+    {
+      encoding: "utf-8",
+      input: `${pathspecs.join("\0")}\0`,
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (checked.status !== 0 && checked.status !== 1) return;
+  const fields = checked.stdout.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  if (fields.length % 4 !== 0) return;
+  const ignored = new Map<string, boolean>();
+  for (let index = 0; index < fields.length; index += 4) {
+    const pattern = fields[index + 2];
+    const pathname = fields[index + 3];
+    const value = pattern.length > 0 && !pattern.startsWith("!");
+    ignored.set(pathname, value);
+    if (!pathname.startsWith("./")) ignored.set(`./${pathname}`, value);
+  }
+  for (const [pathspec, value] of ignored) {
+    repoCache.ignored.set(pathspec, value);
+  }
+}
+
+function gitSourceClaimIgnored(
+  sourceRepoDir: string,
+  literalPathspec: string,
+  cache: GitSourceClaimValidationCache,
+): { ok: boolean; ignored: boolean } {
+  const repoCache = gitSourceClaimRepoCache(sourceRepoDir, cache);
+  seedGitSourceClaimIgnoredPaths(sourceRepoDir, repoCache);
+  const cached = repoCache.ignored.get(literalPathspec);
+  if (cached !== undefined) return { ok: true, ignored: cached };
+  const checked = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-q",
+      "--no-index",
+      "--",
+      literalPathspec,
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (checked.status === 0 || checked.status === 1) {
+    const ignored = checked.status === 0;
+    repoCache.ignored.set(literalPathspec, ignored);
+    return { ok: true, ignored };
+  }
+  return { ok: false, ignored: false };
+}
 
 function currentGitPathMode(
   sourceRepoDir: string,
@@ -16790,6 +17442,7 @@ function ignoredSourceClaimReason(
   path: string,
   prefix: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  sourceClaimValidation: GitSourceClaimValidationCache,
   carriesWorkspaceShell: boolean,
 ): string | null {
   if (!isGitRepoDir(sourceRepoDir)) return null;
@@ -16814,32 +17467,17 @@ function ignoredSourceClaimReason(
   }
 
   let headTracked = false;
-  const head = spawnSync(
-    "git",
-    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const headState = gitSourceClaimHeadAndTree(
+    sourceRepoDir,
+    sourceClaimValidation,
   );
-  if (head.status === 0 && head.stdout.trim()) {
-    const listed = spawnSync(
-      "git",
-      [
-        "-C",
-        sourceRepoDir,
-        "ls-tree",
-        "-z",
-        "--full-tree",
-        head.stdout.trim(),
-        "--",
-        literalPathspec,
-      ],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-    );
-    if (listed.status !== 0) {
+  if (headState.head !== null) {
+    if (headState.treeModes === null) {
       return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
     }
-    const entry = listed.stdout.split("\0").find(Boolean);
-    if (entry) {
-      const headIsDirectory = /^040000 /.test(entry);
+    const mode = headState.treeModes.get(literalPath);
+    if (mode !== undefined) {
+      const headIsDirectory = mode === "040000";
       if (!prefix && !currentExists && headIsDirectory) {
         return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
       }
@@ -16847,20 +17485,15 @@ function ignoredSourceClaimReason(
     }
   }
 
-  const ignored = spawnSync(
-    "git",
-    [
-      "-C",
-      sourceRepoDir,
-      "check-ignore",
-      "-q",
-      "--no-index",
-      "--",
-      literalPathspec,
-    ],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const ignored = gitSourceClaimIgnored(
+    sourceRepoDir,
+    literalPathspec,
+    sourceClaimValidation,
   );
-  if (ignored.status === 0) {
+  if (!ignored.ok) {
+    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (ignored.ignored) {
     if (
       sourcePathIsRegistered(
         sourceRepoDir,
@@ -16872,9 +17505,6 @@ function ignoredSourceClaimReason(
     }
     if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
-  }
-  if (ignored.status !== 1) {
-    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
   }
   if (!prefix && currentIsDirectory) {
     const currentMode = currentGitPathMode(
@@ -16903,8 +17533,8 @@ function ignoredSourceClaimReason(
         "-C",
         sourceRepoDir,
         "read-tree",
-        ...(head.status === 0 && head.stdout.trim()
-          ? [head.stdout.trim()]
+        ...(headState.head !== null
+          ? [headState.head]
           : ["--empty"]),
       ],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
@@ -16990,6 +17620,7 @@ function symlinkClaimTargetReason(
   prefix: boolean,
   carriesWorkspaceShell: boolean,
   pathModeIndexes: GitPathModeIndexCache,
+  sourceClaimValidation: GitSourceClaimValidationCache,
 ): string | null {
   const links = manifestClaimSymlinkPaths(
     sourceRepoDir,
@@ -17096,6 +17727,7 @@ function symlinkClaimTargetReason(
         repoRelative,
         false,
         pathModeIndexes,
+        sourceClaimValidation,
         carriesWorkspaceShell,
       );
       if (ignored !== null) {
@@ -17179,6 +17811,44 @@ export function readUnitSourceManifest(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const pathModeIndexes: GitPathModeIndexCache = new Map();
+  // Cache only this manifest read: later review, verdict, and finalize checks
+  // must observe fresh HEAD and ignore rules, even for the same manifest.
+  const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
+
+  for (const candidate of value.writes) {
+    if (!isPlainObject(candidate) || typeof candidate.path !== "string") {
+      continue;
+    }
+    if ("repo" in candidate && typeof candidate.repo !== "string") continue;
+    const declaredRepo =
+      typeof candidate.repo === "string" ? candidate.repo : undefined;
+    let canonicalRepo = declaredRepo;
+    if (canonicalRepo !== undefined) {
+      if (
+        !isValidRepoName(canonicalRepo) ||
+        !recordedRepoSet.has(canonicalRepo)
+      ) {
+        continue;
+      }
+    } else if (recordedRepos.length > 1) {
+      continue;
+    } else if (recordedRepos.length === 1) {
+      canonicalRepo = recordedRepos[0];
+    }
+    const normalized = normalizeManifestSourcePath(candidate.path);
+    if ("reason" in normalized) continue;
+    const sourceRepoDir =
+      worktreeRelative
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    seedGitSourceClaimIgnorePath(
+      sourceRepoDir,
+      normalized.path,
+      sourceClaimValidation,
+    );
+  }
 
   try {
   for (let index = 0; index < value.writes.length; index++) {
@@ -17227,6 +17897,7 @@ export function readUnitSourceManifest(
       normalized.path,
       normalized.prefix,
       pathModeIndexes,
+      sourceClaimValidation,
       carriesWorkspaceShell,
     );
     if (ignoredReason !== null) {
@@ -17238,6 +17909,7 @@ export function readUnitSourceManifest(
       normalized.prefix,
       carriesWorkspaceShell,
       pathModeIndexes,
+      sourceClaimValidation,
     );
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
@@ -17301,6 +17973,20 @@ export function unitSourceFingerprint(
   return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
 }
 
+/** Parse committed reviewed-source evidence bytes (the serializeUnitSourceListing
+ *  shape): a `manifest\t<sha256>\t-` header row binding the source-manifest bytes,
+ *  then the claim-restricted per-path listing. Null on any malformed row. */
+export function parseUnitSourceListing(
+  serialized: string,
+): { manifestSha256: string; listing: WorkspaceSourceListing } | null {
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
+  if (header === null) return null;
+  const listing = parseSourceListing(serialized.slice(newline + 1));
+  return listing === null ? null : { manifestSha256: header[1], listing };
+}
+
 function validSourceSnapshotFingerprint(fingerprint: string): string | null {
   const matched = /^sha256:([0-9a-f]{64})$/.exec(fingerprint);
   return matched?.[1] ?? null;
@@ -17314,7 +18000,24 @@ function sourceSnapshotDir(
 ): string | null {
   if (!/^[a-z][a-z0-9-]*$/.test(stageSlug)) return null;
   const record = recordDir(projectDir, intent, space);
-  return record === null ? null : join(record, ".aidlc-source-review", stageSlug);
+  return record === null ? null : join(engineDirFor(record), "source-review", stageSlug);
+}
+
+// Read side of the same directory. Snapshots are audit-referenced evidence, so a
+// stage that recorded its baseline before the engine-directory move must still
+// find it: per stage, the legacy directory is used only while the new one is
+// absent. Writers never use this.
+function sourceSnapshotReadDir(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  const current = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  if (current === null) return null;
+  const record = recordDir(projectDir, intent, space);
+  if (record === null) return null;
+  return engineReadDirFor(record, current, join(LEGACY_SOURCE_REVIEW_DIR, stageSlug));
 }
 
 function writeSourceSnapshot(path: string, serialized: string): string {
@@ -17384,6 +18087,40 @@ export function sourceBaselineAuditFields(
   };
 }
 
+/** Record-relative, posix-separated location of a unit's stage record files. One
+ *  grammar for both readers: the filesystem readers join it onto a record dir,
+ *  and the git-tree reader in aidlc-attest.ts appends it to a tree path, so a
+ *  layout change cannot move one reader without moving the other. */
+export function unitStageRecordRelPath(
+  unit: string,
+  stageSlug: string,
+  fileName: string,
+): string {
+  return `construction/${unit}/${stageSlug}/${fileName}`;
+}
+
+/** Record-relative path of a unit's committed reviewed-listing evidence. */
+export function reviewedSourceEvidenceRelPath(
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return unitStageRecordRelPath(unit, stageSlug, `reviewed-source-${hash12}.tsv`);
+}
+
+/** Committed per-unit reviewed-listing evidence beside source-manifest.json. */
+export function reviewedSourceEvidencePath(
+  recordDirPath: string,
+  unit: string,
+  stageSlug: string,
+  hash12: string,
+): string {
+  return join(
+    recordDirPath,
+    ...reviewedSourceEvidenceRelPath(unit, stageSlug, hash12).split("/"),
+  );
+}
+
 /** Write a content-addressed unit listing snapshot including its manifest header. */
 export function writeUnitSourceSnapshot(
   projectDir: string,
@@ -17394,10 +18131,20 @@ export function writeUnitSourceSnapshot(
   manifestSha256: string,
 ): string {
   const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const record = recordDir(projectDir);
   const unitError = validateUnitName(unit);
-  if (dir === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
+  if (dir === null || record === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
   const serialized = serializeUnitSourceListing(listing, claimModel, manifestSha256);
   const hash = sourceListingSha256(serialized);
+  // Dual-write the identical bytes into the COMMITTED record beside the unit's
+  // source-manifest.json. The receipt's Unit Source Fingerprint is the sha256
+  // of exactly these bytes, so the committed audit shards already tamper-bind
+  // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
+  // (aidlc-attest.ts) without the machine-local .aidlc-engine/source-review/ copy.
+  writeSourceSnapshot(
+    reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
+    serialized,
+  );
   return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
@@ -17421,7 +18168,7 @@ export function readBaselineSourceSnapshot(
   intent?: string,
   space?: string,
 ): WorkspaceSourceListing | null {
-  const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  const dir = sourceSnapshotReadDir(projectDir, stageSlug, intent, space);
   const hash = validSourceSnapshotFingerprint(fingerprint);
   if (dir === null || hash === null) return null;
   const serialized = readSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), fingerprint);
@@ -17627,6 +18374,7 @@ export function currentStageSourceBaseline(
 export interface UnitSourceSnapshot {
   listing: WorkspaceSourceListing;
   manifestSha256: string;
+  serialized: string;
 }
 
 /** Read a unit snapshot only after full-hash verification and strict parsing. */
@@ -17636,7 +18384,7 @@ export function readUnitSourceSnapshot(
   unit: string,
   fingerprint: string,
 ): UnitSourceSnapshot | null {
-  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const dir = sourceSnapshotReadDir(projectDir, stageSlug);
   const hash = validSourceSnapshotFingerprint(fingerprint);
   if (dir === null || hash === null || validateUnitName(unit) !== null) return null;
   const serialized = readSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), fingerprint);
@@ -17646,7 +18394,9 @@ export function readUnitSourceSnapshot(
   const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
   if (header === null) return null;
   const listing = parseSourceListing(serialized.slice(newline + 1));
-  return listing === null ? null : { listing, manifestSha256: header[1] };
+  return listing === null
+    ? null
+    : { listing, manifestSha256: header[1], serialized };
 }
 
 
@@ -17826,6 +18576,35 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
   return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
 }
 
+// All record-local framework state lives here. Review audit references retain
+// their exact legacy paths; sensors and summary authorizations have read-only
+// directory fallbacks. Everything else is transient or derived and is rebuilt
+// at the new path without a fallback. These helpers never create directories.
+export function engineDir(projectDir: string, intent?: string, space?: string): string {
+  return engineDirFor(docsRoot(projectDir, intent, space));
+}
+
+export function engineDirFor(recordRoot: string): string {
+  return join(recordRoot, ENGINE_DIR);
+}
+
+function engineReadDirFor(recordRoot: string, current: string, legacyName: string): string {
+  const legacy = join(recordRoot, legacyName);
+  // An existing but malformed new entry is not absence. In particular, do not
+  // revive legacy data when the new entry is a dangling symlink.
+  try {
+    const engine = lstatSync(engineDirFor(recordRoot), { throwIfNoEntry: false });
+    if (engine !== undefined && !engine.isDirectory()) return current;
+    return lstatSync(current, { throwIfNoEntry: false }) === undefined && existsSync(legacy)
+      ? legacy
+      : current;
+  } catch {
+    // Unreadable parents are not absence either. Keep path-only hook guards
+    // total and let data readers report or reject the unavailable new path.
+    return current;
+  }
+}
+
 // The bare record-tree root (doctor's existence check, the init scaffolder's
 // base dir).
 export function docsDir(projectDir: string, intent?: string, space?: string): string {
@@ -17837,10 +18616,10 @@ export function runtimeGraphPath(projectDir: string, intent?: string, space?: st
   return join(docsRoot(projectDir, intent, space), "runtime-graph.json");
 }
 
-// `<root>/.aidlc-hooks-health` — per-hook heartbeat + drop counters surfaced by
+// `<root>/.aidlc-engine/hooks-health` - per-hook heartbeat + drop counters surfaced by
 // `--doctor`.
 export function hooksHealthDir(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-hooks-health");
+  return join(engineDir(projectDir, intent, space), "hooks-health");
 }
 
 // Hook heartbeats and audit rows are written in the same turn, normally
@@ -17939,21 +18718,21 @@ export function hookLiveness(
   };
 }
 
-// `<root>/.aidlc-recovery.md` — the validate-state breadcrumb the orchestrator
+// `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator
 // reads on resume.
 export function recoveryFilePath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-recovery.md");
+  return join(engineDir(projectDir, intent, space), "recovery.md");
 }
 
-// `<root>/.aidlc-plan.json` — `aidlc-graph resolve` output.
+// `<root>/.aidlc-engine/plan.json` - `aidlc-graph resolve` output.
 export function planFilePath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-plan.json");
+  return join(engineDir(projectDir, intent, space), "plan.json");
 }
 
-// `<root>/.aidlc-stop-hook` — the Stop hook's durable no-progress guard counter
+// `<root>/.aidlc-engine/stop-hook` - the Stop hook's durable no-progress guard counter
 // directory.
 export function stopHookDir(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
+  return join(engineDir(projectDir, intent, space), "stop-hook");
 }
 
 // --- The turn-shape markers (the transcript-free conversational carve-out) ----
@@ -17969,12 +18748,12 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 //
 // These two mtime markers reconstruct the same predicate from the filesystem:
 //
-//   .aidlc-human-turn   — touched by the UserPromptSubmit mint, once per human
+//   .aidlc-engine/human-turn   - touched by the UserPromptSubmit mint, once per human
 //                         prompt, alongside the HUMAN_TURN ledger event.
-//   .aidlc-engine-touch — touched by aidlc-orchestrate on every ADVANCING
+//   .aidlc-engine/engine-touch - touched by aidlc-orchestrate on every ADVANCING
 //                         invocation (`next` / `report` / `park`).
 //
-//   conversational  <=>  mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+//   conversational  <=>  mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
 //
 // Why markers and not the audit ledger: `next` is read-only and emits NO audit
 // event, so a ledger-only predicate is BLIND to the exact failure the forwarding
@@ -17988,15 +18767,15 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 // look implemented and do nothing. The probe is therefore marked with
 // STOP_HOOK_PROBE_ENV and the engine skips the touch when it sees it.
 //
-// Per-intent (under docsRoot), matching .aidlc-stop-hook/block-count.json — the
+// Per-intent (under docsRoot), matching .aidlc-engine/stop-hook/block-count.json - the
 // markers describe one workflow's turn shape, so they travel with the intent.
 // Already covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore
 // rule, so neither marker is ever committed.
 export function humanTurnMarkerPath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-human-turn");
+  return join(engineDir(projectDir, intent, space), "human-turn");
 }
 export function engineTouchMarkerPath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-engine-touch");
+  return join(engineDir(projectDir, intent, space), "engine-touch");
 }
 
 // The env marker that identifies the Stop hook's OWN read-only `next` probe.
@@ -18158,16 +18937,16 @@ export function turnMarkersShowConversational(
   }
 }
 
-// `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
+// `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
 // record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
 // exempt — the two facts no harness payload carries. Lives under the intent's
-// record root (the same transient family as .aidlc-stop-hook/), already
+// record root (the same transient family as .aidlc-engine/stop-hook/), already
 // covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore rule.
 export function reviewerDispatchPath(projectDir: string, intent?: string, space?: string): string {
-  return join(docsRoot(projectDir, intent, space), ".aidlc-reviewer-dispatch.json");
+  return join(engineDir(projectDir, intent, space), "reviewer-dispatch.json");
 }
 
 // Freshness window for the reviewer dispatch record. The scope hook honours a
@@ -19508,7 +20287,7 @@ export function inspectSubagentInflight(
   };
 }
 
-// `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
+// `<baseDir>/.aidlc-engine/sensors` - the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;
 // callers append a stage slug as needed. Before 2.6.94, type-check passed a
 // tsconfig directory instead, creating legacy package-local record trees. With
@@ -19516,10 +20295,13 @@ export function inspectSubagentInflight(
 // record) when one resolves, so caches and failure details share the manifest's
 // per-intent location; only pre-intent does it fall back to the flat space root.
 export function sensorsDir(baseDir: string, intent?: string, space?: string): string {
-  if (intent === undefined && space === undefined) {
-    return join(docsRoot(baseDir), ".aidlc-sensors");
-  }
-  return join(docsRoot(baseDir, intent, space), ".aidlc-sensors");
+  return join(engineDir(baseDir, intent, space), "sensors");
+}
+
+/** Read old findings only until the new sensors directory exists; writers use sensorsDir. */
+export function sensorsReadDir(projectDir: string, intent?: string, space?: string): string {
+  const record = docsRoot(projectDir, intent, space);
+  return engineReadDirFor(record, join(engineDirFor(record), "sensors"), LEGACY_SENSORS_DIR);
 }
 
 // `<root>/<phase>/<slug>` — a stage's per-run artifact directory (the Stop hook
@@ -19912,7 +20694,7 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
 }
 
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
-export const DOCUMENT_INPUT_REQUEST_FILE = ".aidlc-document-input-path";
+export const DOCUMENT_INPUT_REQUEST_FILE = "document-input-path";
 const LEGACY_PROJECT_DESCRIPTION_SOURCE = "aidlc-state.md#Project";
 
 export interface ProjectDescriptionAuthority {
@@ -19981,7 +20763,7 @@ export function documentInputRequestFilePath(
   intent?: string,
   space?: string,
 ): string {
-  return join(dirname(stateFilePath(projectDir, intent, space)), DOCUMENT_INPUT_REQUEST_FILE);
+  return join(engineDir(projectDir, intent, space), DOCUMENT_INPUT_REQUEST_FILE);
 }
 
 export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
@@ -20967,7 +21749,7 @@ function guardRefusalPath(
   const key = createHash("sha256")
     .update(`${stage}\0${unit ?? ""}`, "utf-8")
     .digest("hex");
-  return join(docsRoot(projectDir), ".aidlc-guard-refusals", `${key}.json`);
+  return join(engineDir(projectDir), "guard-refusals", `${key}.json`);
 }
 
 // The latest boundary after which a repetition is a new situation: a session
@@ -23403,7 +24185,7 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
     leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason, kind: "audit", cleared });
   };
   const probeActiveDirective = (bucketLabel: string, root: string): void => {
-    const lockDir = join(root, ACTIVE_DIRECTIVE_LOCK);
+    const lockDir = join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK);
     probeCoordinationGate(bucketLabel, lockDir);
     if (existsSync(lockDir)) {
       const inspected = inspectOwnerStamp(lockDir);
@@ -23437,7 +24219,7 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
           kind: "active-directive", cleared });
       }
     }
-    const legacy = join(root, `${ACTIVE_DIRECTIVE_MARKER}.transaction`);
+    const legacy = join(root, LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE);
     if (existsSync(legacy)) {
       leaks.push({ bucket: bucketLabel, lockDir: legacy, ownerPid: null, reason: "legacy-transaction",
         kind: "legacy-active-directive-transaction", cleared: false });
@@ -25330,6 +26112,7 @@ interface ScopeMetadata {
   /** The scope's Change Control default (`change_control:` frontmatter).
    *  Absent = strict. Resolution lives in resolveChangeControl. */
   changeControl?: ChangeControl;
+  ceremony?: Partial<CeremonyPolicy>;
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -25445,6 +26228,17 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.changeControl = changeControl;
+    }
+    for (const key of CEREMONY_KEYS) {
+      const value = scalarField(fm, key);
+      if (!value) continue;
+      if (value !== "on" && value !== "off") {
+        throw new Error(
+          `Scope file ${filePath} has invalid ${key} value "${value}". Expected "on" or "off".`,
+        );
+      }
+      meta.ceremony ??= {};
+      meta.ceremony[key] = value;
     }
     out[name] = meta;
   }
@@ -25577,6 +26371,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
     if (meta.changeControl !== undefined) def.changeControl = meta.changeControl;
+    if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
     out[name] = def;
   }
   _scopeMapping = out;
@@ -25616,30 +26411,40 @@ export function validScopes(): ReadonlySet<string> {
 
 export interface DefaultScopeResolution {
   scope: string;
+  source: "env" | "default";
+  error?: string;
+}
+
+// Shared implicit-default ladder: the real environment wins over recorded
+// project flags; an empty value falls back to the framework default. Unknown
+// configured names retain the env source so callers own their canonical error.
+export function defaultScopeResolution(): DefaultScopeResolution {
+  const raw = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") ?? "").trim();
+  if (raw.length > 0) {
+    if (validScopes().has(raw)) return { scope: raw, source: "env" };
+    // Only installed-but-disabled scopes participate in selection-aware rescue.
+    if (loadScopeMetadataAll()[raw] === undefined) return { scope: raw, source: "env" };
+    const fallback = selectionAwareDefaultScope(raw);
+    if (!fallback.error && fallback.note) {
+      process.stderr.write(
+        `AWS_AIDLC_DEFAULT_SCOPE="${raw}" is not an enabled scope; using ${fallback.scope} (sole enabled plugin's first scope)\n`,
+      );
+    }
+    return { scope: fallback.scope, source: "env", error: fallback.error };
+  }
+  try {
+    const fallback = selectionAwareDefaultScope("classic");
+    return { scope: fallback.scope, source: "default", error: fallback.error };
+  } catch {
+    return { scope: "classic", source: "default" };
+  }
+}
+
+export function selectionAwareDefaultScope(preferred: string): {
+  scope: string;
   error?: string;
   note?: string;
-}
-
-// The framework's single hard-coded default scope — the bottom of every
-// default ladder (the engine's scope resolution, `/aidlc-init`, the low-level
-// `intent-create` fallback, and the help-text "(default)" marker). Exactly two
-// things control the implicit default: the AWS_AIDLC_DEFAULT_SCOPE env var
-// (which overrides when set) and this constant (when the var is unset).
-export const DEFAULT_SCOPE = "classic";
-
-// AWS_AIDLC_DEFAULT_SCOPE resolved with the engine ladder's semantics: unset →
-// null; a valid scope → itself; an installed-but-disabled scope → the
-// selection-aware rescue; an unknown value → returned verbatim so the caller's
-// own validation owns the canonical `Unknown scope` error.
-export function envDefaultScope(): string | null {
-  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
-  if (envScope.length === 0) return null;
-  if (validScopes().has(envScope)) return envScope;
-  if (loadScopeMetadataAll()[envScope] === undefined) return envScope;
-  return selectionAwareDefaultScope(envScope).scope;
-}
-
-export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): DefaultScopeResolution {
+} {
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
@@ -25690,17 +26495,9 @@ export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): D
   };
 }
 
-/**
- * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
- * callers that just need the resolved scope name. `preferred` is the caller's
- * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
- * intent creation).
- * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
- * the nominated freeform default (or the sole enabled plugin's first scope) is
- * returned, falling back to `preferred` when nothing can be chosen.
- */
-export function resolveDefaultScope(preferred: string): string {
-  return selectionAwareDefaultScope(preferred).scope;
+/** Return the shared implicit default for callers that only need its name. */
+export function defaultScope(): string {
+  return defaultScopeResolution().scope;
 }
 
 // Agent metadata derived from `.claude/agents/*.md` frontmatter. Adding a
@@ -26628,6 +27425,7 @@ export interface ScopeCostSummary {
                          // computeGate() in aidlc-orchestrate.ts - change together
   perUnitStages: number; // EXECUTE stages that repeat per Unit of Work when
                          // units-generation EXECUTEs; otherwise they run once
+  off: string[];        // scope defaults omitted from the gated-flow ceremony
 }
 
 // Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
@@ -26657,14 +27455,40 @@ export function gridCostSummary(
     // degrade to one stage-level pass (aidlc-orchestrate.ts).
     if (hasUnitDag && isPerUnitStage(node)) perUnitStages++;
   }
-  return { total, execute, skip: total - execute, gates, perUnitStages };
+  return { total, execute, skip: total - execute, gates, perUnitStages, off: [] };
+}
+
+/** Labels of ceremonies the effective policy turns off, plus reviewers when
+ * the scope caps reviews at none. Pure: scope metadata and supplied policy only. */
+export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[] {
+  const off: string[] = [];
+  if (loadScopeMetadata()[scope]?.reviewCap === "none") off.push("reviewers");
+  if (policy.sensors === "off") off.push("sensors");
+  if (policy.learnings === "off") off.push("learnings ritual");
+  if (policy.summary_confirmation === "off") off.push("summary confirmation");
+  return off;
 }
 
 // Cost of a named scope's grid. Returns null for an unknown scope.
 export function scopeCostSummary(scope: string): ScopeCostSummary | null {
   const def = loadScopeMapping()[scope];
   if (!def) return null;
-  return gridCostSummary(def.stages);
+  const summary = gridCostSummary(def.stages);
+  summary.off = ceremonyOffList(scope, {
+    sensors: def.ceremony?.sensors ?? "on",
+    learnings: def.ceremony?.learnings ?? "on",
+    summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
+  });
+  return summary;
+}
+
+/** Human-readable policy clause appended to the scope's stage/gate counts. */
+export function ceremonyOffClause(summary: ScopeCostSummary): string {
+  const { off } = summary;
+  if (off.length === 0) return "";
+  if (off.length === 1) return `; no ${off[0]}`;
+  if (off.length === 2) return `; no ${off[0]} or ${off[1]}`;
+  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}`;
 }
 
 // --- Timestamp ---
@@ -27033,6 +27857,126 @@ export function formatChangeControl(value: ChangeControl, source: string): strin
   return `${value} (${changeControlSourceLabel(source)})`;
 }
 
+// Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
+export type CeremonySetting = "on" | "off";
+export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
+export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
+  sensors: "Sensors",
+  learnings: "Learnings",
+  summary_confirmation: "Summary Confirmation",
+};
+/** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
+export const CEREMONY_ENV: Record<CeremonyKey, string> = {
+  sensors: "AIDLC_DISABLE_SENSORS",
+  learnings: "AIDLC_DISABLE_LEARNINGS",
+  summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
+};
+export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
+  sensors: "--sensors",
+  learnings: "--learnings",
+  summary_confirmation: "--summary-confirmation",
+};
+export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
+export interface CeremonyResolution {
+  key: CeremonyKey;
+  value: CeremonySetting;
+  /** Human-worded: env AIDLC_DISABLE_SENSORS, you, scope classic, or default. */
+  source: string;
+  scopeDefault: CeremonySetting;
+  intent: { value: CeremonySetting; source: string } | null;
+  rawStateValue: string | null;
+}
+
+export function parseCeremonySetting(raw: string | null | undefined): CeremonySetting | null {
+  if (raw === null || raw === undefined) return null;
+  const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
+  return word === "on" || word === "off" ? word : null;
+}
+
+const CEREMONY_STATE_LINE_RE = /^(on|off)\b(?:\s*\((.*)\))?\s*$/i;
+
+export function parseCeremonyStateLine(
+  raw: string | null | undefined,
+): { value: CeremonySetting; source: string } | null {
+  if (!raw) return null;
+  const match = CEREMONY_STATE_LINE_RE.exec(raw.trim());
+  if (!match) return null;
+  return {
+    value: match[1].toLowerCase() as CeremonySetting,
+    source: changeControlSourceFromLabel((match[2] ?? "").trim()),
+  };
+}
+
+export function formatCeremony(value: CeremonySetting, source: string): string {
+  return `${value} (${changeControlSourceLabel(source)})`;
+}
+
+export function scopeCeremonyDefault(
+  key: CeremonyKey,
+  scope: string | null | undefined,
+): CeremonySetting {
+  if (!scope) return "on";
+  try {
+    return loadScopeMapping()[scope.trim().toLowerCase()]?.ceremony?.[key] ?? "on";
+  } catch {
+    return "on";
+  }
+}
+
+/** Pure resolution of the supplied state; no intent-file reads or writes. */
+export function resolveCeremony(
+  key: CeremonyKey,
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+): CeremonyResolution {
+  const scopeName = scope?.trim().toLowerCase();
+  let declared: CeremonySetting | undefined;
+  try {
+    declared = scopeName ? loadScopeMapping()[scopeName]?.ceremony?.[key] : undefined;
+  } catch {
+    // Scope data is unavailable; saved intent values and the on default remain usable.
+  }
+  const scopeDefault = declared ?? "on";
+  const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
+  const intent = parseCeremonyStateLine(rawStateValue);
+  const disabled = resolveProjectFlag(CEREMONY_ENV[key]) === "1";
+  return {
+    key,
+    value: disabled ? "off" : intent?.value ?? scopeDefault,
+    source: disabled
+      ? `env ${CEREMONY_ENV[key]}`
+      : intent?.source ?? (declared === undefined ? "default" : `scope ${scopeName}`),
+    scopeDefault,
+    intent,
+    rawStateValue,
+  };
+}
+
+export function resolveCeremonyPolicy(
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+): Record<CeremonyKey, CeremonyResolution> {
+  return {
+    sensors: resolveCeremony("sensors", scope, stateContent),
+    learnings: resolveCeremony("learnings", scope, stateContent),
+    summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
+  };
+}
+
+export function ceremonyPolicyValues(
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+): CeremonyPolicy {
+  const policy = resolveCeremonyPolicy(scope, stateContent);
+  return {
+    sensors: policy.sensors.value,
+    learnings: policy.learnings.value,
+    summary_confirmation: policy.summary_confirmation.value,
+  };
+}
+
 function changeControlMemoryDir(
   projectDir: string,
   selection: WorkflowSelectionOptions = {},
@@ -27379,23 +28323,6 @@ export function governedChangeControl(
     }
   }, intent, selection.space);
   return resolution;
-}
-
-/**
- * The CHANGE_CONTROL_SET row the verb writes when it rewrites the state line.
- */
-export function recordChangeControlSet(
-  projectDir: string,
-  oldValue: string | null,
-  newValue: ChangeControl,
-  source: string,
-  selection: WorkflowSelectionOptions = {},
-): void {
-  appendChangeControlSetRow(projectDir, {
-    "Old Value": oldValue ?? "unknown",
-    "New Value": newValue,
-    Source: source,
-  }, selection);
 }
 
 // --- Helpers ---

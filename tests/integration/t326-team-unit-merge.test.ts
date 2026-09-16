@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:gate, subcommand:aidlc-unit:land, subcommand:aidlc-unit:merge-status, subcommand:aidlc-state:fold-unit-merge, audit:UNIT_MERGED, function:UNIT_MERGE_DIR, function:unitMergeTransactionPath, function:readUnitMergeTransaction, function:writeUnitMergeTransaction, function:unitMergedReceipts
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -44,6 +44,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+// The default also governs afterEach cleanup of several git trees per case, which exceeds bun's 5s hook default under --parallel 4.
+setDefaultTimeout(120_000);
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -823,7 +826,8 @@ describe("t326 pinned team Unit merge", () => {
     expect(completeRetry.status, completeRetry.out).toBe(0);
     expect(readFileSync(seededStateFile(seed), "utf-8")).toBe(completedState);
     expect(readAllAuditShards(seed)).toBe(completedAudit);
-  }, 120000);
+  // Two full gate-and-land cycles measure ~110 s alone on an M3 Pro (each tool call is a fresh bun process), so 120 s leaves no headroom under --parallel 4.
+  }, 300000);
 
   test("moved refs require re-pin and released attempts cannot pin", () => {
     const { seed, remote } = makeSeed();

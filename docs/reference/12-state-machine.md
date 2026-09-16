@@ -1,6 +1,6 @@
 # State Machine
 
-This chapter is the canonical reference for AI-DLC's state machines, the audit-event taxonomy, and the rule that connects them — **every state transition has exactly one tool-owned emitter**. Keeping this chapter's tables in sync with the code is enforced by the drift test at `tests/integration/t48-audit-event-emitters.test.ts`. If the doc and the code disagree, t48 fails.
+This chapter is the canonical reference for AI-DLC's state machines, the audit-event taxonomy, and the rule that connects them — **every state transition has a tool-owned emitter**. A transition is recorded by its owning mutation path, never duplicated by the conductor. Keeping this chapter's tables in sync with the code is enforced by the drift test at `tests/integration/t48-audit-event-emitters.test.ts`. If the doc and the code disagree, t48 fails.
 
 Three nested state machines drive AI-DLC: **workflow**, **phase**, and **stage**. A fourth, independent stream records **session** events emitted by Claude Code hooks. These four streams share the intent's audit trail (the `audit/` shard dir under its record dir, `<record>/` = `aidlc/spaces/<active-space>/intents/<YYMMDD>-<label>/`) but are owned by different code paths, so it's easiest to read them as separate concerns and remember that their timelines interleave.
 
@@ -30,12 +30,14 @@ Flattening them into one state field conflates those decisions. Separating them 
 stateDiagram-v2
     [*] --> Running : WORKFLOW_STARTED
     Running --> Completed : WORKFLOW_COMPLETED
+    Running --> Archived : WORKFLOW_ARCHIVED
+    Archived --> Running : WORKFLOW_UNARCHIVED
     Completed --> [*]
 ```
 
-<!-- Text fallback: initial state transitions to Running on WORKFLOW_STARTED; Running transitions to Completed on WORKFLOW_COMPLETED; Completed is terminal. -->
+<!-- Text fallback: initial state transitions to Running on WORKFLOW_STARTED; Running transitions to Completed on WORKFLOW_COMPLETED; Running transitions to Archived on WORKFLOW_ARCHIVED; Archived transitions back to Running on WORKFLOW_UNARCHIVED; Completed is terminal. -->
 
-**Status values:** `Running`, `Completed`.
+**Status values:** `Running`, `Completed`, `Archived`.
 
 A workflow starts when the first intent is created (`aidlc-utility intent-create`, auto-invoked on the first `/aidlc` or via `/aidlc-init`) and ends when the last in-scope stage's approval gate closes. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
 
@@ -45,6 +47,8 @@ A workflow's `Running` state persists across Claude Code sessions. You start a w
 |---|---|---|
 | `[*] -> Running` | `aidlc-utility intent-create` | `tools/aidlc-utility.ts` |
 | `Running -> Completed` | Final stage outcome reported through `aidlc-orchestrate.ts report` | `tools/aidlc-state.ts` (internal emitter) |
+| `Running -> Archived` | `aidlc-utility intent archive <name>` (human decision; refused for completed intents, live Bolt worktrees, and claimed team Units) | `tools/aidlc-utility.ts` |
+| `Archived -> Running` | `aidlc-utility intent unarchive <name>` | `tools/aidlc-utility.ts` |
 
 ---
 
@@ -311,6 +315,8 @@ do not count. Reviewer-bearing stages persist `[R]` after that recovered
 rejection and require a fresh review plus the normal `revised` report before
 the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
+**Archive (issue #980).** `aidlc-utility intent archive <name> [--reason <text>]` retires an in-flight intent the team will not finish. Under the workspace lock it emits `WORKFLOW_ARCHIVED` into that intent's own audit shard first, then flips the state file's `Status` to `Archived` and the `intents.json` row to `archived`; the record dir, its artifacts, and its audit shards are never moved or deleted. A subsequent `next` on that record (a stale per-user cursor or session binding) emits a terminal `done` naming `intent unarchive`, so retired stages never resume by accident; `park` refuses an archived workflow the same way it refuses a completed one. Archiving is refused for a completed intent (already terminal), an intent with Bolt worktrees still in flight, and a team-owned intent with claimed Units. `intent unarchive <name>` reverses the two field writes and emits `WORKFLOW_UNARCHIVED`. The default `intent` listing hides archived rows (`--all` shows them; `--json` always carries every row), the creation gate ignores them, and the lone-record fallback never resolves one implicitly.
+
 **Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it.
 
 ### Revision loop
@@ -355,7 +361,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**95 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 95 into 23 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**99 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 99 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `CHANGE_CONTROL_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` and are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -365,6 +371,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `WORKFLOW_COMPLETED` | `tools/aidlc-state.ts` |  |
 | `WORKFLOW_PARKED` | `tools/aidlc-state.ts` | `park` - workflow parked mid-flow for a later session; no stage advanced |
 | `WORKFLOW_UNPARKED` | `tools/aidlc-state.ts` | `unpark` - park marker cleared on explicit `--resume` re-entry |
+| `WORKFLOW_ARCHIVED` | `tools/aidlc-utility.ts` | `intent archive <name>` - intent retired to `Archived` / `archived`; record and audit shards preserved; written to that intent's own shard |
+| `WORKFLOW_UNARCHIVED` | `tools/aidlc-utility.ts` | `intent unarchive <name>` - archived intent returned to `Running` / `in-flight` |
 
 ### Phase lifecycle
 
@@ -379,7 +387,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `STAGE_STARTED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` | Internal route marks `[ ]` → `[-]` |
+| `STAGE_STARTED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts`, `tools/aidlc-orchestrate.ts` | Internal route marks `[ ]` → `[-]`; isolated `next --single` rows carry `Workflow=single-stage:<slug>` and `Scope`, so completion uses that attempt's summary-confirmation policy rather than the main workflow's. Legacy isolated rows without Scope retain confirmation-on behavior. |
 | `STAGE_AWAITING_APPROVAL` | `tools/aidlc-state.ts` | Internal emitter for `report --result awaiting-approval` / `revised`; recovered rows carry `Recovered=true`; an authorized blocking-sensor override records sensor ids, optional detail paths, and evaluation reasons |
 | `STAGE_COMPLETED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts` | Internal emitter for a completed/approved report; never paired with a skipped report |
 | `STAGE_REVISING` | `tools/aidlc-state.ts` | Internal emitter paired with `GATE_REJECTED` after a rejected report |
@@ -405,11 +413,11 @@ legacy Unit-less rows retain stage-global behavior.
 |---|---|---|
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
-| `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-summary-authorization/`, and a `Request changes` reply withdraws it. Reserved from public audit append. |
+| `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-engine/summary-authorization/`, and a `Request changes` reply withdraws it. Reserved from public audit append. |
 | `PLAN_APPROVAL_RECORDED` | `tools/aidlc-log.ts` | Human-backed Code Generation plan receipt. The authority it records binds to intent, stage or Unit target, stage attempt (run floor), content fingerprint (the projected plan and instructions plus the Testing Contract hash), prompt (the questions file with answers blanked), and session response, never to the identity of the directive that presented the question nor to row order. The row also carries the directive epoch and the raw questions-file digest (`Questions SHA-256`) as provenance; both are recorded and never compared, so a note appended to the questions file after approval leaves the decision standing while a change to the prompt the human saw retires it. Protected runtime state is the authority; this row is provenance only. |
 | `PLAN_APPROVAL_OVERRIDDEN` | `tools/aidlc-log.ts` | The human-only break-glass exit for Plan Approval. Fires only when the human typed `Override Plan Approval: <reason>` as a prompt (the human-turn hook records that typed text under the session; a picked option never does), the conductor ran `answer --checkpoint plan-approval --override "<reason>"` with the same reason, and the normal receipt path refused. Carries `Reason`, `Failed Checks` (what the normal path refused), `Session`, `Unit` or `stage-level`, and `Fingerprint`; the paired `PLAN_APPROVAL_RECORDED` row carries `Override: yes`. The receipt it accompanies binds to plan content and stage attempt only, so no later check compares its source. The typed request is single-use and the conductor never proposes or initiates it |
-| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot records every declared artifact exactly as dispatched (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request. One coherent artifact snapshot must reproduce the requested bytes exactly: the reviewer writes no artifact, so `Request Fingerprint` and `Artifact Fingerprint` are the same identity. The review is read from the request's review file (or `--review-file`), validated with Bun's Markdown parser (one rendered Verdict matching `--verdict`, one Reviewer, one Iteration, no later Markdown or raw-HTML H1/H2; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint ownership), and written as the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` or `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` in the same locked transaction; the row names it (`Review Record`) and pins its bytes (`Review Record Digest`), and echoes the `Request Id`. Request-time and completion source fingerprints use the same Git-independent bounded filesystem identity and must match. Deprecated for this release cycle: a verdict is still accepted from a terminal `## Review` section a reviewer appended to `review_artifact` after the request (the bytes before it are the requested bytes and the request saw no appendix); that validated section is copied into the review record. A retried incomplete review may record `NOT-READY` with an empty review record. A malformed row is ignored and does not consume its pending request. |
+| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot records every declared artifact exactly as dispatched (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-engine/reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request. One coherent artifact snapshot must reproduce the requested bytes exactly: the reviewer writes no artifact, so `Request Fingerprint` and `Artifact Fingerprint` are the same identity. The review is read from the request's review file (or `--review-file`), validated with Bun's Markdown parser (one rendered Verdict matching `--verdict`, one Reviewer, one Iteration, no later Markdown or raw-HTML H1/H2; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint ownership), and written as the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `<record>/.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` in the same locked transaction; the row names it (`Review Record`) and pins its bytes (`Review Record Digest`), and echoes the `Request Id`. Request-time and completion source fingerprints use the same Git-independent bounded filesystem identity and must match. Deprecated for this release cycle: a verdict is still accepted from a terminal `## Review` section a reviewer appended to `review_artifact` after the request (the bytes before it are the requested bytes and the request saw no appendix); that validated section is copied into the review record. A retried incomplete review may record `NOT-READY` with an empty review record. A malformed row is ignored and does not consume its pending request. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
 ### Unit lifecycle (inline per-unit Construction stages)
@@ -419,7 +427,7 @@ legacy Unit-less rows retain stage-global behavior.
 | `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — requires the exact stage/Unit pair currently routed by the engine, a safe Unit identifier from the authoritative DAG (including safe legacy spellings), and no other open Unit |
 | `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume |
 | `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only the currently-paused unit can resume |
-| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies new Unit diary entries into the parent diary with deterministic markers, binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
+| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies any new Unit diary entries into the parent diary with deterministic markers (leaving an absent parent diary absent when there are no new entries), binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
 | `UNIT_MERGED` | `tools/aidlc-state.ts` | Main landed the pinned candidate content, received the team's audit shard, and folded this Unit's derived row. Fields bind the row to Unit, owner, pinned candidate OID, merge commit OID, and attempt generation. |
 
 Team-owned unit-major runs add a derived `## Unit Progress` table to state. The
@@ -443,10 +451,49 @@ column.
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock) |
-| `CHANGE_CONTROL_SET` | `tools/aidlc-lib.ts` | The intent's Change Control value moved: the `change-control <strict\|relaxed>` verb (behind `/aidlc --change-control` and the plain-chat request), a `scope-change` carrying a scope-supplied value to the new scope's default, or a governed checkpoint observing a memory-layer edit. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`) |
+| `CHANGE_CONTROL_SET` | `tools/aidlc-utility.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --change-control <strict\|relaxed>` or a changed scope-owned default in `scope-change`; lib's `appendChangeControlSetRow` records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
 | `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
+| `CEREMONY_SET` | `tools/aidlc-utility.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
-Change Control decides the consequence of an input change after a human approval or confirmation (`strict` reopens the approval with the existing remedy, `relaxed` records the change and continues); it never removes a gate, never alters a reviewer's verdict, and never deletes evidence. The value is read only where such a change is met (the three governed checkpoints), by the `change-control` verb, by `intent-create`, and by `/aidlc --status`; a check that meets no change reads nothing. An invalid memory `Mode:` value is a validation error naming the file and the two allowed values at each of those reads, so a stage whose inputs did not change is not stopped by it.
+All seven intent settings share `config-change`: `depth`, `test-strategy`,
+`review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`, in
+that order. The matching slash flags and every `config set <key> <value>` route
+can combine settings in one transaction. `config get` and `config list` expose
+all seven; Change Control and ceremony values include effective sources.
+`config-change` accepts only those setting flags plus `--intent`, `--space`,
+and `--project-dir`, requires at least one setting, and refuses unknown flags
+by name. Validation precedes the complete mutation, so invalid values cannot
+partially apply companion settings.
+
+Change Control decides the consequence of an input change after a human
+approval or confirmation (`strict` reopens the approval with the existing
+remedy, `relaxed` records the change and continues); it never removes a gate,
+alters a reviewer's verdict, or deletes evidence. A governed checkpoint reads
+it only when it meets such a change. Configuration reads and writes,
+`intent-create`, and status also resolve the relevant policy. An invalid
+memory `Mode:` is a validation error naming the file and the two allowed values
+when read; a governed check that meets no input change reads nothing.
+
+An explicit `--change-control relaxed` under a memory layer's `Mode: strict`
+refuses the entire command, including other setting flags and any scope
+change, and names the memory file. Explicit strict and unrelated settings
+remain allowed. Scope-owned Change Control and ceremony values follow the new
+scope even under that memory policy, which still controls effective Change Control.
+Changed stored values or sources are audited with
+scope provenance; explicit human overrides and absent legacy rows are
+preserved. Explicit Change Control and ceremony flags store `<value> (set by
+you)`. A same-value source change still counts as a change; `review adversarial`
+clears `Review Override` to an empty string.
+
+Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. `classic` defaults sensors and learnings to `on` and summary confirmation to `off`; other scopes default all three to `on`. An explicit setting writes `on (set by you)` or `off (set by you)` to the selected intent. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
+
+Ceremony precedence is environment kill switch (`1`) → valid per-intent field
+→ scope default → `on`. A kill switch never rewrites the saved override. An
+isolated `--single` attempt uses its selected scope's policy, recorded on its
+synthetic stage-start event, rather than the main intent's ceremony overrides.
+Its scope is fixed through completion; a different-scope resume is refused.
+Legacy isolated starts without a recorded scope retain summary confirmation
+and do not enforce that scope comparison.
 
 ### Artifacts
 
@@ -570,7 +617,7 @@ The sensor dispatcher emits the four `SENSOR_*` events and doctor emits the pair
 |---|---|---|
 | `SENSOR_FIRED` | `tools/aidlc-sensor.ts` `fire` | Dispatcher invoked a sensor against a stage output from a matching Write/Edit or gate-boundary dispatch |
 | `SENSOR_PASSED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported no findings (also covers tool-unavailable and script-error fall-through; `Note` field discriminates) |
-| `SENSOR_FAILED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported findings; detail file written at `<record>/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md` (in the intent's record dir) |
+| `SENSOR_FAILED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported findings; detail file written at `<record>/.aidlc-engine/sensors/<stage-slug>/<sensor-id>-<fire-id>.md` (in the intent's record dir) |
 | `SENSOR_BUDGET_OVERRIDE` | `tools/aidlc-sensor.ts` `fire` | Sensor exceeded its configured cap (registry / binding / depth-derived per the three-layer cap model) and was terminated or skipped |
 | `GUARDRAIL_LOADED` | `tools/aidlc-utility.ts` | Guardrail loader resolved the scope-hierarchical guardrail set for the active workflow (org → project → phase → stage); doctor's paired-coverage check reads from this event |
 
@@ -598,6 +645,14 @@ The swarm taxonomy has seven events. Six emit from the stateless referee `aidlc-
 | `SWARM_COMPLETED` | `tools/aidlc-swarm.ts` | All Units in the batch finished (converged or failed); batch closed |
 | `SWARM_DEGRADED` | `tools/aidlc-swarm.ts` | `AIDLC_USE_SWARM=1` was requested but the Workflow tool was unavailable; the conductor ran the subagent floor |
 
+### Commit provenance
+
+One enrichment event. `aidlc attest anchor` records that a commit was observed to land reviewed source claims — one row per involved intent per (commit, repo), deduplicated on re-anchor and skipped when a `SWARM_SOURCE_MERGED` receipt already binds the same (commit, repo). `aidlc attest resolve` never reads these rows: attribution is a pure function of committed content, so an unanchored commit resolves identically. See the [commit provenance chapter](20-commit-provenance.md).
+
+| Event | Emitter | Trigger |
+|---|---|---|
+| `SOURCE_COMMITTED` | `tools/aidlc-attest.ts` (runAnchor — the explicit `anchor` verb, or the opt-in session-start sweep under `AIDLC_SESSION_ANCHOR=1`) | A commit's changed paths were attributed to reviewed units by an `anchor` invocation (or by the opt-in session-start sweep) |
+
 Every event in the taxonomy is either backed by a real emitter or marked `Reserved (v0.4.0 PR N)` / `Reserved (v0.5.0 PR N)` / `Reserved (v0.6.0 PR N)` for a pre-registered upcoming consumer. The drift test enforces both halves — the `Reserved` early-skip applies only while the cell literally contains "Reserved"; consumer PRs replace it with the real emitter file path in the same commit they ship the emit call.
 
 ---
@@ -608,6 +663,19 @@ State-mutating commands emit their audit entries **before** mutating the state f
 
 1. If audit emission fails (lock timeout, disk error, invalid event type), the tool throws before touching state. The state stays at its previous value; audit.md stays clean.
 2. If state writing fails *after* audit emission, the audit has an "intent" entry but the state didn't move. The drift is visible and diagnosable; `--doctor` surfaces it.
+
+`config-change` and both the different-scope and same-scope paths of
+`scope-change` use one shared settings applier. Under one `withAuditLock`, the
+caller reads the selected state, validates and computes the whole candidate,
+appends its `AuditEntryInput[]` through `appendAuditEntries` in caller-held-lock
+mode, and writes state once. When Change Control changes,
+`assertChangeControlLedgerWritable` runs before any write. `CHANGE_CONTROL_SET`
+and `CEREMONY_SET` rows are built by the utility applier, not separate setter
+wrappers; lib's `appendChangeControlSetRow` remains the emitter for effective
+memory observations. Only real stored field/source changes produce setting
+rows or update `Last Updated`; no-op commands do neither. As with other
+audit-first mutations, a state-write failure after a successful batch leaves
+visible audit/state drift, not a silently partial sequence of setting writes.
 
 The case `test("65: approve is audit-first ...")` in `tests/unit/t17.test.ts` proves this for `approve`: chmod'ing audit.md to read-only forces an audit failure and asserts the state file stays at `[?]` (not `[x]`). The same invariant holds for `gate-start`, `reject`, `revise`, `skip`, `advance`, `complete-workflow`, `reuse-artifact`, `aidlc-bolt.ts set-autonomy`, and `aidlc-state.ts fork` / `aidlc-state.ts merge` (the v0.4.0 milestone 9 state fork/merge subcommands — see `tests/unit/t76.test.ts` for the equivalent chmod-the-lock-dir Part A and chmod-the-target-after-emit Part B proofs).
 
@@ -697,7 +765,7 @@ evidence still cover the current bytes) is built in one place,
 guard-recovery `ask` the first time it happens. The router emits it as the
 directive; an enforcing tool prints the human sentence and then the same ask as
 the last line of its refusal, which the router parses back into the directive it
-would have emitted itself. The `.aidlc-guard-refusals/` record beside the other
+would have emitted itself. The `.aidlc-engine/guard-refusals/` record beside the other
 gitignored runtime files counts repetitions of one guard state (stage, Unit,
 lifecycle state, attempt fields, the latest session/workflow/jump/rejection
 boundary, and the resource fingerprints); it carries no authority, and an
@@ -740,9 +808,9 @@ Don't emit audit events from LLM prose. The following anti-patterns are the reas
 - `**Event**: STAGE_COMPLETED` markdown block written by a stage file — events only come from `appendAuditEntry` in a tool or hook
 - Freeform `## Artifact Update` sections written by hooks — replaced by canonical `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`
 
-The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, and the three `DOCUMENT_*` provenance events — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
+The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, the three `DOCUMENT_*` provenance events, the commit-provenance anchor `SOURCE_COMMITTED`, and the setting provenance `CEREMONY_SET` — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
 
-The drift test at `tests/integration/t48-audit-event-emitters.test.ts` catches drift between this chapter's tables and the code: every event in the tables must have a matching `appendAuditEntry(..., "EVENT", ...)` call in the declared emitter file, and every emission call site in the codebase must appear in the tables. The test also guards against deleted events being resurrected and against pairing invariants (e.g., `handleApprove` must emit both `GATE_APPROVED` and `STAGE_COMPLETED`).
+The drift test at `tests/integration/t48-audit-event-emitters.test.ts` catches drift between this chapter's tables and the code: every event in the tables must have a matching canonical emission in a declared emitter file, including rows built for `appendAuditEntries`, and every emission call site in the codebase must appear in the tables. The test also guards against deleted events being resurrected and against pairing invariants (e.g., `handleApprove` must emit both `GATE_APPROVED` and `STAGE_COMPLETED`).
 
 ---
 

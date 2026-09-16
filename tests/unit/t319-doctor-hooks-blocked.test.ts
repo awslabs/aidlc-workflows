@@ -100,7 +100,7 @@ function projectWithWorkflowProgress(): string {
 function activeHealthDir(project: string): string {
   const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
   const active = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
-  return join(intentsDir, active, ".aidlc-hooks-health");
+  return join(intentsDir, active, ".aidlc-engine/hooks-health");
 }
 
 function writeHeartbeat(project: string, timestamp: string): void {
@@ -139,7 +139,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
 
   test("AIDLC_HOOK_DEBUG-only health data does not create a false failure", () => {
     const project = freshProject();
-    const health = join(seededRecordDir(project), ".aidlc-hooks-health");
+    const health = join(seededRecordDir(project), ".aidlc-engine/hooks-health");
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "hook-debug.log"), "debug only\n", "utf-8");
 
