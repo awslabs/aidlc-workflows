@@ -5187,11 +5187,7 @@ function existingProject(projectDir: string, requested?: string): {
   const harness = requested
     ? harnesses.find((candidate) => candidate.distribution === requested)
     : harnesses[0];
-  if (!harness && requested && harnesses.length > 0) {
-    throw new Error(
-      `project uses ${harnesses.map((candidate) => candidate.distribution).join(", ")}; refusing ${requested}`,
-    );
-  }
+
   if (!harness) return {};
   const baselinePath = join(harness.root, "tools", "data", "aidlc-manifest.json");
   const baseline = readBaseline(baselinePath);
@@ -5378,16 +5374,36 @@ function planRootIntegrations(
       const priorHash = priorContribution?.policy === "managed-block"
         ? priorContribution.hash
         : undefined;
+
+      const foreignSharedBlock = Boolean(
+        merged.currentHash &&
+          merged.currentHash !== merged.nextHash &&
+          priorHash === undefined,
+      );
       if (
         merged.currentHash &&
         merged.currentHash !== merged.nextHash &&
         merged.currentHash !== priorHash &&
+        !foreignSharedBlock &&
         !force
       ) {
         actions.push({
           path: integration.path,
           action: "conflict",
           detail: priorHash ? "managed block was locally modified" : "managed block has no ownership baseline",
+        });
+        continue;
+      }
+      if (foreignSharedBlock && !force) {
+        contributions[integration.path] = {
+          policy: "managed-block",
+          hash: merged.currentHash as string,
+          marker: integration.marker,
+        };
+        actions.push({
+          path: integration.path,
+          action: "preserve",
+          detail: "shared with another harness",
         });
         continue;
       }
@@ -6376,6 +6392,16 @@ export async function main(
     const { stamp, descriptor } = selected;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
+    }
+    if (!existing.distribution) {
+      const collision = discoverProjectHarnesses(projectDir).find(
+        (candidate) => candidate.harnessDir === descriptor.harnessDir,
+      );
+      if (collision) {
+        throw new Error(
+          `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
+        );
+      }
     }
     if (existing.distribution) assertRefreshSafe(projectDir);
     if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {

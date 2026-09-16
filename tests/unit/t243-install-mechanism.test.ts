@@ -731,7 +731,7 @@ describe("t243 project initialization", () => {
     }
   });
 
-  test("OpenCode metadata selects refresh source and refuses a different harness", () => {
+  test("OpenCode metadata selects refresh source, and a non-colliding harness is added alongside", () => {
     const project = temp("aidlc-t240-opencode-init-");
     mkdirSync(join(project, ".git"));
     const initialized = run(INIT, [
@@ -756,7 +756,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
 
-    const wrongHarness = run(INIT, [
+    const addClaude = run(INIT, [
       "config",
       "--project-dir",
       project,
@@ -764,10 +764,73 @@ describe("t243 project initialization", () => {
       CLAUDE_RELEASE,
       "--harness",
       "claude",
+      "--mcp",
+      "none",
     ], project);
-    expect(wrongHarness.status).toBe(4);
-    expect(wrongHarness.stdout).toContain("project uses opencode; refusing claude");
-    expect(existsSync(join(project, ".claude"))).toBe(false);
+    expect(addClaude.status, addClaude.stdout + addClaude.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(true);
+    expect(existsSync(join(project, ".aidlc"))).toBe(true);
+
+    const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
+    expect(gitignore.split("# BEGIN AI-DLC:gitignore").length - 1).toBe(1);
+  }, 60_000);
+
+  test("a harness that shares an engine directory cannot coexist", () => {
+    const project = temp("aidlc-t240-shared-dir-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const shared = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_IDE_RELEASE,
+      "--harness",
+      "kiro-ide",
+    ], project);
+    expect(shared.status).toBe(4);
+    expect(shared.stdout).toContain(
+      "harness kiro-ide shares directory .kiro with installed kiro",
+    );
+  }, 60_000);
+
+  test("a refresh source that disagrees with the sole project harness is refused", () => {
+    const project = temp("aidlc-t240-refresh-yield-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const mismatched = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      OPENCODE_RELEASE,
+    ], project);
+    expect(mismatched.status).toBe(4);
+    expect(mismatched.stdout).toContain("project uses claude; refusing opencode");
   }, 60_000);
 
   test("an explicit installed harness never silently yields to the existing project harness", () => {
@@ -781,22 +844,32 @@ describe("t243 project initialization", () => {
       CLAUDE_RELEASE,
       "--harness",
       "claude",
+      "--mcp",
+      "none",
     ], project);
     expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
 
-    const runtimes = temp("aidlc-t240-installed-runtimes-");
-    cpSync(CLAUDE_RELEASE, join(runtimes, "claude"), { recursive: true });
-    cpSync(OPENCODE_RELEASE, join(runtimes, "opencode"), { recursive: true });
-    const wrongHarness = run(INIT, [
+    const addOpencode = run(INIT, [
       "config",
       "--project-dir",
       project,
+      "--from",
+      OPENCODE_RELEASE,
       "--harness",
       "opencode",
-    ], project, { AIDLC_RUNTIME_ROOT: runtimes });
-    expect(wrongHarness.status).toBe(4);
-    expect(wrongHarness.stdout).toContain("project uses claude; refusing opencode");
-    expect(existsSync(join(project, ".aidlc"))).toBe(false);
+      "--mcp",
+      "none",
+    ], project);
+    expect(addOpencode.status, addOpencode.stdout + addOpencode.stderr).toBe(0);
+    expect(existsSync(join(project, ".aidlc"))).toBe(true);
+    expect(existsSync(join(project, ".claude"))).toBe(true);
+    const opencodeStamp = JSON.parse(
+      readFileSync(
+        join(project, ".aidlc", "tools", "data", "aidlc-stamp.json"),
+        "utf-8",
+      ),
+    ) as { distribution: string };
+    expect(opencodeStamp.distribution).toBe("opencode");
   }, 60_000);
 
   test("--force cannot overwrite an unowned whole-file root integration", () => {
