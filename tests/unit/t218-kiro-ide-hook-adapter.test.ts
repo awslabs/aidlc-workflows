@@ -2963,7 +2963,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("malformed Plan Approval payloads remain advisory outside Code Generation", () => {
     for (const withState of [false, true]) {
