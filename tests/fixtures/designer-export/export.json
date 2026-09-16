@@ -15,6 +15,7 @@
       "requires_stage": [],
       "sensors": [],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -62,6 +63,7 @@
       ],
       "sensors": [],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -109,6 +111,7 @@
       ],
       "sensors": [],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -989,6 +992,7 @@
         "upstream-coverage"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -1406,6 +1410,7 @@
         "traceability"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -1620,6 +1625,7 @@
         "upstream-coverage"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -1749,6 +1755,7 @@
         "traceability"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -2376,6 +2383,7 @@
         "traceability"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -2490,6 +2498,7 @@
         "type-check"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -3433,6 +3442,57 @@
       "description": "Regulated enterprise feature, full audit trail",
       "skeleton": true,
       "changeControl": "strict"
+    },
+    "express-plus": {
+      "depth": "Minimal",
+      "stages": {
+        "workspace-scaffold": "EXECUTE",
+        "workspace-detection": "EXECUTE",
+        "state-init": "EXECUTE",
+        "intent-capture": "SKIP",
+        "market-research": "SKIP",
+        "feasibility": "SKIP",
+        "scope-definition": "SKIP",
+        "team-formation": "SKIP",
+        "rough-mockups": "SKIP",
+        "approval-handoff": "SKIP",
+        "reverse-engineering": "SKIP",
+        "practices-discovery": "SKIP",
+        "requirements-analysis": "EXECUTE",
+        "user-stories": "SKIP",
+        "refined-mockups": "SKIP",
+        "domain-design": "SKIP",
+        "units-generation": "EXECUTE",
+        "contract-design": "SKIP",
+        "delivery-planning": "EXECUTE",
+        "functional-design": "EXECUTE",
+        "nfr-requirements": "SKIP",
+        "nfr-design": "SKIP",
+        "infrastructure-design": "SKIP",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
+        "ci-pipeline": "SKIP",
+        "deployment-pipeline": "SKIP",
+        "environment-provisioning": "SKIP",
+        "deployment-execution": "SKIP",
+        "observability-setup": "SKIP",
+        "incident-response": "SKIP",
+        "performance-validation": "SKIP",
+        "feedback-optimization": "SKIP"
+      },
+      "keywords": [
+        "fast-lane",
+        "lean"
+      ],
+      "description": "Lean design+build fast-lane: minimal ceremony, expandable later",
+      "runner": false,
+      "skeleton": false,
+      "changeControl": "relaxed",
+      "ceremony": {
+        "sensors": "off",
+        "learnings": "off",
+        "summary_confirmation": "off"
+      }
     },
     "express": {
       "depth": "Minimal",

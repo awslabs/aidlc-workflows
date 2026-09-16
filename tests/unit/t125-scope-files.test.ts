@@ -90,13 +90,14 @@ const UTIL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-utility.ts", import.meta.url),
 );
 
-// The 11 scopes the framework ships, alphabetical — the .sh's hard-coded
+// The 12 scopes the framework ships, alphabetical — the .sh's hard-coded
 // expectation (t125:62). Each is a literal independent of source iteration.
 const SHIPPED_SCOPES = [
   "bugfix",
   "classic",
   "enterprise",
   "express",
+  "express-plus",
   "feature",
   "infra",
   "mvp",
@@ -129,11 +130,11 @@ afterEach(() => {
 });
 
 describe("shipped scope files — frontmatter + derived metadata (in-process)", () => {
-  test("exactly 11 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
+  test("exactly 12 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
     const files = readdirSync(SCOPES_DIR).filter(
       (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
     );
-    expect(files.length).toBe(11);
+    expect(files.length).toBe(12);
   });
 
   test("every shipped scope file's frontmatter name == its slug [.sh test 2]", () => {
@@ -152,7 +153,7 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
     }
   });
 
-  test("validScopes() == the 11 .md-derived names, alphabetical [.sh test 3]", () => {
+  test("validScopes() == the 12 .md-derived names, alphabetical [.sh test 3]", () => {
     expect([...validScopes()]).toEqual(SHIPPED_SCOPES);
   });
 
