@@ -567,13 +567,17 @@ describe("t294 provider diagnostics", () => {
       opencodePath,
       `${JSON.stringify(opencodeSettings, null, 2)}\n`,
     );
-    expect(providerIssues(opencode, ".aidlc", "opencode", record)
-      .map((issue) => issue.id)).toContain("provider-opencode-project-override");
     applyConfigDiagnosticRecords(
       opencode,
       ".aidlc",
       "opencode",
       emptyRecords(record),
+      {
+        schemaVersion: 1,
+        provider: "amazon-bedrock",
+        region: "us-east-1",
+        opencodeDefault: true,
+      },
     );
     expect(providerIssues(opencode, ".aidlc", "opencode", record)).toEqual([]);
   });
@@ -1300,6 +1304,226 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).toContain('model_reasoning_effort = "low"');
     expect(after).toContain("[model_providers.team-provider]");
   }, 60_000);
+
+  test("provider mutation and later refresh preserve unrelated Claude and Codex settings", () => {
+    const env = runtimeEnv();
+    const claude = install("claude");
+    const claudePath = join(claude, ".claude", "settings.json");
+    const claudeSettings = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeSettings.model = "team-claude-model";
+    claudeSettings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(claudePath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
+    const claudeRecorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      claude,
+      "--provider",
+      "current",
+      "--yes",
+    ], claude, env);
+    expect(
+      claudeRecorded.status,
+      claudeRecorded.stdout + claudeRecorded.stderr,
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(claudePath, "utf-8")))
+      .toEqual(expect.objectContaining({
+        model: "team-claude-model",
+        env: expect.objectContaining({ MY_TEAM_SETTING: "preserved" }),
+      }));
+    const claudeRefreshed = run([
+      "config",
+      "--project-dir",
+      claude,
+      "--yes",
+    ], claude, env);
+    expect(
+      claudeRefreshed.status,
+      claudeRefreshed.stdout + claudeRefreshed.stderr,
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(claudePath, "utf-8")))
+      .toEqual(expect.objectContaining({
+        model: "team-claude-model",
+        env: expect.objectContaining({ MY_TEAM_SETTING: "preserved" }),
+      }));
+
+    const codex = install("codex");
+    const codexPath = join(codex, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      readFileSync(codexPath, "utf-8").replace(
+        'sandbox_mode = "workspace-write"',
+        'sandbox_mode = "read-only"',
+      ),
+    );
+    const codexRecorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      codex,
+      "--provider",
+      "current",
+      "--yes",
+    ], codex, env);
+    expect(
+      codexRecorded.status,
+      codexRecorded.stdout + codexRecorded.stderr,
+    ).toBe(0);
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('sandbox_mode = "read-only"');
+    const codexRefreshed = run([
+      "config",
+      "--project-dir",
+      codex,
+      "--yes",
+    ], codex, env);
+    expect(
+      codexRefreshed.status,
+      codexRefreshed.stdout + codexRefreshed.stderr,
+    ).toBe(0);
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('sandbox_mode = "read-only"');
+  }, 90_000);
+
+  test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-east-1",
+      AWS_PROFILE: "team-profile",
+      ANTHROPIC_DEFAULT_FABLE_MODEL:
+        "global.anthropic.claude-fable-5[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL:
+        "global.anthropic.claude-opus-4-8[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL:
+        "global.anthropic.claude-sonnet-4-6[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL:
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
+    expect(after.AWS_PROFILE).toBe("team-profile");
+    expect(after.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  }, 60_000);
+
+  test("current preserves a manually configured OpenCode Bedrock provider", () => {
+    const project = install("opencode");
+    const env = runtimeEnv();
+    const path = join(project, "opencode.json");
+    const config = JSON.parse(readFileSync(path, "utf-8"));
+    config.provider = {
+      "amazon-bedrock": {
+        options: {
+          region: "eu-west-1",
+          profile: "team-profile",
+        },
+      },
+    };
+    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf-8")).provider)
+      .toEqual(config.provider);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, 60_000);
+
+  test("changing a Bedrock region or profile resets provider attestations", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configure = (...args: string[]) => run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      ...args,
+      "--yes",
+    ], project, env);
+    const complete = configure(
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--profile",
+      "dev",
+      "--acknowledge",
+      "--mark-done",
+      "bedrock-model-access",
+    );
+    expect(complete.status, complete.stdout + complete.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        acknowledged: true,
+        pendingActions: [
+          { id: "bedrock-model-access", status: "done" },
+          { id: "codex-provider-configuration", status: "done" },
+        ],
+      }));
+
+    const changedRegion = configure("--region", "eu-west-1");
+    expect(
+      changedRegion.status,
+      changedRegion.stdout + changedRegion.stderr,
+    ).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        region: "eu-west-1",
+        pendingActions: [
+          { id: "bedrock-model-access", status: "pending" },
+          { id: "codex-provider-configuration", status: "pending" },
+        ],
+      }));
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
+      ?.acknowledged).toBeUndefined();
+
+    expect(configure(
+      "--acknowledge",
+      "--mark-done",
+      "bedrock-model-access",
+    ).status).toBe(0);
+    const changedProfile = configure("--profile", "team-profile");
+    expect(
+      changedProfile.status,
+      changedProfile.stdout + changedProfile.stderr,
+    ).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        profile: "team-profile",
+        pendingActions: [
+          { id: "bedrock-model-access", status: "pending" },
+          { id: "codex-provider-configuration", status: "pending" },
+        ],
+      }));
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
+      ?.acknowledged).toBeUndefined();
+  }, 90_000);
 
   test("reapplying an unchanged provider answer repairs stale project overrides", () => {
     const project = install("claude");

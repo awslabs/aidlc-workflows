@@ -492,7 +492,7 @@ the two paths that actually exist for it:
 | Harness | `amazon-bedrock` records |
 |---------|--------------------------|
 | Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
-| Codex CLI | the AWS region and profile in `config.toml` |
+| Codex CLI | the AWS region and profile in the project record, then guides user-level provider setup in `$CODEX_HOME/config.toml` |
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
 | Cursor | that you configure the provider in Cursor yourself |
@@ -511,21 +511,21 @@ answer: whatever region that file carries, whether an earlier build's Bedrock
 answer put it there or you did, is kept across refreshes, and `--reset` leaves
 the file alone.
 
-Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
-credentials are never read as evidence that you are on your own subscription.
-Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
-which AI-DLC tracks as a pending action rather than performs.
+Every other harness asks whether to keep its current provider or opt in to
+Amazon Bedrock. Keeping the current provider is the default, including when AWS
+credentials are detected. Copilot and Cursor reach Bedrock through their own
+BYOK or provider settings, which AI-DLC tracks as a pending action rather than
+performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
 record. On every other unrecorded section it names that state instead of
 reporting a verified answer, and still exits zero because the shipped fallback
 bytes remain valid.
 
-On a Bedrock-oriented harness `unchanged` is always the second answer, and it
-becomes the default once something is recorded, so re-entering the section never
-silently rewrites a region or profile you already set. It names what it keeps,
-records nothing, and still reaches the mark-done prompts, so a pending action
-can be cleared without re-answering.
+On these harnesses `keep current` is the first answer and the default.
+`amazon-bedrock` is the second answer. Re-entering the section with the recorded
+Bedrock answer keeps the region and profile unless you explicitly replace them;
+pending actions can still be completed with `--mark-done`.
 
 ### Trust Diagnostics
 

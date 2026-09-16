@@ -1135,7 +1135,6 @@ function clearClaudeProvider(
   if (!hasLegacyClaudeProviderConfig(env)) return;
   for (const key of CLAUDE_BEDROCK_MODEL_KEYS) delete env[key];
   delete env.AWS_REGION;
-  delete env.AWS_PROFILE;
   settings.env = env;
   writeJson(settingsPath, settings);
 }
@@ -1268,11 +1267,42 @@ function writeOpenCodeProvider(
   writeJson(path, value);
 }
 
-function clearOpenCodeProvider(projectionRoot: string): void {
+function openCodeProviderMatchesRecord(
+  value: unknown,
+  record: ProvidersRecord | null,
+): boolean {
+  if (
+    record?.provider !== "amazon-bedrock" ||
+    record.opencodeDefault !== true ||
+    !isRecord(value)
+  ) {
+    return false;
+  }
+  const options = isRecord(value.options) ? value.options : {};
+  return (
+    options.region === record.region &&
+    (
+      record.profile
+        ? options.profile === record.profile
+        : !Object.hasOwn(options, "profile")
+    )
+  );
+}
+
+function clearOpenCodeProvider(
+  projectionRoot: string,
+  previousProvider: ProvidersRecord | null,
+): void {
   const path = join(projectionRoot, "opencode.json");
   const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
   if (!isRecord(value.provider)) return;
   const providers = { ...value.provider };
+  if (!openCodeProviderMatchesRecord(
+    providers["amazon-bedrock"],
+    previousProvider,
+  )) {
+    return;
+  }
   delete providers["amazon-bedrock"];
   if (Object.keys(providers).length > 0) value.provider = providers;
   else delete value.provider;
@@ -1309,6 +1339,7 @@ export function applyConfigDiagnosticRecords(
   harnessDir: string,
   harness: ModelHarness,
   records: ConfigDiagnosticRecords,
+  previousProvider: ProvidersRecord | null = null,
 ): void {
   // Owned harnesses record no provider answer; a legacy record is not applied
   // anywhere. The Kiro CLI MCP region is carried by preserveKiroMcpRegion from
@@ -1319,7 +1350,9 @@ export function applyConfigDiagnosticRecords(
   if (provider.provider === "current" || provider.provider === "other") {
     if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
     else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir);
-    else if (harness === "opencode") clearOpenCodeProvider(projectionRoot);
+    else if (harness === "opencode") {
+      clearOpenCodeProvider(projectionRoot, previousProvider);
+    }
     return;
   }
   if (!provider.region) return;
@@ -1823,7 +1856,7 @@ export function providerSurfaceIssues(
             "Codex project configuration still contains the legacy AI-DLC Bedrock defaults",
           );
         }
-      } else if (harness === "opencode") {
+      } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
         const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};

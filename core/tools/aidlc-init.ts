@@ -1603,10 +1603,6 @@ function providerRecordFromArgs(
     throw new Error("--provider must be current, amazon-bedrock, or other");
   }
   if (provider) {
-    if (provider !== current?.provider) {
-      delete next.acknowledged;
-      delete next.pendingActions;
-    }
     next.provider = provider;
     if (provider !== "amazon-bedrock") {
       delete next.region;
@@ -1627,6 +1623,15 @@ function providerRecordFromArgs(
       throw new Error("--opencode-default must be yes or no");
     }
     next.opencodeDefault = opencodeDefault === "yes";
+  }
+  if (
+    next.provider !== current?.provider ||
+    next.region !== current?.region ||
+    next.profile !== current?.profile ||
+    next.opencodeDefault !== current?.opencodeDefault
+  ) {
+    delete next.acknowledged;
+    delete next.pendingActions;
   }
   if (argv.includes("--acknowledge")) next.acknowledged = true;
   if (!next.provider) {
@@ -3635,6 +3640,17 @@ function preserveClaudeProviderFields(
   if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(current)) {
+    if (
+      key !== "companyAnnouncements" &&
+      key !== "permissions" &&
+      key !== "statusLine" &&
+      key !== "env" &&
+      key !== "hooks"
+    ) {
+      staged[key] = value;
+    }
+  }
   const currentEnv = current.env && typeof current.env === "object" &&
       !Array.isArray(current.env)
     ? { ...current.env as Record<string, unknown> }
@@ -3665,42 +3681,101 @@ const CODEX_PROVIDER_TOP_LEVEL_KEYS = [
   "model_reasoning_effort",
 ] as const;
 
-function withoutCodexProviderFields(content: string): string {
-  const keys = CODEX_PROVIDER_TOP_LEVEL_KEYS.join("|");
-  const withoutAssignments = content.replace(
-    new RegExp(`^(?:${keys})\\s*=.*(?:\\r?\\n|$)`, "gm"),
-    "",
-  );
-  const lines = withoutAssignments.split(/\r?\n/);
-  const kept: string[] = [];
-  let dropping = false;
-  for (const line of lines) {
-    const table = /^\s*\[([^\]]+)\]\s*$/.exec(line)?.[1];
-    if (table !== undefined) dropping = table.startsWith("model_providers.");
-    if (!dropping) kept.push(line);
-  }
-  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
-}
+const CODEX_FRAMEWORK_TABLES = new Set([
+  "agents",
+  "features",
+  "tools",
+  "tui",
+]);
 
-function codexProviderFields(content: string): string {
-  const assignments = CODEX_PROVIDER_TOP_LEVEL_KEYS.flatMap((key) => {
-    const match = new RegExp(`^${key}\\s*=.*$`, "m").exec(content);
-    return match ? [match[0]] : [];
-  });
+function codexUserConfiguration(
+  content: string,
+): {
+  assignments: Array<{ key: string; text: string }>;
+  sections: Array<{ name: string; text: string }>;
+} {
+  const firstTable = content.search(/^\s*\[/m);
+  const preamble = firstTable < 0 ? content : content.slice(0, firstTable);
+  const legacy = hasLegacyCodexProviderConfig(content);
+  const assignments = [...preamble.matchAll(
+    /^([A-Za-z0-9_.-]+)\s*=.*$/gm,
+  )]
+    .filter((match) =>
+      !legacy ||
+      !CODEX_PROVIDER_TOP_LEVEL_KEYS.includes(
+        match[1] as typeof CODEX_PROVIDER_TOP_LEVEL_KEYS[number],
+      )
+    )
+    .map((match) => ({ key: match[1], text: match[0] }));
   const lines = content.split(/\r?\n/);
-  const sections: string[] = [];
-  let current: string[] | null = null;
+  const sections: Array<{ name: string; text: string }> = [];
+  let current: { name: string; lines: string[] } | null = null;
   for (const line of lines) {
     const table = /^\s*\[([^\]]+)\]\s*$/.exec(line)?.[1];
     if (table !== undefined) {
-      if (current) sections.push(current.join("\n").trimEnd());
-      current = table.startsWith("model_providers.") ? [line] : null;
+      if (current) {
+        sections.push({
+          name: current.name,
+          text: current.lines.join("\n").trimEnd(),
+        });
+      }
+      current = { name: table, lines: [line] };
       continue;
     }
-    if (current) current.push(line);
+    if (current) current.lines.push(line);
   }
-  if (current) sections.push(current.join("\n").trimEnd());
-  return [...assignments, ...sections].filter(Boolean).join("\n\n");
+  if (current) {
+    sections.push({
+      name: current.name,
+      text: current.lines.join("\n").trimEnd(),
+    });
+  }
+  return {
+    assignments,
+    sections: sections.filter((section) =>
+      !CODEX_FRAMEWORK_TABLES.has(section.name) &&
+      !(
+        legacy &&
+        section.name.startsWith("model_providers.amazon-bedrock")
+      )
+    ),
+  };
+}
+
+function mergeCodexUserConfiguration(
+  staged: string,
+  current: string,
+): string {
+  const user = codexUserConfiguration(current);
+  let merged = staged;
+  for (const assignment of user.assignments) {
+    const pattern = new RegExp(
+      `^${assignment.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=.*(?:\\r?\\n|$)`,
+      "m",
+    );
+    merged = pattern.test(merged)
+      ? merged.replace(pattern, `${assignment.text}\n`)
+      : `${assignment.text}\n${merged}`;
+  }
+  for (const section of user.sections) {
+    const escaped = section.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(
+      `^\\[${escaped}\\]\\r?\\n[\\s\\S]*?(?=^\\[|\\s*$)`,
+      "m",
+    );
+    if (pattern.test(merged)) {
+      merged = merged.replace(pattern, `${section.text}\n\n`);
+    } else {
+      const firstFrameworkTable = merged.search(
+        /^\[(?:agents|features|tools|tui)\]\s*$/m,
+      );
+      merged = firstFrameworkTable < 0
+        ? `${merged.trimEnd()}\n\n${section.text}\n`
+        : `${merged.slice(0, firstFrameworkTable).trimEnd()}\n\n` +
+          `${section.text}\n\n${merged.slice(firstFrameworkTable)}`;
+    }
+  }
+  return `${merged.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
 function preserveCodexProviderFields(
@@ -3713,15 +3788,37 @@ function preserveCodexProviderFields(
   const stagedPath = join(stagedRoot, relative);
   if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = readFileSync(currentPath, "utf-8");
-  if (hasLegacyCodexProviderConfig(current)) return;
-  const fields = codexProviderFields(current);
-  if (!fields) return;
-  const staged = withoutCodexProviderFields(readFileSync(stagedPath, "utf-8"));
-  const firstTable = staged.search(/^\s*\[/m);
-  const merged = firstTable < 0
-    ? `${staged}\n\n${fields}\n`
-    : `${staged.slice(0, firstTable).trimEnd()}\n\n${fields}\n\n${staged.slice(firstTable).trimStart()}\n`;
-  writeFileSync(stagedPath, merged);
+  writeFileSync(
+    stagedPath,
+    mergeCodexUserConfiguration(
+      readFileSync(stagedPath, "utf-8"),
+      current,
+    ),
+  );
+}
+
+function preserveOpenCodeProviderFields(
+  projectDir: string,
+  stagedRoot: string,
+): void {
+  const currentPath = join(projectDir, "opencode.json");
+  const stagedPath = join(stagedRoot, "opencode.json");
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
+  if (!current.provider || typeof current.provider !== "object" ||
+      Array.isArray(current.provider)) {
+    return;
+  }
+  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const stagedProviders = staged.provider && typeof staged.provider === "object" &&
+      !Array.isArray(staged.provider)
+    ? staged.provider as Record<string, unknown>
+    : {};
+  staged.provider = {
+    ...stagedProviders,
+    ...current.provider as Record<string, unknown>,
+  };
+  writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
 }
 
 function preserveUserProviderFields(
@@ -3740,6 +3837,8 @@ function preserveUserProviderFields(
     );
   } else if (harness === "codex") {
     preserveCodexProviderFields(projectDir, stagedRoot, harnessDir);
+  } else if (harness === "opencode") {
+    preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
 }
 
@@ -3864,6 +3963,7 @@ function prepareRefreshSource(
       trust: normalizeTrustRecord(staged.trust),
       project: normalizeProjectChoicesRecord(staged.project),
     },
+    previousProvider,
   );
   for (const directory of descriptor.managedDirectories) {
     const stagedDirectory = join(root, directory);
