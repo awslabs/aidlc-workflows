@@ -1658,6 +1658,15 @@ describe("AttemptView projections and refusal streaks", () => {
       '"Request Changes"',
       "Request Changes.",
       "  Request   Changes  ",
+      // The question-rendering guide asks the conductor to append this to the
+      // recommended option's label, and the picker returns the decorated label.
+      "Request Changes (Recommended)",
+      "request changes (recommended)",
+      // The decorator is stripped after the quote and punctuation tolerance
+      // above, so it still matches when either of those wraps it.
+      '"Request Changes (Recommended)"',
+      "Request Changes (Recommended).",
+      "B. Request Changes (Recommended)",
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }
