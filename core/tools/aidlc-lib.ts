@@ -18576,6 +18576,20 @@ export interface RepoResolution {
 //   - multiple recorded repos: --repo is REQUIRED to disambiguate; it must name one
 //     of the set.
 // Throws (string message) on any disambiguation failure so the tool can surface it.
+//
+// A repo NAME becomes a working DIRECTORY through repoDir (an immediate child of
+// the workspace root). That is right for a multi-repo workspace and wrong whenever
+// the workspace root IS the repository, where no such child exists — so the
+// resolved cwd is verified rather than returned unchecked, and the caller gets a
+// message naming the path instead of a downstream git failure in a missing dir.
+function repoCwdOrThrow(projectDir: string, repoName: string): string {
+  const cwd = repoDir(projectDir, repoName);
+  if (existsSync(cwd)) return cwd;
+  throw new Error(
+    `Repo "${repoName}" resolves to ${cwd}, which does not exist. A recorded repo (or --repo) names a checkout that must be an immediate child of the workspace root. If the workspace root IS the repository, record no repos and pass no --repo.`,
+  );
+}
+
 export function resolveConstructionRepo(
   projectDir: string,
   requestedRepo: string | undefined,
@@ -18597,14 +18611,14 @@ export function resolveConstructionRepo(
     // repos.length === 0 (legacy) AND an explicit --repo: honour it as a sibling
     // anchor (the caller may be operating multi-repo on an unrecorded intent),
     // resolving cwd to the named sibling dir.
-    return { repo: requestedRepo, cwd: repoDir(projectDir, requestedRepo) };
+    return { repo: requestedRepo, cwd: repoCwdOrThrow(projectDir, requestedRepo) };
   }
   if (repos.length === 0) {
     // Legacy single-repo / projectDir-is-the-repo: run git in projectDir's cwd.
     return { repo: null, cwd: projectDir };
   }
   if (repos.length === 1) {
-    return { repo: repos[0], cwd: repoDir(projectDir, repos[0]) };
+    return { repo: repos[0], cwd: repoCwdOrThrow(projectDir, repos[0]) };
   }
   throw new Error(
     `This intent spans ${repos.length} repos (${repos.join(", ")}); pass --repo <name> to disambiguate which to operate on.`,
