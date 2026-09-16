@@ -13,6 +13,7 @@ requires_stage:
   - workspace-detection
 sensors: []
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp

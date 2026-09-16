@@ -47,6 +47,7 @@ sensors:
   - type-check
   - traceability
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp

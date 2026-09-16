@@ -12,6 +12,7 @@ requires_stage:
   - workspace-scaffold
 sensors: []
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp
