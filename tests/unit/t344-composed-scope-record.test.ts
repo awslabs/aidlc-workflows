@@ -1,6 +1,6 @@
 // covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack
 //
-// t340 - the durable composed-scope RECORD contract.
+// t344 - the durable composed-scope RECORD contract.
 //
 // A composer-authored scope has no producer in core/, so a bare re-transpose
 // cannot rebuild it. Before this record existed, compile folded it back from the
@@ -45,7 +45,7 @@ const IDENTITY = [
   "name: lean-feature",
   "depth: Minimal",
   "keywords: []",
-  "description: composed by t340",
+  "description: composed by t344",
   "---",
   "",
   "# lean-feature",
@@ -76,7 +76,7 @@ function recordFor(
 
 const STOCK = new Set(["bugfix", "classic"]);
 
-describe("t340 record format round-trip", () => {
+describe("t344 record format round-trip", () => {
   test("the sentinels were actually emitted (guards the two constants above)", () => {
     expect(BEGIN).toContain("BEGIN aidlc composed-scope-grid");
     expect(END).toBe("<!-- END aidlc composed-scope-grid -->");
@@ -170,7 +170,7 @@ describe("t340 record format round-trip", () => {
 // carries frontmatter keys and a multi-heading prose body the synthetic case
 // does not. If the format only survives artifacts we invented, it does not
 // survive.
-describe("t340 round-trip over a real composer-authored scope", () => {
+describe("t344 round-trip over a real composer-authored scope", () => {
   const FIXTURE_DIR = join(
     dirname(fileURLToPath(import.meta.url)),
     "..",
@@ -212,7 +212,7 @@ describe("t340 round-trip over a real composer-authored scope", () => {
 // in their prose as the grid — resolving the scope to a DIFFERENT set of executed
 // stages — and drop every authored line after the collision on the next
 // write-back. These cases pin that the sentinel boundary is immune.
-describe("t340 authored prose cannot capture the grid boundary", () => {
+describe("t344 authored prose cannot capture the grid boundary", () => {
   const hostile = [
     "---",
     "name: hostile",
@@ -297,7 +297,7 @@ describe("t340 authored prose cannot capture the grid boundary", () => {
   });
 });
 
-describe("t340 record parse failures name the file and never degrade silently", () => {
+describe("t344 record parse failures name the file and never degrade silently", () => {
   // Build a body with a real generated region so each case isolates ONE defect.
   const withRegion = (frontmatter: string, fence: string): string =>
     `${frontmatter}\n\n${BEGIN}\n\n\`\`\`json\n${fence}\n\`\`\`\n\n${END}\n`;
@@ -384,7 +384,7 @@ describe("t340 record parse failures name the file and never degrade silently", 
   });
 });
 
-describe("t340 composedFoldBack source priority", () => {
+describe("t344 composedFoldBack source priority", () => {
   const installed = new Set(["lean", "older", "bugfix", "classic"]);
 
   test("a record wins over a conflicting on-disk grid column", () => {

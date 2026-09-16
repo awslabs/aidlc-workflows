@@ -2356,7 +2356,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t340-composed-scope-record.test.ts",
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
           "mechanism": "none"
         }
       ],
@@ -4694,7 +4694,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t340-composed-scope-record.test.ts",
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
           "mechanism": "none"
         }
       ],
@@ -5743,7 +5743,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t340-composed-scope-record.test.ts",
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
           "mechanism": "none"
         }
       ],
