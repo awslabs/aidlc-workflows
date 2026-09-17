@@ -1673,6 +1673,14 @@ describe("AttemptView projections and refusal streaks", () => {
       "B. Request Changes (Recommended)",
       // The decorator composes with a numeric prefix, case, and punctuation.
       "2) request changes (recommended).",
+      // The decorator must compose both inside and outside the wrappers.
+      // These rows pin the direction a fixed-order normalization would drop.
+      // The decorator sits outside trailing punctuation.
+      "Request Changes. (Recommended)",
+      // The decorator sits outside surrounding quotes.
+      '"Request Changes" (Recommended)',
+      // Quotes sit inside and punctuation outside the decorator.
+      '"Request Changes (Recommended)".',
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }

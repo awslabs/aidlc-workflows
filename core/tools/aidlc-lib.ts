@@ -7522,19 +7522,16 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 // themselves must be present; a paraphrase ("please change it") is not a
 // choice. Plan Approval keeps its exact-label rule because those labels are the
 // anti-forgery binding.
-// The decorator is removed after prefix, quotes, and punctuation so those
-// tolerances compose with it.
+// Shape of an accepted reply: optional option prefix, then the words
+// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
+// most ONE "(recommended)" decorator, then wrapper noise again. Because the
+// noise is allowed on both sides of the decorator, the decorator composes with
+// quotes and punctuation whether it sits inside or outside them, and there is
+// no pass ordering that can silently drop one direction (PR #1133 review).
+const REQUEST_CHANGES_CHOICE_RE =
+  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
 export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  const normalized = stripRecommendedDecorator(
-    (text ?? "")
-      .trim()
-      .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
-      .replace(/^["'`]+|["'`]+$/g, "")
-      .replace(/[.!]+$/, ""),
-  )
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-  return normalized === "request changes";
+  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
 // The Codex question-rendering guide tells the conductor to append
