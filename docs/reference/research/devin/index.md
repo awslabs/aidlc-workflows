@@ -105,6 +105,8 @@ git show 6e208f7b:docs/reference/research/devin/devin-harness-port-plan.md
 | stop-hook-read-only-probe-plan.md | DEVIN-11 |
 | testing-contract-repair-observability-plan.md | DEVIN-12 |
 
+`pr-996-item-1-plan-approval-session-isolation-plan.md` (DEVIN-09) was folded into findings 09/14 after the fix landed in `8bbdb928` and is not in the `6e208f7b` baseline; recover it with `git show 8bbdb928:docs/reference/research/devin/pr-996-item-1-plan-approval-session-isolation-plan.md`.
+
 Old per-fix release-number recipes are intentionally omitted. Follow the current repository Release Metadata Policy: feature, fix, documentation, refactor, and test changes do not independently bump the framework version; explicit release preparation owns synchronized version/badge/changelog updates.
 
 ## Related documentation

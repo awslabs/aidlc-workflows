@@ -70,7 +70,7 @@ A broader acceptance session needs a disposable project outside this checkout, i
 | Skill and rule loading | User-only invocation policy; actual beginning/end context visibility, not only a rules listing |
 | SessionStart and blocking | Genuine startup produces evidence; a harmless test denial preserves the sentinel file and surfaces its reason |
 | Human questions | Single and multiple choices, Other, skip, cancellation, and partial answers retain identity and never manufacture approval |
-| Plan Approval | Real offered choice and human response certify current content; stale/wrong-session evidence refuses; Stop consultation preserves the challenge |
+| Plan Approval | Real offered choice and human response certify current content; stale/wrong-session evidence refuses; Stop consultation preserves the challenge; session isolation per the protocol below |
 | Native dispatch | Exact profile/task field translation, augmented task content, supported reviewer identity, and no silent inline fallback |
 | Background work | Distinguish launch, pending, terminal, repeated read, failure, cancellation, and resume across adapter processes |
 | Ensemble modes | Ordered pipeline receipts; support contribution identity; parent-owned human questions; unavailable delegation uses explicit recovery |
@@ -78,6 +78,8 @@ A broader acceptance session needs a disposable project outside this checkout, i
 | Desktop/platform differences | Record actual host/platform results rather than treating discovery stubs as execution evidence |
 
 If a required contract is unavailable, record BLOCKED with the missing evidence and owner decision. Do not guess child identity or introduce lifecycle counts without a terminal path.
+
+**Plan Approval session-isolation protocol** (executed 2026-09-17; see `evidence/devin-e2e-run/session-isolation-run/`): run the workflow to the Plan Approval prompt in session A and leave it pending. In a second interactive session B in the same project, type `Approve Plan` — no `response-*.json` or receipt may appear under `aidlc/.aidlc-sessions/plan-approval/` for A. Then run `aidlc-log.ts answer --checkpoint plan-approval --session <B>` with the `[Answer]` tag filled as B's conductor would, and confirm the refusal `Plan Approval requires the actual offered choice from this prompt and session`. Approve in A via the native prompt, hash the receipt, `/clear`, resume, and confirm the same receipt path is honored without a new approval prompt; if a re-prompt occurs, record the guard's stated reason before retrying (a missing `AIDLC-STAGE`/`AIDLC-UNIT` marker block is a dispatch translation failure, not an approval one). Only the current session can be exported (`--export` writes it each turn; `/clear` starts a new session), so enable export from the start of every session whose transcript matters.
 
 ## Maintaining this record
 

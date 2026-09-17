@@ -1,6 +1,6 @@
 # Plan Approval sessions, challenges, responses, and receipts
 
-**Finding:** DEVIN-09. **Status:** Strict session pairing implemented, regression-covered, and accepted live on Devin CLI 3000.10.31 (2026-09-17); receipt reuse without re-prompt remains inconclusive because DEVIN-07 blocks every developer dispatch. **Source baseline:** `bce80f29` plus uncommitted Item 1 fix. **Fact-checked:** 2026-09-17.
+**Finding:** DEVIN-09. **Status:** Strict session pairing implemented, regression-covered, and accepted live on Devin CLI 3000.10.31 (2026-09-17); receipt reuse without re-prompt remains inconclusive because DEVIN-07 blocks every developer dispatch. **Source baseline:** `8bbdb928` (Item 1 fix on `feat/devin-harness`). **Fact-checked:** 2026-09-17.
 
 ## Why this was needed
 
@@ -37,9 +37,15 @@ The native task/prompt mismatch from DEVIN-07 also affects what dispatch evidenc
 | Receipt reuse after session change | A valid certified receipt survives `/clear`/restart without a new approval | Live S5: persistence and later honoring observed; no-re-prompt inconclusive until DEVIN-07 dispatch translation is fixed |
 | Re-entry and Stop | Observer consultation preserves live authority; ordinary publication remains distinct | DEVIN-11; t328-authority-rebinding integration |
 
+### Session-isolation matrix (upgrade checklist)
+
+When session resolution or approval storage changes, the deterministic isolation cases to keep green are: a reply supplied for session A while only B holds a pending challenge records nothing for either session; certification requested for A while B holds a complete challenge/response pair with identical plan identity refuses; A holding a challenge but no response cannot consume B's pair (the partial-miss branch); a response written while `.current-session` points at B still lands under the supplied session; `Request Changes` under the wrong session neither consumes B's response nor clears a matching durable receipt; blank, unknown, or intent-UUID session ids never redirect to B's authority; and results never depend on the pointer's position between decision, response, and certification. These live in the `Item 1 session isolation` suite of `t328-plan-approval-runtime-authority`, with CLI/hook and adapter-transport variants in t265 and t332.
+
+Removing the fallbacks prevents new miscertification; it does not prove receipts minted before the fix were correctly attributed, and no bulk migration or invalidation of existing protected state was performed. Same-session delayed replies, session-filename sanitization, and hostile same-user environment manipulation remain out of scope.
+
 ## Superseded approaches and history
 
-`dafe8bec` added the current-session fallback for an observed session-identifier mismatch; the Item 1 fix removed it because the fallback let a challenge/response pair recorded under one session certify authority requested for another. Shared authority rebinding also separates approval identity from incidental directive issuance. The current implementation, not old development-version headings, determines the contract.
+`dafe8bec` added the current-session fallback for an observed session-identifier mismatch; `8bbdb928` removed it because the fallback let a challenge/response pair recorded under one session certify authority requested for another. The implementation plan for that fix was folded into this finding and DEVIN-14 and removed from the tree; recover it with `git show 8bbdb928:docs/reference/research/devin/pr-996-item-1-plan-approval-session-isolation-plan.md`. Shared authority rebinding also separates approval identity from incidental directive issuance. The current implementation, not old development-version headings, determines the contract.
 
 Retired: a matching state hash alone proves continuation validity; next must immediately return run-stage; successful HUMAN_TURN or a Markdown label is a valid Plan Approval receipt. The first historical live run's manually seeded authority is not a successful human-gate test.
 
