@@ -9053,7 +9053,8 @@ export function checkSummaryConfirmationEvidence(
       return failure(
         "SUMMARY_HASH_SCOPE_INVALID",
         `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
-          `Hash Scope "${hashScope}". ${recovery}`,
+          `Hash Scope "${hashScope}". Supported: ` +
+          `"${SUMMARY_CONFIRMATION_HASH_SCOPE}". ${recovery}`,
         "stale",
       );
     }
@@ -11036,12 +11037,17 @@ export function reviewCompletionMatchesRequest(
 export const REVIEW_RECORDS_DIR = toPosix(join(engineDirFor(""), "reviews"));
 const REVIEW_RECORD_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+const REVIEW_FINDING_FIXED_STATUS_VALUES = [
+  "New",
+  "Unresolved",
+  "Resolved",
+  "Accepted risk",
+] as const;
+const REVIEW_FINDING_REJECTED_PREFIX = "Rejected: ";
+
 export type ReviewFindingStatus =
-  | "New"
-  | "Unresolved"
-  | "Resolved"
-  | "Accepted risk"
-  | `Rejected: ${string}`;
+  | (typeof REVIEW_FINDING_FIXED_STATUS_VALUES)[number]
+  | `${typeof REVIEW_FINDING_REJECTED_PREFIX}${string}`;
 
 export interface ReviewFinding {
   artifact: string;
@@ -11109,13 +11115,18 @@ function splitMarkdownRow(line: string): string[] {
   return cells;
 }
 
+/** Human-readable form of the same values used by the type and predicate. */
+export const REVIEW_FINDING_STATUS_VALUES =
+  `${REVIEW_FINDING_FIXED_STATUS_VALUES.join(", ")}, or ` +
+  `"${REVIEW_FINDING_REJECTED_PREFIX}<reason>"`;
+
 export function validReviewFindingStatus(value: string): value is ReviewFindingStatus {
+  const rejectedReason = value.startsWith(REVIEW_FINDING_REJECTED_PREFIX)
+    ? value.slice(REVIEW_FINDING_REJECTED_PREFIX.length)
+    : null;
   return (
-    value === "New" ||
-    value === "Unresolved" ||
-    value === "Resolved" ||
-    value === "Accepted risk" ||
-    /^Rejected: \S[\s\S]*$/.test(value)
+    REVIEW_FINDING_FIXED_STATUS_VALUES.some((status) => status === value) ||
+    (rejectedReason !== null && /^\S[\s\S]*$/.test(rejectedReason))
   );
 }
 
@@ -11199,8 +11210,12 @@ export function parseReviewSection(
     }
     const status = value("Status");
     if (!validReviewFindingStatus(status)) {
+      // Name the accepted set: "Fixed" is the word a reviewer reaches for once a
+      // human has fixed something, so the rejected value alone leaves them
+      // guessing at an enum that is right here.
       throw new Error(
-        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}`,
+        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}. ` +
+          `Valid statuses: ${REVIEW_FINDING_STATUS_VALUES}.`,
       );
     }
     const finding: ReviewFinding = {

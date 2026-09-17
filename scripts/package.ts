@@ -93,7 +93,7 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
-import { ROUTES } from "../core/tools/aidlc.ts";
+import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
@@ -1096,31 +1096,13 @@ function rewriteNativeInvocations(
 ): void {
   projectNativeRootIntegrations(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
-  const delegateNames = [
-    "audit",
-    "bolt",
-    "graph",
-    "init",
-    "jump",
-    "learnings",
-    "lifecycle",
-    "log",
-    "orchestrate",
-    "runner-gen",
-    "runtime",
-    "sensor",
-    "sensor-claim-sources",
-    "sensor-linter",
-    "sensor-required-sections",
-    "sensor-type-check",
-    "sensor-upstream-coverage",
-    "state",
-    "swarm",
-    "utility",
-    "validate",
-    "worktree",
-    "workspace-sync",
-  ].join("|");
+  // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
+  // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
+  // covered by both the rewrite and bareToolCheck. The leftover checks below
+  // still reject a rewrite to a non-route.
+  const delegateNames = Object.values(TOOLS)
+    .map((file) => escapeRegExp(file.slice("aidlc-".length, -".ts".length)))
+    .join("|");
   // The authored subprocess adapters, each backed by an `aidlc engine adapter
   // <harness>` dispatcher route. Only these project onto that route; any other
   // hook file keeps the generic one-argument `engine hook <name>` rewrite.

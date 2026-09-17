@@ -44,8 +44,10 @@ import {
   consumedArtifactProducerCollisions,
   findCycles,
   frameworkMemorySeedDir,
+  loadComposedScopeRecords,
   loadGraph,
   loadRules,
+  loadScopeGrid,
   memoryDirFor,
   selectionDroppedOrderingEdges,
   stageGraphDrift,
@@ -157,6 +159,7 @@ import {
   loadScopeMapping,
   loadStageGraph,
   loadStageGraphAll,
+  loadScopeMetadata,
   loadScopeMetadataAll,
   MERGE_SUCCEEDED_TAG_REGEX,
   migrateFlatLayout,
@@ -454,7 +457,31 @@ function die(msg: string): never {
 function validateIntentCreateFlagValues(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
+  positional: string[] = [],
+  verbTokens?: number,
 ): void {
+  // Creation takes every input as a flag and never a positional, so anything past the
+  // verb means the shell split a value that was not quoted. The common case is
+  // `--arguments=deploy this and that`: the shell hands over `--arguments=deploy` plus
+  // orphaned words, and the description is silently stored as "deploy".
+  // project-description.json is written once and is the [desc] source register for the
+  // whole run, so a silent prefix is unrecoverable data loss - refuse instead.
+  //
+  // verbTokens is 2 for the `intent create` alias and 1 for `intent-create`.
+  // It is omitted for the retired `init` command so that command keeps its
+  // dedicated transition refusal.
+  if (verbTokens !== undefined && positional.length > verbTokens) {
+    const orphans = positional.slice(verbTokens);
+    const hint = flags.arguments !== undefined
+      ? ` This usually means an unquoted --arguments=... was split by the shell: ` +
+        `only ${JSON.stringify(flags.arguments)} would have been kept. ` +
+        `Quote the whole value, e.g. --arguments="<full description>".`
+      : " Pass every value through a flag, quoting any value that contains spaces.";
+    die(
+      `intent-create does not accept positional arguments, but received ` +
+        `${orphans.map((word) => JSON.stringify(word)).join(", ")}.${hint}`,
+    );
+  }
   // Creation names the new intent itself, so an --intent selector has nothing
   // to select; --space is the one selector creation takes (the target space).
   if (flags.intent !== undefined || missingValueFlags.has("intent")) {
@@ -4870,6 +4897,140 @@ export async function collectDoctorReport(
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Composed scope durability
+  //
+  // A composer-authored scope is workflow data, but its harness projection lives
+  // in a GENERATED tree (scopes/aidlc-<name>.md + a scope-grid.json column). The
+  // durable copy is the aidlc/scopes/<name>.md record; compile projects it. Three
+  // ways that pairing can break, none of which any other check sees:
+  //
+  //   (a) PHANTOM — an identity file with no grid column. loadScopeMapping falls
+  //       back to `{}` for a missing column, so the scope stays "valid" and
+  //       resolves as an all-SKIP plan. Scope validation cannot catch it: an
+  //       all-SKIP grid walks no consumes, so it reports zero errors. This is the
+  //       shape a copy-channel reinstall leaves behind. Reported in two arms,
+  //       because a record makes it compile-recoverable and its absence does not:
+  //       the transpose emits a column only for a name some stage declares, so
+  //       naming compile for a recordless one would be a remedy that never lands.
+  //   (b) UNPROJECTED — a durable record whose harness identity file is absent,
+  //       so `--scope <name>` does not resolve at all until the next compile.
+  //   (c) DANGLING — a RUNNABLE workflow whose recorded Scope has no definition
+  //       anywhere. Typically a collaborator's checkout missing aidlc/scopes/.
+  //
+  // All three FAIL rather than advise: every one of them silently changes which
+  // stages a workflow will run, which is the class of defect a health check
+  // exists to make loud. Plugin-owned scopes are excluded — a disabled plugin's
+  // scope legitimately has no grid column (the selection filter drops it), and
+  // the plugin checks own that state.
+  //
+  // What this does NOT check: whether a record's descriptive frontmatter (depth,
+  // description, keywords) still matches its projected file. The grid always comes
+  // from the record, so a divergence cannot change which stages run; and compile
+  // deliberately leaves an existing identity file alone rather than overwrite a
+  // hand-edit. Reconciling would mean choosing to clobber that edit, which is a
+  // behavior change, not a durability fix. The docs say so explicitly.
+  // ---------------------------------------------------------------------------
+  try {
+    const stockScopeNames = new Set<string>();
+    for (const stage of loadGraph()) {
+      for (const name of stage.scopes ?? []) stockScopeNames.add(name);
+    }
+    const grid = loadScopeGrid();
+    const records = loadComposedScopeRecords();
+    const enabled = loadScopeMetadata();
+    const compileFix = `run \`${aidlcToolInvocation("graph")} compile\``;
+
+    // A missing column is reported either way, but the two causes have different
+    // exits, so they are counted apart. With a record, compile rebuilds the column
+    // from it. Without one there is nothing to project and the transpose emits a
+    // column only for a name some stage declares in its `scopes:` frontmatter, so
+    // compile will keep exiting 0 and leaving the row red — telling the user to run
+    // it would be a remedy that cannot reach the cause.
+    const phantoms: string[] = [];
+    const phantomsNoRecord: string[] = [];
+    for (const [name, meta] of Object.entries(enabled)) {
+      if (meta.plugin !== undefined || stockScopeNames.has(name)) continue;
+      const stages = grid[name]?.stages;
+      if (stages !== undefined && Object.keys(stages).length > 0) continue;
+      (records[name] === undefined ? phantomsNoRecord : phantoms).push(name);
+    }
+    const unprojected = Object.keys(records)
+      .filter((name) => enabled[name] === undefined)
+      .sort();
+    const dangling: string[] = [];
+    for (const space of listSpaces(projectDir)) {
+      for (const intent of listIntents(projectDir, space.name)) {
+        // Only workflows that can still run. A finished workflow needs no scope
+        // definition, and holding one to this standard would be unrecoverable:
+        // `intent archive` refuses a completed intent outright, so the only exit
+        // would be recreating a scope the user deliberately deleted. Mirrors the
+        // enumeration activeWorkflowDependencyViolations already uses in this file
+        // (which t224 pins), so completion releases this check the same way it
+        // releases the plugin-selection block.
+        if (isArchivedIntent(intent) || intent.status === "complete" || !intent.dirName) {
+          continue;
+        }
+        const sp = stateFilePath(projectDir, intent.dirName, space.name);
+        if (!existsSync(sp)) continue;
+        const content = readFileSync(sp, "utf-8");
+        const status = getField(content, "Status") ?? "";
+        if (status === "Completed" || status === "Archived") continue;
+        const scope = getField(content, "Scope");
+        if (scope && !validScopes().has(scope)) {
+          dangling.push(`${space.name}/${intent.dirName} → "${scope}"`);
+        }
+      }
+    }
+
+    const total =
+      phantoms.length + phantomsNoRecord.length + unprojected.length + dangling.length;
+    if (total === 0) {
+      const count = Object.keys(records).length;
+      results.push({
+        pass: true,
+        label: count === 0
+          ? "Composed scope durability: no composed scopes"
+          : `Composed scope durability: ${count} composed scope(s) recorded and projected`,
+      });
+    } else {
+      const detail = [
+        phantoms.length > 0
+          ? `${phantoms.length} with no grid column (resolves as an empty all-SKIP plan) [${phantoms.join(", ")}]`
+          : "",
+        phantomsNoRecord.length > 0
+          ? `${phantomsNoRecord.length} with no grid column and no record to rebuild it from (resolves as an empty all-SKIP plan) [${phantomsNoRecord.join(", ")}]`
+          : "",
+        unprojected.length > 0
+          ? `${unprojected.length} recorded but not projected into ${harnessDir()}/scopes/ [${unprojected.join(", ")}]`
+          : "",
+        dangling.length > 0
+          ? `${dangling.length} workflow(s) reference an unresolvable scope [${dangling.join(", ")}]`
+          : "",
+      ].filter(Boolean).join("; ");
+      const fixes = [
+        phantoms.length > 0 || unprojected.length > 0 ? compileFix : "",
+        phantomsNoRecord.length > 0
+          ? `${compileFix} cannot rebuild a column with no record behind it: one is emitted only for a scope some stage declares in its \`scopes:\` frontmatter. Either restore the scope's \`aidlc/scopes/<name>.md\` record and ${compileFix}, finish authoring the scope by tagging the stages that belong to it (see the harness-engineering scopes guide) and ${compileFix}, or delete ${harnessDir()}/scopes/aidlc-<name>.md`
+          : "",
+        dangling.length > 0
+          ? `for an unresolvable scope, restore its \`aidlc/scopes/<name>.md\` record (a composed scope travels with the shared \`aidlc/\` tree, so pull it from the collaborator or checkout that composed it), then ${compileFix}`
+          : "",
+      ].filter(Boolean).join(". ");
+      results.push({
+        pass: false,
+        label: `Composed scope durability: ${total} problem(s) - ${detail}`,
+        fix: fixes,
+      });
+    }
+  } catch (e) {
+    results.push({
+      pass: false,
+      label: "Composed scope durability: check failed",
+      fix: errorMessage(e),
+    });
+  }
+
   // Schema validation — parse + validate every stage's YAML frontmatter.
   // Uses the same library functions every other caller does; drift impossible.
   // Tracks attempted vs valid separately so the label can't silently say
@@ -9056,7 +9217,12 @@ export async function main(argv: string[]): Promise<void> {
     space: missingValueFlags.has("space") ? undefined : flags.space,
   };
   if (isIntentCreate) {
-    validateIntentCreateFlagValues(flags, missingValueFlags);
+    validateIntentCreateFlagValues(
+      flags,
+      missingValueFlags,
+      positional,
+      subcommand === "intent" ? 2 : subcommand === "intent-create" ? 1 : undefined,
+    );
   }
   if (subcommand === "config-change" || subcommand === "scope-change") {
     validateIntentSettingsArgs(subcommand, rawArgs, positional, flags, missingValueFlags);
