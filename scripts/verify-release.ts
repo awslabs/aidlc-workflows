@@ -10,6 +10,8 @@ import {
   PREVIEW_CHANNEL,
 } from "../core/tools/aidlc-channel.ts";
 import {
+  digest,
+  releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../core/tools/aidlc-release.ts";
@@ -196,8 +198,18 @@ function verifyCandidate(args: string[]): void {
   }
 
   const bundleName = "aidlc-release.intoto.jsonl";
+  const copyRuntimeName = releaseCopyRuntimeAsset(manifest.version);
+  const copyRuntimeChecksumName = `${copyRuntimeName}.sha256`;
+  const copyRuntimePath = join(directory, copyRuntimeName);
+  const copyRuntimeChecksumPath = join(directory, copyRuntimeChecksumName);
+  const expectedCopyRuntimeChecksum = `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`;
+  if (readFileSync(copyRuntimeChecksumPath, "utf-8") !== expectedCopyRuntimeChecksum) {
+    throw new Error(`${copyRuntimeChecksumName} does not authenticate ${copyRuntimeName}`);
+  }
   const expectedFiles = new Set([
     ...assetNames,
+    copyRuntimeName,
+    copyRuntimeChecksumName,
     "checksums.txt",
     "version.json",
     bundleName,

@@ -30,7 +30,7 @@
 // WORKFLOW_STARTED reset the floor (so post-rejection revisions are never
 // frozen), a below-cap adversarial NOT-READY remains nonterminal so its repair
 // loop can edit, and non-produces writes (diary, questions, contributions,
-// the reviewer's own review file under `.aidlc-reviews/`) never match.
+// the reviewer's own review file under `.aidlc-engine/reviews/`) never match.
 // Terminal NOT-READY under the effective class freezes just like READY because
 // no further review pass follows it. The reviewer never writes the artifact it
 // certifies, so the freeze has no carve-out to make for it.

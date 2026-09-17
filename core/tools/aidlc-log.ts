@@ -7,8 +7,8 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -858,7 +858,7 @@ function handleAnswer(args: string[]): void {
       const positive = flags.details === "Looks correct";
       if (positive) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;
       // Registry first, receipt second, both under the audit lock. A registry
-      // that cannot be written (a redirected `.aidlc-summary-authorization`, a
+      // that cannot be written (a redirected `.aidlc-engine/summary-authorization`, a
       // file where the stage directory belongs, a full disk) refuses the answer
       // BEFORE any receipt exists, so the pending question and the human's turn
       // are still there for a retry once the cause is fixed. If the receipt
@@ -1666,7 +1666,7 @@ function handleReview(args: string[]): void {
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
       const slot = reviewSlot(floor, iteration);
-      // Never through a symlinked `.aidlc-reviews`: a redirected slot is not
+      // Never through a symlinked `.aidlc-engine/reviews`: a redirected slot is not
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
       try {
@@ -2076,13 +2076,20 @@ function handleReview(args: string[]): void {
             message,
           );
         }
-        if (!recoveryEligible && budget !== null && iteration > budget) {
-          refuseAttemptGuard(
-            "REVIEW_BUDGET_EXHAUSTED",
-            "Review requests do not exceed the configured attempt budget.",
-            reviewBudgetMessage(flags.stage, iteration, budget),
-          );
-        }
+        // The budget is measured against `expected` ONLY. `iteration` is the
+        // caller's claim about which pass this is, and it is validated against
+        // `expected` further down with a message that names the right ordinal.
+        // Measuring the budget against the claim instead turned a recoverable
+        // off-by-one into an unrecoverable refusal: after a gate rejection the
+        // accounting floor moves (reviewAttemptAccounting treats GATE_REJECTED as
+        // an attempt boundary), so `expected` is 1 again while a conductor that
+        // kept counting passes `--iteration 2`. On an `advisory` stage, whose
+        // budget is 1, that claim alone produced REVIEW_BUDGET_EXHAUSTED - and
+        // its guidance ("do not ask the reviewer again; include the findings in
+        // the approval summary") then routes to a gate that refuses for
+        // REVIEW_EVIDENCE_MISSING, because the revision path needs the fresh
+        // receipt the refusal just forbade. The only remedy left is a redo jump,
+        // which discards the attempt the human was mid-revision on.
         if (!recoveryEligible && budget !== null && expected > budget) {
           refuseAttemptGuard(
             "REVIEW_BUDGET_EXHAUSTED",
@@ -2169,6 +2176,7 @@ function handleReview(args: string[]): void {
   fields.Verdict = verdict;
   const reviewFileFlag = flags["review-file"];
   let recordPath: string | null = null;
+  let reviewMarkdown: string | null = null;
 
   try {
     withAuditLock(pd, () => {
@@ -2463,6 +2471,34 @@ function handleReview(args: string[]): void {
       if (body !== null && reviewFileFlag === undefined) {
         removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
       }
+      // A readable copy for people, beside the artifact the review is about:
+      // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.
+      // The JSON record stays the engine's source of truth; nothing reads the
+      // copy back, so a failure to write it never withholds the verdict.
+      if (recordBody.length > 0) {
+        try {
+          const recordRoot = recordDir(pd) as string;
+          const reviewsDirRelative = posix.join(posix.dirname(artifactKey), "reviews");
+          const reviewsDir = join(recordRoot, ...reviewsDirRelative.split("/"));
+          let next = 1;
+          if (existsSync(reviewsDir)) {
+            for (const name of readdirSync(reviewsDir)) {
+              const match = /^review-(\d+)\.md$/.exec(name);
+              if (match === null) continue;
+              const suffix = Number.parseInt(match[1], 10);
+              if (Number.isSafeInteger(suffix) && suffix >= next) {
+                next = suffix + 1;
+              }
+            }
+          }
+          const copyRelative =
+            `${reviewsDirRelative}/review-${String(next).padStart(2, "0")}.md`;
+          writeRecordFileNoFollow(recordRoot, copyRelative, recordBody);
+          reviewMarkdown = copyRelative;
+        } catch (e) {
+          console.error(`warning: the readable review copy was not written: ${errorMessage(e)}`);
+        }
+      }
     }, intent, space);
   } catch (e) {
     if (e instanceof ReviewRefusal) error(e.message);
@@ -2473,6 +2509,7 @@ function handleReview(args: string[]): void {
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
+    ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
   }));
 }
 

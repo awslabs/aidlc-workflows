@@ -8,9 +8,9 @@ attestation verification; missing or older versions do not block installation.
 
 This chapter describes the native install lifecycle available in this release.
 The planned `aidlc setup` experience, npm package, and package-manager formulas
-are not available yet. Manual-copy users take the versioned runtime from
-`aidlc-runtime-X.Y.Z.tar.gz`; framework developers may separately generate the
-Bun-invoking `dist/` projection from source.
+are not available yet. Manual-copy users install Bun and take the versioned,
+Bun-invoking runtime from `aidlc-copy-runtime-X.Y.Z.tar.gz`; they do not need the
+native `aidlc` command.
 
 ## Install
 
@@ -99,6 +99,12 @@ new sessions; it does not edit a PowerShell profile.
 
 PowerShell installer parameters use their native names, such as `-Version`, `-From`, `-Offline`,
 `-ReleaseBaseUrl`, `-CaBundle`, `-Yes`, `-Quiet`, `-Json`, and `-NoColor`.
+
+An installer downloaded from a versioned release URL defaults to that exact
+release, including previews. The `latest/download` installer continues to
+select the latest stable release. An explicit `--version` / `-Version`
+selection overrides the packaged default, while `--from` / `-From` reads the
+version from the local release manifest.
 
 ### Automation
 
@@ -248,10 +254,28 @@ After apply, gerund receipts name the project files and settings layer,
 genuinely blocking actions follow, then the wizard prints the exact harness
 launch and first workflow command.
 
-An existing-project rerun keeps the seven-row map for Harnesses, Models,
-Runtime, Flags, Project, Providers, and Trust. Rows are lowercase `[ok]` or
-`[needs]`; one default-yes gate walks only Runtime, Providers, and Trust
-findings. Runtime leads with the immediate action and points to
+Step 3 also offers a fourth option, `unchanged`, which records no preset and
+preserves existing model settings; projects without model policy use shipped
+defaults. `balanced` remains the recommended default.
+
+An existing-project rerun keeps the eight-row map for Harnesses, Models,
+Runtime, Flags, Project, Providers, Trust, and Workspace. Rows are lowercase
+`[ok]` or `[needs]`; one default-yes gate walks only Models, Runtime,
+Providers, and Trust findings. Workspace is reported, never walked: a missing
+`aidlc/spaces/default/memory/` shell is repaired by an explicit
+`aidlc config --harness <name>` refresh, not by a question, and while the shell
+is incomplete the gate is not offered at all: its sections would either fail on
+the missing directory or, with no-op answers, rebuild nothing. The ledger then
+leads with the rebuild command. On a Bun-invoking projection, one copied from the
+`runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's
+`dist/<name>/` tree, there is no installed runtime to refresh from, so that
+command also carries
+`--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`;
+a native install refreshes from its installed runtime without it. A missing
+`aidlc/` root is counted once: the Trust section's own
+`workspace-root-missing` issue is folded into the Workspace row. The Providers
+row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
+their own model access. Runtime leads with the immediate action and points to
 `aidlc config runtime --show` for diagnostics. The closing ledger is a compact
 label-to-command list. Section-named commands, non-TTY runs, `--dry-run`,
 `--json`, and `--quiet` keep their deterministic output and never render the
@@ -275,9 +299,9 @@ interactive wizard.
 
 ### Model Policy
 
-`aidlc config models` records project model policy under the selected harness's
-`tools/data/harness.json` and applies it through the normal config plan,
-confirmation, refresh guard, and transaction. It never contacts a model
+`aidlc config models` records model policy in the selected settings layer
+(`aidlc.settings.json` for `--project`) and applies it through the normal config
+plan, confirmation, refresh guard, and transaction. It never contacts a model
 provider.
 
 The public groups are:
@@ -297,9 +321,10 @@ Policy resolves per agent in this order:
 
 Pins bind in both directions. A pinned agent stays pinned if the session later
 moves to a larger model. The framework never raises an agent above the session
-on its own. Judgment and Writing up inherit by default; only the measured
-balanced reviewer baseline ships a step-down. Use `aidlc config models` to
-record a per-install Writing up downgrade.
+on its own. With no recorded policy, Deciding and Writing up inherit; only the
+measured reviewing tier baseline ships a step-down. The first-run wizard's
+default choice records the `balanced` preset, which sets all three groups to
+medium effort.
 
 ```bash
 aidlc config models --show
@@ -336,12 +361,23 @@ written.
 
 Three immutable effort-only presets ship:
 
-- `thorough`: reviewing effort xhigh
-- `balanced`: reviewing effort medium, explicitly matching the shipped default
-- `minimal`: reviewing effort medium, writing-up effort low
+| Preset | Deciding | Reviewing | Writing up |
+|--------|----------|-----------|------------|
+| `thorough` | session effort | `xhigh` | session effort |
+| `balanced` (wizard default) | `medium` | `medium` | `medium` |
+| `minimal` | `medium` | `medium` | `low` |
 
-Presets never set model IDs or deciding effort. Deciding work continues to
-inherit the session ceiling.
+Presets never set model IDs. Explicit group dials and per-agent exceptions can
+override the preset's efforts.
+
+On upgrade, an install that recorded `preset: balanced` or `preset: minimal`
+picks up these efforts the next time its projections are regenerated. After
+`aidlc update`, run `aidlc config --yes` between workflows to reapply the
+recorded policy, or explicitly select it with
+`aidlc config models --preset balanced --project --yes` (substitute `minimal`
+as needed). Update changes only the machine runtime; doctor and
+`aidlc config models --check` report issues without applying changes. Installs
+with no recorded model policy keep the shipped tier defaults and are unaffected.
 
 Derive a project profile from a preset or an existing profile:
 
@@ -403,9 +439,21 @@ Kiro IDE has no required separate CLI.
 
 ### Provider Diagnostics
 
-`aidlc config providers` records provider answers for this project install.
-Amazon Bedrock is the default answer, but the shipped fallback bytes remain
-valid when this section has never run.
+`aidlc config providers` records provider answers for this project install. The
+interactive section offers only the two answers that have distinct effects for
+the harness in front of you. `amazon-bedrock` records the region and profile the
+harness should use, and leads on every harness whose models AI-DLC can point at
+Bedrock. The second answer is `unchanged` on every harness the section asks,
+recording nothing and keeping what is already in place. Kiro CLI and Kiro IDE
+are not asked at all because model access comes with Kiro. The shipped fallback
+bytes remain valid when this section has never run.
+
+`other` is available as `--provider other --acknowledge` but is not offered
+interactively. Nothing reads a recorded `other`: its only effect is a
+`non-bedrock-provider-configuration` reminder that `--acknowledge` immediately
+clears, and declining that acknowledgement did exactly what `unchanged` does,
+so it duplicated the second answer by a longer route. Existing `other` records
+stay valid.
 
 ```bash
 aidlc config providers --provider amazon-bedrock \
@@ -427,8 +475,6 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 |---------|-----------------------------|
 | Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
-| Kiro CLI | Writes the AWS MCP URL and metadata in `.kiro/settings/mcp.json` |
-| Kiro IDE | Records and instructs only; the chat model must be selected manually in the IDE |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
 | GitHub Copilot | Records acknowledgement of the manual BYOK environment setup |
 | Cursor | Records acknowledgement of the manual provider and model-picker setup |
@@ -436,10 +482,50 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
-`--mark-done <id>` records completion. Kiro IDE also carries the
-`kiro-ide-chat-model` action. A non-Bedrock opt-out is supported with
+`--mark-done <id>` records completion. A custom non-Bedrock provider is recorded with
 `--provider other --acknowledge`; it records the choice without silently
 editing provider bytes.
+
+The question is worded for the harness in front of you, so each install offers
+the two paths that actually exist for it:
+
+| Harness | `amazon-bedrock` records |
+|---------|--------------------------|
+| Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
+| Codex CLI | the AWS region and profile in `config.toml` |
+| OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
+| GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
+| Cursor | that you configure the provider in Cursor yourself |
+
+
+Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures no
+model provider for them. Both the first-run wizard and `aidlc config providers`
+state that model access comes with Kiro and ask nothing. Provider flags are
+refused, and the Providers row reads `[ok]` regardless of a legacy record.
+`aidlc config providers --reset --yes` clears a record left by an earlier build.
+`builtin` records from the previous build still load and read as harness-managed,
+with no pending actions. Legacy Kiro Bedrock records are also ignored, including
+their pending actions, and nothing is written from them. The `aws-mcp` region in
+`.kiro/settings/mcp.json` is plain MCP configuration, not a model-provider
+answer: whatever region that file carries, whether an earlier build's Bedrock
+answer put it there or you did, is kept across refreshes, and `--reset` leaves
+the file alone.
+
+Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
+credentials are never read as evidence that you are on your own subscription.
+Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
+which AI-DLC tracks as a pending action rather than performs.
+
+On Kiro, `--check` says no answer is needed and exits zero even with a legacy
+record. On every other unrecorded section it names that state instead of
+reporting a verified answer, and still exits zero because the shipped fallback
+bytes remain valid.
+
+On a Bedrock-oriented harness `unchanged` is always the second answer, and it
+becomes the default once something is recorded, so re-entering the section never
+silently rewrites a region or profile you already set. It names what it keeps,
+records nothing, and still reaches the mark-done prompts, so a pending action
+can be cleared without re-answering.
 
 ### Trust Diagnostics
 
@@ -478,7 +564,7 @@ present.
 ### Project Flags
 
 `aidlc config flags` records project answers for default scope, swarm mode,
-hook debug, sensor timeout, and explicit guard bypasses:
+hook debug, sensor timeout, and explicit guard bypasses or ceremony kill switches:
 
 ```bash
 aidlc config flags --default-scope <installed-scope> \
@@ -499,7 +585,7 @@ data. On Claude Code, config also rewrites the staged
 `AWS_AIDLC_DEFAULT_SCOPE` value in `.claude/settings.json`; otherwise the
 shipped session environment would shadow the lower-precedence record.
 
-The recordable bypass set is limited to the documented recovery switches:
+The recordable bypass set includes the documented recovery and ceremony switches:
 
 - `AIDLC_SKIP_ARTIFACT_GUARD`
 - `AIDLC_SKIP_HUMAN_PRESENCE_GUARD`
@@ -510,6 +596,9 @@ The recordable bypass set is limited to the documented recovery switches:
 - `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`
 - `AIDLC_DISABLE_REVIEW_FREEZE_HOOK`
 - `AIDLC_DISABLE_USAGE_TRACKING`
+- `AIDLC_DISABLE_SENSORS` — disables sensor execution and sensor gate checks
+- `AIDLC_DISABLE_LEARNINGS` — disables the stage learnings ritual
+- `AIDLC_DISABLE_SUMMARY_CONFIRMATION` — disables the separate summary-confirmation checkpoint, not stage approval
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
@@ -698,21 +787,21 @@ There is no public rollback or retained-version management command.
 
 `main` is the shared development branch. The **stable** channel publishes a
 selected commit as a GitHub release tagged `vX.Y.Z`. The **preview** channel
-lets users try changes from `main` before the next stable release, at most once
-per UTC day, as a GitHub prerelease that is never marked "latest". Source
-versions and changelog entries are updated during release preparation.
+lets users try changes from `main` before the next stable release as a GitHub
+prerelease that is never marked "latest". Source versions and changelog entries
+are updated during release preparation.
 
-Scheduled and manual runs share the same daily cap. A run skips if a preview
-is already published for that UTC day, even when `main` has advanced; it also
-skips when the source is unchanged since the latest published preview. An
-overnight build counts on the UTC date it is published as well as the date in
-its id.
+Scheduled and manual runs share one serialized publication queue. A run skips
+when the source is unchanged since the latest published preview. When `main`
+advances more than once on the same UTC date, each changed source can publish a
+new preview with the next build counter.
 
-A preview id is `<x.y.z>-preview.<YYYYMMDD>.<N>`: the source tree's version,
-the UTC build date chosen during planning, and a retry counter (`1` initially).
-Drafts and tags left by failed attempts reserve ids without consuming the
-daily publication allowance. A retry can advance `N` past those occupied ids;
-it does not permit multiple public releases in one day.
+A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
+source tree's current stable version, the UTC build date chosen during
+planning, and a retry counter (`1` initially). The workflow calculates the
+preview version without editing the source version. Drafts and tags left by
+failed attempts reserve ids. A retry or another changed source on the same date
+advances `N` past those occupied ids.
 
 Stable ids stay exactly `x.y.z`, and nothing else is accepted anywhere a
 version appears (installer flags, `use`, pins, `.aidlc-version`, retained
@@ -961,35 +1050,47 @@ continuation before doing other work.
 
 ## Copy Channel
 
-The supported manual-copy payload is the versioned `aidlc-runtime-X.Y.Z.tar.gz`
+The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-project-root files stay together:
+project-root files stay together. Bun is the runtime prerequisite; the native
+`aidlc` executable is not required:
 
 ```bash
 tag=vX.Y.Z
 tmp="$(mktemp -d)"
-runtime_asset="aidlc-runtime-${tag#v}.tar.gz"
+runtime_asset="aidlc-copy-runtime-${tag#v}.tar.gz"
+runtime_checksum="${runtime_asset}.sha256"
 source_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
 release_workflow="${AIDLC_RELEASE_WORKFLOW:-$source_repo/.github/workflows/release.yml}"
 gh release download "$tag" --repo "$source_repo" --dir "$tmp" \
   --pattern "$runtime_asset" \
-  --pattern checksums.txt \
+  --pattern "$runtime_checksum" \
   --pattern aidlc-release.intoto.jsonl
-gh attestation verify "$tmp/checksums.txt" \
+gh attestation verify "$tmp/$runtime_asset" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo "$source_repo" \
   --signer-workflow "$release_workflow" \
   --source-ref "refs/tags/$tag"
-(cd "$tmp" && grep "  $runtime_asset\$" checksums.txt | sha256sum -c -)
+(cd "$tmp" && sha256sum -c "$runtime_checksum")
 tar -xzf "$tmp/$runtime_asset" -C "$tmp"
 RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
 ```
 
-The archive is assembled from freshly regenerated native projections and uses
-the matching `aidlc` command. Prefer `aidlc config`, which applies the same
-runtime transactionally and records ownership for later refreshes.
+The archive is assembled from the freshly regenerated Bun projections under
+`dist/`. Its generated hooks and tools invoke the included TypeScript through
+Bun. The native installers and lifecycle commands instead consume
+`aidlc-runtime-X.Y.Z.tar.gz`, assembled from `dist-release/`; users do
+not normally download that archive directly.
+
+The copy archive stays outside `version.json` and `checksums.txt` so existing
+2.8.x native clients can continue to parse release metadata and self-update.
+Its versioned `.sha256` sidecar authenticates the bytes directly, and the
+release provenance covers both files.
+
+When native executables are permitted, prefer `aidlc config`. It installs the
+native runtime transactionally and records ownership for later refreshes.
 
 Framework developers may instead clone the source, install dependencies, and
 materialize ignored local outputs:

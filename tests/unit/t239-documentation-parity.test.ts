@@ -33,7 +33,7 @@ function filesBelow(root: string, suffix: string): string[] {
 }
 
 function numberWord(value: number): string {
-  const words = ["zero", "one", "two", "three", "four", "five"];
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
   return words[value] ?? String(value);
 }
 
@@ -154,7 +154,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(98);
+    expect(eventTypes.length).toBe(99);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -283,7 +283,7 @@ describe("documentation parity derives current behavior from authored implementa
     expect(reviewerProtocol).toContain(
       "On a harness without reviewer-scope enforcement (Kiro IDE today)",
     );
-    expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(skill).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     expect(skill).not.toContain("kiro-cli");
     expect(questionRendering).toContain("Kiro IDE has no structured-question tool");
     expect(questionRendering).not.toContain("Kiro CLI");
@@ -434,6 +434,7 @@ describe("documentation parity derives current behavior from authored implementa
       "report",
       "park",
       "team-board",
+      "wait",
     ]);
     const expected =
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;

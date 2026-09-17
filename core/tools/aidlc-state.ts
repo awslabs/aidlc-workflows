@@ -45,6 +45,7 @@ import {
   governedChangeControl,
   recordAcceptedChanges,
   resolveChangeControl,
+  resolveCeremony,
   claimAttemptFields,
   codekbDir,
   codekbRepoName,
@@ -2377,6 +2378,7 @@ function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
   const parentPath = join(rec, "construction", stage, "memory.md");
   const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
   const entries = parseMemoryEntries(unitContent);
+  if (entries.length === 0 && !existsSync(parentPath)) return 0;
 
   let parentContent = existsSync(parentPath)
     ? readFileSync(parentPath, "utf-8")
@@ -2972,11 +2974,15 @@ function artifactFingerprint(path: string): string | null {
 function fireGateSensors(
   pd: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  stateContent: string,
   artifacts?: string,
 ): GateSensorEvaluation {
-  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
   const issues: BlockingSensorIssue[] = [];
   const fingerprints = new Map<string, string>();
+  if (
+    resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent).value === "off"
+  ) return { issues, fingerprints };
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
   if (paths.length === 0) return { issues, fingerprints };
 
   const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
@@ -3032,7 +3038,7 @@ function fireGateSensors(
         outputPath,
       ];
       const command = executable
-        ? [executable, "sensor", ...args]
+        ? [executable, "engine", "sensor", ...args]
         : [process.execPath, sensorTool, ...args];
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
@@ -5229,6 +5235,7 @@ function handleGateStart(args: string[]): void {
   const gateSensorEvaluation = fireGateSensors(
     pd,
     preflightStage,
+    preflightContent,
     artifacts,
   );
   enforceBlockingGateSensors(
@@ -5472,7 +5479,7 @@ function handleApprove(args: string[]): void {
     !preflightDecision.autonomousDecision &&
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
   const backstopSensorEvaluation = preflightBackstop
-    ? fireGateSensors(pd, preflightStage)
+    ? fireGateSensors(pd, preflightStage, preflightContent)
     : { issues: [], fingerprints: new Map<string, string>() };
 
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
@@ -6069,7 +6076,7 @@ function handleRevise(args: string[]): void {
     action: "revise",
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
   });
-  const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
+  const gateSensorEvaluation = fireGateSensors(pd, preflightStage, preflightContent);
   enforceBlockingGateSensors(
     pd,
     preflightContent,

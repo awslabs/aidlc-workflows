@@ -10,7 +10,7 @@
 //   :39  if (!existsSync(stateFile)) process.exit(0)
 //          — the "no active workflow" no-op gate (no heartbeat, no audit,
 //            no stdout)
-//   :42-44 mkdir aidlc-docs/.aidlc-hooks-health + write session-start.last
+//   :42-44 mkdir aidlc-docs/.aidlc-engine/hooks-health + write session-start.last
 //          heartbeat (only reached when state IS present)
 //   :55-75 source defaults to "startup"; when stdin is not a TTY it reads
 //          Bun.stdin.text(), JSON.parses it, and pulls raw.source when the
@@ -22,7 +22,7 @@
 //   :87-93 appendAuditEntry(eventType, { Source }, projectDir) when an event
 //          is mapped — writes a "**Event**: <type>" block to audit.md
 //   :96-125 reads the state file, extracts the workflow fields via getField,
-//          appends a ".aidlc-recovery.md exists" NOTE iff that breadcrumb file
+//          appends a ".aidlc-engine/recovery.md exists" NOTE iff that breadcrumb file
 //          is present, then writes JSON.stringify({ additionalContext }) +"\n"
 //          to stdout
 // None of those seams — stdin, the env/script-path projectDir derivation, the
@@ -58,7 +58,7 @@
 //   .sh  5 (extracts Current Stage = feasibility)      -> "injects the Current Stage (feasibility)"
 //   .sh  6 (extracts Active Agent)                     -> "injects the Active Agent (aidlc-architect-agent)"
 //   .sh  7 (extracts Scope = feature)                  -> "injects the Scope (feature)"
-//   .sh  8 (recovery breadcrumb note present)          -> "includes the recovery-breadcrumb NOTE when .aidlc-recovery.md exists"
+//   .sh  8 (recovery breadcrumb note present)          -> "includes the recovery-breadcrumb NOTE when .aidlc-engine/recovery.md exists"
 //   .sh  9 (no recovery note when no breadcrumb)       -> "omits the recovery-breadcrumb NOTE when no breadcrumb"
 //   .sh 10 (writes heartbeat when state exists)        -> "writes the session-start.last heartbeat when state exists"
 //   .sh 11 (CONSTRUCTION phase from fixture)            -> "injects CONSTRUCTION from the construction fixture"
@@ -83,8 +83,8 @@
 //     early exit; it has no legacy .sh counterpart.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -130,11 +130,11 @@ function readAudit(p: string): string {
 }
 
 function heartbeatPath(p: string): string {
-  return join(seededRecordDir(p), ".aidlc-hooks-health", "session-start.last");
+  return join(seededRecordDir(p), ".aidlc-engine/hooks-health", "session-start.last");
 }
 
 function recoveryPath(p: string): string {
-  return join(seededRecordDir(p), ".aidlc-recovery.md");
+  return join(seededRecordDir(p), ".aidlc-engine/recovery.md");
 }
 
 interface FireResult {
@@ -253,8 +253,9 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     expect(ctx).toContain("Scope: feature");
   });
 
-  test("includes the recovery-breadcrumb NOTE when .aidlc-recovery.md exists [.sh test 8]", () => {
+  test("includes the recovery-breadcrumb NOTE when .aidlc-engine/recovery.md exists [.sh test 8]", () => {
     seedStateFile(proj, MID_IDEATION);
+    mkdirSync(dirname(recoveryPath(proj)), { recursive: true });
     writeFileSync(recoveryPath(proj), "# Recovery breadcrumb\n", "utf-8");
     const r = fire(proj);
     const ctx = JSON.parse(r.stdout.trim()).additionalContext as string;
@@ -262,13 +263,13 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     // hook injects (aidlc-session-start.ts :110-112).
     expect(ctx).toContain("recovery breadcrumb");
     expect(ctx).toContain(
-      "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md",
+      "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md",
     );
   });
 
   test("omits the recovery-breadcrumb NOTE when no breadcrumb [.sh test 9]", () => {
     seedStateFile(proj, MID_IDEATION);
-    // createTestProject seeds no .aidlc-recovery.md (the .sh rm -f'd it).
+    // createTestProject seeds no .aidlc-engine/recovery.md (the .sh rm -f'd it).
     expect(existsSync(recoveryPath(proj))).toBe(false);
     const r = fire(proj);
     const ctx = JSON.parse(r.stdout.trim()).additionalContext as string;

@@ -18,7 +18,7 @@
 // Source under test (dist/claude/.claude/hooks/aidlc-continue-workflow.ts):
 //   :97  allowStop()       — emit nothing, exit 0 (the precedent non-blocking pattern)
 //   :104 blockStop(reason) — console.log({decision:"block",reason}); exit 0
-//   :129 guardFilePath()   — aidlc-docs/.aidlc-stop-hook/block-count.json
+//   :129 guardFilePath()   - aidlc-docs/.aidlc-engine/stop-hook/block-count.json
 //   :247 progressSignature(state, directive) - Current Stage + state digest +
 //          directive position (kind/stage/Unit/part)
 //   :204 decideBlock(state, directive, stopHookActive) — the no-progress counter + cap logic:
@@ -130,7 +130,7 @@ const UTILITY_TS = join(
 );
 
 // P9 per-intent layout: the stop hook reads state (stateFilePath), the guard
-// counter (stopHookDir → <record>/.aidlc-stop-hook/block-count.json), and the
+// counter (stopHookDir → <record>/.aidlc-engine/stop-hook/block-count.json), and the
 // current stage's canonical or per-unit memory/questions dir. All re-root under
 // the active intent's record. We PIN the clone-id so audit fixtures resolve to
 // the same shard across the hook subprocess and this test process.
@@ -169,13 +169,14 @@ function seedShell(proj: string): void {
 
 // The stop-hook guard counter, re-rooted under the record (stopHookDir).
 function guardFilePath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-stop-hook", "block-count.json");
+  return join(seededRecordDir(proj), ".aidlc-engine/stop-hook", "block-count.json");
 }
 
 function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
+  mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json")), { recursive: true });
   writeFileSync(
-    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
     `${JSON.stringify({
       version: 1,
       stage,
@@ -190,8 +191,9 @@ function seedCopilotDirective(proj: string, kind = "run-stage", unit?: string): 
   const state = readFileSync(seededStateFile(proj), "utf-8");
   const digest = stateDigest(state);
   const commandDigest = createHash("sha256").update("next").digest("hex");
+  mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json")), { recursive: true });
   writeFileSync(
-    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
     `${JSON.stringify({
       version: 2,
       revision: 1,
@@ -236,7 +238,8 @@ function seedSessionlessResumeMarker(
   const stateSha256 = stateDigest(state);
   const projectSha256 = createHash("sha256").update(realpathSync(proj)).digest("hex");
   const ownerSession = `sessionless:${projectSha256.slice(0, 16)}`;
-  const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+  const markerPath = join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
+  mkdirSync(dirname(markerPath), { recursive: true });
   writeFileSync(
     markerPath,
     `${JSON.stringify({
@@ -281,9 +284,10 @@ function seedSessionlessResumeMarker(
 }
 
 function rewriteCopilotMarker(proj: string, update: (marker: Record<string, unknown>) => void): void {
-  const path = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+  const path = join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
   const marker = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
   update(marker);
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(marker, null, 2)}\n`);
 }
 
@@ -299,7 +303,7 @@ afterAll(() => {
 // spawns this via join(projectDir, ".claude/tools/aidlc-orchestrate.ts").
 //
 // IT ALSO WRITES AN ENV WITNESS, and that is load-bearing rather than
-// incidental. The mock never calls markEngineTouch, so `.aidlc-engine-touch`
+// incidental. The mock never calls markEngineTouch, so `.aidlc-engine/engine-touch`
 // cannot be refreshed by the hook's probe no matter what the spawn env carries
 // — which means an mtime-equality assertion here is trivially satisfied and
 // passes even with the probe marking deleted from the hook (proved by mutation
@@ -821,8 +825,8 @@ function terminalDepthDispatch(proj: string): string {
 
 /**
  * Seed the two turn-shape markers the transcript-free tier-3 carve-out reads:
- * `<record>/.aidlc-human-turn` (written by the UserPromptSubmit mint) and
- * `<record>/.aidlc-engine-touch` (written by an advancing aidlc-orchestrate).
+ * `<record>/.aidlc-engine/human-turn` (written by the UserPromptSubmit mint) and
+ * `<record>/.aidlc-engine/engine-touch` (written by an advancing aidlc-orchestrate).
  * Only their RELATIVE mtimes matter, so this writes explicit, well-separated
  * timestamps rather than sleeping:
  *
@@ -841,13 +845,15 @@ function seedTurnMarkers(
   const base = Math.floor(Date.now() / 1000) - 600; // safely in the past
   const humanAt = opts.humanNewer ? base + 60 : base;
   const engineAt = opts.humanNewer ? base : base + 60;
-  const humanPath = join(rec, ".aidlc-human-turn");
-  const enginePath = join(rec, ".aidlc-engine-touch");
+  const humanPath = join(rec, ".aidlc-engine/human-turn");
+  const enginePath = join(rec, ".aidlc-engine/engine-touch");
   if (opts.omitHuman !== true) {
+    mkdirSync(dirname(humanPath), { recursive: true });
     writeFileSync(humanPath, "seeded\n", "utf-8");
     utimesSync(humanPath, humanAt, humanAt);
   }
   if (opts.omitEngine !== true) {
+    mkdirSync(dirname(enginePath), { recursive: true });
     writeFileSync(enginePath, "seeded\n", "utf-8");
     utimesSync(enginePath, engineAt, engineAt);
   }
@@ -884,7 +890,7 @@ function runHook(
     MOCK_KIND: kind,
     MOCK_UNIT: unit,
     MOCK_STAGE: stage,
-    MOCK_MARKER_PATH: join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    MOCK_MARKER_PATH: join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
     ...extraEnv,
   };
   if (rewriteMarker) env.MOCK_REWRITE_MARKER = "1";
@@ -1122,7 +1128,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     // Pre-seed a no-progress streak; a parked allow must clear it.
-    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), { recursive: true });
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-engine/stop-hook"), { recursive: true });
     writeFileSync(
       guardFilePath(proj),
       JSON.stringify({ signature: "requirements-analysis::1", count: 5 }),
@@ -1239,7 +1245,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(c1) recursion guard at ceiling exits 0", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), {
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-engine/stop-hook"), {
       recursive: true,
     });
     const sig = progressSig(proj);
@@ -1255,7 +1261,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(c1) counter at default cap (8) + stop_hook_active:true releases (no block) — session NOT trapped", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), {
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-engine/stop-hook"), {
       recursive: true,
     });
     const sig = progressSig(proj);
@@ -1677,7 +1683,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(syncedState).toContain("- [ ] code-generation — EXECUTE");
     const syncedMarker = JSON.parse(
       readFileSync(
-        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
         "utf-8",
       ),
     ) as { unit?: string; state_sha256?: string };
@@ -1762,7 +1768,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const drops = readFileSync(
       join(
         seededRecordDir(proj),
-        ".aidlc-hooks-health",
+        ".aidlc-engine/hooks-health",
         "continue-workflow.drops",
       ),
       "utf-8",
@@ -2116,7 +2122,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // an interactive run would have RELEASED at 2. This pins the run-mode-aware
     // default: the autonomous cap is genuinely 8, not 2.
     seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
-    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), {
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-engine/stop-hook"), {
       recursive: true,
     });
     const sig = progressSig(proj);
@@ -2163,7 +2169,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   // now reconstructs the predicate from two mtimes the framework writes on seams
   // that already exist:
   //
-  //   conversational <=> mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+  //   conversational <=> mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
   //
   // Same gating as the transcript path: positive-confirmation, autonomy-guarded,
   // FAIL-CLOSED on any missing marker. It can only ever ALLOW. Note these cases
@@ -2198,7 +2204,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
-  test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-engine-touch is 'no evidence', not 'the engine was never touched'", () => {
+  test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-engine/engine-touch is 'no evidence', not 'the engine was never touched'", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     // A pre-upgrade workspace (or a wiped record dir) has the human marker but
@@ -2212,7 +2218,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(guardCount(proj)).toBe(1); // a fresh first block, not released
   }, 30000);
 
-  test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-human-turn also falls through to the cap-bounded block", () => {
+  test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-engine/human-turn also falls through to the cap-bounded block", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     seedTurnMarkers(proj, { humanNewer: true, omitHuman: true });
@@ -2254,7 +2260,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     seedTurnMarkers(proj, { humanNewer: true });
-    const enginePath = join(seededRecordDir(proj), ".aidlc-engine-touch");
+    const enginePath = join(seededRecordDir(proj), ".aidlc-engine/engine-touch");
     const before = statSync(enginePath).mtimeMs;
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     expect(r.rc).toBe(0);
@@ -2262,7 +2268,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
 
     // THE ASSERTION THAT ACTUALLY BITES. The hook runs `aidlc-orchestrate next`
     // on every stop to learn whether work is pending. If that consultation were
-    // unmarked, the real engine would refresh `.aidlc-engine-touch` on every
+    // unmarked, the real engine would refresh `.aidlc-engine/engine-touch` on every
     // stop, the engine mtime would always end up newer than the human mtime, and
     // the carve-out would be permanently false — implemented-looking dead code.
     //
@@ -3034,7 +3040,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     seedCopilotDirective(bounded);
     expect((JSON.parse(runCopilotStop(bounded).out) as { decision?: string }).decision).toBe("block");
     expect(runCopilotStop(bounded).out).toBe("");
-    const persisted = JSON.parse(readFileSync(join(seededRecordDir(bounded), ".aidlc-active-directive.json"), "utf-8")) as { stop_count?: number };
+    const persisted = JSON.parse(readFileSync(join(seededRecordDir(bounded), ".aidlc-engine/active-directive.json"), "utf-8")) as { stop_count?: number };
     expect(persisted.stop_count).toBe(2);
   }, 30000);
 
@@ -3042,9 +3048,9 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const proj = makeProject();
     seedActive(proj);
     seedCopilotDirective(proj);
-    const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
     const before = readFileSync(markerPath, "utf-8");
-    const lockDir = join(seededRecordDir(proj), ".aidlc-active-directive.lock");
+    const lockDir = join(seededRecordDir(proj), ".aidlc-engine/active-directive.lock");
     const token = randomUUID();
     mkdirSync(join(lockDir, token), { recursive: true });
     writeFileSync(join(lockDir, "owner.json"), JSON.stringify({

@@ -1607,6 +1607,11 @@ X. Other (please specify)
       expect(result.rc).not.toBe(0);
       expect(result.out).toContain("unsupported summary-confirmation Hash Scope");
       expect(result.out).toContain("confirmed-content-v99");
+      // #1082: name the scope that WOULD be accepted, not only the rejected one.
+      // Asserted without quote characters: this surface is JSON-encoded, so a quoted
+      // substring would have to match the escaped wire form.
+      expect(result.out).toContain("Supported:");
+      expect(result.out).toContain("confirmed-content-v1");
     });
 
     test("refuses same-second matching receipts from different audit shards", () => {

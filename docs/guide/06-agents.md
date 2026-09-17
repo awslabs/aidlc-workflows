@@ -123,7 +123,7 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 
 **Domain:** Domain design, domain modelling, NFRs, component decomposition
 
-The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
+The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). With no recorded model policy, judgment agents inherit your session's model and effort. Delivery, pipeline-deploy, and operations carry the `templated` tier because their output is dominantly planning, CI/CD YAML, and runbook scaffolding; their shipped baseline also inherits. Only the reviewer tier pins a mid-size model at medium effort on Claude Code, Codex, and opencode. The wizard-default `balanced` preset is an explicit effort override for all three groups, setting each to medium without changing models. Kiro CLI/IDE, Cursor, and Copilot cannot express those group effort dials. See [Model Policy](18-install-and-lifecycle.md#model-policy).
 
 - **Leads:** feasibility, domain-design, units-generation, contract-design, functional-design, nfr-requirements, nfr-design
 - **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
@@ -278,8 +278,9 @@ artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then writes its review (a verdict of **READY** or **NOT-READY** plus
 a findings table) to the review file the conductor names. The reviewer never
 edits the artifact it reviews; the engine records the review as a framework-owned
-record under the intent's `.aidlc-reviews/` directory and refuses a verdict whose
-artifacts changed. How the verdict is handled depends on the stage's review class:
+record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy of
+the review for people at `<stage dir>/reviews/review-NN.md` beside the reviewed
+artifact, and refuses a verdict whose artifacts changed. How the verdict is handled depends on the stage's review class:
 
 - **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
   review pass, whatever the verdict. The findings are quoted verbatim at the
@@ -308,8 +309,9 @@ at the gate until the next review replaces them.
 
 The scope can cap the class (`bugfix`, `poc`, `classic`, and `workshop` cap
 every stage to advisory; `express` caps reviews to none) and
-`/aidlc --review <class>` caps it per run. Either way the reviewer never blocks
-— the human always has final say.
+`/aidlc --review <class>` caps it per run. Explicit autonomy keeps the single
+pre-merge review, exempt from scope caps and per-run overrides. Either way the reviewer never blocks —
+the human always has final say.
 
 (IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)
 

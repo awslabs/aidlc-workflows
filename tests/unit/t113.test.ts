@@ -71,6 +71,7 @@ function runStage(): Record<string, unknown> {
     produces: ["aidlc-docs/inception/application-design/decisions.md"],
     rules_in_context: ["aidlc-org.md", "aidlc-team.md"],
     sensors_applicable: ["required-sections"],
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
     stage_file: ".claude/skills/aidlc/stages/inception/application-design.md",
   };
 }
@@ -118,6 +119,7 @@ function dispatchSubagent(): Record<string, unknown> {
     produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
     rules_in_context: ["aidlc-org.md"],
     sensors_applicable: ["linter"],
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
     stage_file: ".claude/skills/aidlc/stages/construction/code-generation.md",
     worker: "code-generation",
   };
@@ -217,6 +219,54 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(runStage()).valid).toBe(true);
   });
 
+  test("stage directives accept all-off and independently selected ceremony policies", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      expect(validateDirective({
+        ...create(),
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
+      }).valid).toBe(true);
+      expect(validateDirective({
+        ...create(),
+        ceremony: { sensors: "off", learnings: "on", summary_confirmation: "off" },
+      }).valid).toBe(true);
+    }
+  });
+
+  test("stage directives require an explicit ceremony policy", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      const directive = create();
+      delete directive.ceremony;
+      expect(validateDirective(directive).valid).toBe(false);
+    }
+  });
+
+  test("stage directives require every ceremony switch", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      for (const key of ["sensors", "learnings", "summary_confirmation"]) {
+        const directive = create();
+        delete (directive.ceremony as Record<string, unknown>)[key];
+        expect(validateDirective(directive).valid).toBe(false);
+      }
+    }
+  });
+
+  test("stage directives reject malformed ceremony policies", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      const directive = create();
+      const policy = directive.ceremony as Record<string, unknown>;
+      for (const ceremony of [
+        null,
+        ["on", "on", "on"],
+        { ...policy, sensors: true },
+        { ...policy, learnings: "enabled" },
+        { ...policy, summary_confirmation: "ON" },
+        { ...policy, reviewer: "off" },
+      ]) {
+        expect(validateDirective({ ...directive, ceremony }).valid).toBe(false);
+      }
+    }
+  });
+
   test("Code Generation directives validate matching legacy Plan Approval choices", () => {
     const choices = {
       approve: "Approve Plan [0123456789ab]",
@@ -256,13 +306,11 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     );
   });
 
-  test("run-stage accepts validated protocol module hints", () => {
-    expect(
-      errs({
-        ...runStage(),
-        protocol_modules: ["reviewer", "ensemble", "construction"],
-      }),
-    ).toBe("VALID");
+  test("run-stage accepts learnings alongside existing protocol modules", () => {
+    expect(validateDirective({
+      ...runStage(),
+      protocol_modules: ["reviewer", "ensemble", "construction", "learnings"],
+    }).valid).toBe(true);
   });
 
   test("run-stage accepts only literal true for the settled-swarm marker", () => {
@@ -279,14 +327,10 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   test("run-stage rejects unknown protocol module hints", () => {
-    expect(
-      errs({
-        ...runStage(),
-        protocol_modules: ["reviewer", "unknown"],
-      }),
-    ).toContain(
-      "run-stage: protocol_modules[1] must be one of reviewer | ensemble | construction | swarm",
-    );
+    expect(validateDirective({
+      ...runStage(),
+      protocol_modules: ["reviewer", "unknown"],
+    }).valid).toBe(false);
   });
 
   test("dispatch-subagent well-formed -> VALID", () => {

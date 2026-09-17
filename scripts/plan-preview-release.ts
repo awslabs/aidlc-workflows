@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 // Plans one preview publication from the authorized main commit: decides
-// whether today's UTC publication slot is free and main has moved since the
-// newest published preview, allocates a retry-safe id, and renders release notes.
+// whether main has moved since the newest published preview, allocates a
+// retry-safe id, and renders release notes.
 // Runs in the validate job, where full history is available; publication consumes
 // the resulting plan verbatim.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import {
   compareVersions,
+  nextPatchVersion,
   parseVersion,
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
@@ -20,7 +21,6 @@ import {
   type PreviewPlan,
   previewReleaseName,
   previewReleaseVersion,
-  publishedPreviewOnDate,
 } from "./preview-release.ts";
 
 const API_VERSION = "2022-11-28";
@@ -31,7 +31,7 @@ const HEADING = /^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}\s*$/;
 export type PreviewPlanResult =
   | {
     skip: true;
-    reason: "daily-limit" | "unchanged-source";
+    reason: "unchanged-source";
     version: null;
     previousSourceDigest: string | null;
     plan: null;
@@ -296,15 +296,6 @@ export async function planPreviewRelease(options: {
     options.client,
     `repos/${options.repository}/releases?per_page=100`,
   );
-  if (publishedPreviewOnDate(releases, date)) {
-    return {
-      skip: true,
-      reason: "daily-limit",
-      version: null,
-      previousSourceDigest: null,
-      plan: null,
-    };
-  }
   const newest = newestPublishedPreviewVersion(releases);
   const previousSourceDigest = newest
     ? await previewSourceDigest(
@@ -322,7 +313,11 @@ export async function planPreviewRelease(options: {
   const releaseVersions = releases
     .map(previewReleaseVersion)
     .filter((version): version is string => version !== null);
-  const version = nextPreviewVersion([...tags, ...releaseVersions], AIDLC_VERSION, date);
+  const version = nextPreviewVersion(
+    [...tags, ...releaseVersions],
+    nextPatchVersion(AIDLC_VERSION),
+    date,
+  );
   const notes = previewReleaseNotes({
     cwd: options.cwd,
     version,
@@ -369,9 +364,7 @@ async function main(argv: string[]): Promise<void> {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${rows.join("\n")}\n`);
   process.stdout.write(
     result.skip
-      ? result.reason === "daily-limit"
-        ? `a ${PREVIEW_CHANNEL} is already published for this UTC day; nothing to publish\n`
-        : `main ${sourceDigest} is already the source of the newest ${PREVIEW_CHANNEL}; nothing to publish\n`
+      ? `main ${sourceDigest} is already the source of the newest ${PREVIEW_CHANNEL}; nothing to publish\n`
       : `planned ${PREVIEW_CHANNEL} ${result.version} from ${sourceDigest}${
         result.previousSourceDigest ? ` (previous ${result.previousSourceDigest})` : ""
       }\n`,

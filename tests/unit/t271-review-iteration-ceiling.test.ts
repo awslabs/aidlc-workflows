@@ -46,6 +46,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
+  cleanupTestProject,
   createTestProject,
   seedAuditFile,
   seedBoltDagBatches,
@@ -230,17 +231,17 @@ function runState(proj: string, args: string[]) {
 // state-mid-inception.md: Scope bugfix (review_cap advisory), Current Stage
 // requirements-analysis (declared advisory anyway). For adversarial cases we
 // flip the scope field to `feature` (uncapped).
-function seedProject(scope: "bugfix" | "feature"): string {
+function seedProject(scope: "bugfix" | "feature" | "classic"): string {
   const proj = createTestProject();
   seedStateFile(proj, "state-mid-inception.md");
   seedAuditFile(proj);
-  if (scope === "feature") {
+  if (scope !== "bugfix") {
     const sf = seededStateFile(proj);
     writeFileSync(
       sf,
       readFileSync(sf, "utf8").replace(
         "- **Scope**: bugfix",
-        "- **Scope**: feature"
+        `- **Scope**: ${scope}`
       ).replace(
         "- [S] units-generation — SKIP (bugfix scope)",
         "- [ ] units-generation — EXECUTE",
@@ -448,6 +449,46 @@ describe("t271 review iteration ceiling", () => {
     expect(rows.length).toBe(1);
   });
 
+  test("a gate rejection resets the ordinal, so a stale --iteration is corrected rather than refused as over budget", () => {
+    // Regression: the budget was measured against the CALLER's `--iteration` as
+    // well as against the engine's own `expected`. A gate rejection is an attempt
+    // boundary, so after one the next request is ordinal 1 again - but a conductor
+    // that kept counting asks for 2, and on an advisory stage (budget 1) that
+    // claim alone produced REVIEW_BUDGET_EXHAUSTED. Its guidance sends the
+    // conductor to the gate, which then refuses for REVIEW_EVIDENCE_MISSING
+    // because the revision path needs the very receipt the refusal forbade, and
+    // the only remedy left discards the attempt. Measured on a live run.
+    const proj = seedProject("feature"); // requirements-analysis declares advisory
+    const base = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status,
+    ).toBe(0);
+
+    // Timestamps are second-precision, and a rejection sharing a second with the
+    // review it invalidates is the tie the attempt reducer warns about. Wait it out
+    // so this case pins the ordinal reset, not the tiebreak.
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "requirements-analysis",
+      Feedback: "add the missing section",
+    }, proj);
+
+    const stale = runReview(proj, [...base, "--iteration", "2"]);
+    expect(stale.status).not.toBe(0);
+    // The refusal names the ordinal to retry with, and does NOT claim the budget
+    // is spent - the caller's arithmetic was wrong, the budget was not.
+    expect(stale.stderr).toContain("the next iteration is 1");
+    expect(stale.stderr).not.toContain("allows 1 review pass");
+
+    // And the corrected ordinal is accepted, which is what the revision path needs.
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+  });
+
   test("advisory stale receipt gets one recovery request at the next ordinal", () => {
     const proj = seedProject("feature");
     writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
@@ -619,6 +660,16 @@ describe("t271 review iteration ceiling", () => {
 
   test("scope review_cap lowers an adversarial budget to 1 (bugfix)", () => {
     const proj = seedProject("bugfix");
+    // Spend the one pass the cap allows FIRST. Without it the attempt's next
+    // ordinal is still 1, so asking for 2 is a wrong ordinal rather than an
+    // exhausted budget - and this case is about the cap, not about arithmetic.
+    expect(
+      runReview(proj, [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--iteration", "1",
+      ]).status,
+    ).toBe(0);
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -648,6 +699,50 @@ describe("t271 review iteration ceiling", () => {
     expect(refused.stderr).toContain("allows 0 review passes");
   });
 
+  test("a resumed classic intent keeps one advisory pass gated and the cap-exempt pre-merge reviewer", () => {
+    const proj = seedProject("classic");
+    try {
+      const first = [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "unit-alpha",
+        "--iteration", "1",
+      ];
+      // Classic's advisory cap allows exactly one gated pass; spend it first so
+      // the refusal below is about the budget, not a wrong ordinal.
+      expect(runReview(proj, first).status).toBe(0);
+      expect(runReview(proj, [...first, "--verdict", "NOT-READY"]).status).toBe(0);
+      const request = [...first.slice(0, -1), "2"];
+      const gated = runReview(proj, request);
+      expect(gated.status).not.toBe(0);
+      expect(gated.stderr).toContain("allows 1 review pass");
+
+      const sf = seededStateFile(proj);
+      writeFileSync(
+        sf,
+        `${readFileSync(sf, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+      );
+      appendAuditEntry("BOLT_STARTED", {
+        "Bolt names": "unit-alpha",
+        "Batch number": "1",
+        "Walking skeleton": "false",
+        "Bolt slug": "unit-alpha",
+      }, proj);
+      writeSourceManifest(proj, "unit-alpha");
+      // The autonomous pre-merge review is exempt from the scope cap and opens
+      // its own attempt, so its ordinal starts again at 1.
+      const resumed = runReview(proj, first);
+      expect(resumed.status, resumed.stderr).toBe(0);
+      const completed = runReview(proj, [...first, "--verdict", "READY"]);
+      expect(completed.status, completed.stderr).toBe(0);
+      const audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Event**: REVIEW_REQUESTED");
+      expect(audit).toContain("**Event**: REVIEW_COMPLETED");
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
   test("inline per-unit reviews remain subject to scope caps", () => {
     const proj = seedProject("bugfix");
     const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
@@ -670,6 +765,17 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    // The Bolt boundary opens a fresh attempt, so the pass above no longer counts
+    // against this one. Spend this attempt's single pass before asking for a
+    // second, or the refusal would be about the ordinal rather than the cap.
+    expect(
+      runReview(proj, [
+        "--stage", "functional-design",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "unit-alpha",
+        "--iteration", "1",
+      ]).status,
+    ).toBe(0);
     const over = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -965,7 +1071,7 @@ describe("t271 review iteration ceiling", () => {
     };
     expect(requestOutput.requestId).toMatch(/^review:[0-9a-f]{32}$/);
     expect(requestOutput.reviewFile).toMatch(
-      /\/\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
+      /\/\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
     );
     const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
     const requestFingerprint = auditBlockField(
@@ -982,7 +1088,7 @@ describe("t271 review iteration ceiling", () => {
     expect(completedRun.status, completedRun.stderr).toBe(0);
     const completedOutput = JSON.parse(completedRun.stdout) as { reviewRecord: string };
     expect(completedOutput.reviewRecord).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     // The draft was consumed into the record; the artifact was never written.
     expect(existsSync(join(proj, requestOutput.reviewFile))).toBe(false);
@@ -1271,7 +1377,7 @@ describe("t271 review iteration ceiling", () => {
     // The tolerated appendix is copied into the universal completion record.
     expect(auditBlockField(completed, "Artifact Fingerprint")).not.toBe(requestFingerprint);
     expect(auditBlockField(completed, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     const stage = resolveStage("requirements-analysis");
     if (!stage) throw new Error("requirements-analysis missing from stage graph");
@@ -1489,13 +1595,14 @@ describe("t271 review iteration ceiling", () => {
     expect(readFileSync(artifact, "utf-8")).toBe(original);
   });
 
-  test("a symlinked .aidlc-reviews container refuses the request and the completion, touching nothing outside", () => {
+  test("a symlinked .aidlc-engine/reviews container refuses the request and the completion, touching nothing outside", () => {
     const proj = seedProject("feature");
     writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
     const outside = join(createTestProject(), "elsewhere");
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(outside, "keep.md"), "keep\n", "utf-8");
-    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-reviews"));
+    mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/reviews")), { recursive: true });
+    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const request = [
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
@@ -1509,15 +1616,16 @@ describe("t271 review iteration ceiling", () => {
     expect(readdirSync(outside)).toEqual(["keep.md"]);
     // With the link removed the request opens; re-linked, the completion cannot
     // write its record through it either.
-    unlinkSync(join(seededRecordDir(proj), ".aidlc-reviews"));
+    unlinkSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const opened = runReview(proj, request);
     expect(opened.status, opened.stderr).toBe(0);
     const { reviewFile } = JSON.parse(opened.stdout) as { reviewFile: string };
     const draft = join(proj, reviewFile);
     mkdirSync(dirname(draft), { recursive: true });
     writeFileSync(draft, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
-    renameSync(join(seededRecordDir(proj), ".aidlc-reviews"), join(proj, "detached-reviews"));
-    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-reviews"));
+    renameSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"), join(proj, "detached-reviews"));
+    mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/reviews")), { recursive: true });
+    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const completed = runReview(proj, [...request, "--verdict", "READY"], {
       AIDLC_TEST_NO_REVIEW_FILE: "1",
     });
@@ -1525,8 +1633,8 @@ describe("t271 review iteration ceiling", () => {
     expect(completed.stderr).toContain("is a symlink");
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
     expect(readdirSync(outside)).toEqual(["keep.md"]);
-    unlinkSync(join(seededRecordDir(proj), ".aidlc-reviews"));
-    renameSync(join(proj, "detached-reviews"), join(seededRecordDir(proj), ".aidlc-reviews"));
+    unlinkSync(join(seededRecordDir(proj), ".aidlc-engine/reviews"));
+    renameSync(join(proj, "detached-reviews"), join(seededRecordDir(proj), ".aidlc-engine/reviews"));
     const recorded = runReview(proj, [...request, "--verdict", "READY"], {
       AIDLC_TEST_NO_REVIEW_FILE: "1",
     });
@@ -1644,7 +1752,7 @@ describe("t271 review iteration ceiling", () => {
     expect(auditBlockField(completed, "Verdict")).toBe("NOT-READY");
     const recordPath = auditBlockField(completed, "Review Record");
     expect(recordPath).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     const record = JSON.parse(
       readFileSync(join(seededRecordDir(proj), recordPath as string), "utf-8"),
@@ -2008,7 +2116,38 @@ describe("t271 review iteration ceiling", () => {
     });
     expect(completed.status, completed.stderr).toBe(0);
     expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+    );
+  });
+
+  test("readable review numbering does not overwrite an existing copy across a gap", () => {
+    const proj = seedProject("feature");
+    const reviews = join(
+      seededRecordDir(proj),
+      "inception",
+      "requirements-analysis",
+      "reviews",
+    );
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "review-01.md"), "first review\n", "utf-8");
+    writeFileSync(join(reviews, "review-03.md"), "keep this review\n", "utf-8");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    const completed = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(completed.status, completed.stderr).toBe(0);
+    const output = JSON.parse(
+      completed.stdout.trim().split("\n").at(-1) ?? "{}",
+    ) as { reviewMarkdown?: string };
+    expect(output.reviewMarkdown).toEndWith("/reviews/review-04.md");
+    expect(readFileSync(join(reviews, "review-03.md"), "utf-8")).toBe(
+      "keep this review\n",
+    );
+    expect(readFileSync(join(reviews, "review-04.md"), "utf-8")).toContain(
+      "**Verdict:** READY",
     );
   });
 
@@ -2194,7 +2333,7 @@ describe("t271 review iteration ceiling", () => {
         "Artifact Fingerprint":
           auditBlockField(requested, "Artifact Fingerprint") ?? "",
         // Request Id intentionally omitted: the row cannot pair with the request.
-        "Review Record": ".aidlc-reviews/requirements-analysis/stage/0123456789abcdef/1.json",
+        "Review Record": ".aidlc-engine/reviews/requirements-analysis/stage/0123456789abcdef/1.json",
         // Review Record Digest intentionally omitted: a half-named record is no record.
       },
       proj,
@@ -2419,7 +2558,7 @@ describe("t271 review iteration ceiling", () => {
     const completion = auditBlocks(proj, "REVIEW_COMPLETED")[0];
     expect(auditBlockField(completion, "Request Id")).toBe(requestId);
     expect(auditBlockField(completion, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     expect(auditBlockField(completion, "Review Appendix Artifact")).toBe(
       snapshot.reviewArtifact,
@@ -2697,7 +2836,7 @@ describe("t271 review iteration ceiling", () => {
       requestedSnapshot.fingerprint,
     );
     expect(auditBlockField(completed, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     expect(auditBlockField(completed, "Review Record Digest")).toMatch(
       /^sha256:[0-9a-f]{64}$/,
@@ -2736,7 +2875,7 @@ describe("t271 review iteration ceiling", () => {
       "Review Record",
     );
     expect(attemptOneRecord).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
 
     // Attempt reset: ordinals restart at 1 while the attempt-1 section is
@@ -2804,7 +2943,7 @@ describe("t271 review iteration ceiling", () => {
     const completions = auditBlocks(proj, "REVIEW_COMPLETED");
     expect(completions).toHaveLength(2);
     expect(auditBlockField(completions[1], "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     // Two attempts, two records slots: the reset attempt's record does not
     // overwrite anything attempt 1 could have written.

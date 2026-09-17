@@ -46,7 +46,7 @@ Each fire leaves a row in the intent's `audit/` shards. The event names — exac
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
 **`SENSOR_PASSED`** when it clears, and **`SENSOR_FAILED`** when it finds a gap.
 A failed row links to a detail file under
-`<record>/.aidlc-sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
+`<record>/.aidlc-engine/sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
 missing headings, the unreferenced upstream artifact, the lint error. The
 user-facing tour of how this looks during a run is in
 [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) in the

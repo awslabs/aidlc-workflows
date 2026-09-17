@@ -93,7 +93,7 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
-import { ROUTES } from "../core/tools/aidlc.ts";
+import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
@@ -136,9 +136,9 @@ if (TIER_CAP) {
 
 // The version stamped into every projected aidlc-version.ts copy and projection
 // stamp. Unset means the source version. A release build sets AIDLC_BUILD_VERSION
-// to a preview id derived from the source version; the source tree is never
-// edited. Honoured in --check mode too, so the two-build determinism guard
-// measures the same stamped projection the release will ship.
+// to a next-patch preview id derived from the current source version; the source
+// tree is never edited. Honoured in --check mode too, so the two-build
+// determinism guard measures the same stamped projection the release will ship.
 const BUILD_VERSION = releaseBuildVersion();
 if (BUILD_VERSION !== AIDLC_VERSION) {
   console.error(`[version] stamping projections with ${BUILD_VERSION_ENV}=${BUILD_VERSION}`);
@@ -1096,31 +1096,13 @@ function rewriteNativeInvocations(
 ): void {
   projectNativeRootIntegrations(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
-  const delegateNames = [
-    "audit",
-    "bolt",
-    "graph",
-    "init",
-    "jump",
-    "learnings",
-    "lifecycle",
-    "log",
-    "orchestrate",
-    "runner-gen",
-    "runtime",
-    "sensor",
-    "sensor-claim-sources",
-    "sensor-linter",
-    "sensor-required-sections",
-    "sensor-type-check",
-    "sensor-upstream-coverage",
-    "state",
-    "swarm",
-    "utility",
-    "validate",
-    "worktree",
-    "workspace-sync",
-  ].join("|");
+  // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
+  // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
+  // covered by both the rewrite and bareToolCheck. The leftover checks below
+  // still reject a rewrite to a non-route.
+  const delegateNames = Object.values(TOOLS)
+    .map((file) => escapeRegExp(file.slice("aidlc-".length, -".ts".length)))
+    .join("|");
   // The authored subprocess adapters, each backed by an `aidlc engine adapter
   // <harness>` dispatcher route. Only these project onto that route; any other
   // hook file keeps the generic one-argument `engine hook <name>` rewrite.
@@ -1178,16 +1160,15 @@ function rewriteNativeInvocations(
       (_match, verb: string) =>
         `${trustedCommand("workspace")} ${verb === "codekb-path" ? "codekb" : verb}`,
     );
-    // The per-intent Change Control flip lives under the `config` noun in the
-    // native dispatcher (`config set change-control <value>`), so its direct
-    // utility invocation is rewritten verb-aware for the same reason.
-    const changeControlUtilityPattern = new RegExp(
-      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+change-control\b`,
+    // Settings share one utility transaction; project its first setting onto
+    // the dispatcher's config noun and preserve all trailing flags/selectors.
+    const configUtilityPattern = new RegExp(
+      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+config-change\s+--(depth|test-strategy|review|change-control|sensors|learnings|summary-confirmation)\b`,
       "gi",
     );
     value = value.replace(
-      changeControlUtilityPattern,
-      () => trustedCommand("config set change-control"),
+      configUtilityPattern,
+      (_match, key: string) => trustedCommand(`config set ${key}`),
     );
     value = value.replace(toolPattern, (_match, delegate: string | undefined) =>
       delegate ? trustedCommand(delegate) : TRUSTED_COMMAND_PREFIX

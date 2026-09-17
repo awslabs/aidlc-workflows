@@ -1025,10 +1025,10 @@ if (target === "terminal-command-guard") {
 // shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
 // human's turn.
 //
-// The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
 // what makes the Stop hook's conversational carve-out work on this harness. The
 // IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine-touch instead.
+// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
 // Both writes ride this one seam so the ledger and the marker can never
 // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 // --- block: the preToolUse human-presence floor ---
@@ -1911,7 +1911,7 @@ function buildForward(): Forward {
       //
       // So the core hook still runs and its side effects are what matter here:
       // the `continue-workflow.drops` carve-out record and the no-progress
-      // counter under `.aidlc-stop-hook/`. Its `{"decision":"block"}` stdout is
+      // counter under `.aidlc-engine/stop-hook/`. Its `{"decision":"block"}` stdout is
       // produced and then discarded by the host. Forwarding-loop enforcement on
       // the IDE therefore rests on the conductor's own Stop protocol, NOT on
       // this hook. (An earlier revision of this comment claimed the block
@@ -1926,7 +1926,7 @@ function buildForward(): Forward {
       // AUTONOMOUS_BLOCK_CAP=8), not the fixed 8 a still earlier revision promised.
       //
       // The absent transcript no longer leaves the conversational carve-out inert:
-      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // the core hook falls back to the `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch`
       // mtime comparison, and the `record-human-turn` target above writes the
       // former. On this harness that changes which record
       // `continue-workflow.drops` gets and whether the counter advances — not
