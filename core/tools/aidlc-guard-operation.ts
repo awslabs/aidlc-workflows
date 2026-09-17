@@ -1,3 +1,4 @@
+import { basename, isAbsolute } from "node:path";
 import { aidlcInvocation, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 
 // These are domain operations, not shell programs. Owning commands retain their
@@ -65,7 +66,11 @@ export function renderGuardOperation(
   const invocation = guardOperationInvocation(operation);
   const mode = options.mode ?? (aidlcInvocation().startsWith("bun ") ? "source" : "native");
   const shell = options.shell ?? (process.platform === "win32" ? "powershell" : "posix");
-  const harness = options.harnessDir ?? runtimeHarnessDir();
+  // The AIDLC_HARNESS_DIR seam may name an installed tree by absolute path;
+  // the rendered command is project-relative, so only its leaf directory
+  // applies. Relative spellings must already be that bare leaf.
+  const configured = options.harnessDir ?? runtimeHarnessDir();
+  const harness = isAbsolute(configured) ? basename(configured) : configured;
   if (!/^\.[A-Za-z0-9_.-]+$/.test(harness)) throw new Error("Invalid recovery harness directory");
   const prefix = mode === "native"
     ? `aidlc engine ${invocation.route}`
