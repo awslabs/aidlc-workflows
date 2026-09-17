@@ -1246,17 +1246,22 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       };
       expect(
         runAdapter(dir, "log-subagent", dispatch).code,
-        "the edge that owns admission must be the one that refuses",
+        "the edge that opens the window refuses before opening one",
       ).toBe(2);
-      // The sibling guards stand down on a dispatch, so they cannot strand a window
-      // this edge opened - and they still refuse everything else.
+      // And EVERY refuser still refuses on its own evidence. A previous cut stood
+      // these two down so the decision would be made once; that made each gate's
+      // verdict depend on another registration having run, and with the opening
+      // edge absent or its payload malformed the floor had no owner at all.
       expect(
         runAdapter(dir, "plan-approval-guard", dispatch).code,
-        "the dispatch is decided once, on the opening edge",
-      ).toBe(0);
+        "the plan guard does not assume the opening edge ran",
+      ).toBe(2);
+      // The human-presence floor is a DIFFERENT contract and this fixture does not arm
+      // it (no stage at [?]), so 0 is the correct answer here - the floor's own
+      // no-stand-down is pinned by 5d7, which arms it.
       expect(
         runAdapter(dir, "enforce-approval-gate", dispatch).code,
-        "the matcherless gate must not answer a second time either",
+        "an unapproved plan is not the presence floor's business",
       ).toBe(0);
       expect(
         runAdapter(dir, "state-transition-guard", {
@@ -1269,6 +1274,98 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       ).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d7: a malformed dispatch payload cannot bypass the presence floor", () => {
+    // The admitter block is gated on `malformedFields` being empty, and a previous cut
+    // stood the gate down on the tool NAME alone - so `tool_input: []` skipped the
+    // admitter while still disarming the gate, and an ordinary open gate let the call
+    // through. Nothing may stand down on a shape it cannot fully parse.
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        seededStateFile(dir),
+        readFileSync(seededStateFile(dir), "utf-8").replace(/^- \[x\] /m, "- [?] "),
+      );
+      writeFileSync(
+        join(seededAuditDir(dir), pinnedShardName()),
+        "# AI-DLC Audit Log\n\n## Stage Awaiting Approval\n" +
+          "**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_AWAITING_APPROVAL\n\n---\n",
+      );
+      const armed: NodeJS.ProcessEnv = {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+        AIDLC_PROJECT_DIR: dir,
+      };
+      expect(
+        runAdapter(dir, "enforce-approval-gate", {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "subagent_aidlc-developer-agent",
+          tool_input: [],
+        }, [], armed).code,
+        "a malformed dispatch is still a tool call at an open gate",
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d8: the suffix is the identity, so an argument cannot name a different agent", () => {
+    // `openDelegation` attributes the window with kiroDispatch's derivation, which
+    // treats the `subagent_` suffix as authoritative. A first cut of the admission
+    // check derived the agent argument-first, so this payload asked the core guard
+    // about the quality agent, was admitted, and then had its window attributed to
+    // the developer - two identities for one dispatch.
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      expect(
+        runAdapter(dir, "log-subagent", {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "subagent_aidlc-developer-agent",
+          tool_input: {
+            name: "aidlc-quality-agent",
+            prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          },
+        }).code,
+        "the suffix names the developer, so Code Generation must judge the developer",
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d9: an admitted dispatch survives either hook order", () => {
+    // The reviewer asked for both orders explicitly. With no gate open and no
+    // unapproved Code Generation, all three targets must pass and exactly one window
+    // must exist afterwards - whichever ran first.
+    for (const order of [
+      ["log-subagent", "plan-approval-guard", "enforce-approval-gate"],
+      ["enforce-approval-gate", "plan-approval-guard", "log-subagent"],
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        const dispatch = {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "subagent_aidlc-developer-agent",
+          tool_input: { subagent_type: "aidlc-developer-agent", prompt: "no gate is open" },
+        };
+        for (const target of order) {
+          expect(
+            runAdapter(dir, target, dispatch).code,
+            `${target} in order [${order.join(", ")}]`,
+          ).toBe(0);
+        }
+        const ledger = readFileSync(findDelegationLedger(dir), "utf-8")
+          .split("\n")
+          .filter((line) => line.includes('"op":"open"'));
+        expect(ledger.length, `one window for order [${order.join(", ")}]`).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

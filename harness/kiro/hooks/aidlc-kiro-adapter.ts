@@ -325,12 +325,6 @@ const INPUT_TARGETS = new Set([
   "reviewer-scope",
   "guard-tool-call",
   "deliver-stage-rules",
-  // Needs the tool name for ONE reason: to recognise a dispatch and stand down,
-  // because the log-subagent edge decides dispatch admission and this guard
-  // refusing one afterwards would strand the window that edge already opened. Its
-  // manifest carries no matcher, so without the payload it cannot tell a dispatch
-  // from anything else.
-  "enforce-approval-gate",
   // Not in PAYLOAD_TARGETS on purpose: a malformed payload here must fall back to
   // the audit-tail reconciliation, not drop the event.
   "sync-workflow-state",
@@ -856,7 +850,13 @@ if (INPUT_TARGETS.has(target)) {
             sessionId: typeof rawSessionId === "string"
               ? rawSessionId
               : undefined,
-            event: typeof rawEvent === "string" ? rawEvent : undefined,
+            // Normalized, not raw. The hosts measured so far send PascalCase, but
+            // this repo's own captured fixtures and Kiro's hook documentation spell
+            // it `preToolUse`, and the admission edge below branches on this value -
+            // so an exact-match comparison would put a security decision on the
+            // spelling of one field. Same lesson as the USER_PROMPT/stdin channel
+            // fix: accept both spellings rather than replace one with the other.
+            event: typeof rawEvent === "string" ? canonicalHookEvent(rawEvent) : undefined,
             prompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
             userPrompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
             toolName: typeof rawName === "string" ? rawName : undefined,
@@ -1417,12 +1417,15 @@ if (target === "terminal-command-guard") {
 // floor answer differently for the same payload depending on the launch directory.
 // All read from disk. Fail-open on any read/parse error (advisory).
 if (target === "enforce-approval-gate") {
-  // A dispatch is decided by the log-subagent edge, which asks this same floor
-  // BEFORE opening the window. Refusing one here as well would be a second verdict
-  // on a decision already made - and if this guard runs after that edge, the
-  // refusal strands the open it created, which is the wedge this row shipped with.
-  if (isDispatchToolName(ide.toolName ?? "")) return 0;
-  if (approvalFloorRefuses(projectDir)) {
+  // NO carve-out for dispatch shapes, deliberately. A previous cut stood this guard
+  // down on a dispatch, because the log-subagent edge asks this same floor before it
+  // opens the window - but standing down means one registration ASSUMES another ran,
+  // and nothing here can know that: hook order is not promised and the payload
+  // carries no event identity. With that manifest absent, its matcher not firing, or
+  // its own block skipped because the payload was malformed, the floor had no owner
+  // at all and an unapproved dispatch passed. A duplicate refusal is the cheap
+  // failure; a floor with no owner is not.
+  if (approvalFloorRefuses(projectDir, false)) {
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
@@ -1467,10 +1470,16 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
       // event identity the payload does not carry, so the credit for one refusal
       // could be spent cancelling a later byte-identical dispatch.
       //
-      // A refusal is therefore NOT a ledger fact. Nothing is appended, and the two
-      // matcherless gates no-op on dispatch shapes so they cannot refuse one after
-      // this edge has admitted it.
-      if (approvalFloorRefuses(projectDir)) {
+      // A refusal is therefore NOT a ledger fact: nothing is appended for one. The
+      // matcherless gates still judge a dispatch on their own evidence - they must,
+      // because no registration may assume another ran - so this edge is an early
+      // refusal and a narrower window, not the only owner of the decision. A gate
+      // refusing after this edge admitted leaves a window with no close, and the
+      // human-turn sweep is what reclaims it.
+      //
+      // Unreadable state fails CLOSED here, unlike the advisory gate: this decides
+      // whether a delegate starts at all.
+      if (approvalFloorRefuses(projectDir, true)) {
         process.stderr.write(
           "An approval gate is open and no human has acted since it opened. The gate " +
             "requires a typed human turn before any tool call proceeds. Acknowledge the " +
@@ -2264,7 +2273,15 @@ function delegationLedgerPath(sessionId: string): string {
 // groups.
 type DelegationRecord =
   | { op: "open"; agent: string; key: string; group: string; ts: number }
-  | { op: "close"; key: string; ts: number };
+  | { op: "close"; key: string; ts: number }
+  // A boundary, not a cancellation. Every open appended BEFORE it is abandoned;
+  // opens after it are untouched. This is how a window survives the failure modes
+  // that produce no PostToolUse - a crash, a cancel, a malformed close, or a gate
+  // refusing after the admitter already opened - without the accounting that made
+  // a stray close a standing credit. Appending closes instead cannot work: a close
+  // cancels the most recent group for its key, so one appended at a human turn
+  // would cancel a dispatch the next turn legitimately opened with the same bytes.
+  | { op: "sweep"; ts: number };
 
 function readDelegationLedger(sessionId: string): DelegationRecord[] {
   let raw = "";
@@ -2285,6 +2302,12 @@ function readDelegationLedger(sessionId: string): DelegationRecord[] {
     if (!isRecord(parsed)) continue;
     const key = typeof parsed.key === "string" ? parsed.key : "";
     const ts = typeof parsed.ts === "number" ? parsed.ts : 0;
+    // A sweep carries no key: it is a point in time, not a statement about one
+    // dispatch. Read it before the key guard below drops keyless records.
+    if (parsed.op === "sweep") {
+      out.push({ op: "sweep", ts });
+      continue;
+    }
     if (key === "") continue;
     if (parsed.op === "open") {
       const agent = typeof parsed.agent === "string" ? parsed.agent.trim() : "";
@@ -2345,6 +2368,29 @@ function closeDelegation(sessionId: string, input: KiroHookInput): void {
   ]);
 }
 
+/** Abandon every window opened before now. The recovery path for the failure modes
+ *  that produce no PostToolUse at all: a crashed or cancelled delegate, a malformed
+ *  close, or a gate that refused after the admitter had already opened. A human turn
+ *  is the boundary because a delegate is blocking on this row (the skill pins
+ *  `mode:"blocking"`), so anything still believed inflight when a human speaks is
+ *  finished or gone. Cheaper than the TTL by hours, and unlike an appended close it
+ *  cannot cancel a dispatch that comes AFTER it. */
+function sweepDelegations(sessionId: string): void {
+  appendDelegationRecords(sessionId, [{ op: "sweep", ts: Date.now() }]);
+}
+
+/** The hook event name in one spelling, whatever case the host sent. The captured
+ *  fixtures in `tests/fixtures/kiro-hook-payloads/payloads.json` and Kiro's hook
+ *  documentation use `preToolUse`/`postToolUse`; the hosts measured on live runs sent
+ *  `PreToolUse`/`PostToolUse`. Unknown names pass through untouched so a new trigger
+ *  is visible in a drop rather than silently renamed. */
+function canonicalHookEvent(raw: string): string {
+  const key = raw.trim().toLowerCase();
+  if (key === "pretooluse") return "PreToolUse";
+  if (key === "posttooluse") return "PostToolUse";
+  return raw;
+}
+
 /** The dispatch tool spellings that open a delegation window. */
 function isDispatchToolName(name: string): boolean {
   return (
@@ -2357,7 +2403,7 @@ function isDispatchToolName(name: string): boolean {
  *  so the dispatch admission below can ask the same question the
  *  `enforce-approval-gate` target answers - one predicate, two callers, rather
  *  than a second implementation that can drift from it. */
-function approvalFloorRefuses(pd: string): boolean {
+function approvalFloorRefuses(pd: string, onUnreadable: boolean): boolean {
   try {
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
@@ -2367,7 +2413,14 @@ function approvalFloorRefuses(pd: string): boolean {
     if (humanActedSinceGate(pd)) return false;
     return true;
   } catch {
-    return false; // advisory - any read/parse failure fails open
+    // The two callers want opposite answers here, so neither gets a default. The
+    // gate keeps the advisory contract this seam shipped with (a tool call is not
+    // blocked because a file could not be parsed). The admission edge does not: it
+    // decides whether a delegate STARTS, and `humanActedSinceGate` itself learned
+    // that treating "could not read" as "was empty" inverts this floor to fail-open
+    // (core/tools/aidlc-lib.ts, ENOENT-only skip). Extracting this predicate is what
+    // made the difference expressible; before, one fail-open served both.
+    return onUnreadable;
   }
 }
 
@@ -2389,27 +2442,20 @@ function planApprovalRefusesDispatch(
   toolArgs: Record<string, unknown>,
   pd: string,
 ): boolean {
-  const crew = CREW_DISPATCH_TOOLS.has(toolName)
-    ? kiroDispatch({ tool_name: toolName, tool_input: toolArgs })
-    : null;
-  let agent = "";
-  let prompt = "";
-  if (crew?.agents.includes("aidlc-developer-agent")) {
-    agent = "aidlc-developer-agent";
-    prompt = crew.prompt;
-  } else {
-    agent =
-      [toolArgs.name, toolArgs.subagent_type, toolArgs.agent, toolArgs.agent_name, toolArgs.role]
-        .find((value): value is string => typeof value === "string" && value.trim().length > 0)
-        ?.trim() ??
-      (toolName.startsWith("subagent_") && toolName !== "subagent_response"
-        ? toolName.slice("subagent_".length).trim()
-        : "");
-    if (toolName === "invoke_sub_agent" && agent === "") agent = "aidlc-developer-agent";
-    prompt =
-      [toolArgs.prompt, toolArgs.task, toolArgs.description]
-        .find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
-  }
+  // ONE derivation, and it is the ledger's. `kiroDispatch` treats the `subagent_`
+  // SUFFIX as authoritative and arguments as the fallback (`namedAgent || directAgent`),
+  // which matches this harness's rule that a platform-provided identity outranks an
+  // agent-authored one. A first cut here derived the agent argument-first, so
+  // `subagent_aidlc-developer-agent` carrying `tool_input.name: "aidlc-quality-agent"`
+  // asked core about the quality agent, was admitted, and then had its window
+  // attributed to the developer by `openDelegation` - two identities for one dispatch.
+  const dispatch = kiroDispatch({ tool_name: toolName, tool_input: toolArgs });
+  let agent = dispatch?.agents[0] ?? "";
+  const prompt = dispatch?.prompt ?? "";
+  // Not an identity: a fail-closed policy for the one shape that hides it. Kept out of
+  // kiroDispatch on purpose - putting it there would let a completion audit record the
+  // developer for a delegate whose real identity was in the prose.
+  if (toolName === "invoke_sub_agent" && agent === "") agent = "aidlc-developer-agent";
   if (agent === "") return false; // nothing this guard is about
   try {
     return runCoreHook(
@@ -2446,6 +2492,15 @@ function liveDelegationOpens(
     if (record.op === "open") {
       if (now - record.ts > DELEGATION_TTL_MS) continue;
       opens.push({ agent: record.agent, key: record.key, group: record.group, ts: record.ts });
+      continue;
+    }
+    // A boundary: everything opened before this point is abandoned, whatever the
+    // reason no close arrived. Replay order is append order, so dropping what has
+    // accumulated so far is exactly "opens older than the sweep" - and an open
+    // appended after it is untouched, which is what keeps this from becoming the
+    // standing credit the previous accounting was.
+    if (record.op === "sweep") {
+      opens.length = 0;
       continue;
     }
     // Cancel the most recent GROUP for this key - every persona that dispatch
@@ -2609,6 +2664,16 @@ function buildForward(): Forward {
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
       }
+      // The delegation boundary. A dispatch on this row is blocking, so any window
+      // still believed inflight when a human speaks belongs to a delegate that
+      // finished, crashed, was cancelled, or was refused by a gate after the
+      // admitter opened for it. Advisory: a mint must never fail the human's turn.
+      try {
+        sweepDelegations(sessionId);
+      } catch {
+        // appendDelegationRecords already swallows its own IO errors; this is the
+        // belt for anything the session-id resolution above can still throw.
+      }
       return {
         hook: "aidlc-record-human-turn.ts",
         input: {
@@ -2628,12 +2693,12 @@ function buildForward(): Forward {
       // nothing. Excluding it from mutationCapableTool is not enough - that only
       // keeps it out of the legacy machinery below.
       if (DISPATCH_AUXILIARY_TOOLS.has(toolName)) return null;
-      // A DISPATCH is decided once, on the log-subagent edge, which asks this same
-      // core guard before it opens the delegation window. Answering again here
-      // would let this guard refuse a dispatch that edge already admitted, and the
-      // refusal would strand the open - the wedge this row shipped with. Every
-      // other tool this matcherless guard sees is still judged below.
-      if (ide.event === "PreToolUse" && isDispatchToolName(toolName)) return null;
+      // NO carve-out for dispatch shapes here either, and for the same reason as the
+      // human-presence floor above: a previous cut returned null on a dispatch so the
+      // log-subagent edge could own the decision, which made this guard's verdict
+      // depend on another registration having run. It also skipped the arms below -
+      // the legacy opaque-write window in particular - so a dispatch was never judged
+      // against them at all.
       if (ide.channel === "legacy") {
         try {
           markKiroIdeLegacyPlanApprovalHost(

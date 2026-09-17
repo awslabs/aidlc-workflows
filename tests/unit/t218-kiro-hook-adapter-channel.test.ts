@@ -1581,8 +1581,9 @@ describe("t218 Kiro legacy plan-approval enforcement", () => {
         },
       });
       expect(runIdeStdin(dir, "log-subagent", dispatchPayload).code).toBe(2);
-      // And the guard deliberately stands down on it, so the refusal is made once.
-      expect(runIdeStdin(dir, "plan-approval-guard", dispatchPayload).code).toBe(0);
+      // The guard refuses it too. Standing down here - so the refusal happened once -
+      // is what let a dispatch through whenever the opening edge did not run.
+      expect(runIdeStdin(dir, "plan-approval-guard", dispatchPayload).code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
