@@ -45,6 +45,35 @@ recognized later from `toolArgs.command` on the matching preToolUse event. Raw
 `/aidlc ...` text remains accepted for newer Kiro generations that expose it
 directly, but is not the 0.12 compatibility claim.
 
+## Which spelling of `hook_event_name` each generation sends
+
+The split is by **engine generation, not by surface** — that is the part worth writing
+down, because "IDE versus CLI" is the wrong axis to reason about it on.
+
+Counted 2026-09-17 across every capture available on this machine:
+
+| Source | Spelling | Evidence |
+|---|---|---|
+| Kiro CLI, agent-v1 engine (2.6.1, 2.18.1) | **camelCase** — `preToolUse`, `postToolUse` | `tests/fixtures/kiro-hook-payloads/payloads.json`, whose `_provenance` records both captures and says "payload field names are verbatim" |
+| Kiro IDE 1.x, every build from 1.0.89 to 1.0.395 | **PascalCase** | the per-version capture archives in the `kiro-ide-1.x-test` controlled-experiment tree: 1.0.89 (41), 1.0.116 (26), 1.0.138 (31), 1.0.165 (108), 1.0.203 (61), 1.0.212 (73), 1.0.309 (275), 1.0.337 (111), 1.0.395 (124) — camelCase 0 in all nine |
+| Current unified row, both surfaces | **PascalCase** | two concurrent gated runs, one CLI and one IDE on the same engine build: CLI `PreToolUse` 140 / `PostToolUse` 139 / `UserPromptSubmit` 7 / `SessionStart` 3; IDE 129 / 127 / 6 / 2; camelCase 0 in both |
+
+Kiro IDE 0.12 does not appear in this table at all: that generation carries no
+`hook_event_name` field, because its contract is the `USER_PROMPT` env var with
+camelCase *field* names (`toolName`, `toolArgs`) — see the channel table above. The
+camelCase `preToolUse` spelling of this field belongs to the CLI's agent-v1 engine, and
+the same fixture's `_registration_tool_names` notes that v3 "does not consume agent-v1
+hooks" at all.
+
+The published hook documentation also spells it camelCase, which matches the agent-v1
+generation rather than anything measured here.
+
+**The adapter does not depend on the answer.** `canonicalHookEvent` folds both spellings
+at parse, because the dispatch admission edge branches on this value and an exact-match
+comparison would rest a security decision on one field's capitalisation. Unknown names
+pass through unchanged, so a genuinely new trigger surfaces as a drop rather than being
+silently renamed into a known one.
+
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
 CLI). Legacy Plan Approval hashes those measured host-instance values into its
 runtime session identity, so two IDE windows in one workspace do not share
