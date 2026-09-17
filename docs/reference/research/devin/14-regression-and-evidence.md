@@ -12,13 +12,11 @@ The port repeatedly exposed the difference between a configured integration, a g
 | --- | --- | --- |
 | `tests/fixtures/devin-hook-payloads/captured-3000.6.14.json` with `capture-provenance.json` | Sanitized raw hook captures from the documented build; foreground/background dispatch, reads/writes, lifecycle fields, missing child identity | Current-build behavior; answered C07/C08 envelopes; separately captured cancel/fail/resume lifecycle |
 | `tests/fixtures/devin-hook-payloads/payloads.json` | Synthetic/compatibility inputs used by adapter tests | That the host emitted every field or shape |
-| `evidence/devin-e2e-run/first-run/SUMMARY.md` and associated artifacts | Historical headless workflow experiment; summary discloses permissive mode, auto-handled gates, manually created approval evidence, and no subagent test | Genuine native human approval or complete delegated workflow acceptance |
-| `evidence/devin-e2e-run/second-run/` | Interactive run recorded as blocked at Plan Approval after response-recording problems | A successful full workflow or a current-build reproduction |
-| `evidence/devin-e2e-run/third-run/` | Another blocked run showing the first response-wrapper fix was insufficient | That all later fixes or all response shapes were verified |
-| `evidence/devin-e2e-run/fourth-run/` | Retained session exports, including native question schema/response observations used during later fixes | A blanket all-topology PASS or an independent raw hook capture for every tool result |
+| Historical `evidence/devin-e2e-run/` run subdirectories (`first-run/` through `fourth-run/`) | Removed from the working tree; original run summaries, manifests, and session exports remain in Git history | A current-build reproduction, a blanket all-topology PASS, or an independent raw hook capture for every tool result |
+| `evidence/devin-e2e-run/session-isolation-run/` | Attended 2026-09-17 run on Devin CLI 3000.10.31 at `bce80f29` plus the uncommitted Item 1 fix: three real sessions, native Plan Approval click, forced wrong-session `answer`, `/clear` receipt persistence; audit shard, runtime challenge/receipt files, session C export, SHA-256 manifest | A completed workflow (developer dispatch blocked by DEVIN-07), receipt reuse without re-prompt, exports for sessions A and B, or behavior on other builds |
 | Former frontmatter-revert log | Historical test narrative with an explicit notice of edited version text, recoverable in Git | Untouched raw evidence or a rerun on the newer baseline |
 
-Leave existing evidence outside this research directory unchanged. Interpret summaries alongside their raw artifacts and disclosed interventions; summaries can contain diagnoses later corrected by source inspection.
+The four run subdirectories under `evidence/devin-e2e-run/` have been removed from the working tree; the top-level `README.md` and `HARNESS-REQUIREMENTS.md` are retained. Other evidence outside this directory is unchanged. Interpret summaries alongside their raw artifacts and disclosed interventions; summaries can contain diagnoses later corrected by source inspection.
 
 ## Deterministic verification commands
 
@@ -48,7 +46,7 @@ Packaging determinism, source parity, static protocol checks, runtime fixture as
 | Adapter subprocess behavior | t332 | Native dispatch translation, reviewer attribution, and terminal lifecycle gaps in DEVIN-07 |
 | Ensemble binding | t333 source-contract assertions | Real participation, contribution artifacts, pipeline receipts, and failure recovery |
 | Version and diagnostics | t334, t294, t331/t332 SessionStart cases | Desktop execution, actual model selection, current hook approval |
-| Plan Approval and shell safety | t265 and shared authority tests | Native field transport and current-session fallback isolation |
+| Plan Approval and shell safety | t265 and shared authority tests; strict session pairing covered by the t328 `Item 1 session isolation` suite and t332 adapter A/B transport cases at `bce80f29` plus uncommitted Item 1 fix | Native dispatch-field transport (DEVIN-07 / review Item 2, live-blocking on 3000.10.31); receipt reuse without re-prompt after a session change (inconclusive in session-isolation-run) |
 | Question rendering and recording | t250, focused t181 contract assertions, t332 | Fresh interactive batch, skip, Other, and contradictory-response cases |
 | Read-only Stop consultation | t121 and t328 integration | New observer-reachable writers after engine changes |
 | Contract repair | t299 and t37 | Host write-tool attribution/fix and safe retirement |

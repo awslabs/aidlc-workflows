@@ -418,6 +418,15 @@ function authority(p: Project, target: { unit: string | null }): {
   ) as unknown as { directiveEpoch: string; runFloor: string };
 }
 
+function receiptBody(p: Project): string {
+  const names = p.receipts();
+  expect(names).toHaveLength(1);
+  return readFileSync(
+    join(sessionsDir(p.dir), "plan-approval", names[0]),
+    "utf-8",
+  );
+}
+
 async function approvedProject(scope: "express" | "feature" = "express"): Promise<{
   p: Project;
   target: { unit: string | null };
@@ -630,11 +639,16 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       const beforeRevision = p.marker()?.revision;
       const beforeEpoch = authority(p, target).directiveEpoch;
       expect(p.receipts().length).toBe(1);
+      const receiptBefore = receiptBody(p);
+      expect((JSON.parse(receiptBefore) as { session: string }).session).toBe(
+        SESSION,
+      );
 
       act(p);
 
       expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
       expect(p.receipts().length).toBe(1);
+      expect(receiptBody(p)).toBe(receiptBefore);
       expect(authority(p, target).directiveEpoch).toBe(beforeEpoch);
       expect(p.marker()?.revision).toBe(beforeRevision);
     }, 180000);

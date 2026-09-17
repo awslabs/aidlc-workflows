@@ -27,7 +27,7 @@ Four distinctions are essential:
 | DEVIN-06 | [Hook events, payload translation, and output contracts](06-hook-transport.md) | Implemented transport with explicit payload and enforcement gaps |
 | DEVIN-07 | [Ensemble dispatch, reviewer attribution, and subagent lifecycle](07-subagent-lifecycle-and-ensemble.md) | Protocol binding implemented; adapter acceptance incomplete |
 | DEVIN-08 | [Structured questions and human-turn recording](08-questions-and-human-turns.md) | Implemented response compatibility; live batch/cancellation authority coverage remains limited |
-| DEVIN-09 | [Plan Approval sessions, challenges, responses, and receipts](09-plan-approval-authority.md) | Shared authority implemented; fallback isolation needs explicit regression evidence |
+| DEVIN-09 | [Plan Approval sessions, challenges, responses, and receipts](09-plan-approval-authority.md) | Strict session pairing implemented, regression-covered, and accepted live on 3000.10.31; receipt reuse without re-prompt inconclusive pending DEVIN-07 |
 | DEVIN-10 | [Planning commands, shell composition, and working directories](10-shell-guards-and-working-directory.md) | Implemented protections with scoped guarantees |
 | DEVIN-11 | [Stop-hook consultation must preserve live approval state](11-stop-hook-observer-safety.md) | Shared observer mechanism implemented and regression-covered |
 | DEVIN-12 | [Testing Contract JSON compatibility repair and retirement](12-testing-contract-repair.md) | Temporary shared workaround; vendor fix version unconfirmed |
@@ -44,7 +44,7 @@ Read DEVIN-01–06 for the integration architecture, DEVIN-07–12 for behaviora
 | DEVIN-07 | Reviewer-specific read/search enforcement lacks adapter handling and captured child identity | Supported identity contract plus native read/search/notebook boundary tests |
 | DEVIN-07 | Background launch is not terminal completion; poll exclusion is not lifecycle tracking | Capture-backed persistent lifecycle and restart/repeated-read tests |
 | DEVIN-08 | Unknown/partial/contradictory question responses and first-answer extraction | Batch/cancellation authority tests and fresh interactive hook captures |
-| DEVIN-09 | Current-session fallback isolation | Explicit intended-fallback and concurrent-session negative cases |
+| DEVIN-09 | Receipt reuse without re-prompt after a session change | A live run after the DEVIN-07 dispatch fix in which `/clear` + resume proceeds on the existing receipt with no new Plan Approval prompt |
 | DEVIN-12 | Testing Contract repair retirement | Vendor-confirmed fixed version, real write/read regression, supported baseline, and stored-plan migration |
 | DEVIN-02, DEVIN-05, DEVIN-13 | Actual context injection, authenticated MCP/header behavior, Desktop execution, current hook approval | Separate host/platform validation; static config or doctor output is insufficient |
 
@@ -69,7 +69,7 @@ These are evidence-qualified findings, not permission to weaken guards or silent
 - **Synthetic regression:** tests a supplied shape or state. It proves only its assertions, not that the current host emits that shape.
 - **Historical result:** belongs to its recorded revision, environment, and intervention history. A skip, environment blocker, modified log, or manually seeded approval is not a fresh live PASS.
 
-The old frontmatter-revert `.log` explicitly warned that version text had been edited afterward. Its historical content remains in Git, but it is not preserved here as authoritative current-build test evidence. Original captures and `evidence/devin-e2e-run/` are untouched.
+The old frontmatter-revert `.log` explicitly warned that version text had been edited afterward. Its historical content remains in Git, but it is not preserved here as authoritative current-build test evidence. The original `evidence/devin-e2e-run/` run subdirectories (`first-run/` through `fourth-run/`) have been removed from the working tree; they remain in Git history. The current `README.md`, `HARNESS-REQUIREMENTS.md`, and the 2026-09-17 `session-isolation-run/` are retained. Original S02 fixture captures outside this directory are unchanged.
 
 ## Historical source map
 

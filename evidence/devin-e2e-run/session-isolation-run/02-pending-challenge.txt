@@ -1,0 +1,17 @@
+total 12
+drwxr-xr-x 2 wiley wiley 4096 Sep 17 17:08 .
+drwxr-xr-x 4 wiley wiley 4096 Sep 17 17:08 ..
+-rw-r--r-- 1 wiley wiley 1022 Sep 17 17:08 challenge-purple-wool.json
+
+total 36
+drwxr-xr-x 4 wiley wiley 4096 Sep 17 17:08 .
+drwxr-xr-x 4 wiley wiley 4096 Sep 17 16:53 ..
+-rw-r--r-- 1 wiley wiley   12 Sep 17 16:52 .current-session
+-rw-r--r-- 1 wiley wiley   67 Sep 17 16:19 carpal-sphynx.binding.json
+-rw-r--r-- 1 wiley wiley   84 Sep 17 16:53 jasper-psychology.binding.json
+drwxr-xr-x 2 wiley wiley 4096 Sep 17 16:52 pids
+drwxr-xr-x 2 wiley wiley 4096 Sep 17 17:08 plan-approval
+-rw-r--r-- 1 wiley wiley   37 Sep 17 16:53 purple-wool
+-rw-r--r-- 1 wiley wiley   84 Sep 17 16:53 purple-wool.binding.json
+
+purple-wool

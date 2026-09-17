@@ -10,7 +10,7 @@ Adding Devin to the packaging roster did not tell the conductor how to execute s
 
 The shared ensemble protocol now has a Devin binding and the Devin orchestrator requires dispatched topologies to dispatch rather than silently run inline. The parent selects a named profile, coordinates participants, reads returned work, and owns questions. Foreground dependencies are sequential; parallel supports use background dispatch. Contribution files and pipeline-link receipts remain engine evidence, separate from SUBAGENT_COMPLETED telemetry.
 
-The observed native dispatch fields are profile, task, is_background, and title. Current Plan Approval translation chooses legacy agent before profile and forwards only prompt, defaulting it to an empty string; it does not map native task to prompt. This is a source/capture mismatch, not a newly reproduced live failure on 3000.10.21.
+The observed native dispatch fields are profile, task, is_background, and title. Current Plan Approval translation chooses legacy agent before profile and forwards only prompt, defaulting it to an empty string; it does not map native task to prompt. This was a source/capture mismatch until 2026-09-17, when the attended session-isolation run reproduced it live on 3000.10.31: the conductor placed `AIDLC-STAGE: code-generation` and `AIDLC-TESTING-CONTRACT: …` at the top of the native `task` field, the adapter forwarded an empty `prompt`, and the guard refused every developer dispatch with `(missing marker)` despite a valid receipt (`evidence/devin-e2e-run/session-isolation-run/09-run-subagent-task-field.txt`). The guard's rejection text in that branch says the plan is "not currently approved", which misled the conductor into re-presenting Plan Approval. No AI-DLC workflow can pass code-generation by dispatch on Devin until this translation is fixed.
 
 Stage-rule delivery only renames run_subagent to Task. The core accepts task as a text field, but augmentSingleDispatch selects identity from subagent_type, agent_type, agent, or role—not profile. A captured-style profile-only dispatch therefore has no recognized AI-DLC agent identity for that augmentation. Do not claim automatic rule injection is complete because the matcher fires.
 
@@ -28,7 +28,7 @@ C04–C06 and C09 document foreground/background payloads and missing child iden
 
 | Case | Expected contract | Evidence or gap |
 | --- | --- | --- |
-| Profile/task dispatch | Native task reaches the core approval check unchanged and generated rule updates target the native task field | OPEN: current translation does not satisfy the captured-field contract |
+| Profile/task dispatch | Native task reaches the core approval check unchanged and generated rule updates target the native task field | OPEN and live-reproduced on 3000.10.31 (session-isolation-run): marker-bearing `task` is dropped, every developer dispatch is blocked |
 | Profile identity and rule injection | A named AI-DLC profile receives the exact rule bundle; unrelated profiles remain untouched | OPEN: profile alias is not consumed by current core augmentation |
 | Reviewer read/search boundary | Supported identity distinguishes reviewer from conductor; all native read/search/notebook paths are handled | OPEN: missing attribution and adapter branches; no invented identity heuristic |
 | Background lifecycle | Launch is pending, actual terminal completion is recorded once, repeated reads add nothing, interruption/restart remains consistent | OPEN: persistent completion/identity contract needed; current poll exclusion is insufficient |

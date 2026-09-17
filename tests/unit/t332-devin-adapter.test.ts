@@ -52,7 +52,22 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { writeActiveDirectiveMarker, writePlanApprovalChallenge } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
+import {
+  readPlanApprovalChallenge,
+  readPlanApprovalResponse,
+  stateDigest,
+  writeActiveDirectiveMarker,
+  writeCurrentSessionId,
+  writePlanApprovalChallenge,
+  workspaceSourceFingerprint,
+} from "../../dist/devin/.devin/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  codeGenerationRecordDir,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/devin/.devin/tools/aidlc-testing-posture.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEVIN_TREE = join(REPO_ROOT, "dist", "devin", ".devin");
@@ -619,7 +634,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   });
 
   test("13g: record-human-turn with Devin 3000.6.14 native shape (unwrapped) mints a HUMAN_TURN and recognizes the selection", () => {
-    // Captured from evidence/devin-e2e-run/fourth-run/devin-session-1.txt step 46:
+    // Captured from a real Devin 3000.6.14 interactive session export (step 46):
     // the real interactive Devin 3000.6.14 answer shape is a single object
     // {selected: ["<label>"], skipped: false} keyed by question TEXT, with NO
     // {answers:...} wrapper. The parser now recognizes this third shape directly
@@ -702,11 +717,454 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       const responseFiles = readdirSync(runtimeDir).filter(
         (n) => n.startsWith("response-") && n.endsWith(".json"),
       );
-      expect(responseFiles.length).toBe(1);
+      expect(responseFiles).toEqual([`response-${session}.json`]);
+      expect(readPlanApprovalResponse(dir, session)).toEqual({
+        version: 1,
+        session,
+        challengeId: "test-challenge-1",
+        choice: "Approve Plan",
+        responseSha256: createHash("sha256")
+          .update("yes", "utf-8")
+          .digest("hex"),
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  const PLAN_APPROVAL_QUESTION = "Approve this exact Code Generation plan?";
+  const PLAN_APPROVAL_OPTIONS = ["Approve Plan", "Request Changes"];
+
+  function seedStageLevelPlanApproval(dir: string): string {
+    const state = readFileSync(seededStateFile(dir), "utf-8").replace(
+      /(- \*\*Current Stage\*\*:\s*)[^\n]+/,
+      `$1code-generation`,
+    );
+    writeFileSync(seededStateFile(dir), state, "utf-8");
+    writeActiveDirectiveMarker(dir, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(state),
+    });
+    const recordDir = codeGenerationRecordDir(dir, null);
+    mkdirSync(recordDir, { recursive: true });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "base.ts"), "export const base = 1;\n", "utf-8");
+    const authority = resolveCodeGenerationAuthority(dir, { unit: null });
+    const contract = resolveTestingPosture(dir);
+    const plan =
+      `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
+    const instructions =
+      "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n";
+    writeFileSync(join(recordDir, "code-generation-plan.md"), plan, "utf-8");
+    writeFileSync(
+      join(recordDir, "unit-test-instructions.md"),
+      instructions,
+      "utf-8",
+    );
+    const questionsPath = join(recordDir, "code-generation-questions.md");
+    writeFileSync(
+      questionsPath,
+      [
+        "## Plan Approval",
+        `[Approval Fingerprint]: ${approvalFingerprint(
+          plan,
+          instructions,
+          contract.contract_sha256,
+          authority,
+        )}`,
+        `[Planned Source]: ${workspaceSourceFingerprint(dir) ?? "unbindable"}`,
+        "A. Approve Plan",
+        "B. Request Changes",
+        "[Answer]:",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    return questionsPath;
+  }
+
+  function runLog(
+    dir: string,
+    args: string[],
+  ): { stdout: string; stderr: string; code: number } {
+    const r = spawnSync(
+      process.execPath,
+      [join(dir, ".devin", "tools", "aidlc-log.ts"), ...args, "--project-dir", dir],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          DEVIN_PROJECT_DIR: dir,
+          CLAUDE_PROJECT_DIR: dir,
+        },
+        timeout: 30_000,
+      },
+    );
+    return {
+      stdout: r.stdout ?? "",
+      stderr: r.stderr ?? "",
+      code: r.status ?? -1,
+    };
+  }
+
+  function devinSessionStart(session: string): Record<string, unknown> {
+    return {
+      session_id: session,
+      hook_event_name: "SessionStart",
+      source: "startup",
+    };
+  }
+
+  function devinAnswerPayload(
+    session: string | null,
+    choice: string,
+    promptId?: string,
+  ): Record<string, unknown> {
+    return {
+      ...(session !== null ? { session_id: session } : {}),
+      ...(promptId !== undefined ? { prompt_id: promptId } : {}),
+      hook_event_name: "PostToolUse",
+      tool_name: "ask_user_question",
+      tool_input: {
+        questions: [{
+          question: PLAN_APPROVAL_QUESTION,
+          header: "Plan Approval",
+          options: [
+            { label: "Approve Plan", description: "Approve this exact plan." },
+            { label: "Request Changes", description: "Revise the plan before generation." },
+          ],
+          multi_select: false,
+        }],
+      },
+      tool_response: {
+        success: true,
+        output: JSON.stringify({
+          [PLAN_APPROVAL_QUESTION]: { selected: [choice], skipped: false },
+        }),
+        error: null,
+      },
+      tool_use_id: "call_synthetic",
+    };
+  }
+
+  function devinTypedPayload(
+    session: string | null,
+    prompt: string,
+    promptId?: string,
+  ): Record<string, unknown> {
+    return {
+      ...(session !== null ? { session_id: session } : {}),
+      ...(promptId !== undefined ? { prompt_id: promptId } : {}),
+      hook_event_name: "UserPromptSubmit",
+      prompt,
+    };
+  }
+
+  function approvalRuntimeFiles(dir: string, prefix: string): string[] {
+    const runtimeDir = join(dir, "aidlc", ".aidlc-sessions", "plan-approval");
+    return existsSync(runtimeDir)
+      ? readdirSync(runtimeDir).filter((name) => name.startsWith(prefix))
+      : [];
+  }
+
+  function approvalContext(stdout: string): string {
+    return (
+      (JSON.parse(stdout) as {
+        hookSpecificOutput?: { additionalContext?: string };
+      }).hookSpecificOutput?.additionalContext ?? ""
+    );
+  }
+
+  test("13i: session-start publishes the exact runtime session with and without an active workflow", () => {
+    const withWorkflow = scratchProject(true);
+    const withoutWorkflow = scratchProject(false);
+    try {
+      const session = "devin-session-context";
+      const active = runAdapter(
+        withWorkflow,
+        "session-start",
+        devinSessionStart(session),
+      );
+      expect(active.code).toBe(0);
+      expect(approvalContext(active.stdout)).toContain(
+        `Runtime Session: ${session}`,
+      );
+      const cold = runAdapter(
+        withoutWorkflow,
+        "session-start",
+        devinSessionStart(session),
+      );
+      expect(cold.code).toBe(0);
+      expect(approvalContext(cold.stdout)).toContain(
+        `AIDLC Runtime Session: ${session}`,
+      );
+    } finally {
+      rmSync(withWorkflow, { recursive: true, force: true });
+      rmSync(withoutWorkflow, { recursive: true, force: true });
+    }
+  });
+
+  for (const [kind, answerPayload] of [
+    ["picked", devinAnswerPayload],
+    ["typed", devinTypedPayload],
+  ] as const) {
+    test(`13j: a session-tagged ${kind} answer certifies only its own session through the real decision and answer commands`, () => {
+      const dir = scratchProject(true);
+      try {
+        const questionsPath = seedStageLevelPlanApproval(dir);
+        const sessionA = "devin-session-a";
+        const sessionB = "devin-session-b";
+        expect(
+          runAdapter(dir, "session-start", devinSessionStart(sessionA)).code,
+        ).toBe(0);
+        expect(
+          runAdapter(dir, "session-start", devinSessionStart(sessionB)).code,
+        ).toBe(0);
+        const identityFor = (session: string) => [
+          "--stage",
+          "code-generation",
+          "--checkpoint",
+          "plan-approval",
+          "--questions-file",
+          questionsPath,
+          "--session",
+          session,
+          "--stage-level",
+        ];
+        const decision = runLog(dir, [
+          "decision",
+          ...identityFor(sessionA),
+          "--decision",
+          PLAN_APPROVAL_QUESTION,
+          "--options",
+          PLAN_APPROVAL_OPTIONS.join(","),
+        ]);
+        expect(decision.code, decision.stderr).toBe(0);
+        const challengeId = (
+          JSON.parse(decision.stdout) as { challengeId?: string }
+        ).challengeId;
+        expect(typeof challengeId).toBe("string");
+        expect(challengeId).toBeTruthy();
+        const challengeA = readPlanApprovalChallenge(dir, sessionA);
+        expect(challengeA).not.toBeNull();
+
+        expect(
+          runAdapter(
+            dir,
+            "record-human-turn",
+            answerPayload(sessionB, "Approve Plan", `${kind}-prompt-1`),
+          ).code,
+        ).toBe(0);
+        expect(readPlanApprovalResponse(dir, sessionA)).toBeNull();
+        expect(readPlanApprovalResponse(dir, sessionB)).toBeNull();
+
+        expect(
+          runAdapter(
+            dir,
+            "record-human-turn",
+            answerPayload(sessionA, "Approve Plan", "devin-prompt-2"),
+          ).code,
+        ).toBe(0);
+        const responseA = readPlanApprovalResponse(dir, sessionA);
+        expect(responseA).toMatchObject({
+          session: sessionA,
+          challengeId,
+          choice: "Approve Plan",
+        });
+        writeFileSync(
+          questionsPath,
+          readFileSync(questionsPath, "utf-8").replace(
+            /\[Answer\]:\s*$/m,
+            "[Answer]: Approve Plan",
+          ),
+        );
+
+        writeCurrentSessionId(dir, sessionA);
+        const crossSession = runLog(dir, [
+          "answer",
+          ...identityFor(sessionB),
+          "--details",
+          "Approve Plan",
+        ]);
+        expect(crossSession.code).not.toBe(0);
+        expect(crossSession.stderr).toContain(
+          "actual offered choice from this prompt and session",
+        );
+        expect(approvalRuntimeFiles(dir, "receipt-")).toEqual([]);
+        expect(readPlanApprovalResponse(dir, sessionA)).toEqual(responseA);
+        expect(readPlanApprovalChallenge(dir, sessionA)).toEqual(challengeA);
+
+        writeCurrentSessionId(dir, sessionB);
+        const answer = runLog(dir, [
+          "answer",
+          ...identityFor(sessionA),
+          "--details",
+          "Approve Plan",
+        ]);
+        expect(answer.code, `${answer.stdout}\n${answer.stderr}`).toBe(0);
+        const receiptNames = approvalRuntimeFiles(dir, "receipt-");
+        expect(receiptNames.length).toBe(1);
+        const receipt = JSON.parse(
+          readFileSync(
+            join(
+              dir,
+              "aidlc",
+              ".aidlc-sessions",
+              "plan-approval",
+              receiptNames[0],
+            ),
+            "utf-8",
+          ),
+        ) as {
+          session?: string;
+          challengeId?: string;
+          choice?: string;
+          status?: string;
+        };
+        expect(receipt).toMatchObject({
+          session: sessionA,
+          challengeId,
+          choice: "Approve Plan",
+          status: "approved",
+        });
+        expect(readPlanApprovalChallenge(dir, sessionA)).toBeNull();
+        expect(readPlanApprovalResponse(dir, sessionA)).toBeNull();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30000);
+  }
+
+  test("13k: an answer event for an unknown session or an intent UUID never redirects to the pending challenge", () => {
+    const dir = scratchProject(true);
+    try {
+      const questionsPath = seedStageLevelPlanApproval(dir);
+      const sessionB = "devin-session-b";
+      const intentUuid = "00000000-0000-7000-8000-000000000001";
+      expect(
+        runAdapter(dir, "session-start", devinSessionStart(sessionB)).code,
+      ).toBe(0);
+      const decision = runLog(dir, [
+        "decision",
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        sessionB,
+        "--stage-level",
+        "--decision",
+        PLAN_APPROVAL_QUESTION,
+        "--options",
+        PLAN_APPROVAL_OPTIONS.join(","),
+      ]);
+      expect(decision.code, decision.stderr).toBe(0);
+      const challengeB = readPlanApprovalChallenge(dir, sessionB);
+      expect(challengeB).not.toBeNull();
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/m,
+          "[Answer]: Approve Plan",
+        ),
+      );
+
+      for (const supplied of ["session-unknown", intentUuid]) {
+        expect(
+          runAdapter(
+            dir,
+            "record-human-turn",
+            devinAnswerPayload(supplied, "Approve Plan", `prompt-${supplied}`),
+          ).code,
+        ).toBe(0);
+        expect(
+          runAdapter(
+            dir,
+            "record-human-turn",
+            devinTypedPayload(supplied, "Approve Plan", `typed-${supplied}`),
+          ).code,
+        ).toBe(0);
+        expect(readPlanApprovalResponse(dir, supplied)).toBeNull();
+        const refused = runLog(dir, [
+          "answer",
+          "--stage",
+          "code-generation",
+          "--checkpoint",
+          "plan-approval",
+          "--questions-file",
+          questionsPath,
+          "--session",
+          supplied,
+          "--stage-level",
+          "--details",
+          "Approve Plan",
+        ]);
+        expect(refused.code).not.toBe(0);
+        expect(refused.stderr).toContain(
+          "actual offered choice from this prompt and session",
+        );
+      }
+      expect(approvalRuntimeFiles(dir, "response-")).toEqual([]);
+      expect(approvalRuntimeFiles(dir, "receipt-")).toEqual([]);
+      expect(readPlanApprovalChallenge(dir, sessionB)).toEqual(challengeB);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("13l: an answer event with no session writes no protected approval records", () => {
+    const dir = scratchProject(true);
+    try {
+      const questionsPath = seedStageLevelPlanApproval(dir);
+      const sessionB = "devin-session-b";
+      expect(
+        runAdapter(dir, "session-start", devinSessionStart(sessionB)).code,
+      ).toBe(0);
+      const decision = runLog(dir, [
+        "decision",
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        sessionB,
+        "--stage-level",
+        "--decision",
+        PLAN_APPROVAL_QUESTION,
+        "--options",
+        PLAN_APPROVAL_OPTIONS.join(","),
+      ]);
+      expect(decision.code, decision.stderr).toBe(0);
+      const challengeB = readPlanApprovalChallenge(dir, sessionB);
+      expect(challengeB).not.toBeNull();
+
+      expect(
+        runAdapter(
+          dir,
+          "record-human-turn",
+          devinAnswerPayload(null, "Approve Plan", "devin-prompt-no-session"),
+        ).code,
+      ).toBe(0);
+      expect(
+        runAdapter(
+          dir,
+          "record-human-turn",
+          devinTypedPayload(null, "Approve Plan", "devin-prompt-no-session-2"),
+        ).code,
+      ).toBe(0);
+      expect(approvalRuntimeFiles(dir, "response-")).toEqual([]);
+      expect(approvalRuntimeFiles(dir, "receipt-")).toEqual([]);
+      expect(readPlanApprovalChallenge(dir, sessionB)).toEqual(challengeB);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 
   // --- rebuild-stage-graph: exec PostToolUse advisory ---
 

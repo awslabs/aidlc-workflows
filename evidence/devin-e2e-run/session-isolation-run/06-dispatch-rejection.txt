@@ -1,0 +1,14 @@
+Guard rejection relayed by the conductor in session A (purple-wool) for each of the four
+run_subagent -> aidlc-developer-agent attempts after the receipt was certified
+(audit rows PLAN_APPROVAL_BLOCKED at 20:37:17Z, 20:37:42Z, 20:38:20Z, 20:39:49Z; Unit: (missing marker)):
+
+Tool rejected: Code generation cannot start for one target, but the brief does not name it because its plan and test instructions are not currently
+approved. Finish Steps 2-3 in code-generation: update code-generation-plan.md and unit-test-instructions.md, refresh the Testing Contract and approval
+fingerprint, present Plan Approval, end the turn, and wait for the human's "Approve Plan" answer. Then retry the developer handoff with "AIDLC-UNIT:
+<unit>" or "AIDLC-STAGE: code-generation", followed by "AIDLC-TESTING-CONTRACT: <contract hash>".
+
+Attribution: the Devin adapter forwards tool_input.prompt to the core guard, while Devin's native
+run_subagent tool_input carries the brief in `task` (captured fixture keys: profile, task, title,
+is_background). The guard therefore saw an empty brief with no AIDLC-STAGE marker. This is the
+PR #996 review Item 2 / DEVIN-07 native-dispatch field gap, out of scope for this run; the
+receipt under plan-approval/ was valid at the time of each block.

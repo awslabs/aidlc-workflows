@@ -139,7 +139,8 @@ interface DevinHookInput {
 //   3. Devin 3000.6.14 native: {<question text>: {selected: ["<label>"], skipped: false}}
 //      — keyed by question TEXT; value is a SINGLE object (not an array) with
 //      a `selected` (string[]) and `skipped` (boolean) field. Captured from a
-//      real interactive session export (evidence/devin-e2e-run/fourth-run/).
+//      real interactive session export; the original export has been removed
+//      from the working tree and is recoverable from Git history.
 
 // Normalize Devin's PostToolUse tool_response into the JSON string the
 // selection parsers expect. Devin delivers {success, output, error}; the
