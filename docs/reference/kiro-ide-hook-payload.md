@@ -55,7 +55,7 @@ Counted 2026-09-17 across every capture available on this machine:
 | Source | Spelling | Evidence |
 |---|---|---|
 | Kiro CLI, agent-v1 engine (2.6.1, 2.18.1) | **camelCase** — `preToolUse`, `postToolUse` | `tests/fixtures/kiro-hook-payloads/payloads.json`, whose `_provenance` records both captures and says "payload field names are verbatim" |
-| Kiro IDE 1.x, every build from 1.0.89 to 1.0.395 | **PascalCase** | the per-version capture archives in the `kiro-ide-1.x-test` controlled-experiment tree: 1.0.89 (41), 1.0.116 (26), 1.0.138 (31), 1.0.165 (108), 1.0.203 (61), 1.0.212 (73), 1.0.309 (275), 1.0.337 (111), 1.0.395 (124) — camelCase 0 in all nine |
+| Kiro IDE 1.x, every build from 1.0.89 to 1.1.14 | **PascalCase** | the per-version capture archives in the `kiro-ide-1.x-test` controlled-experiment tree: 1.0.89 (41), 1.0.116 (26), 1.0.138 (31), 1.0.165 (108), 1.0.203 (61), 1.0.212 (73), 1.0.309 (275), 1.0.337 (111), 1.0.395 (124), 1.1.14 (73) — camelCase 0 in all ten, including the first minor transition |
 | Current unified row, both surfaces | **PascalCase** | two concurrent gated runs, one CLI and one IDE on the same engine build: CLI `PreToolUse` 140 / `PostToolUse` 139 / `UserPromptSubmit` 7 / `SessionStart` 3; IDE 129 / 127 / 6 / 2; camelCase 0 in both |
 
 Kiro IDE 0.12 does not appear in this table at all: that generation carries no
@@ -162,7 +162,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   structured 1.x `subagent_<agent>` tool name (#543) — it is platform-provided,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
-  the only identity signal on the 0.12 `invoke_sub_agent` shape.
+  the only identity signal on the 0.12 `invoke_sub_agent` shape. Which arm actually
+  carries the identity is a per-build fact, and it moved: IDE 1.1.14 sends
+  `invoke_sub_agent` again — `subagent_<agent>` 0 across a 73-event capture — but
+  with a populated `{name, prompt, explanation, preset, contextFiles}` argument
+  object, so on that build the argument arm is the live one while the suffix arm
+  keeps precedence in code. The precedence order is what the adapter guarantees;
+  neither arm may be assumed present.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
   shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
   empty argument object, so the adapter uses a mediated planned-source protocol:
