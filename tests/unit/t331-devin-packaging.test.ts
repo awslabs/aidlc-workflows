@@ -284,6 +284,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect("command" in context7).toBe(false);
   });
 
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: test name documents the literal config syntax
   test("5c: the Context7 key uses the documented ${env:VAR} interpolation and resolves without a real credential", () => {
     const mcp = JSON.parse(readFileSync(join(ENGINE, "mcp_config.json"), "utf-8")) as {
       mcpServers: { context7: { headers: Record<string, string> } };
@@ -291,6 +292,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     const header = mcp.mcpServers.context7.headers.CONTEXT7_API_KEY;
     // Devin's documented interpolation form is ${env:VAR}; the bare ${VAR}
     // form is not a substitution reference.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: asserts the literal config syntax
     expect(header).toBe("${env:CONTEXT7_API_KEY}");
     // Resolve it the way the documented contract describes: ${env:NAME}
     // expands from the process environment. Injected map, never a real key.
