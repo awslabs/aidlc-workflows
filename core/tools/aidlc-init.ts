@@ -120,7 +120,6 @@ import {
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
   harnessOwnsModelAccess,
-  hasLegacyCodexProviderConfig,
   availableScopeNames,
   completionInstruction,
   detectAwsCredentials,
@@ -3633,6 +3632,7 @@ function preserveClaudeProviderFields(
   stagedRoot: string,
   harnessDir: string,
   previousProvider: ProvidersRecord | null,
+  nextProvider: ProvidersRecord | null,
 ): void {
   const relative = join(harnessDir, "settings.json");
   const currentPath = join(projectDir, relative);
@@ -3668,18 +3668,26 @@ function preserveClaudeProviderFields(
   }
   const stagedEnv = staged.env && typeof staged.env === "object" &&
       !Array.isArray(staged.env)
-    ? staged.env as Record<string, unknown>
+    ? { ...staged.env as Record<string, unknown> }
     : {};
+  if (
+    nextProvider?.provider !== "amazon-bedrock" &&
+    previousProvider?.provider === "amazon-bedrock" &&
+    stagedEnv.CLAUDE_CODE_USE_BEDROCK === "1" &&
+    stagedEnv.AWS_REGION === previousProvider.region &&
+    (!previousProvider.profile ||
+      stagedEnv.AWS_PROFILE === previousProvider.profile)
+  ) {
+    delete stagedEnv.CLAUDE_CODE_USE_BEDROCK;
+    delete stagedEnv.AWS_REGION;
+    if (previousProvider.profile) delete stagedEnv.AWS_PROFILE;
+  }
+  // The project-flags record owns this value. Do not allow the current file to
+  // override a newly selected scope when user fields are carried into staging.
+  delete currentEnv.AWS_AIDLC_DEFAULT_SCOPE;
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
 }
-
-const CODEX_PROVIDER_TOP_LEVEL_KEYS = [
-  "model",
-  "model_provider",
-  "model_context_window",
-  "model_reasoning_effort",
-] as const;
 
 const CODEX_FRAMEWORK_TABLES = new Set([
   "agents",
@@ -3688,25 +3696,9 @@ const CODEX_FRAMEWORK_TABLES = new Set([
   "tui",
 ]);
 
-function codexUserConfiguration(
+function codexSections(
   content: string,
-): {
-  assignments: Array<{ key: string; text: string }>;
-  sections: Array<{ name: string; text: string }>;
-} {
-  const firstTable = content.search(/^\s*\[/m);
-  const preamble = firstTable < 0 ? content : content.slice(0, firstTable);
-  const legacy = hasLegacyCodexProviderConfig(content);
-  const assignments = [...preamble.matchAll(
-    /^([A-Za-z0-9_.-]+)\s*=.*$/gm,
-  )]
-    .filter((match) =>
-      !legacy ||
-      !CODEX_PROVIDER_TOP_LEVEL_KEYS.includes(
-        match[1] as typeof CODEX_PROVIDER_TOP_LEVEL_KEYS[number],
-      )
-    )
-    .map((match) => ({ key: match[1], text: match[0] }));
+): Array<{ name: string; text: string }> {
   const lines = content.split(/\r?\n/);
   const sections: Array<{ name: string; text: string }> = [];
   let current: { name: string; lines: string[] } | null = null;
@@ -3730,52 +3722,38 @@ function codexUserConfiguration(
       text: current.lines.join("\n").trimEnd(),
     });
   }
-  return {
-    assignments,
-    sections: sections.filter((section) =>
-      !CODEX_FRAMEWORK_TABLES.has(section.name) &&
-      !(
-        legacy &&
-        section.name.startsWith("model_providers.amazon-bedrock")
-      )
-    ),
-  };
+  return sections;
 }
 
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
 ): string {
-  const user = codexUserConfiguration(current);
-  let merged = staged;
-  for (const assignment of user.assignments) {
-    const pattern = new RegExp(
-      `^${assignment.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=.*(?:\\r?\\n|$)`,
-      "m",
-    );
-    merged = pattern.test(merged)
-      ? merged.replace(pattern, `${assignment.text}\n`)
-      : `${assignment.text}\n${merged}`;
-  }
-  for (const section of user.sections) {
+  // Keep the project's exact bytes as the base and refresh only tables the
+  // framework owns. This is byte-idempotent when the generated tables have not
+  // changed, preserves top-level model/provider assignments and custom tables,
+  // and lets the normal ownership check catch edits to framework tables.
+  let merged = current;
+  const generatedFrameworkSections = codexSections(staged).filter((section) =>
+    CODEX_FRAMEWORK_TABLES.has(section.name)
+  );
+  for (const section of generatedFrameworkSections) {
     const escaped = section.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const pattern = new RegExp(
-      `^\\[${escaped}\\]\\r?\\n[\\s\\S]*?(?=^\\[|\\s*$)`,
+      `^\\[${escaped}\\]\\r?\\n[\\s\\S]*?(?=^\\[|(?![\\s\\S]))`,
       "m",
     );
-    if (pattern.test(merged)) {
+    const existing = pattern.exec(merged)?.[0];
+    if (existing !== undefined && existing.trimEnd() === section.text) {
+      continue;
+    }
+    if (existing !== undefined) {
       merged = merged.replace(pattern, `${section.text}\n\n`);
     } else {
-      const firstFrameworkTable = merged.search(
-        /^\[(?:agents|features|tools|tui)\]\s*$/m,
-      );
-      merged = firstFrameworkTable < 0
-        ? `${merged.trimEnd()}\n\n${section.text}\n`
-        : `${merged.slice(0, firstFrameworkTable).trimEnd()}\n\n` +
-          `${section.text}\n\n${merged.slice(firstFrameworkTable)}`;
+      merged = `${merged.trimEnd()}\n\n${section.text}\n`;
     }
   }
-  return `${merged.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  return merged.endsWith("\n") ? merged : `${merged}\n`;
 }
 
 function preserveCodexProviderFields(
@@ -3827,6 +3805,7 @@ function preserveUserProviderFields(
   harnessDir: string,
   harness: ModelHarness,
   previousProvider: ProvidersRecord | null,
+  nextProvider: ProvidersRecord | null,
 ): void {
   if (harness === "claude") {
     preserveClaudeProviderFields(
@@ -3834,12 +3813,57 @@ function preserveUserProviderFields(
       stagedRoot,
       harnessDir,
       previousProvider,
+      nextProvider,
     );
   } else if (harness === "codex") {
     preserveCodexProviderFields(projectDir, stagedRoot, harnessDir);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
+}
+
+function claudeProviderOnlyDifference(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+  previousProvider: ProvidersRecord | null,
+): boolean {
+  const relative = join(harnessDir, "settings.json");
+  const currentPath = join(projectDir, relative);
+  const stagedPath = join(stagedRoot, relative);
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
+  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const currentEnv = current.env && typeof current.env === "object" &&
+      !Array.isArray(current.env)
+    ? { ...current.env as Record<string, unknown> }
+    : {};
+  const stagedEnv = staged.env && typeof staged.env === "object" &&
+      !Array.isArray(staged.env)
+    ? { ...staged.env as Record<string, unknown> }
+    : {};
+  for (const key of [
+    "CLAUDE_CODE_USE_BEDROCK",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "AWS_REGION",
+  ]) {
+    delete currentEnv[key];
+    delete stagedEnv[key];
+  }
+  if (
+    previousProvider?.provider === "amazon-bedrock" &&
+    previousProvider.profile &&
+    currentEnv.AWS_PROFILE === previousProvider.profile
+  ) {
+    delete currentEnv.AWS_PROFILE;
+    delete stagedEnv.AWS_PROFILE;
+  }
+  current.env = currentEnv;
+  staged.env = stagedEnv;
+  return canonical(current) === canonical(staged);
 }
 
 function prepareRefreshSource(
@@ -3940,13 +3964,6 @@ function prepareRefreshSource(
     modelHarness(distribution),
     modelPolicy,
   );
-  preserveUserProviderFields(
-    projectDir,
-    root,
-    descriptor.harnessDir,
-    modelHarness(distribution),
-    previousProvider,
-  );
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -3982,6 +3999,60 @@ function prepareRefreshSource(
       beforeGeneratedWrites.get(integration.path) !== sha256File(path)
     ) {
       regenerated.add(integration.path);
+    }
+  }
+  // Provider preservation carries only user-owned fields into the staged
+  // projection. Run it after the regenerated scan so those fields cannot make
+  // the whole file runtime-generated and bypass the ordinary ownership check.
+  // Provider mutations were already classified above; when preservation is the
+  // only difference, the staged bytes equal the project and are preserved.
+  preserveUserProviderFields(
+    projectDir,
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    previousProvider,
+    normalizeProvidersRecord(staged.providers),
+  );
+  // User environment preservation intentionally excludes this managed value,
+  // but reapply it here to keep the ordering explicit.
+  applyProjectFlagsToProjection(
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    projectFlags,
+  );
+  // Preservation starts from project-owned fields, so apply the selected
+  // provider once more to prevent the previous provider from being carried
+  // back into the final staged projection.
+  applyConfigDiagnosticRecords(
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    {
+      runtime: normalizeRuntimeRecord(staged.runtime),
+      providers: normalizeProvidersRecord(staged.providers),
+      trust: normalizeTrustRecord(staged.trust),
+      project: normalizeProjectChoicesRecord(staged.project),
+    },
+    previousProvider,
+  );
+  if (modelHarness(distribution) === "claude") {
+    const settingsRel = `${descriptor.harnessDir}/settings.json`;
+    const currentSettings = join(projectDir, settingsRel);
+    const stagedSettings = join(root, settingsRel);
+    if (
+      regularFile(currentSettings) &&
+      regularFile(stagedSettings) &&
+      sha256File(currentSettings) !== sha256File(stagedSettings) &&
+      claudeProviderOnlyDifference(
+        projectDir,
+        root,
+        descriptor.harnessDir,
+        previousProvider,
+      )
+    ) {
+      regenerated.add(settingsRel);
     }
   }
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider

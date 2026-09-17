@@ -1825,6 +1825,16 @@ export function providerSurfaceIssues(
             path,
             "Claude settings still carry the legacy AI-DLC Bedrock defaults",
           );
+        } else if (env.CLAUDE_CODE_USE_BEDROCK === "1") {
+          const projectOverrides = ["CLAUDE_CODE_USE_BEDROCK"];
+          for (const key of ["AWS_REGION", "AWS_PROFILE"]) {
+            if (Object.hasOwn(env, key)) projectOverrides.push(key);
+          }
+          warning(
+            "provider-claude-project-override",
+            `Claude project settings enable Bedrock despite the recorded ${record.provider} choice with: ${projectOverrides.join(", ")}`,
+            `Review ${path}. Leave the entries in place if the project override is intentional.`,
+          );
         }
         const localPath = join(projectDir, harnessDir, "settings.local.json");
         if (existsSync(localPath)) {

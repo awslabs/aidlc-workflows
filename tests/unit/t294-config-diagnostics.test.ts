@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   applyConfigDiagnosticRecords,
@@ -1303,6 +1304,28 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).toContain('model_provider = "team-provider"');
     expect(after).toContain('model_reasoning_effort = "low"');
     expect(after).toContain("[model_providers.team-provider]");
+    expect(() => parseToml(after)).not.toThrow();
+  }, 60_000);
+
+  test("pristine Codex refresh remains valid and byte-idempotent", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const refresh = () => run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    const first = refresh();
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const firstText = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(firstText)).not.toThrow();
+    const second = refresh();
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    const secondText = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(secondText)).not.toThrow();
+    expect(secondText).toBe(firstText);
   }, 60_000);
 
   test("provider mutation and later refresh preserve unrelated Claude and Codex settings", () => {
@@ -1384,6 +1407,92 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('sandbox_mode = "read-only"');
   }, 90_000);
+
+  test("preserved Claude env does not bypass ownership for permissions", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env).status).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.MY_TEAM_SETTING = "preserved";
+    settings.permissions = {
+      ...(settings.permissions ?? {}),
+      allow: ["Bash(team-command:*)"],
+    };
+    const edited = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(settingsPath, edited);
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(refreshed.stdout + refreshed.stderr).toContain("locally modified");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+  }, 60_000);
+
+  test("copy-channel provider transitions remove the recorded Claude Bedrock values", () => {
+    for (const transition of [
+      ["--provider", "current"],
+      ["--provider", "other", "--acknowledge"],
+      ["--reset"],
+    ]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "eu-west-1",
+        "--profile",
+        "team",
+        "--yes",
+      ], project, runtimeEnv());
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const copyEnv = {
+        AIDLC_RUNTIME_ROOT: "",
+        AWS_ACCESS_KEY_ID: "test-access",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      };
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        ...transition,
+        "--yes",
+      ], project, copyEnv);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const settings = JSON.parse(readFileSync(
+        join(project, ".claude", "settings.json"),
+        "utf-8",
+      ));
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(settings.env.AWS_REGION).toBeUndefined();
+      expect(settings.env.AWS_PROFILE).toBeUndefined();
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, copyEnv);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).not.toContain("provider-claude-project-override");
+    }
+  }, 120_000);
 
   test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
     const project = install("claude");
@@ -1591,6 +1700,39 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--check",
     ], project, env).status).toBe(0);
+  }, 60_000);
+
+  test("check warns when a non-Bedrock record has a project Bedrock flag", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-claude-project-override");
+    expect(check.stdout).toContain("warning");
   }, 60_000);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {
