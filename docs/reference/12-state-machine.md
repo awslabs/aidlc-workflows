@@ -900,6 +900,11 @@ external-work selections become `guard_recovery_response.status: ready`
 immediately, without a feedback hash. Human-input selections remain
 `awaiting-feedback` until a separate human answer supplies `feedback_sha256`
 and changes the status to `ready`. An unmatched selection authorizes no remedy.
+A recorded command or external-work selection authorizes only until the next
+human response; a later prompt before the returned command runs replaces it,
+while an identical re-recorded response is idempotent. An unmatched answer
+records no feedback and leaves no admissible restart; the next response is
+resolved as a fresh selection.
 
 A repeated `next` preserves that response only when the state, gate, and ordered
 remedy `op`, `action`, structured `operation`, and `interaction` still match.

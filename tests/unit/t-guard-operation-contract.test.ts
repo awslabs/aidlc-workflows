@@ -177,7 +177,7 @@ describe("recovery selection records the next interaction", () => {
     return { project, state };
   }
 
-  test("a command choice is ready after selection and cannot consume an unrelated later reply", () => {
+  test("a later unrelated reply supersedes a command selection instead of becoming its feedback", () => {
     const operation: GuardRecoveryOperation = { kind: "restart-stage", stage: "requirements-analysis" };
     const { project, state } = publish("command", operation);
     expect(consumeSharedDirectiveAsk(project, "1")).toBe(true);
@@ -185,8 +185,17 @@ describe("recovery selection records the next interaction", () => {
     expect(selected.remedies?.[0].operation).toEqual(operation);
     expect(selected.guard_recovery_response?.status).toBe("ready");
     expect(selected.guard_recovery_response?.feedback_sha256).toBeUndefined();
-    expect(consumeSharedDirectiveAsk(project, "an unrelated later message")).toBe(false);
-    expect(readActiveDirectiveMarker(project, state)).toEqual(selected);
+    expect(consumeSharedDirectiveAsk(project, "an unrelated later message")).toBe(true);
+    const superseded = readActiveDirectiveMarker(project, state)!;
+    expect(superseded.guard_recovery_response?.status).not.toBe("ready");
+    expect(superseded.guard_recovery_response?.selected_op).toBeNull();
+    expect(superseded.guard_recovery_response?.feedback_sha256).toBeUndefined();
+    expect(superseded.delivery).toBe("consumed");
+    expect(consumeSharedDirectiveAsk(project, "1")).toBe(true);
+    const reselected = readActiveDirectiveMarker(project, state)!;
+    expect(reselected.guard_recovery_response?.status).toBe("ready");
+    expect(reselected.guard_recovery_response?.selected_op).toBe("restart-stage");
+    expect(reselected.remedies).toEqual(selected.remedies);
   });
 
   test("Request Changes still needs separate human feedback", () => {

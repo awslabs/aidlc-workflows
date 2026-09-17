@@ -6363,7 +6363,8 @@ export function consumeSharedDirectiveAsk(
     }
     if (
       marker.delivery === "consumed" &&
-      marker.guard_recovery_response?.status === "awaiting-feedback"
+      marker.guard_recovery_response?.status === "awaiting-feedback" &&
+      marker.guard_recovery_response.selected_op !== null
     ) {
       return {
         marker: {
@@ -6378,7 +6379,20 @@ export function consumeSharedDirectiveAsk(
         result: true,
       };
     }
-    if (marker.delivery !== "issued" && marker.delivery !== "delivered") {
+    // A command or external-work selection authorizes only the turn that made it.
+    // A later human response before the command runs replaces it; recording the
+    // same response is idempotent.
+    const supersedesReadySelection =
+      marker.delivery === "consumed" &&
+      (marker.guard_recovery_response?.status === "ready" ||
+        marker.guard_recovery_response?.selected_op === null) &&
+      marker.guard_recovery_response.feedback_sha256 === undefined &&
+      marker.guard_recovery_response.selection_sha256 !== responseSha256;
+    if (
+      marker.delivery !== "issued" &&
+      marker.delivery !== "delivered" &&
+      !supersedesReadySelection
+    ) {
       return { marker, result: false, preserve: true };
     }
     const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);

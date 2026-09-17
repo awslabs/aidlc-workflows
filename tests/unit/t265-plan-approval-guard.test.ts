@@ -1129,6 +1129,12 @@ describe("t265b hook lifecycle", () => {
       publishRestartRecovery(proj);
       recordRecoverySelection(proj);
       expect(runHook(proj, BASH(command)).code).toBe(0);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      recordRecoverySelection(proj, "Cancel that; keep the current attempt.");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
       writeFileSync(
         join(proj, RECORD_REL, "aidlc-state.md"),
         state.replace("**Scope**: poc", "**Scope**: feature"),
