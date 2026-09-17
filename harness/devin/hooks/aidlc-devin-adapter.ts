@@ -69,7 +69,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isNonAnswer, validSessionId } from "../tools/aidlc-lib.ts";
+import {
+  isNonAnswer,
+  readDevinSubagentLedgerEntry,
+  recordDevinSubagentLaunch,
+  recordDevinSubagentTerminal,
+  validSessionId,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -530,6 +536,92 @@ function denormalizeSubagentInput(
     delete out.run_in_background;
   }
   return out;
+}
+
+// --- run_subagent / read_subagent lifecycle -----------------------------------
+//
+// Devin reports a background subagent's launch and its terminal outcome through
+// two different surfaces: run_subagent's PostToolUse response acknowledges the
+// launch (`Background subagent started with agent_id=<id>...`), and the
+// terminal result arrives later inside a read_subagent response
+// (`Subagent <id> completed successfully: ...`). A foreground run_subagent
+// response is already terminal (`Subagent agent_id=<id> completed
+// successfully: ...`). The adapter therefore treats the run_subagent
+// PostToolUse as "launch or foreground completion" and correlates the real
+// terminal outcome by the Devin agent id carried in the response text.
+//
+// Outcome classification reads the response envelope's success/error fields
+// plus the human-readable output text. Only the completion text is a live
+// capture (3000.6.14); the failure/cancellation words follow the same
+// "Subagent <id> <outcome>:" grammar. Anything unrecognized (including a
+// blocking read that timed out mid-run) records no terminal state.
+
+function toolResponseEnvelope(
+  tr: unknown,
+): { success: boolean | null; text: string } {
+  if (typeof tr === "string") return { success: null, text: tr };
+  if (tr !== null && typeof tr === "object" && !Array.isArray(tr)) {
+    const obj = tr as Record<string, unknown>;
+    return {
+      success: typeof obj.success === "boolean" ? obj.success : null,
+      text:
+        typeof obj.output === "string"
+          ? obj.output
+          : typeof obj.error === "string"
+            ? obj.error
+            : "",
+    };
+  }
+  return { success: null, text: "" };
+}
+
+// The agent id appears inside the response text as `agent_id=<id>` (both the
+// launch acknowledgement and the completion notice carry it).
+function extractDevinAgentId(text: string): string {
+  const m = /\bagent_id=([A-Za-z0-9_-]+)/.exec(text);
+  if (m) return m[1];
+  const m2 = /^Subagent ([A-Za-z0-9_-]+) /m.exec(text);
+  return m2 ? m2[1] : "";
+}
+
+function classifySubagentOutcome(
+  env: { success: boolean | null; text: string },
+): "success" | "failure" | "cancelled" | null {
+  const text = env.text;
+  if (/\bcancell?ed\b/i.test(text)) return "cancelled";
+  if (/\b(failed|failure|crashed|terminated|error)\b/i.test(text)) {
+    return "failure";
+  }
+  if (/\b(completed|finished|succeeded)\b/i.test(text)) return "success";
+  // The envelope's own failure flag is terminal evidence even when the output
+  // text does not spell a known outcome word.
+  if (env.success === false) return "failure";
+  return null;
+}
+
+// Emit the core SUBAGENT_COMPLETED record for an observed terminal state.
+// Foreground completions also land here (they ARE the terminal signal for
+// foreground dispatches). The in-flight-ledger release and audit row live in
+// the core hook.
+function emitSubagentCompleted(
+  session: string,
+  agentId: string,
+  agentType: string,
+  outcome: "success" | "failure" | "cancelled" | null,
+  message: string,
+): void {
+  runCore(
+    "aidlc-log-subagent.ts",
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Task",
+      ...(session ? { session_id: session } : {}),
+      agent_type: agentType || "unknown",
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(outcome ? { subagent_outcome: outcome } : {}),
+      last_assistant_message: message.slice(0, 200),
+    }),
+  );
 }
 
 // --- apply_patch envelope parsing --------------------------------------------
@@ -1006,16 +1098,99 @@ export async function run(
     }
 
     case "log-subagent": {
-      // run_subagent PostToolUse → pipe to aidlc-log-subagent.ts (rewriting
-      // tool_name to Task if needed, but the core hook reads
-      // agent_type/agent_id — forward those). This replaces the absent
-      // SubagentStop event. Advisory.
+      // run_subagent PostToolUse → "launch or foreground completion".
+      // Foreground: the response IS the terminal report — emit
+      // SUBAGENT_COMPLETED as before, now with the agent id / profile /
+      // outcome carried through.
+      // Background: the response only acknowledges the launch — record the
+      // agent in the correlation ledger (no terminal audit row) and let the
+      // read_subagent observer emit completion when the real result arrives.
+      // Advisory.
       if (tool === "run_subagent") {
-        const rewritten = rewriteStdinToolName(rawInput, devin);
-        runCore("aidlc-log-subagent.ts", rewritten);
+        const normalized = normalizeSubagentInput(devin.tool_input ?? {});
+        const env = toolResponseEnvelope(devin.tool_response);
+        const agentId = extractDevinAgentId(env.text);
+        const session = payloadSessionId ?? devin.session_id ?? "";
+        const agentType =
+          typeof normalized.subagent_type === "string"
+            ? normalized.subagent_type
+            : "unknown";
+        if (normalized.run_in_background === true) {
+          if (agentId) {
+            recordDevinSubagentLaunch(projectDir, {
+              agentId,
+              session,
+              agentType,
+            });
+          }
+          return 0;
+        }
+        // Foreground completion — dedupe through the ledger so a later
+        // read_subagent on the same agent cannot emit a second row.
+        if (agentId) {
+          const outcome = classifySubagentOutcome(env);
+          const recorded = recordDevinSubagentTerminal(
+            projectDir,
+            agentId,
+            outcome ?? "success",
+            { session, agentType },
+          );
+          if (recorded === "already") return 0;
+          emitSubagentCompleted(
+            session,
+            agentId,
+            agentType,
+            outcome,
+            env.text,
+          );
+          return 0;
+        }
+        // No agent id in the response: emit the completion unattributed, as
+        // before (the core hook still audits Agent Type / message).
+        emitSubagentCompleted(
+          session,
+          "",
+          agentType,
+          classifySubagentOutcome(env),
+          env.text,
+        );
       }
       return 0;
     }
+
+    case "observe-subagent": {
+      // read_subagent PostToolUse → the real background terminal signal.
+      // Correlate by the agent id in tool_input; classify the response text;
+      // record the terminal outcome through the ledger exactly once and emit
+      // SUBAGENT_COMPLETED on first terminal observation only. A still-running
+      // read records nothing; a repeated terminal read is a no-op. Advisory.
+      if (tool === "read_subagent") {
+        const agentId =
+          typeof devin.tool_input?.agent_id === "string"
+            ? devin.tool_input.agent_id
+            : "";
+        if (!agentId) return 0;
+        const env = toolResponseEnvelope(devin.tool_response);
+        const outcome = classifySubagentOutcome(env);
+        if (outcome === null) return 0; // still running or unrecognized
+        const session = payloadSessionId ?? devin.session_id ?? "";
+        const existing = readDevinSubagentLedgerEntry(projectDir, agentId);
+        const recorded = recordDevinSubagentTerminal(projectDir, agentId, outcome, {
+          session: existing?.session ?? session,
+          agentType: existing?.agentType ?? "unknown",
+        });
+        if (recorded === "already") return 0;
+        emitSubagentCompleted(
+          existing?.session ?? session,
+          agentId,
+          existing?.agentType ?? "unknown",
+          outcome,
+          env.text,
+        );
+      }
+      return 0;
+    }
+
 
     case "rebuild-stage-graph": {
       // exec PostToolUse → rewrite tool_name to Bash and pipe verbatim to

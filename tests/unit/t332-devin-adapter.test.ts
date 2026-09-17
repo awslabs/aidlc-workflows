@@ -53,6 +53,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
+  devinSubagentLedgerPath,
   stateDigest,
   workspaceSourceFingerprint,
   writeActiveDirectiveMarker,
@@ -1478,4 +1479,265 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // --- background subagent lifecycle (launch vs terminal via read_subagent) ---
+
+  const SUB_SESSION = "t332-subagent-session";
+
+  function postToolUse(
+    dir: string,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    toolResponse: unknown,
+    session = SUB_SESSION,
+  ): Record<string, unknown> {
+    return {
+      hook_event_name: "PostToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_response: toolResponse,
+      tool_use_id: "chatcmpl-tool-parent1",
+    };
+  }
+
+  function backgroundLaunchPayload(dir: string, agentId = "agent-1"): Record<string, unknown> {
+    return postToolUse(
+      dir,
+      "run_subagent",
+      {
+        title: "worker",
+        task: "do work",
+        profile: "subagent_general",
+        is_background: true,
+      },
+      {
+        success: true,
+        output: `Background subagent started with agent_id=${agentId}. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.`,
+        error: null,
+      },
+    );
+  }
+
+  function readSubagentPayload(
+    dir: string,
+    agentId: string,
+    output: string,
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return postToolUse(
+      dir,
+      "read_subagent",
+      { agent_id: agentId, block: true, timeout: 600 },
+      { success: true, output, error: null },
+      (extra.session as string) ?? SUB_SESSION,
+    );
+  }
+
+  function auditCompletionCount(dir: string): number {
+    return (readAudit(dir).match(/SUBAGENT_COMPLETED/g) ?? []).length;
+  }
+
+  function ledgerFile(dir: string): string {
+    const ledger = JSON.parse(
+      readFileSync(devinSubagentLedgerPath(dir), "utf-8"),
+    ) as {
+      agents: Array<{
+        agentId: string;
+        session: string;
+        agentType: string;
+        terminal: { outcome: string; recordedAt: string } | null;
+      }>;
+    };
+    return JSON.stringify(ledger);
+  }
+
+  test("32: foreground run_subagent PostToolUse still lands SUBAGENT_COMPLETED once", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "log-subagent",
+        postToolUse(
+          dir,
+          "run_subagent",
+          { title: "worker", task: "do work", profile: "subagent_general" },
+          {
+            success: true,
+            output: "Subagent agent_id=agent-fg completed successfully:\n\nreport",
+            error: null,
+          },
+        ),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(auditCompletionCount(dir)).toBe(1);
+      expect(audit).toContain("agent-fg");
+      // A later read_subagent on the same agent does not double-record.
+      const r2 = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(
+          dir,
+          "agent-fg",
+          "Subagent agent-fg completed successfully:\n\nreport",
+        ),
+      );
+      expect(r2.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("33: background launch records a ledger entry and emits NO terminal row", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir));
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const ledger = ledgerFile(dir);
+      expect(ledger).toContain('"agentId":"agent-1"');
+      expect(ledger).toContain('"terminal":null');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("34: background completion arrives through read_subagent, not the launch event", () => {
+    const dir = scratchProject(true);
+    try {
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir));
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      // Still-running read: no terminal record.
+      const running = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(dir, "agent-1", "Subagent agent-1 is still running."),
+      );
+      expect(running.code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const done = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(
+          dir,
+          "agent-1",
+          "Subagent agent-1 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+        ),
+      );
+      expect(done.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+      const audit = readAudit(dir);
+      expect(audit).toContain("subagent_general");
+      expect(audit).toContain("**Outcome**: success");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("35: background failure is recorded through read_subagent with the failure outcome", () => {
+    const dir = scratchProject(true);
+    try {
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir, "agent-fail"));
+      const r = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(
+          dir,
+          "agent-fail",
+          "Subagent agent-fail failed: worker exited with an error",
+        ),
+      );
+      expect(r.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+      expect(readAudit(dir)).toContain("**Outcome**: failure");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("36: a cancelled background agent records the cancelled outcome", () => {
+    const dir = scratchProject(true);
+    try {
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir, "agent-cancel"));
+      const r = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(
+          dir,
+          "agent-cancel",
+          "Subagent agent-cancel was cancelled before completing.",
+        ),
+      );
+      expect(r.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+      expect(readAudit(dir)).toContain("**Outcome**: cancelled");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("37: repeated read_subagent on a terminal agent emits exactly one SUBAGENT_COMPLETED", () => {
+    const dir = scratchProject(true);
+    try {
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir));
+      for (const output of [
+        "Subagent agent-1 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+        "Subagent agent-1 completed successfully:\n\n<report text>",
+      ]) {
+        const r = runAdapter(dir, "observe-subagent", readSubagentPayload(dir, "agent-1", output));
+        expect(r.code).toBe(0);
+      }
+      expect(auditCompletionCount(dir)).toBe(1);
+      // The ledger holds the first terminal outcome — idempotent on disk too.
+      expect(ledgerFile(dir)).toContain('"outcome":"success"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("38: the correlation ledger survives process restarts (fresh adapter processes re-read it)", () => {
+    const dir = scratchProject(true);
+    try {
+      // Launch and observe in separate adapter invocations — each runs in its
+      // own process, so correlation can only come from the on-disk ledger.
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir, "agent-9"));
+      const first = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(dir, "agent-9", "Subagent agent-9 completed successfully:\n\ndone"),
+      );
+      expect(first.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+      const second = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(dir, "agent-9", "Subagent agent-9 completed successfully:\n\ndone"),
+      );
+      expect(second.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("39: a read_subagent with no matching launch still records the terminal once", () => {
+    const dir = scratchProject(true);
+    try {
+      for (let i = 0; i < 2; i++) {
+        const r = runAdapter(
+          dir,
+          "observe-subagent",
+          readSubagentPayload(dir, "agent-unknown", "Subagent agent-unknown completed successfully:\n\nok"),
+        );
+        expect(r.code).toBe(0);
+      }
+      expect(auditCompletionCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });

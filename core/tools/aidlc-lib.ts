@@ -20310,6 +20310,158 @@ export function inspectSubagentInflight(
   };
 }
 
+// --- Devin subagent lifecycle ledger ------------------------------------------
+//
+// `<projectDir>/aidlc/.aidlc-sessions/devin-subagents.json` — per-project,
+// per-user (gitignored with the rest of .aidlc-sessions/) correlation ledger
+// keyed by the Devin agent id. Devin reports a background subagent's terminal
+// state only through a later read_subagent call, so the adapter records the
+// launch here and the read_subagent observer records the terminal outcome
+// exactly once. The file survives process and session restarts so a read that
+// lands in a different process still correlates.
+export interface DevinSubagentLedgerEntry {
+  agentId: string;
+  session: string;
+  agentType: string;
+  launchedAt: string;
+  terminal: { outcome: "success" | "failure" | "cancelled"; recordedAt: string } | null;
+}
+
+interface DevinSubagentLedger {
+  version: 1;
+  agents: DevinSubagentLedgerEntry[];
+}
+
+export function devinSubagentLedgerPath(projectDir: string): string {
+  return join(sessionsDir(projectDir), "devin-subagents.json");
+}
+
+function readDevinSubagentLedger(projectDir: string): DevinSubagentLedger {
+  try {
+    const parsed: unknown = JSON.parse(
+      readAtomicReplacedFileNoFollowOrThrow(
+        devinSubagentLedgerPath(projectDir),
+        "Devin subagent ledger",
+      ).toString("utf-8"),
+    );
+    const candidate = parsed as Partial<DevinSubagentLedger>;
+    if (candidate?.version !== 1 || !Array.isArray(candidate.agents)) {
+      return { version: 1, agents: [] };
+    }
+    const agents: DevinSubagentLedgerEntry[] = [];
+    for (const value of candidate.agents) {
+      const e = value as Partial<DevinSubagentLedgerEntry>;
+      if (
+        typeof e?.agentId !== "string" ||
+        typeof e.session !== "string" ||
+        typeof e.agentType !== "string" ||
+        typeof e.launchedAt !== "string"
+      ) {
+        continue;
+      }
+      const t = e.terminal as Partial<
+        NonNullable<DevinSubagentLedgerEntry["terminal"]>
+      > | null;
+      agents.push({
+        agentId: e.agentId,
+        session: e.session,
+        agentType: e.agentType,
+        launchedAt: e.launchedAt,
+        terminal:
+          t &&
+          typeof t === "object" &&
+          (t.outcome === "success" ||
+            t.outcome === "failure" ||
+            t.outcome === "cancelled") &&
+          typeof t.recordedAt === "string"
+            ? { outcome: t.outcome, recordedAt: t.recordedAt }
+            : null,
+      });
+    }
+    return { version: 1, agents };
+  } catch {
+    return { version: 1, agents: [] };
+  }
+}
+
+function writeDevinSubagentLedger(
+  projectDir: string,
+  ledger: DevinSubagentLedger,
+): void {
+  const dir = sessionsDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(
+    devinSubagentLedgerPath(projectDir),
+    `${JSON.stringify(ledger, null, 2)}\n`,
+  );
+}
+
+export function readDevinSubagentLedgerEntry(
+  projectDir: string,
+  agentId: string,
+): DevinSubagentLedgerEntry | null {
+  if (!agentId) return null;
+  return (
+    readDevinSubagentLedger(projectDir).agents.find(
+      (entry) => entry.agentId === agentId,
+    ) ?? null
+  );
+}
+
+// Record a launch. Idempotent by agent id: a repeated run_subagent PostToolUse
+// for the same id refreshes nothing once a terminal outcome was recorded.
+export function recordDevinSubagentLaunch(
+  projectDir: string,
+  entry: { agentId: string; session: string; agentType: string },
+): void {
+  if (!entry.agentId) return;
+  const ledger = readDevinSubagentLedger(projectDir);
+  const existing = ledger.agents.find((a) => a.agentId === entry.agentId);
+  if (existing) {
+    if (!existing.terminal) {
+      existing.launchedAt = isoTimestamp();
+      existing.session = entry.session;
+      existing.agentType = entry.agentType;
+      writeDevinSubagentLedger(projectDir, ledger);
+    }
+    return;
+  }
+  ledger.agents.push({ ...entry, launchedAt: isoTimestamp(), terminal: null });
+  writeDevinSubagentLedger(projectDir, ledger);
+}
+
+// Record the terminal outcome exactly once. Returns "recorded" when this call
+// wrote the terminal row, "already" when a terminal outcome already stood.
+// An agent observed only through read_subagent (its launch predates the ledger
+// or was never delivered to the hook) is still recorded, under whatever
+// identity the entry or the read event carries.
+export function recordDevinSubagentTerminal(
+  projectDir: string,
+  agentId: string,
+  outcome: "success" | "failure" | "cancelled",
+  meta?: { session?: string; agentType?: string },
+): "recorded" | "already" {
+  if (!agentId) return "already";
+  const ledger = readDevinSubagentLedger(projectDir);
+  const existing = ledger.agents.find((a) => a.agentId === agentId);
+  if (existing?.terminal) return "already";
+  const terminal = { outcome, recordedAt: isoTimestamp() };
+  if (existing) {
+    existing.terminal = terminal;
+  } else {
+    ledger.agents.push({
+      agentId,
+      session: meta?.session ?? "",
+      agentType: meta?.agentType ?? "unknown",
+      launchedAt: terminal.recordedAt,
+      terminal,
+    });
+  }
+  writeDevinSubagentLedger(projectDir, ledger);
+  return "recorded";
+}
+
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;
 // callers append a stage slug as needed. Before 2.6.94, type-check passed a
@@ -20513,6 +20665,7 @@ export interface ClaudeCodeHookInput {
   agent_type?: string;
   agent_id?: string;
   last_assistant_message?: string;
+  subagent_outcome?: string;
   [key: string]: unknown;
 }
 

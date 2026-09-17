@@ -81,12 +81,23 @@ export async function run(input: string): Promise<number> {
   const agentType = parsed.agent_type ?? "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
+  // Harnesses whose completion signal arrives through a status read (not a
+  // SubagentStop event) may attach the observed terminal outcome; absent means
+  // the harness only ever reports success-shaped completions.
+  const outcome = parsed.subagent_outcome;
 
   const fields: Record<string, string> = {
     "Agent Type": agentType,
   };
   if (agentId) fields["Agent ID"] = agentId;
   if (agentMessage) fields.Message = agentMessage;
+  if (
+    outcome === "success" ||
+    outcome === "failure" ||
+    outcome === "cancelled"
+  ) {
+    fields.Outcome = outcome;
+  }
 
   try {
     appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir);
