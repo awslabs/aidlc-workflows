@@ -96,6 +96,8 @@ as fenced ` ```question ` blocks (`prompt`, `header`, `multiSelect`,
 binds that spec to the harness's question rendering. Stage files and this
 protocol never name a harness tool.
 
+**Never echo the spec (non-negotiable).**
+
 **A ` ```question ` fence is a SPEC to be rendered THROUGH the annex-defined
 mechanism: a native question tool when one is available, or the annex's
 numbered-prose fallback. It is NEVER printed verbatim to the user.** The fenced
@@ -108,6 +110,17 @@ that appear in THIS protocol are normative authoring specs for the rendered
 prompts required by their surrounding instructions. They are not literal
 questions to paste into chat: at the required workflow point, their content
 MUST still be presented through the annex-defined mechanism.
+
+This applies to every structured-question site, including but not limited to:
+
+- approval gates;
+- the questions interaction-mode choice;
+- the ladder prompt after the walking skeleton;
+- halt-and-ask on Bolt failure;
+- consolidated-summary confirmation before artifact generation;
+- the §13 learnings gate.
+
+Literal question fences remain valid in framework documentation: annex mapping examples are illustrative authoring specs, while this protocol's templates are normative authoring specs. The prohibition concerns raw fences in live orchestration turns, not their presence in source.
 
 The `prompt`, `header`, and `options[].description` fields in a question spec,
 plus any free-text follow-up, are human-facing prose: render them in the

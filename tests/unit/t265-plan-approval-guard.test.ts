@@ -21,6 +21,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -56,6 +57,7 @@ import {
   releaseAuditLock,
   toPosix,
   writeActiveDirectiveMarker,
+  writeCurrentSessionId,
   writePlanApprovalReceipt,
   stateDigest,
   workspaceSourceFingerprint,
@@ -402,8 +404,13 @@ function scratchProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "t265-"));
   mkdirSync(join(dir, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(dir, ".claude", "tools"), { recursive: true });
+  // The guard hook is copied from core/ (not dist/) so the test exercises the
+  // current authored behavior — the Facet A/C carve-outs live in core and the
+  // dist copy may lag a package.ts regeneration. The hook's imports resolve
+  // against the dist-copied tools/hooks below, which are byte-identical to
+  // core for every module except this guard.
   cpSync(
-    join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts"),
+    join(REPO_ROOT, "core", "hooks", "aidlc-plan-approval-guard.ts"),
     join(dir, ".claude", "hooks", "aidlc-plan-approval-guard.ts"),
   );
   cpSync(
@@ -431,6 +438,7 @@ function scratchProject(): string {
     "aidlc-audit.ts",
     "aidlc-log.ts",
     "aidlc-testing-posture.ts",
+    "aidlc-orchestrate.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
@@ -484,6 +492,22 @@ function seedActiveDirective(proj: string, stage: string, unit?: string): void {
     stage,
     ...(unit ? { unit } : {}),
     state_sha256: stateDigest(state),
+  });
+}
+
+// A non-run-stage active directive (kind "load-steering") so the guard reaches
+// the early-exit path for framework-tool invocations and `git add`/`git commit`
+// instead of selecting a code-generation approval target. The directive is
+// still a v2 marker on the code-generation stage, so the guard does not fail
+// open at the `codeGenerationRelevant` gate — it must rely on the early-exit
+// carve-outs (Facets A and C) rather than a missing directive.
+function seedActiveDirectiveLoadSteering(proj: string, stage = "code-generation"): void {
+  const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8");
+  writeActiveDirectiveMarker(proj, {
+    kind: "load-steering",
+    stage,
+    state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
   });
 }
 
@@ -1048,12 +1072,16 @@ describe("t265b hook lifecycle", () => {
         runHook(proj, WRITE(join(tmpdir(), "aidlc-outside-workspace.ts"))).code,
       ).toBe(2);
       expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+      // Facet A: a redirect to a pseudo-device (/dev/null) is a semantically
+      // no-op discard, so it is excluded from the mutation-target count and
+      // takes the early-exit path even before approval (the guard does not
+      // block no-ops, only real workspace writes).
       expect(
         runHook(
           proj,
           BASH(process.platform === "win32" ? "echo code > NUL" : "printf code > /dev/null"),
         ).code,
-      ).toBe(2);
+      ).toBe(0);
       expect(
         runHook(
           proj,
@@ -1527,6 +1555,124 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("a session-tagged human reply certifies only its own session while another session is current", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const humanTurn = (session: string, prompt: string) =>
+        spawnSync(
+          BUN,
+          [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+          {
+            input: JSON.stringify({
+              hook_event_name: "UserPromptSubmit",
+              session_id: session,
+              prompt,
+            }),
+            env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+            encoding: "utf-8",
+          },
+        );
+      const identityFor = (session: string) => [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        session,
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "session-a" },
+        proj,
+      );
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "session-b" },
+        proj,
+      );
+      const decision = runLog([
+        "decision",
+        ...identityFor("session-b"),
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ]);
+      expect(decision.status, decision.stderr).toBe(0);
+      const challengeId = (
+        JSON.parse(decision.stdout) as { challengeId?: string }
+      ).challengeId;
+
+      expect(humanTurn("session-b", "Approve Plan").status).toBe(0);
+      writeCurrentSessionId(proj, "session-b");
+      expect(humanTurn("session-a", "Approve Plan").status).toBe(0);
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const crossSession = runLog([
+        "answer",
+        ...identityFor("session-a"),
+        "--details",
+        "Approve Plan",
+      ]);
+      expect(crossSession.status).not.toBe(0);
+      expect(crossSession.stderr).toContain(
+        "actual offered choice from this prompt and session",
+      );
+      const runtimeDir = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
+      expect(
+        existsSync(runtimeDir) &&
+          readdirSync(runtimeDir).some((name) => name.startsWith("receipt-")),
+      ).toBe(false);
+
+      const sameSession = runLog([
+        "answer",
+        ...identityFor("session-b"),
+        "--details",
+        "Approve Plan",
+      ]);
+      expect(
+        sameSession.status,
+        `${sameSession.stdout}\n${sameSession.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+      expect(sameSession.stdout).toContain("PLAN_APPROVAL_RECORDED");
+      const receiptName = readdirSync(runtimeDir).find((name) =>
+        name.startsWith("receipt-"),
+      );
+      expect(receiptName).toBeDefined();
+      const receipt = JSON.parse(
+        readFileSync(join(runtimeDir, receiptName!), "utf-8"),
+      ) as { session?: string; challengeId?: string };
+      expect(receipt.session).toBe("session-b");
+      expect(receipt.challengeId).toBe(challengeId);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("Plan Approval rechecks the source floor after acquiring the audit lock", async () => {
     const proj = scratchProject();
     try {
@@ -1933,6 +2079,138 @@ describe("t265b hook lifecycle", () => {
       rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  test("Facet A — a 2>/dev/null redirect on a framework-tool invocation does not trap the early-exit", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirectiveLoadSteering(proj);
+      const r = runHook(proj, BASH("bun .claude/tools/aidlc-orchestrate.ts next 2>/dev/null"));
+      expect(r.code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Facet A — a 2>&1 pipe around a framework-tool invocation does not trap the early-exit", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirectiveLoadSteering(proj);
+      const r = runHook(proj, BASH("bun .claude/tools/aidlc-orchestrate.ts next 2>&1 | cat"));
+      expect(r.code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Facet A — a real file redirect still tracks the mutation target (regression guard)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirectiveLoadSteering(proj);
+      const r = runHook(proj, BASH("echo x > real-file.txt"));
+      expect(r.code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Facet C — git add short-circuits to non-opaque at the code-generation boundary", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirectiveLoadSteering(proj);
+      const r = runHook(proj, BASH("git add -A"));
+      expect(r.code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Facet C — git commit short-circuits to non-opaque at the code-generation boundary", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirectiveLoadSteering(proj);
+      const r = runHook(proj, 'git commit -m "checkpoint"');
+      expect(r.code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Facet C — git push remains blocked at the code-generation boundary", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirectiveLoadSteering(proj);
+      const r = runHook(proj, BASH("git push"));
+      expect(r.code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t265 compound Git checkpoint exemption", () => {
+  for (const directive of ["load-steering", "run-stage"] as const) {
+    for (const command of [
+      "echo x > src/app.ts",
+      "git add -A && echo x > src/app.ts",
+      "git add -A ; echo x > src/app.ts",
+      "git add -A && git push",
+    ]) {
+      test(`blocks ${command} with ${directive} before approval`, () => {
+        const proj = scratchProject();
+        try {
+          seedState(proj);
+          if (directive === "load-steering") seedActiveDirectiveLoadSteering(proj);
+          else seedActiveDirective(proj, "code-generation");
+          const result = runHook(proj, BASH(command), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" });
+          expect(result.code, result.stderr).toBe(2);
+          expect(result.stderr).toContain("Code generation cannot");
+        } finally {
+          rmSync(proj, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
+  for (const command of [
+    'git commit -m "checkpoint"',
+    'git add -A && git commit -m "checkpoint"',
+  ]) {
+    test(`allows checkpoint-only Bash payload: ${command}`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        seedActiveDirectiveLoadSteering(proj);
+        const result = runHook(proj, BASH(command), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" });
+        expect(result.code, result.stderr).toBe(0);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const command of [
+    "git add -A > src/app.ts",
+    'git commit -m "$(echo x > src/app.ts)"',
+  ]) {
+    test(`does not exempt checkpoint redirection or evaluation: ${command}`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        const result = runHook(proj, BASH(command), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" });
+        expect(result.code, result.stderr).toBe(2);
+        expect(result.stderr).toContain("Code generation cannot");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
