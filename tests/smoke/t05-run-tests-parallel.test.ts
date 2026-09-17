@@ -153,6 +153,9 @@ function shellFilesUnder(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
+    // Generated debug evidence can retain whole worker checkouts and fixtures.
+    // It is not part of the authored test-file substrate guarded here.
+    if (full === join(TESTS_ROOT, "logs")) continue;
     if (entry.isDirectory()) {
       files.push(...shellFilesUnder(full));
     } else if (entry.isFile() && entry.name.endsWith(".sh")) {
@@ -563,26 +566,32 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       f.endsWith(".meta"),
     );
     expect(leftoverMeta.length).toBe(0);
+    const junit = readFileSync(join(logDir, "t06-claude-md-paths.junit.xml"), "utf8");
+    expect(junit).toContain("<testcase");
+    const execution = JSON.parse(readFileSync(join(logDir, "t06-claude-md-paths.execution.json"), "utf8"));
+    expect(execution.file).toContain("t06-claude-md-paths.test.ts");
+    expect(Object.hasOwn(execution.gates, "AIDLC_TUI_LIVE")).toBe(true);
   }, PER_TEST_TIMEOUT);
 
   test("--all --debug defaults live TUI coverage unless AIDLC_TUI_LIVE is explicit", () => {
+    // Test each input explicitly, even when this meta-test runs under --no-llm.
     const defaulted = run(
       ["--all", "--debug", "--filter", "t01-helpers"],
-      { AIDLC_TUI_LIVE: undefined },
+      { AIDLC_TUI_LIVE: undefined, AIDLC_NO_LLM: undefined },
     );
     expect(defaulted.status).toBe(0);
     expect(defaulted.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=1 (defaulted");
 
     const explicitOff = run(
       ["--all", "--debug", "--filter", "NO_SUCH_T05_TEST"],
-      { AIDLC_TUI_LIVE: "0" },
+      { AIDLC_TUI_LIVE: "0", AIDLC_NO_LLM: undefined },
     );
     expect(explicitOff.status).toBe(0);
     expect(explicitOff.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");
 
     const noLlm = run(
       ["--all", "--debug", "--no-llm", "--filter", "NO_SUCH_T05_TEST"],
-      { AIDLC_TUI_LIVE: undefined },
+      { AIDLC_TUI_LIVE: undefined, AIDLC_NO_LLM: undefined },
     );
     expect(noLlm.status).toBe(0);
     expect(noLlm.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");

@@ -1005,7 +1005,12 @@ describe("t332 preview publication pipeline", () => {
         AUTHORIZED_SHA: authorizedSha,
         GITHUB_OUTPUT: planningOutput,
       });
-      const planningRows = readFileSync(planningOutput, "utf-8");
+      const rawPlanningRows = readFileSync(planningOutput, "utf-8");
+      // Native Windows jq ends its JSON row with CRLF; GitHub's environment
+      // file consumes rows with either delimiter. Keep each row exact.
+      const planningRows = process.platform === "win32"
+        ? rawPlanningRows.replaceAll("\r\n", "\n")
+        : rawPlanningRows;
       if (alreadyPublished) {
         expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");

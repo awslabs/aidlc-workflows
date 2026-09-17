@@ -249,12 +249,18 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
 
     const marker = "express-stage-level-test-ran.txt";
     const instructionsPath = join(codeDir, "unit-test-instructions.md");
+    // This is a Bash command, including when the test runs under native Windows
+    // Bun. Preserve the executable as one literal word with MSYS-friendly paths.
+    const executablePath = process.platform === "win32"
+      ? process.execPath.replaceAll("\\", "/")
+      : process.execPath;
+    const quotedExecutable = `'${executablePath.replaceAll("'", "'\\''")}'`;
     writeFileSync(
       instructionsPath,
       `# Express Unit Test Instructions
 
 \`\`\`bash
-${process.execPath} -e 'await Bun.write("${marker}", "passed")'
+${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
 \`\`\`
 `,
     );

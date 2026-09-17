@@ -1,4 +1,5 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
+// covers: function:parseLiteralShellInvocation
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -13,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyRuntimeCompileCommand,
   isEngineToolCall,
+  parseLiteralShellInvocation,
 } from "../../core/tools/aidlc-lib.ts";
 
 type RuntimeCompileDecision = "reject" | "fire" | "pass";
@@ -1115,6 +1117,110 @@ describe("detector corpus", () => {
     ]) {
       expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
     }
+  });
+
+  test("one absolute literal cd preserves only the exact terminal config proof", () => {
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const prefix of [
+      "cd /workspace/app && ",
+      "cd -- '/workspace/app with spaces' && ",
+      String.raw`cd "C:\Windows\Temp\project" && `,
+      String.raw`cd 'C:\Windows\Temp\project'&&`,
+      "cd '/workspace/a && b' && ",
+    ]) {
+      for (const command of [
+        "aidlc engine orchestrate next --depth extreme",
+        "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme",
+        "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme 2>&1",
+      ]) {
+        expect(isEngineToolCall("Bash", { command: prefix + command }), prefix + command).toBe(true);
+        expect(isEngineToolCall("Bash", { command: prefix + command }, output), prefix + command).toBe(false);
+      }
+    }
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    for (const command of [
+      `cd relative && ${terminal}`,
+      `cd -P /workspace/app && ${terminal}`,
+      `cd /workspace/app ; ${terminal}`,
+      `cd /workspace/app || ${terminal}`,
+      `cd /workspace/app & ${terminal}`,
+      `cd /workspace/app && ${terminal} && aidlc next`,
+      `cd /workspace/app && aidlc next; ${terminal}`,
+      `cd /workspace/app && ${terminal} | cat`,
+      `cd /workspace/app && ${terminal} > output`,
+      `cd /workspace/* && ${terminal}`,
+      `cd "$ROOT" && ${terminal}`,
+      `cd "$(pwd)" && ${terminal}`,
+      `cd /workspace/app && sh -c '${terminal}'`,
+      `cd\u00a0/workspace/app && ${terminal}`,
+      `cd /workspace/app && ${terminal.replace("--depth extreme", "--depth\u00a0extreme")}`,
+      `cd /workspace/app && ${terminal.replace("extreme", "ex\\\ntreme")}`,
+      `cd /workspace/app && ai\\\ndlc next --depth extreme`,
+      `cd /workspace/app && ${terminal}\n`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+    }
+    for (const invalid of [
+      "",
+      output.slice(0, -1),
+      `${output}\n${output}`,
+      output.replace("depth extreme`", "depth minimal`"),
+      JSON.stringify({
+        kind: "print",
+        message: 'Run `bun "$ROOT/.claude/tools/aidlc.ts" engine config set depth extreme` to update the configuration, then print its output verbatim and stop.',
+      }),
+      JSON.stringify({ kind: "print", message: "done", continue: true }),
+      [{ type: "text", text: output }, { type: "image", data: "other" }],
+    ]) {
+      expect(isEngineToolCall("Bash", { command: `cd /workspace/app && ${terminal}` }, invalid)).toBe(true);
+    }
+  });
+
+  test("literal shell parsing preserves native paths and shell word boundaries", () => {
+    const command = String.raw`cd "C:\Windows\Temp\project" && bun .claude/tools/aidlc.ts engine config set depth extreme 2>&1`;
+    const parsed = parseLiteralShellInvocation(command);
+    expect(parsed?.directory).toBe(String.raw`C:\Windows\Temp\project`);
+    expect(parsed?.argv).toEqual(["bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "extreme"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth\u00a0extreme")?.argv)
+      .toEqual(["aidlc", "next", "--depth\u00a0extreme"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth 'extreme\u00a0'")?.argv.at(-1)).toBe("extreme\u00a0");
+    expect(parseLiteralShellInvocation("aidlc next --depth ex\\\ntreme")).toBeNull();
+    expect(parseLiteralShellInvocation(String.raw`cd "C:\unfinished\" && aidlc next`)).toBeNull();
+    expect(parseLiteralShellInvocation("cd /app && cd /other && aidlc next")).toBeNull();
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const command of [
+      "aidlc\u00a0engine orchestrate next --depth extreme",
+      "aidlc next --depth\u00a0extreme",
+      "aidlc next --depth ex\\\ntreme",
+      "ai\\\ndlc next --depth extreme",
+    ]) expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+  });
+
+  test("ordinary escaped engine names can only add conservative engagement", () => {
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const command of [
+      String.raw`cd /workspace/app && ai\dlc next`,
+      String.raw`a\idlc next`,
+      String.raw`aidlc ne\xt`,
+      String.raw`bun .claude/tools/aidlc-orchest\rate.ts next`,
+      String.raw`cd /workspace/app && ai\dlc next --depth extreme`,
+    ]) {
+      expect(parseLiteralShellInvocation(command), command).toBeNull();
+      expect(isEngineToolCall("Bash", { command }), command).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+    }
+    // These are literal quoted data, not Bash's unquoted escape removal.
+    expect(isEngineToolCall("Bash", { command: String.raw`echo 'ai\dlc next'` })).toBe(false);
+    expect(isEngineToolCall("Bash", { command: String.raw`echo "ai\dlc next"` })).toBe(false);
   });
 
   test("observed unified Bun report has native and legacy transition classifications", () => {

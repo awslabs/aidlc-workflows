@@ -296,6 +296,12 @@ function dispatchedAgent(result: CapturedToolResult): string | undefined {
 }
 
 function inputMentions(result: CapturedToolResult, value: string): boolean {
+  // Read/Write/Edit report native file_path values. Compare decoded paths so a
+  // Windows separator does not hide an actual tool call in the captured trace.
+  if (
+    typeof result.input.file_path === "string" &&
+    result.input.file_path.replaceAll("\\", "/").includes(value.replaceAll("\\", "/"))
+  ) return true;
   return JSON.stringify(result.input).includes(value);
 }
 

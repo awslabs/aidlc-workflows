@@ -64,6 +64,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 // The ten shipped stock scopes. A composed scope whose name is NOT one of
@@ -145,10 +146,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_provider = "amazon-bedrock"`,
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
+      // Root setting: placing this after [shell_environment_policy] silently
+      // makes it a shell-policy key instead of selecting the sandbox mode.
+      `sandbox_mode = "workspace-write"`,
       ``,
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
@@ -164,20 +168,21 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       // lets beat 2 prove the REAL product arc (scope persisted on the
       // sanctioned path) rather than the model's env-seam improvisation.
       // Path pinned by tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
-      `sandbox_mode = "workspace-write"`,
-      ``,
       `[sandbox_workspace_write]`,
-      `writable_roots = ["${join(proj, ".codex")}"]`,
+      `writable_roots = ${JSON.stringify([join(proj, ".codex")])}`,
       ``,
-      `[projects."${proj}"]`,
+      `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );
   return { proj, home, root };
 }
+
+let execNumber = 0;
 
 // One codex turn. `resume: true` continues the newest recorded session for
 // this cwd (`codex exec resume --last "<prompt>"`) instead of starting fresh.
@@ -197,6 +202,16 @@ function codexTurn(
     env: { ...process.env, CODEX_HOME: home },
     timeout: PER_BEAT_TIMEOUT_MS,
   });
+  // Fixtures are deleted even on assertion failure. Keep stderr (effective
+  // sandbox mode and command-policy errors) alongside the final response.
+  const logDir = process.env.AIDLC_TEST_LOG_DIR;
+  if (logDir) {
+    writeFileSync(
+      join(logDir, `exec-codex-compose-front-${++execNumber}.log`),
+      `Command: ${JSON.stringify([CODEX_BIN, ...argv])}\nCwd: ${proj}\nExit code: ${r.status ?? -1}\nSignal: ${r.signal ?? "none"}\nSpawn error: ${r.error?.message ?? "none"}\n\nSTDOUT:\n${r.stdout ?? ""}\nSTDERR:\n${r.stderr ?? ""}`,
+      "utf-8",
+    );
+  }
   return { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 

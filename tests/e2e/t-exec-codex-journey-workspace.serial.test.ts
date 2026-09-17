@@ -35,6 +35,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import {
   activeSpace,
   getField,
@@ -136,8 +137,8 @@ function setupCodexJourney(): WorkspaceJourney {
       `sandbox_mode = "workspace-write"`,
       ``,
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
@@ -146,12 +147,13 @@ function setupCodexJourney(): WorkspaceJourney {
       // front-compose fixture, grant only this project's protected .codex dir;
       // headless exec cannot ask for permission to update config.toml.
       `[sandbox_workspace_write]`,
-      `writable_roots = ["${join(root, ".codex")}"]`,
+      `writable_roots = ${JSON.stringify([join(root, ".codex")])}`,
       ``,
-      `[projects."${root}"]`,
+      `[projects.${JSON.stringify(root)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );

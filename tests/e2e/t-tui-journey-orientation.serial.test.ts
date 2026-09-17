@@ -14,7 +14,7 @@
 //     prefix LOGIC is unit-proven token-free. What t168 CANNOT prove is that the
 //     prefix survives the real TUI render path (the host pipes the workspace
 //     JSON to the statusLine command and paints its stdout into the pane). This
-//     test closes exactly that gap, live, in tmux.
+//     test closes exactly that gap, live, in the selected terminal backend.
 //   - The sibling render test t-tui-render-statusline.serial seeds a SINGLE-space
 //     fixture (setupTuiProject with no secondSpace), so its statusline never
 //     paints the `<space> ·` segment — it matches `[AIDLC].*IDEATION` loosely and
@@ -41,27 +41,26 @@
 // COST: launches the claude TUI but submits NO prompt — it reaches the workflow
 // statusline purely from the seeded per-intent state file (state-mid-ideation),
 // spending NO Bedrock tokens, exactly like t-tui-render-statusline. Still gated
-// on AIDLC_TUI_LIVE (the watched live-TUI tier) + tmux + claude + the
+// on AIDLC_TUI_LIVE (the watched live-TUI tier) + selected TUI substrate + claude + the
 // distributable; absent any of those it SKIPs with a reason — never a hollow
 // pass. (P10 hazard: the live-TUI legs are flaky-by-nature; re-run a flake ~5x
 // watched before calling it red.)
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts as a
-// subprocess — node on Windows so node-pty never loads under bun (#748), bun
-// elsewhere. The driver auto-selects its backend by os.platform().
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
-import { resolveWinNode } from "../harness/tui-drive.ts";
 import { AIDLC_SRC, cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const FIXTURE = join(import.meta.dir, "..", "fixtures", "state-mid-ideation.md");
 const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
 const ORIENTATION_MARKER = "default · fixture · IDEATION";
 const STARTUP_TIMEOUT_MS = 15_000;
 const STARTUP_WALL_BOUND_MS = 20_000;
@@ -74,29 +73,20 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const [bin, prefix] = IS_WIN
-    ? [WIN_NODE as string, ["--experimental-strip-types", DRIVER]]
-    : [process.execPath, [DRIVER]];
+  const { bin, prefix } = resolveTuiRuntime(DRIVER);
   const res = spawnSync(bin, [...prefix, ...args], { encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
-// Gate: the watched live-TUI tier (AIDLC_TUI_LIVE) + the substrate. On POSIX the
-// substrate is tmux; claude is needed on every platform; the distributable +
+// Gate: the watched live-TUI tier (AIDLC_TUI_LIVE) + the selected substrate.
+// Claude is needed on every platform; the distributable +
 // the fixture must be present. A creds-less / binary-less machine SKIPs with a
 // reason — never a hard fail (the P10 live-leg posture).
 function absentReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live Claude TUI orientation render (watched tier)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }

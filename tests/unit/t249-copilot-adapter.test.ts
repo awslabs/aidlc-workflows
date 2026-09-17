@@ -737,16 +737,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout.trim()).toBe("");
   });
 
-  test.skipIf(process.platform === "win32")(
+  test.skipIf(process.platform === "win32" && !COMPILED_BINARY)(
     "11a: compiled executable delegation runs core hooks through the engine route",
     () => {
       const dir = scratchProject(true);
-      const executable = join(dir, "aidlc-native-stub");
-      writeFileSync(
-        executable,
-        `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
-        { mode: 0o755 },
-      );
+      // Windows cannot execute the POSIX shebang stub. Use the same native
+      // dispatcher already required by the compiled lifecycle cases below.
+      const executable = process.platform === "win32"
+        ? COMPILED_BINARY!
+        : join(dir, "aidlc-native-stub");
+      if (process.platform !== "win32") {
+        writeFileSync(
+          executable,
+          `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
+          { mode: 0o755 },
+        );
+      }
 
       const r = runAdapter(
         dir,
@@ -755,7 +761,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         { AIDLC_COMPILED_EXECUTABLE: executable },
       );
 
-      expect(r.code).toBe(0);
+      expect(r.code, r.stderr).toBe(0);
       expect(
         existsSync(
           join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "validate-state.last"),
@@ -2204,7 +2210,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "guard-tool-call",
       commandPayload(dir, "contention-owner", "aidlc next", "contention-attempt"),
     );
-    expect(blocked.stdout).toContain('"permissionDecision":"deny"');
+    expect(blocked.code, blocked.stderr).toBe(0);
+    expect(blocked.stdout, blocked.stderr).toContain('"permissionDecision":"deny"');
     expect(blocked.stdout).toContain("Retry this exact command");
     expect(blocked.stdout).not.toContain("Run a fresh");
     expect(blocked.stdout).not.toContain("do not reuse");

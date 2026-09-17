@@ -12,6 +12,24 @@ test exercises a given unit.
 
 For the full test strategy, levels, fixtures, and assertion guidelines, see [docs/reference/09-testing.md](../docs/reference/09-testing.md).
 
+## Intent grounding regression checks
+
+[t-intent-grounding-regressions.test.ts](unit/t-intent-grounding-regressions.test.ts)
+checks the [captured Kiro overclaims](fixtures/intent-grounding/kiro-overclaims/README.md):
+excluding external customers from an answer about individual users, and treating
+the developer and end user as one person from an answer about decision authority.
+The same [test helper](harness/intent-grounding-regressions.ts) runs on generated
+artifacts in the existing Kiro intent-capture journey and saves findings as
+`kiro-intent-grounding-regressions.json` in its test log directory.
+
+These are bounded wording checks against the cited, confirmed answer text or the
+test's authoritative description. Unselected options, another answer's evidence,
+and an artifact's own source declarations do not justify a claim. Positive controls
+permit explicit supporting answers and distinguish negation, uncertainty, and
+labelled assumptions. The existing source sensor owns citation validity and
+assumption confirmation. These checks do not establish general semantic entailment
+or change the shipped workflow, its questions, or its approval gates.
+
 ## Prerequisites / running the suite
 
 Different levels need different substrate. The deterministic levels (smoke,
@@ -21,7 +39,8 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **`tmux`** | `e2e` live TUI journeys (macOS/Linux) | The `tui-drive.ts` backend drives a real `claude` TUI through a tmux pane. Absent → the live tui tests SKIP with a reason. (On Windows the driver uses a node-pty backend instead — see the Windows runbook.) |
+| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
+| **`tmux`** | default macOS TUI backend; optional on Linux | Requires Bun to run the driver. Native Linux/Windows TUI sessions do not require tmux or node-pty. |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; without the substrate, live files SKIP per-file rather than fail. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
 | **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
@@ -104,6 +123,13 @@ bash tests/run-tests.sh --integration -P 8
 # Run one deterministic unit shard. CI uses four isolated serial shards.
 bash tests/run-tests.sh --unit --shard 1/4
 
+# Inspect isolated e2e selection without running tests or generating dist.
+bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
+
+# Independent e2e workers with a separate Bedrock admission limit.
+# Enable the desired harness's live variables explicitly for live coverage.
+bash tests/run-tests.sh --debug -P 8 --e2e --isolated-e2e --bedrock-parallel 2
+
 # Verbose / debug output
 bash tests/run-tests.sh --verbose
 bash tests/run-tests.sh --debug   # streams output and writes SDK/TUI NDJSON traces
@@ -116,6 +142,15 @@ The runner rejects shard counts that exceed the number of assignable test
 groups. Sharded unit runs also require the native binary producer to make the
 compiled Copilot adapter cases executable.
 
+Isolated e2e workers preserve test files and assertions while allowing known
+serial driver families to overlap. They own separate generated trees, profiles,
+terminal namespaces and artifacts. `--kiro-parallel` and `--ide-parallel` provide
+additional budgets; `--e2e-timings <summary.txt>` uses recorded durations to start
+long work first. Limits count test files, including any internal agent fanout,
+and apply to one coordinator. See
+[Isolated E2E Workers](../docs/reference/09-testing.md#isolated-e2e-workers)
+for result/skip semantics, Windows usage and capacity tuning.
+
 Live SDK and TUI drivers default to project-only Claude setting sources. That
 keeps the copied test `.claude/` tree authoritative while excluding developer
 user-level hooks/settings; focused calibration can opt the TUI back into CLI
@@ -124,3 +159,28 @@ defaults with `AIDLC_TUI_SETTING_SOURCES=default`.
 `--all --debug` defaults `AIDLC_TUI_LIVE=1` so the full debug run includes
 token-spending live TUI journeys. Set `AIDLC_TUI_LIVE=0` explicitly to keep those
 tests on their in-file SKIP path.
+# Required coverage
+
+Add `--require-coverage` to a required nightly gate. It rejects skipped cases,
+empty test files, missing executions, and zero-file selections with a nonzero
+exit. Verbose runs write `coverage.json` separately from assertion results.
+Select the required platform/provider files explicitly; a capability skip is
+not successful coverage.
+Automatically required preflights appear in the effective inventory even under
+a narrow filter. Missing, empty or skipped terminal capability evidence blocks
+dependent journeys.
+
+For jobs split across operating systems or backends, prepare a source-bound
+plan with `tests/reconcile-tests.ts prepare`, run each job using
+`--matrix-plan <file> --matrix-job <id>`, then reconcile its sealed receipts.
+The committed `tests/native-terminal-profile.json` preserves deterministic Bun
+and compatibility controls with explicit Linux/Windows owners. A missing job,
+stale source, wrong backend, skipped case or conflicting receipt cannot satisfy
+the matrix. This native profile has a separate scope from live workflow and GUI
+coverage. See [required matrix jobs](../docs/reference/09-testing.md#required-jobs-across-platforms)
+for commands and receipt handling.
+
+Terminal automation reads physical screen rows so repainted menus remain
+detectable. Public `capture` retains joined logical text; use `capture --physical`
+for visible rows. `wait` and `startup` match physical text first and fall back to
+logical text from the same frame; `--view physical|logical` selects one view.

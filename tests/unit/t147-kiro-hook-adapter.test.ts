@@ -24,6 +24,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -55,6 +56,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -188,6 +190,29 @@ function runAdapter(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+function runEngine(projectDir: string, args: string[]) {
+  const result = spawnSync(process.execPath, [
+    join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), ...args,
+  ], {
+    cwd: projectDir, encoding: "utf-8", timeout: 30_000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return { stdout: result.stdout, directive: JSON.parse(result.stdout) };
+}
+
+/** A deterministic engine fixture behind the real adapter subprocess boundary. */
+function stubNext(projectDir: string, response: string): string {
+  const calls = join(projectDir, "next-calls.ndjson");
+  writeFileSync(join(projectDir, "next-response.txt"), response);
+  writeFileSync(join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), `
+import { appendFileSync, readFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(readFileSync(${JSON.stringify(join(projectDir, "next-response.txt"))}, "utf8"));
+`);
+  return calls;
 }
 
 function runDispatchCore(
@@ -718,6 +743,199 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("3d: only complete non-steering packets within the 10 KiB UTF-8 hook budget are pre-dispatched", () => {
+    const dir = scratchProject(false);
+    try {
+      const args = ["--depth", "Standard"];
+      const prompt = "/aidlc --depth Standard";
+      const empty = JSON.stringify({ kind: "print", message: "" });
+      const calls = stubNext(dir, empty);
+      const first = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(first.code).toBe(0);
+      expect(first.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      const framing = Buffer.byteLength(first.stdout) - Buffer.byteLength(empty);
+      expect(framing).toBeGreaterThan(0);
+      for (const packetBytes of [10 * 1024 - 1, 10 * 1024, 10 * 1024 + 1]) {
+        const remaining = packetBytes - framing - Buffer.byteLength(empty);
+        // UTF-8 exceeds JS string length, so a character-count bound fails here.
+        const message = "界".repeat(Math.floor(remaining / 3)) + "x".repeat(remaining % 3);
+        const response = JSON.stringify({ kind: "print", message });
+        expect(Buffer.byteLength(response) + framing).toBe(packetBytes);
+        expect(response.length + framing).toBeLessThan(10 * 1024);
+        writeFileSync(join(dir, "next-response.txt"), response);
+        const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(result.code).toBe(0);
+        const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+        if (packetBytes <= 10 * 1024) {
+          expect(Buffer.byteLength(result.stdout)).toBe(packetBytes);
+          expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
+          expect(existsSync(latch)).toBe(false);
+        } else {
+          expect(result.stdout).toContain("deterministic argument forwarding");
+          expect(result.stdout).not.toContain("ALREADY");
+          expect(result.stdout).not.toContain(message);
+          expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(args);
+        }
+      }
+      expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+        .toEqual(Array.from({ length: 4 }, () => ["next", ...args]));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3e: steering of any size and incomplete JSON use exact-argv forwarding under every native shell alias", () => {
+    const dir = scratchProject(false);
+    try {
+      const raw = '--stage "reverse-engineering" --depth Standard';
+      const args = ["--stage", "reverse-engineering", "--depth", "Standard"];
+      const token = Buffer.from('{"opaque":"keep-this-token-verbatim"}').toString("base64url");
+      const calls = stubNext(dir, "");
+      for (const [tool_name, text] of [
+        ["execute_bash", "small complete rule\n"],
+        ["execute_pwsh", "large complete rule 界\n".repeat(1000)],
+        ["shell", "another complete rule\n"],
+      ]) {
+        const response = JSON.stringify({
+          kind: "load-steering", stage: "reverse-engineering", part: 1, parts: 1,
+          rules_content: [{ path: "aidlc/spaces/default/memory/org.md", text }],
+          continue_token: token,
+        });
+        writeFileSync(join(dir, "next-response.txt"), response);
+        const hook = runAdapter(dir, "verb-intercept", {
+          cwd: dir, prompt: `Step 1: run \`aidlc engine orchestrate next ${raw}\``,
+        });
+        expect(hook.code).toBe(0);
+        expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
+        expect(hook.stdout).not.toContain(token);
+        expect(hook.stdout).not.toContain("rules_content");
+        expect(hook.stdout).not.toContain("ALREADY");
+        const guard = (suffix: string) => runAdapter(dir, "guard-tool-call", {
+          cwd: dir, tool_name,
+          tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next${suffix}` },
+        });
+        expect(guard("").code).toBe(2);
+        expect(guard(" --stage reverse-engineering").code).toBe(2);
+        expect(guard(` ${raw}`).code).toBe(0);
+        expect(existsSync(join(dir, "aidlc", ".aidlc-forwarding-latch"))).toBe(false);
+        // Actual child stdout carries the entire packet, including the final
+        // token; no hook prefix or simulated truncation participates in delivery.
+        const tool = runEngine(dir, ["next", ...args]);
+        expect(tool.stdout).toBe(response);
+        expect(tool.directive.rules_content[0].text).toBe(text);
+        expect(tool.directive.continue_token).toBe(token);
+      }
+      expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+        .toEqual(Array.from({ length: 6 }, () => ["next", ...args]));
+      writeFileSync(join(dir, "next-response.txt"), '{"kind":"print","message":"incomplete');
+      const incomplete = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
+      expect(incomplete.stdout).toContain("deterministic argument forwarding");
+      expect(incomplete.stdout).not.toContain("--- DIRECTIVE ---");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3f: small config pre-dispatch keeps its terminal latch and native roll-forward guards", () => {
+    const dir = scratchProject(false);
+    try {
+      const response = JSON.stringify({ kind: "print", message: "Configure the requested values, then stop." });
+      stubNext(dir, response);
+      const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: "/aidlc --config" });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(response);
+      expect(result.stdout).toContain("deterministic engine pre-dispatch");
+      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-readonly-latch"), "utf8")).source)
+        .toBe("config-alias");
+      for (const tool_name of ["execute_bash", "execute_pwsh", "shell"]) {
+        const guard = runAdapter(dir, "guard-tool-call", {
+          cwd: dir, tool_name, tool_input: { command: "bun .kiro/tools/aidlc.ts engine orchestrate next" },
+        });
+        expect(guard.code, tool_name).toBe(2);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3g: single-stage tool delivery issues once and retains every real rule chunk and opaque continuation", () => {
+    const dir = scratchProject(true);
+    try {
+      const memory = join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory");
+      cpSync(join(REPO_ROOT, "core", "memory"), memory, { recursive: true });
+      const rule = "# Native rule delivery\n" + "Keep the full rule: café 日本語; never invent a token.\n".repeat(900);
+      writeFileSync(join(memory, "org.md"), rule);
+      const stateBefore = readFileSync(seededStateFile(dir), "utf8");
+      const started = () => (readAudit(dir).match(/\*\*Event\*\*: STAGE_STARTED/g) ?? []).length;
+      const before = started();
+      const raw = "--stage reverse-engineering --single";
+      const hook = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
+      expect(hook.code).toBe(0);
+      expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
+      expect(hook.stdout).not.toContain("ALREADY");
+      expect(started()).toBe(before); // No hook-side isolated attempt or issuance.
+      expect(existsSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"))).toBe(false);
+      const accepted = runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_pwsh",
+        tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}` },
+      });
+      expect(accepted.code).toBe(0);
+      let packet = runEngine(dir, ["next", "--stage", "reverse-engineering", "--single"]);
+      expect(packet.directive.kind).toBe("load-steering");
+      expect(Buffer.byteLength(packet.stdout)).toBeGreaterThan(10 * 1024);
+      expect(started()).toBe(before + 1);
+      const texts = new Map<string, string>();
+      const parts = packet.directive.parts;
+      expect(parts).toBeGreaterThan(1);
+      for (let part = 1; part <= parts; part++) {
+        expect(packet.directive).toMatchObject({ kind: "load-steering", part, parts });
+        expect(Buffer.byteLength(packet.stdout.trim())).toBeLessThanOrEqual(28 * 1024);
+        for (const entry of packet.directive.rules_content as Array<{ path: string; text: string }>) {
+          texts.set(entry.path, (texts.get(entry.path) ?? "") + entry.text);
+        }
+        const token = packet.directive.continue_token as string;
+        expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+        // Pass the exact emitted token; the real engine verifies its envelope.
+        packet = runEngine(dir, ["continue", token]);
+        expect(started()).toBe(before + 1);
+      }
+      expect(packet.directive).toMatchObject({ kind: "run-stage", stage: "reverse-engineering", single: true });
+      expect([...texts.keys()]).toEqual(packet.directive.rules_in_context);
+      for (const [path, text] of texts) expect(text).toBe(readFileSync(join(dir, path), "utf8"));
+      expect(texts.get(`aidlc/spaces/${DEFAULT_SPACE}/memory/org.md`)).toBe(rule);
+      expect(readFileSync(seededStateFile(dir), "utf8")).toBe(stateBefore);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 30_000);
+
+  test("3h: single-stage bypass also precedes compiled engine dispatch", () => {
+    const dir = scratchProject(false);
+    try {
+      const called = join(dir, "compiled-next.json");
+      const script = join(dir, "compiled-spy.ts");
+      writeFileSync(script, `
+import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "engine" && args[1] === "orchestrate") {
+  writeFileSync(${JSON.stringify(called)}, JSON.stringify(args));
+  console.log(JSON.stringify({ kind: "print", message: "compiled next response" }));
+}
+`);
+      const executable = join(dir, process.platform === "win32" ? "compiled-spy.cmd" : "compiled-spy");
+      writeFileSync(executable, process.platform === "win32"
+        ? `@"${process.execPath}" "${script}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      if (process.platform !== "win32") chmodSync(executable, 0o755);
+      const env = { AIDLC_COMPILED_EXECUTABLE: executable };
+      const single = runAdapter(dir, "verb-intercept", {
+        cwd: dir, prompt: "/aidlc --stage reverse-engineering --single",
+      }, [], env);
+      expect(single.code).toBe(0);
+      expect(single.stdout).toContain("deterministic argument forwarding");
+      expect(existsSync(called)).toBe(false);
+      const ordinary = runAdapter(dir, "verb-intercept", {
+        cwd: dir, prompt: "/aidlc --stage reverse-engineering",
+      }, [], env);
+      expect(ordinary.code).toBe(0);
+      expect(ordinary.stdout).toContain("compiled next response");
+      expect(JSON.parse(readFileSync(called, "utf8")))
+        .toEqual(["engine", "orchestrate", "next", "--stage", "reverse-engineering"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("4: todo_list create with [slug] suffix syncs the state file", () => {
@@ -1463,13 +1681,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   // fails ENOENT and the whole hook layer dies. The fix reuses the exact bun
   // running the adapter (process.execPath), which needs no PATH at all.
 
-  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
-   *  environment the fix targets). Deterministic: reads real disk. */
-  function pathWithoutBun(): string {
-    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
-  }
-
   test("14: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
     // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
     // starts regardless of PATH; the contract under test is that its OWN child
@@ -1477,10 +1688,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // argv[0] this session-start would ENOENT in runCore and emit nothing.
     const dir = scratchProject(true);
     try {
-      const strippedPath = pathWithoutBun();
+      const strippedEnv = envWithoutCommandOnPath("bun");
+      const strippedPath = strippedEnv.PATH ?? "";
       // Premise guard: bun must genuinely be unresolvable on the stripped PATH,
       // else the test proves nothing.
       expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      expect(Bun.which("bun", { PATH: strippedPath })).toBeNull();
       const r = spawnSync(
         process.execPath,
         [join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "session-start"],
@@ -1488,7 +1701,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           cwd: dir,
           input: JSON.stringify(FIXTURES.agentSpawn),
           encoding: "utf-8",
-          env: { ...process.env, CLAUDE_PROJECT_DIR: dir, PATH: strippedPath },
+          env: { ...strippedEnv, CLAUDE_PROJECT_DIR: dir },
           timeout: 30_000,
         },
       );

@@ -629,7 +629,11 @@ dynamic per workflow position.
    bodies at build time).
 2. Paste the accumulated `load-steering` rule bundle verbatim into the brief;
    pass relevant prior-artifact paths and task instructions rather than copied
-   persona or knowledge prose.
+   persona or knowledge prose. Kiro CLI uses its registered workers' native
+   `resources` preload for the full active-space memory tree; an incomplete
+   brief is advisory when that preload supplies the complete rules. The
+   space-switch engine repoints every worker's memory glob. Missing or unreadable
+   required resources still require repair, and a summary does not replace them.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)

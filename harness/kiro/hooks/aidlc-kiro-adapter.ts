@@ -57,6 +57,9 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+// The agent-v1 hook's default max_output_size is 10 KiB, independently of
+// the shell tool's larger response budget. Count the complete UTF-8 packet.
+const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -243,13 +246,15 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--resume",
   "--depth",
   "--test-strategy",
-  "--single",
   "--new-intent",
   "--new-scope",
   "--report",
 ]);
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // A single-stage next owns its issuance/audit boundary. Let the conductor's
+  // exact first tool call issue it once, rather than issuing inside this hook.
+  if (args.includes("--single")) return false;
   if (args[0] === "compose") return true;
   if (args.some((arg) => PRE_DISPATCH_FLAGS.has(arg))) return true;
   // A scope choice is unambiguous only before a workflow exists. Over an
@@ -307,10 +312,10 @@ if (target === "verb-intercept") {
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
-    // inject the returned directive. This removes the observed fail-then-retry
-    // path where Kiro changed or dropped compose/routing arguments. Ambiguous
-    // active-workflow freeform remains conductor-owned and uses the forwarding
-    // latch below.
+    // inject a small, non-steering directive. Steering must arrive complete
+    // through the real tool channel: the hook can truncate rules and their
+    // trailing continuation token even when the engine's own budget is met.
+    // Ambiguous active-workflow freeform also uses the forwarding latch below.
     const cwd = projectDir;
     if (invocation.raw.length > 0 && shouldPreDispatchNext(args, cwd)) {
       try {
@@ -331,32 +336,43 @@ if (target === "verb-intercept") {
           run.stdout ?? new Uint8Array(),
         ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
-          rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
-            force: true,
-          });
-          if (args[0] === "--config") {
-            try {
-              writeFileSync(
-                join(cwd, "aidlc", ".aidlc-readonly-latch"),
-                JSON.stringify({
-                  turn,
-                  flag: args.join(" ").replace(/^--/, ""),
-                  source: "config-alias",
-                  ts: Date.now(),
-                }) + "\n",
-                "utf-8",
-              );
-            } catch { /* config-alias latch is best-effort */ }
-          }
-          process.stdout.write(
+          const parsed: unknown = JSON.parse(directive);
+          const packet =
             "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
               "run the exact first `aidlc-orchestrate.ts next` invocation with " +
               "every user argument preserved. Treat the JSON below as the " +
               "authoritative directive and act on it now. Do NOT call `next` " +
               "again for this invocation.\n\n" +
-              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`,
-          );
-          return 0;
+              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
+          // Never move the token ahead of rules to make it survive truncation.
+          // Fall through without publishing either when the full packet cannot
+          // be delivered, or when these are steering contents of any size.
+          if (
+            parsed !== null && typeof parsed === "object" &&
+            !Array.isArray(parsed) && "kind" in parsed &&
+            typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
+            Buffer.byteLength(packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
+          ) {
+            rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
+              force: true,
+            });
+            if (args[0] === "--config") {
+              try {
+                writeFileSync(
+                  join(cwd, "aidlc", ".aidlc-readonly-latch"),
+                  JSON.stringify({
+                    turn,
+                    flag: args.join(" ").replace(/^--/, ""),
+                    source: "config-alias",
+                    ts: Date.now(),
+                  }) + "\n",
+                  "utf-8",
+                );
+              } catch { /* config-alias latch is best-effort */ }
+            }
+            process.stdout.write(packet);
+            return 0;
+          }
         }
       } catch { /* pre-dispatch is advisory; forwarding latch remains the floor */ }
     }

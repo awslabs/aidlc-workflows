@@ -17,8 +17,9 @@
 // Distilled from the CDP spike primitives (the raw cdp / ctx-click / ctx-scan /
 // drive-unblocked / live-fix-drive probes kept under the private tmp working area).
 // Test-grade choices that REPLACE spike shortcuts are marked TEST-GRADE below:
-//   - port comes from the caller (ephemeral / pid-derived), never the hardcoded
-//     9337/9340/9341 the spike used (those collide under -P 8). (spike gotcha)
+//   - Electron binds port 0 and reports its OS-assigned CDP endpoint on stderr.
+//     It owns the socket continuously; parallel launches never reserve/release
+//     a candidate port or attach using a stale profile's endpoint file.
 //   - waitForChatInput() polls the chat-input placeholder instead of the spike's
 //     fixed 11_000ms / 2000ms settle sleeps (spike gotcha: fixed sleeps are brittle
 //     on a loaded CI box; the placeholder string is the same signal the Kiro TUI
@@ -27,11 +28,18 @@
 //     never a 44MB clone of a real profile (spike gotcha: leaks personal/internal
 //     state, must never ship in a public repo).
 
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, type SpawnOptions, spawn, spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { platform } from "node:os";
-import { join } from "node:path";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+
+// Visible command text has both legacy script and public dispatcher spellings.
+// Keep these non-global so repeated assertions do not share RegExp state.
+export const KIRO_REPORT_COMMAND_TEXT =
+  /\baidlc(?:-orchestrate\.ts["']?\s+|\.ts["']?\s+engine\s+orchestrate\s+)report(?=\s|$|["'`])/i;
+export const KIRO_INTENT_JSON_COMMAND_TEXT =
+  /\baidlc(?:-utility\.ts["']?\s+intent|\.ts["']?\s+engine\s+intent(?:\s+list)?)\s+--json(?=\s|$|["'`])/i;
 
 /** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN). */
 const DEFAULT_KIRO_IDE_BIN =
@@ -412,43 +420,422 @@ export function generateKiroIdeSeed(dir: string): string {
 export interface LaunchOptions {
   /** The scratch workspace dir Kiro opens (carries the .kiro/hooks/aidlc-*.json v2 hooks). */
   workspace: string;
-  /** A DISTILLED seed user-data-dir that skips onboarding. It carries no sign-in
-   *  credentials and is NOT a clone of a real profile. */
+  /** A DISTILLED seed, copied to a private user-data-dir for each launch.
+   *  The seed itself is never passed to Electron or mutated by the driver. */
   seedProfile: string;
-  /** The remote-debugging port. TEST-GRADE: caller passes a unique/ephemeral port
-   *  (e.g. derived from process.pid) - the spike hardcoded 9337/9340/9341 which
-   *  collide under parallel runs. */
-  port: number;
   /** Override the launch binary (default KIRO_IDE_BIN). */
   bin?: string;
+  /** Windows defaults to per-file TEMP so Electron's nested storage paths stay
+   *  short. Other platforms default to AIDLC_TEST_WORKER_ROOT, then OS temp. */
+  profileRoot?: string;
+  startupTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
 }
 
 export interface KiroIdeHandle {
-  child: ChildProcess;
-  port: number;
-  workspace: string;
+  readonly child: ChildProcess;
+  readonly port: number;
+  readonly browserWebSocketUrl: string;
+  readonly workspace: string;
+  readonly profileDir: string;
 }
 
-/** Launch Kiro IDE headfully with the CDP debug port open. Flags are exactly the
- *  spike's (drive-unblocked.mjs:41-46 / live-fix-drive.mjs:58-61). Does NOT wait for
- *  CDP - call waitForCdp() next. */
-export function launchKiroIde(opts: LaunchOptions): KiroIdeHandle {
-  const bin = opts.bin ?? KIRO_IDE_BIN;
-  const child = spawn(
-    bin,
-    [
+/** Synthetic children can exercise launch/cleanup without an installed IDE.
+ *  A supplied spawn must return a child with piped stderr; terminate must affect
+ *  only that child and its descendants, and leave exit/close events observable. */
+export interface KiroIdeLaunchRuntime {
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  spawn: (bin: string, args: string[], options: SpawnOptions) => ChildProcess;
+  terminate: (child: ChildProcess) => void;
+}
+
+const kiroIdeCleanups = new WeakMap<KiroIdeHandle, () => Promise<void>>();
+
+/** Parse a complete Electron stderr line, never an arbitrary reachable port. */
+function kiroIdeDebugEndpoint(line: string): { port: number; url: string } | null {
+  const match = /^DevTools listening on (ws:\/\/\S+)\s*$/.exec(line.trim());
+  if (!match) return null;
+  try {
+    const endpoint = new URL(match[1]);
+    const port = Number(endpoint.port);
+    if (
+      !["127.0.0.1", "localhost"].includes(endpoint.hostname) ||
+      endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
+      !/^\/devtools\/browser\/[^/]+$/.test(endpoint.pathname) ||
+      !Number.isInteger(port) || port < 1 || port > 65535
+    ) return null;
+    return { port, url: match[1] };
+  } catch {
+    return null;
+  }
+}
+
+export function kiroIdeDebugPort(line: string): number | null {
+  return kiroIdeDebugEndpoint(line)?.port ?? null;
+}
+
+/** Close only the browser identity reported by our child. Never rediscover a
+ *  browser through /json/version: its port may since have been reused. */
+type KiroIdeLifecycleTrace = (phase: string, fields?: {
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  timeoutMs?: number;
+  sent?: boolean;
+  settled?: boolean;
+  localDispose?: boolean;
+  closed?: boolean;
+  exited?: boolean;
+}) => void;
+
+function closeKiroIdeBrowser(
+  url: string, timeoutMs: number, childClosed: Promise<void>, trace: KiroIdeLifecycleTrace,
+): Promise<void> {
+  return new Promise((resolveClosed, reject) => {
+    let socket: WebSocket | undefined;
+    let sent = false;
+    let settled = false;
+    let localDispose = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // This driver is Bun-only. Do not let a stalled close handshake outlive
+      // the shutdown bound after either a reply or a connection timeout.
+      localDispose = true;
+      try { (socket as Bun.WebSocket | undefined)?.terminate(); } catch { /* already closed */ }
+      if (error) reject(error);
+      else resolveClosed();
+    };
+    const timer = setTimeout(() => {
+      trace("rpc-timeout", { timeoutMs });
+      finish(new Error("Kiro Browser.close timed out"));
+    }, timeoutMs);
+    // A browser may exit without delivering a final RPC reply or close frame.
+    // Only authoritative child CLOSE settles this path. A protocol error that
+    // already settled the promise stays rejected; EXIT alone cannot resolve it.
+    void childClosed.then(() => {
+      trace("rpc-child-close-observed", { settled });
+      finish();
+    });
+    try {
+      socket = new WebSocket(url);
+      socket.onopen = () => {
+        if (settled) return;
+        trace("rpc-connected");
+        try {
+          socket!.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+          sent = true;
+          trace("rpc-sent");
+        } catch (error) {
+          trace("rpc-send-error");
+          finish(new Error("Kiro Browser.close send failed", { cause: error }));
+        }
+      };
+      socket.onmessage = (event) => {
+        try {
+          const reply = JSON.parse(String(event.data));
+          if (reply.id === 1) {
+            trace(reply.error ? "rpc-refused" : "rpc-ack", { settled });
+            finish(reply.error ? new Error("Kiro Browser.close was refused") : undefined);
+          }
+        } catch { /* unrelated non-JSON output */ }
+      };
+      socket.onerror = () => {
+        trace("rpc-socket-error", { settled, localDispose });
+        finish(new Error("Kiro Browser.close connection failed"));
+      };
+      // Electron may close the connection before delivering the reply. The
+      // caller must still observe the authoritative child close before success.
+      socket.onclose = () => {
+        trace("rpc-socket-close", { sent, settled, localDispose });
+        finish(sent ? undefined : new Error("Kiro browser endpoint closed before request"));
+      };
+    } catch (error) {
+      trace("rpc-connect-error");
+      finish(new Error("Kiro browser endpoint connection failed", { cause: error }));
+    }
+  });
+}
+
+function terminateKiroIdeChild(child: ChildProcess): void {
+  // Never act on a remembered PID once the authoritative child has exited.
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+  if (platform() === "win32") {
+    const result = spawnSync(
+      "taskkill",
+      ["/PID", String(child.pid), "/T", "/F"],
+      { stdio: "ignore", windowsHide: true, timeout: 10_000 },
+    );
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`taskkill failed for owned Kiro PID ${child.pid}`);
+  } else {
+    // spawn(detached:true) gives this launch its own process group. Never kill
+    // by executable name or enumerate other IDE instances.
+    process.kill(-child.pid, "SIGKILL");
+  }
+}
+
+/** Launch with a private profile and let Electron own an OS-assigned port.
+ *  Resolves when this child's stderr reports its endpoint; callers still assert
+ *  waitForCdp()/waitForChatInput(). Imports perform no launch or allocation. */
+export async function launchKiroIde(
+  opts: LaunchOptions,
+  runtime: Partial<KiroIdeLaunchRuntime> = {},
+): Promise<KiroIdeHandle> {
+  const env = runtime.env ?? process.env;
+  const launchStarted = performance.now();
+  const windows = (runtime.platform ?? platform()) === "win32";
+  const inheritedGroup = env.AIDLC_TEST_WORKER_PROCESS_GROUP === "1";
+  const root = opts.profileRoot ?? (windows
+    ? env.TEMP ?? env.TMP ?? tmpdir()
+    : env.AIDLC_TEST_WORKER_ROOT ?? tmpdir());
+  const seed = realpathSync(opts.seedProfile);
+  mkdirSync(root, { recursive: true });
+  const profileDir = mkdtempSync(join(root, "aidlc-kiro-ide-profile-"));
+  try {
+    const destination = relative(seed, realpathSync(profileDir));
+    if (destination === "" || (!isAbsolute(destination) && destination !== ".." && !destination.startsWith(`..${sep}`))) {
+      throw new Error("Kiro profile destination must be outside the seed profile");
+    }
+    cpSync(seed, profileDir, {
+      recursive: true,
+      filter: (source) => dirname(source) !== seed ||
+        !["DevToolsActivePort", "SingletonLock", "SingletonCookie", "SingletonSocket"].includes(basename(source)),
+    });
+  } catch (error) {
+    rmSync(profileDir, { recursive: true, force: true });
+    throw error;
+  }
+
+  let child: ChildProcess;
+  const spawnChild: KiroIdeLaunchRuntime["spawn"] = runtime.spawn ?? spawn;
+  try {
+    child = spawnChild(opts.bin ?? KIRO_IDE_BIN, [
       opts.workspace,
-      `--remote-debugging-port=${opts.port}`,
-      `--user-data-dir=${opts.seedProfile}`,
+      "--remote-debugging-port=0",
+      "--remote-debugging-address=127.0.0.1",
+      `--user-data-dir=${profileDir}`,
       "--no-sandbox",
       "--disable-workspace-trust",
       "--skip-welcome",
       "--skip-release-notes",
       "--new-window",
-    ],
-    { stdio: "ignore" },
-  );
-  return { child, port: opts.port, workspace: opts.workspace };
+    ], {
+      stdio: ["ignore", "ignore", "pipe"],
+      // Isolated cancellation must also cover the interval before CDP discovery.
+      detached: !windows && !inheritedGroup,
+      env,
+    });
+  } catch (error) {
+    rmSync(profileDir, { recursive: true, force: true });
+    throw error;
+  }
+
+  // Opt-in per-file metadata only: no endpoints, profile contents, error text,
+  // commands or environment values. Bound output and never let diagnostic I/O
+  // replace a launch, body or cleanup failure.
+  const tracePath = env.AIDLC_KIRO_IDE_DIAGNOSTICS;
+  let traceCount = 0;
+  let traceUnavailable = false;
+  const trace: KiroIdeLifecycleTrace = (phase, fields = {}) => {
+    if (!tracePath || traceUnavailable || traceCount >= 64) return;
+    traceCount++;
+    const limited = traceCount === 64;
+    try {
+      appendFileSync(tracePath, `${JSON.stringify({
+        timestamp: new Date().toISOString(), event: "kiro-lifecycle",
+        phase: limited ? "trace-limit" : phase, pid: child.pid,
+        elapsedMs: performance.now() - launchStarted, ...(limited ? {} : fields),
+      })}\n`, "utf8");
+    } catch {
+      traceUnavailable = true;
+      try { process.stderr.write("[kiro-ide-driver] lifecycle trace write failed\n"); } catch { /* closed diagnostic pipe */ }
+    }
+  };
+  trace("child-started");
+  let closed = false;
+  let resolveChildClosed!: () => void;
+  const childClosed = new Promise<void>((resolveClosed) => { resolveChildClosed = resolveClosed; });
+  let exited = false;
+  let browserWebSocketUrl: string | undefined;
+  let processError: Error | undefined;
+  const onError = (error: Error) => { processError = error; trace("child-error"); };
+  // Keep an error listener for the whole child lifetime, including after attach.
+  child.on("error", onError);
+  child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    exited = true;
+    trace("child-exit", { code, signal });
+  });
+  child.once("close", (code: number | null, signal: NodeJS.Signals | null) => {
+    closed = true;
+    trace("child-close", { code, signal });
+    resolveChildClosed();
+    child.removeListener("error", onError);
+  });
+
+  const liveChild = () => !exited && child.exitCode === null && child.signalCode === null && child.pid !== undefined;
+  const killDirectChild = (reason: "startup" | "fallback") => {
+    if (!liveChild()) {
+      trace(`${reason}-signal-skipped`, { closed, exited });
+      return;
+    }
+    trace(`${reason}-signal`, { signal: "SIGKILL" });
+    if (!child.kill("SIGKILL")) throw new Error("Kiro direct child termination failed");
+  };
+  const waitClosed = (timeoutMs: number): Promise<void> => {
+    if (closed) return Promise.resolve();
+    return new Promise((resolveClosed, reject) => {
+      const onClose = () => { clearTimeout(timer); resolveClosed(); };
+      const timer = setTimeout(() => {
+        child.removeListener("close", onClose);
+        trace("child-close-timeout", { timeoutMs, closed, exited });
+        reject(new Error(`Kiro child did not close; profile retained at ${profileDir}`));
+      }, timeoutMs);
+      child.once("close", onClose);
+    });
+  };
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = async (): Promise<void> => {
+    if (env.AIDLC_KEEP_TEMP === "1") {
+      process.stderr.write(`[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved Kiro profile ${profileDir}\n`);
+      return;
+    }
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      trace("cleanup-start", { closed, exited });
+      if (!closed) {
+        const timeoutMs = opts.shutdownTimeoutMs ?? 10_000;
+        if ((windows || inheritedGroup) && !runtime.terminate) {
+          const deadline = Date.now() + timeoutMs;
+          // Keep fallback observation inside the original shutdown budget.
+          const closeDeadline = deadline - Math.min(1_000, Math.floor(timeoutMs / 10));
+          try {
+            if (liveChild()) {
+              if (browserWebSocketUrl) await closeKiroIdeBrowser(browserWebSocketUrl, Math.min(3_000, Math.max(1, closeDeadline - Date.now())), childClosed, trace);
+              else killDirectChild("startup"); // Startup failed before an endpoint was reported.
+            }
+            await waitClosed(Math.max(1, closeDeadline - Date.now()));
+          } catch (error) {
+            // Release the test's pipe handles so the parent can reap the worker
+            // POSIX group or Windows Job (whose group marker is "0"). Only the
+            // authoritative child is signalled; failure remains visible even
+            // when this fallback closes it. The profile is retained on failure.
+            try {
+              trace("fallback-start", { closed, exited });
+              killDirectChild("fallback");
+              await waitClosed(Math.max(1, deadline - Date.now()));
+            } catch (fallbackError) {
+              throw new AggregateError([error, fallbackError], `Kiro cleanup failed; profile retained at ${profileDir}`);
+            }
+            throw new Error(`Kiro termination failed; profile retained at ${profileDir}`, { cause: error });
+          }
+        } else {
+          try {
+            if (liveChild()) (runtime.terminate ?? terminateKiroIdeChild)(child);
+          } catch (error) {
+            throw new Error(`Kiro termination failed; profile retained at ${profileDir}`, { cause: error });
+          }
+          await waitClosed(timeoutMs);
+        }
+      }
+      removeSeedDir(profileDir, 20, 250, env);
+      trace("cleanup-complete", { closed, exited });
+    })();
+    try {
+      await cleanupPromise;
+    } catch (error) {
+      trace("cleanup-failed", { closed, exited });
+      cleanupPromise = undefined;
+      throw error;
+    }
+  };
+
+  try {
+    const port = await new Promise<number>((resolvePort, reject) => {
+      let buffered = "";
+      let settled = false;
+      const finish = (port?: number, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.removeListener("error", fail);
+        child.removeListener("exit", onExit);
+        child.removeListener("close", onExit);
+        if (error) reject(error);
+        else resolvePort(port!);
+      };
+      const fail = (error: Error) => finish(undefined, error);
+      const onExit = () => fail(new Error("Kiro exited before reporting its CDP endpoint"));
+      const timer = setTimeout(
+        () => fail(new Error("Kiro timed out reporting its OS-assigned CDP endpoint")),
+        opts.startupTimeoutMs ?? 60_000,
+      );
+      child.once("error", fail);
+      child.once("exit", onExit);
+      child.once("close", onExit);
+      if (!child.stderr) {
+        fail(new Error("Kiro launch requires piped stderr for CDP endpoint ownership"));
+        return;
+      }
+      // Continue draining stderr after attach so Electron cannot block on a full
+      // pipe. Bound the incomplete line, and never retain the rest of its log.
+      child.stderr.on("data", (chunk: Buffer | string) => {
+        if (settled) return;
+        buffered += chunk.toString();
+        let newline = buffered.indexOf("\n");
+        while (newline !== -1) {
+          const line = buffered.slice(0, newline);
+          buffered = buffered.slice(newline + 1);
+          const endpoint = kiroIdeDebugEndpoint(line);
+          if (endpoint !== null) {
+            browserWebSocketUrl = endpoint.url;
+            finish(endpoint.port);
+            buffered = "";
+            return;
+          }
+          newline = buffered.indexOf("\n");
+        }
+        buffered = buffered.slice(-8192);
+      });
+    });
+    if (processError) throw processError;
+    if (exited || closed || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error("Kiro exited while reporting its CDP endpoint");
+    }
+    const handle: KiroIdeHandle = { child, port, browserWebSocketUrl: browserWebSocketUrl!, workspace: opts.workspace, profileDir };
+    kiroIdeCleanups.set(handle, cleanup);
+    return handle;
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Kiro launch and cleanup failed; profile retained at ${profileDir}`);
+    }
+    throw error;
+  }
+}
+
+/** Keep the first assertion/driver failure when owned cleanup also fails.
+ *  Cleanup runs once; callers keep their existing ordered cleanup steps so a
+ *  failed child retirement never deletes the retained workspace or profile. */
+export async function withKiroIdeCleanup<T>(
+  body: () => T | Promise<T>,
+  cleanup: () => void | Promise<void>,
+): Promise<T> {
+  let result: T;
+  try {
+    result = await body();
+  } catch (bodyError) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError([bodyError, cleanupError], "Kiro IDE test body and cleanup failed");
+    }
+    throw bodyError;
+  }
+  await cleanup();
+  return result;
 }
 
 /** Poll GET /json/version until the CDP endpoint answers (drive-unblocked.mjs:48-56
@@ -1241,36 +1628,25 @@ export async function screenshot(t: CdpTarget): Promise<Buffer | null> {
   return s?.data ? Buffer.from(s.data, "base64") : null;
 }
 
-/** Kill the Electron process tree. Honour AIDLC_KEEP_TEMP by leaving it running so a
- *  failed live run is inspectable. */
-export function teardown(handle: KiroIdeHandle): void {
-  if (process.env.AIDLC_KEEP_TEMP === "1") {
-    process.stderr.write(
-      `[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - Kiro left running on :${handle.port}\n`,
-    );
-    return;
-  }
-  if (platform() === "win32" && handle.child.pid !== undefined) {
-    const result = spawnSync(
-      "taskkill",
-      ["/PID", String(handle.child.pid), "/T", "/F"],
-      { stdio: "ignore", windowsHide: true },
-    );
-    if (!result.error && result.status === 0) return;
-  }
-  try {
-    handle.child.kill("SIGKILL");
-  } catch {
-    /* already gone */
-  }
+/** Stop only a driver-owned launch, wait for close, then remove its private
+ *  profile. Failed termination preserves the profile and fails the test. */
+export async function teardown(handle: KiroIdeHandle): Promise<void> {
+  const cleanup = kiroIdeCleanups.get(handle);
+  if (!cleanup) throw new Error("Refusing teardown of a Kiro handle not owned by this driver");
+  await cleanup();
 }
 
 /** Remove a seed/profile directory, tolerating Windows lock latency: after
  *  taskkill ends the Electron tree, the OS can hold file locks inside the
  *  user-data dir for a short moment, so a bare rmSync throws EBUSY. Bounded
  *  retries with short waits; anything else (or exhaustion) still throws. */
-export function removeSeedDir(path: string, attempts = 20, waitMs = 250): void {
-  if (process.env.AIDLC_KEEP_TEMP === "1") {
+export function removeSeedDir(
+  path: string,
+  attempts = 20,
+  waitMs = 250,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (env.AIDLC_KEEP_TEMP === "1") {
     process.stderr.write(`[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved ${path}\n`);
     return;
   }

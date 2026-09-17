@@ -231,6 +231,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
           encoding: "utf-8",
           env: {
             ...process.env,
+            AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
             AIDLC_HARNESS_DIR: ".aidlc",
             AIDLC_HARNESS_NAME: "copilot",
             COPILOT_HOME: join(project, ".copilot-home"),
@@ -271,6 +272,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
             encoding: "utf-8",
             env: {
               ...process.env,
+              AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
               AIDLC_HARNESS_DIR: ".aidlc",
               AIDLC_HARNESS_NAME: "copilot",
               COPILOT_HOME: copilotHome,

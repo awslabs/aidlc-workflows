@@ -107,6 +107,14 @@ model_provider = "amazon-bedrock"
 model_context_window = 1000000
 model_reasoning_effort = "high"
 
+# Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
+# interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
+# shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
+# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
+# cannot escalate: uncomment writable_roots with the MAIN repo's absolute
+# .git path (linked worktrees resolve into <main>/.git/worktrees/*).
+sandbox_mode = "workspace-write"
+
 [model_providers.amazon-bedrock.aws]
 # Set to your AWS profile/region with Bedrock model access.
 profile = "default"
@@ -124,14 +132,6 @@ region = "us-east-1"
 # Starlark permission-rules dir — D-10 — distinct from the AIDLC method.)
 [shell_environment_policy]
 set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }
-
-# Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
-# interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
-# shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
-# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
-# cannot escalate: uncomment writable_roots with the MAIN repo's absolute
-# .git path (linked worktrees resolve into <main>/.git/worktrees/*).
-sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 network_access = true
