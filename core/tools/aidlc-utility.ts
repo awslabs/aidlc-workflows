@@ -3221,7 +3221,12 @@ export async function collectDoctorReport(
     // LocalAppData/ProgramFiles). Desktop execution is NOT verified —
     // discovery only. See core/tools/aidlc-devin-version.ts for the full
     // discovery/exec/parse logic and the injectable test seams.
-    const devinVerResult = checkDevinVersion();
+    // AIDLC_DEVIN_BIN is a test/packaging seam: when set, the check probes
+    // that binary directly instead of PATH/Desktop discovery.
+    const devinBinOverride = process.env.AIDLC_DEVIN_BIN;
+    const devinVerResult = devinBinOverride
+      ? checkDevinVersion(() => devinBinOverride, () => null)
+      : checkDevinVersion();
     results.push({
       pass: devinVerResult.pass,
       label: devinVerResult.label,

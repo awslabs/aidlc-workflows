@@ -385,6 +385,10 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       const project = join(root, "project");
       cpSync(DEVIN_ROOT, project, { recursive: true });
       const markerPath = join(project, ".devin", ".aidlc-session-start.local.json");
+      // Inject the version-check seam: a stub binary answering --version, so
+      // the assertion never depends on a real Devin CLI being installed.
+      const stubBin = join(root, "devin-stub");
+      writeFileSync(stubBin, "#!/bin/sh\necho 'devin 3000.99.0 (stubbed)'\n", { mode: 0o755 });
       const runDoctor = () => {
         const r = spawnSync(
           "bun",
@@ -392,7 +396,11 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
           {
             cwd: project,
             encoding: "utf-8",
-            env: { ...process.env, AIDLC_HARNESS_DIR: ".devin" },
+            env: {
+              ...process.env,
+              AIDLC_HARNESS_DIR: ".devin",
+              AIDLC_DEVIN_BIN: stubBin,
+            },
           },
         );
         return { status: r.status, output: `${r.stdout}${r.stderr}` };
@@ -409,7 +417,9 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(output).toContain("config.json present");
       expect(output).toContain("mcp_config.json present");
       expect(output).toContain("rules/aidlc.md present");
-      expect(output).toContain("devin CLI version");
+      // Semantic version-check field: the parsed triple meets the shared
+      // floor — asserted via the injected stub, independent of host Devin.
+      expect(output).toContain("devin CLI version 3000.99.0 >= 3000.10.21");
       // The Claude settings.json fallback must NOT appear.
       expect(output).not.toContain("settings.json present");
 
@@ -445,7 +455,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
         {
           cwd: project,
           encoding: "utf-8",
-          env: { ...process.env, AIDLC_HARNESS_DIR: ".devin" },
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".devin", AIDLC_DEVIN_BIN: stubBin },
         },
       );
       expect(jsonRun.status, `${jsonRun.stdout}${jsonRun.stderr}`).toBe(0);
