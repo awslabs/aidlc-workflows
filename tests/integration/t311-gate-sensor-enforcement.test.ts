@@ -531,7 +531,8 @@ describe("t311 gate-bound sensor enforcement", () => {
     }
   }, 30_000);
 
-  test("compiled dispatch fires sensors through the engine namespace", () => {
+  // The executable fixture requires /bin/sh, which native Windows cannot launch.
+  test.skipIf(process.platform === "win32")("compiled dispatch fires sensors through the engine namespace", () => {
     const fixture = setupFixture("blocking", "**/*", true);
     const seen = join(fixture.project, "native-argv.log");
     const executable = join(fixture.project, "aidlc-native-stub");

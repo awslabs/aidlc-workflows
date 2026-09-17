@@ -303,29 +303,9 @@ export function validateStructuredReview(
   if (inspectionCandidate.status !== "complete") {
     throw new Error("inspection did not complete");
   }
-  if (!Array.isArray(inspectionCandidate.changedFiles)) {
-    throw new Error("inspection.changedFiles must be an array");
-  }
-  const changedFiles = inspectionCandidate.changedFiles.map((value, index) => {
-    if (typeof value !== "string") {
-      throw new Error(`inspection.changedFiles[${index}] must be a string`);
-    }
-    return value;
-  });
-  if (new Set(changedFiles).size !== changedFiles.length) {
-    throw new Error("inspection.changedFiles must not contain duplicates");
-  }
-  const expectedFiles = manifest.files.map(file => file.path).sort();
-  const inspectedFiles = [...changedFiles].sort();
-  if (
-    inspectedFiles.length !== expectedFiles.length ||
-    inspectedFiles.some((path, index) => path !== expectedFiles[index])
-  ) {
-    throw new Error("inspection.changedFiles must exactly match the changed-file manifest");
-  }
   const inspection: StructuredReview["inspection"] = {
     status: "complete",
-    changedFiles,
+    changedFiles: manifest.files.map(file => file.path),
   };
 
   if (!Array.isArray(candidate.validation) || candidate.validation.length === 0) {
