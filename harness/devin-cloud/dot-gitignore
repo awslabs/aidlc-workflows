@@ -1,0 +1,33 @@
+# AI-DLC — the committed-vs-ignored split (workspace layout, re-rooted under aidlc/).
+# Rule of thumb: per-user session CURSORS and machine-local runtime/derived
+# state are ignored; everything that is the shared work — method, registry,
+# state, AUDIT (per-clone shards), artifacts — is committed.
+
+# Per-user session cursors — ignored.
+aidlc/active-space
+aidlc/spaces/*/intents/active-intent
+
+# Machine-local runtime / derived — ignored (regenerated per machine).
+aidlc/.aidlc-clone-id
+aidlc/.aidlc-unit-scope.json
+aidlc/.aidlc-unit-parked
+aidlc/.aidlc-claim-generations.json
+aidlc/.aidlc-unit-participant
+aidlc/.aidlc-claim-registry.json
+aidlc/.aidlc-unit-releases/
+aidlc/.aidlc-unit-merges/
+aidlc/.aidlc-active-space-*.tmp
+aidlc/.aidlc-sessions/
+aidlc/spaces/*/intents/.aidlc-*
+**/aidlc/spaces/*/intents/**/.aidlc-sensors/
+aidlc/spaces/*/knowledge/documentkb/.journal/
+aidlc/spaces/*/knowledge/.sources.local.json
+aidlc/spaces/*/intents/*/runtime-graph.json
+aidlc/spaces/*/intents/*/.aidlc-*
+aidlc/diagnostics/
+
+# Personal overrides — never committed.
+.aidlc/config.local.json
+.aidlc/mcp_config.local.json
+.aidlc/.aidlc-session-start.local.json
+AGENTS.local.md

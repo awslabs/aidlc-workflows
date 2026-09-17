@@ -1,0 +1,5 @@
+{
+  "harness": "devin-cloud",
+  "enforcement": "cooperative",
+  "notes": "Devin Cloud sessions have no repo-local hook transport. AIDLC guarantees on this harness are verified at engine gates (state + receipts + audit trail) rather than by tool interception. See docs/guide/harnesses/devin-cloud.md for the deterministic-vs-cooperative contract."
+}

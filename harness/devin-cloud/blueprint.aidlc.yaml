@@ -1,0 +1,30 @@
+# blueprint.aidlc.yaml — Devin Cloud environment blueprint template for AIDLC.
+#
+# Paste the sections below into this repository's blueprint (Devin UI:
+# Settings → Environment → Blueprints, or ask Devin to apply them). They install
+# Bun — the runtime the AIDLC engine runs on — and re-verify the install on
+# every rebuild. `maintenance` stays off the snapshot path as Devin documents:
+# it is surfaced to the agent at session start, so keep it incremental.
+#
+# Requires nothing else: the AIDLC runtime lives in the repository itself at
+# .aidlc/ (committed with the project). No secrets are needed.
+
+# --- initialize: install Bun once, baked into the snapshot -------------------
+# initialize: |
+#   curl -fsSL https://bun.sh/install | bash
+#   echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$ENVRC"
+
+# --- maintenance: cheap, self-contained, re-runnable --------------------------
+# maintenance: |
+#   export PATH="$HOME/.bun/bin:$PATH"
+#   bun --version
+
+# --- knowledge: what Devin should know about this repo ------------------------
+# knowledge:
+#   - name: AIDLC entry point
+#     contents: |
+#       This project runs AI-DLC on Devin Cloud. The orchestrator skill is
+#       .agents/skills/aidlc/SKILL.md (invoke via `@skills:aidlc`). Engine
+#       commands run as `bun .aidlc/tools/aidlc.ts <verb>` — they are the
+#       authoritative gate checks; never advance a workflow stage without the
+#       engine call that verifies the transition.
