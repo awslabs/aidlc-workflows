@@ -1042,12 +1042,23 @@ async function runBunTestFile(
   // inherit this absent, runner-owned path, so a policy on the developer or CI
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
+  //
+  // Isolate the native machine root too. Install-management tests that forget
+  // AIDLC_INSTALL_ROOT / AIDLC_BIN_DIR would otherwise read the developer's real
+  // ~/.local/share/aidlc (update cache, channel, versions) or write ~/.local/bin.
+  // Each test file gets its own root so parallel files never share one, with bin
+  // under that root so machineTransactionRoot() has its required shared parent.
+  // Focused tests keep overriding both variables per spawn.
+  const machineRoot = join(logDir, "machine", name);
+  mkdirSync(machineRoot, { recursive: true });
   const env: NodeJS.ProcessEnv = {
     ...testGuardEnvironment({ ...process.env, ...context?.env }, context?.guardProfile ?? args.guardProfile),
     AIDLC_TEST_NAME: base,
     // Survives each file's private TMPDIR, but never crosses runner invocations.
     AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
     AIDLC_MANAGED_SETTINGS_PATH: join(args.isolatedFiles && context ? context.artifacts : logDir, ".aidlc-managed-settings-absent.json"),
+    AIDLC_INSTALL_ROOT: machineRoot,
+    AIDLC_BIN_DIR: join(machineRoot, "bin"),
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
