@@ -3032,23 +3032,11 @@ export async function collectDoctorReport(
       // flavor. Copilot: a hooks/ shim inside the engine dir (wired by
       // .github/hooks/aidlc.json). opencode: a plugin in the .opencode shell.
       const copilotAdapter = join(projectDir, harness, "hooks", "aidlc-copilot-adapter.ts");
-      if (harnessName === "devin-cloud") {
-        // devin-cloud has NO adapter: the host supplies no hook transport, so
-        // the projected hooks/ are engine scripts invoked explicitly by the
-        // conductor, not a wired roster. Probe the session-mint entry point
-        // only; the roster above already covers the shared hook bodies.
-        results.push({
-          pass: existsSync(
-            join(projectDir, harness, "hooks", "aidlc-session-start.ts"),
-          ),
-          label:
-            "hooks/aidlc-session-start.ts present (session-mint entry, invoked explicitly)",
-          fix: projectedFileRepair(
-            "devin-cloud",
-            ".aidlc/hooks/aidlc-session-start.ts",
-          ),
-        });
-      } else if (isCopilot) {
+      // devin-cloud has NO adapter: the host supplies no hook transport, so
+      // the projected hooks/ are engine scripts invoked explicitly by the
+      // conductor, not a wired roster. The roster above already covers the
+      // session-mint entry point, so there is nothing extra to probe here.
+      if (isCopilot) {
         results.push({
           pass: existsSync(copilotAdapter),
           label: "hooks/aidlc-copilot-adapter.ts present (hook shim)",
@@ -3057,7 +3045,7 @@ export async function collectDoctorReport(
             ".aidlc/hooks/aidlc-copilot-adapter.ts",
           ),
         });
-      } else {
+      } else if (harnessName !== "devin-cloud") {
         const adapterPath = join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
         results.push({
           pass: existsSync(adapterPath),
