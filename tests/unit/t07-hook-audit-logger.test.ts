@@ -58,7 +58,7 @@
 //   .sh test 15 (canonical **Event**: ARTIFACT_* field)    -> "emits canonical **Event**: ARTIFACT_* field"
 //   .sh test 16 (Write->CREATED, Edit->UPDATED same file)  -> "Write→CREATED, Edit→UPDATED on same file"
 //
-// Windows semantics are driven by AIDLC_TEST_SESSION_PLATFORM=win32 with an
+// Windows semantics are driven by AIDLC_TEST_PLATFORM=win32 with an
 // upper-cased project prefix. A literal C: root cannot be seeded on every host
 // because projectDir must name a real directory.
 
@@ -157,7 +157,7 @@ function fire(
   const env = { ...process.env };
   if (setEnv) env.CLAUDE_PROJECT_DIR = p;
   else delete env.CLAUDE_PROJECT_DIR;
-  delete env.AIDLC_TEST_SESSION_PLATFORM;
+  delete env.AIDLC_TEST_PLATFORM;
   Object.assign(env, extraEnv);
   const t0 = performance.now();
   const r = Bun.spawnSync({
@@ -249,7 +249,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       proj,
       HOOK,
       true,
-      { AIDLC_TEST_SESSION_PLATFORM: "win32" },
+      { AIDLC_TEST_PLATFORM: "win32" },
     );
     const audit = readShards(auditDir);
     expect(audit).toContain("**Event**: ARTIFACT_CREATED");
@@ -264,7 +264,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       proj,
       HOOK,
       true,
-      { AIDLC_TEST_SESSION_PLATFORM: "win32" },
+      { AIDLC_TEST_PLATFORM: "win32" },
     );
     const audit = readShards(auditDir);
     expect(audit).toContain("**Event**: ARTIFACT_UPDATED");
@@ -275,7 +275,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     expect(proj.toUpperCase()).not.toBe(proj);
     const { auditDir } = seedIntentShard(proj);
     const file = caseVaried(join(codekbDir(proj, "repo-a"), "analysis.md"));
-    fire(writeJson(file), proj, HOOK, true, { AIDLC_TEST_SESSION_PLATFORM: "win32" });
+    fire(writeJson(file), proj, HOOK, true, { AIDLC_TEST_PLATFORM: "win32" });
     const audit = readShards(auditDir);
     expect(audit).toContain("**Context**: codekb > repo-a > analysis.md");
     expect(audit).toMatch(/\*\*Event\*\*: ARTIFACT_(CREATED|UPDATED)/);
@@ -286,7 +286,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     const { auditDir } = seedIntentShard(proj);
     const before = readShards(auditDir);
     const file = caseVaried(join(proj, "src", "other.md"));
-    fire(writeJson(file), proj, HOOK, true, { AIDLC_TEST_SESSION_PLATFORM: "win32" });
+    fire(writeJson(file), proj, HOOK, true, { AIDLC_TEST_PLATFORM: "win32" });
     expect(readShards(auditDir)).toBe(before);
   });
 
@@ -299,7 +299,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       proj,
       HOOK,
       true,
-      { AIDLC_TEST_SESSION_PLATFORM: "linux" },
+      { AIDLC_TEST_PLATFORM: "linux" },
     );
     expect(readShards(auditDir)).toBe(before);
   });

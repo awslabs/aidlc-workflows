@@ -32,7 +32,7 @@ let proj = "";
 const originalSessionOverride = process.env.AIDLC_SESSION_OVERRIDE;
 const originalSessionOverrideSource =
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
-const originalTestSessionPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+const originalTestPlatform = process.env.AIDLC_TEST_PLATFORM;
 const originalTestPsDenied = process.env.AIDLC_TEST_PS_DENIED;
 
 function mockMacProcessTree(parents = new Map<number, number>()) {
@@ -48,7 +48,7 @@ function mockMacProcessTree(parents = new Map<number, number>()) {
     const stdout = `${parents.get(pid) ?? 1} fixture-start-${pid}\n`;
     return { pid: 123, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
   }) as typeof childProcess.spawnSync);
-  process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+  process.env.AIDLC_TEST_PLATFORM = "darwin";
   return {
     ps,
     restore() {
@@ -61,7 +61,7 @@ function mockMacProcessTree(parents = new Map<number, number>()) {
 beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE;
   delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
-  delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+  delete process.env.AIDLC_TEST_PLATFORM;
   delete process.env.AIDLC_TEST_PS_DENIED;
   proj = createTestProject();
 });
@@ -78,10 +78,10 @@ afterEach(() => {
     process.env.AIDLC_SESSION_OVERRIDE_SOURCE =
       originalSessionOverrideSource;
   }
-  if (originalTestSessionPlatform === undefined) {
-    delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+  if (originalTestPlatform === undefined) {
+    delete process.env.AIDLC_TEST_PLATFORM;
   } else {
-    process.env.AIDLC_TEST_SESSION_PLATFORM = originalTestSessionPlatform;
+    process.env.AIDLC_TEST_PLATFORM = originalTestPlatform;
   }
   if (originalTestPsDenied === undefined) {
     delete process.env.AIDLC_TEST_PS_DENIED;
@@ -278,9 +278,9 @@ describe("t318 session binding helpers", () => {
       "utf-8",
     );
 
-    const priorPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+    const priorPlatform = process.env.AIDLC_TEST_PLATFORM;
     const priorPsDenied = process.env.AIDLC_TEST_PS_DENIED;
-    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    process.env.AIDLC_TEST_PLATFORM = "darwin";
     process.env.AIDLC_TEST_PS_DENIED = "1";
     try {
       writeSessionPidAncestry(proj, "new-session");
@@ -291,9 +291,9 @@ describe("t318 session binding helpers", () => {
       expect(existsSync(deadEntry)).toBe(false);
     } finally {
       if (priorPlatform === undefined) {
-        delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+        delete process.env.AIDLC_TEST_PLATFORM;
       } else {
-        process.env.AIDLC_TEST_SESSION_PLATFORM = priorPlatform;
+        process.env.AIDLC_TEST_PLATFORM = priorPlatform;
       }
       if (priorPsDenied === undefined) {
         delete process.env.AIDLC_TEST_PS_DENIED;
@@ -373,7 +373,7 @@ describe("t318 session binding helpers", () => {
     const cursor = createIntent(proj, "cursor", "default", "feature");
     writeSessionBinding(proj, "codex-session", "default", bound.dirName);
     setActiveIntentCursor(proj, cursor.dirName, "default");
-    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    process.env.AIDLC_TEST_PLATFORM = "darwin";
     process.env.AIDLC_TEST_PS_DENIED = "1";
     writeSessionPidEntry(proj, process.ppid, "ancestry-session");
 

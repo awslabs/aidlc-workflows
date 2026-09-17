@@ -121,28 +121,28 @@ describe("t342 relativeUnderRoot", () => {
 });
 
 describe("t342 runtimePlatform", () => {
-  const originalTestSessionPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+  const originalTestPlatform = process.env.AIDLC_TEST_PLATFORM;
 
   afterEach(() => {
-    if (originalTestSessionPlatform === undefined) {
-      delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+    if (originalTestPlatform === undefined) {
+      delete process.env.AIDLC_TEST_PLATFORM;
     } else {
-      process.env.AIDLC_TEST_SESSION_PLATFORM = originalTestSessionPlatform;
+      process.env.AIDLC_TEST_PLATFORM = originalTestPlatform;
     }
   });
 
   test("returns the host platform when the override is unset", () => {
-    delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+    delete process.env.AIDLC_TEST_PLATFORM;
     expect(runtimePlatform()).toBe(process.platform);
   });
 
   test("honours the win32 platform override", () => {
-    process.env.AIDLC_TEST_SESSION_PLATFORM = "win32";
+    process.env.AIDLC_TEST_PLATFORM = "win32";
     expect(runtimePlatform()).toBe("win32");
   });
 
   test("ignores an unrecognised platform override", () => {
-    process.env.AIDLC_TEST_SESSION_PLATFORM = "plan9";
+    process.env.AIDLC_TEST_PLATFORM = "plan9";
     expect(runtimePlatform()).toBe(process.platform);
   });
 });

@@ -3993,10 +3993,11 @@ const sessionAncestryCache = new Map<
   { sessionId: string | null; expiresAt: number }
 >();
 
-// Use process.platform unless AIDLC_TEST_SESSION_PLATFORM pins another platform
-// so a test can exercise that platform's branch on this host.
+// Use process.platform unless AIDLC_TEST_PLATFORM pins another platform so a
+// test can exercise that platform's branch (session ancestry, path containment)
+// on this host.
 export function runtimePlatform(): NodeJS.Platform {
-  const testPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+  const testPlatform = process.env.AIDLC_TEST_PLATFORM;
   if (
     testPlatform === "linux" ||
     testPlatform === "darwin" ||
