@@ -225,11 +225,22 @@ Generation before the next begins. A [Bolt](glossary.md) remains the delivery
 slice planned in 2.9; runtime order follows `unit-of-work-dependency.md` rather
 than the grouping in `bolt-plan.md`.
 
+During Delivery Planning, the conductor proposes a real project check, such as
+`bun test`, `pytest`, or `make check`, and asks **Use this command to verify each
+completed Unit?** with the actual command and **Approve** / **Request Changes**.
+Your approval is recorded before the intent's `Construction Verification Command`
+is set. That same command is reused at every Unit/batch checkpoint; changing it
+requires another recorded human approval. If a greenfield project has no runnable
+check yet, you may defer selection; the first checkpoint asks before running any
+verification. The conductor never invents or auto-approves a command.
+
 With skeleton-on, the first DAG Unit is the smallest working integrated slice.
 It completes its design and code, including your Plan Approval and required
-summary confirmations. A real project check then demonstrates the slice end to
-end, and you approve that verified skeleton before later Units start. Reviewing
-only the first design stage does not demonstrate a working skeleton.
+summary confirmations. The recorded, human-authorized project check then
+demonstrates the slice end to end, and the approval question shows **Verified
+with `<verification_command>` (exit 0)** before you approve the skeleton and
+later Units start. Reviewing only the first design stage does not demonstrate a
+working skeleton.
 
 If no autonomy choice is already recorded, the workflow then asks:
 
@@ -242,8 +253,9 @@ How should I continue building the remaining work?
 Skeleton-off offers this choice at Construction entry instead. Your answer is
 recorded as `Construction Autonomy Mode` and respected on resume; explicit
 on-demand requests can change it later. **Continue automatically** skips routine
-completion questions, while Plan Approval, enabled summary confirmation, and
-failures still require your attention. Summary confirmation applies only when
+completion questions, while Plan Approval, enabled summary confirmation,
+verification command selection, and failures still require your attention.
+Summary confirmation applies only when
 `directive.ceremony.summary_confirmation === "on"`. **Review each checkpoint**
 waits for your approval at each completed Unit.
 

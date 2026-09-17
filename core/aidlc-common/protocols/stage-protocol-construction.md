@@ -48,7 +48,8 @@ load this module and apply these branches in order:
    `human_completion_required` selects whether the routine completion gate
    needs a human. When false, skip the learnings question and routine approval
    question, report `awaiting-approval` and `approved` without `--user-input`,
-   then `next`. This never waives an enabled summary stop or Plan Approval.
+   then `next`. This never waives an enabled summary stop, Plan Approval, or
+   verification command selection.
    An unfinished per-Unit iteration still completes its Unit receipt and calls
    `next`, without reporting the whole stage. When the policy is absent, use
    the legacy gate rules. All verification and tool failures stop the flow.
@@ -91,21 +92,74 @@ already approved at its checkpoint must not be built again by a later swarm.
 
 A `run-stage` with `construction_checkpoint` carries `kind` (`unit` or
 `skeleton`), `unit`, `stages`, `fingerprint`, `ready`, `verified`, `approved`,
-`human_required`, `errors`, and `proof_path`. It is a verification/approval
-re-entry over existing work. Use the exact Unit and kind the engine emitted:
+`human_required`, `verification_command`, `command_authorized`, `errors`, and
+`proof_path`. It is a verification/approval re-entry over existing work.
+`verification_command` is the recorded command's display label. Use the exact
+Unit and kind the engine emitted:
 
 ```bash
 {{INVOKE}} engine bolt checkpoint --action status --unit "<unit>" --kind <unit|skeleton>
-{{INVOKE}} engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --check-cmd '<real project check>'
 ```
 
-Choose an actual project command: for a skeleton it must demonstrate the
-integrated slice end to end; for an ordinary Unit it must check that Unit's
-working result. The verifier stores proof bound to the current artifacts,
-source, and attempt. File presence, a claimed demonstration, a placeholder
-command, or a previous pass is not verification. A failed check halts. Re-run
-`next` after each checkpoint action; the resulting directive is the next source
-of truth about readiness and verification.
+`verify` runs the intent's recorded, human-authorized **Construction Verification
+Command**, reused at every Unit/batch checkpoint. If
+`construction_checkpoint.command_authorized` is false (no recorded command, no
+matching receipt, or a changed state field), **do not run `verify`**. Propose a
+real project check from the project scan, such as `bun test`, `pytest`, or
+`make check`. It must demonstrate the skeleton's integrated slice end to end and
+check completed Units' working results. Use one nonblank line of at most 8192
+characters with no control characters (including newline, CR, tab, or NUL).
+The tools trim leading/trailing whitespace before recording, hashing, and
+executing the command. Put multiline checks in a script and record its invocation.
+Record the decision before presenting it:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+```
+
+Render this structured question through the harness's question binding, showing
+the proposed command, and wait for the human even under autonomous completion:
+
+```question
+prompt: "Use this command to verify each completed Unit? `<cmd>`"
+header: Verification
+multiSelect: false
+options:
+  - label: Approve
+    description: Record this command for all Unit and batch checkpoints in this intent.
+  - label: Request Changes
+    description: Propose a different project check before running verification.
+```
+
+Only after the human chooses **Approve**, record their answer and then the state:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command "<cmd>"
+```
+
+For **Request Changes**, record the same `log answer` with
+`--details "Request Changes"`, do not call the setter, and propose another
+command. Never invent or auto-approve a command. The tool-owned approval receipt,
+not the state field, is the authority: never write the field without that receipt
+or use generic `state set`. Changing the command later requires this same fresh
+decision/answer/setter flow. Re-run `next` after recording it, then follow the
+new directive before verification. If no runnable project check exists yet,
+resolve that gap with the human; do not substitute a placeholder or claim a pass.
+
+When the new directive confirms `command_authorized: true`, verify with the
+recorded command:
+
+```bash
+{{INVOKE}} engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
+```
+
+The verifier stores proof bound to the current artifacts, source, attempt, and
+authorized command's SHA-256 plus display label, not raw command text. File
+presence, a claimed demonstration, a placeholder command, or a previous pass is
+not verification. A failed check halts. Re-run `next` after each checkpoint action;
+the resulting directive is the next source of truth about readiness and
+verification.
 
 If `ready` is false or evidence became stale, explain `errors`. Repair the named
 missing review or receipt through its owning procedure, or let the human request
@@ -129,8 +183,9 @@ final handoff only when `directive.protocol_modules` lists `learnings`; do not
 infer acceptance, persist unapproved rules, or fabricate a “nothing to add” answer.
 When the module is absent, keep no diary and ask no learning question; go straight
 to the checkpoint approval question when a human is required.
-Present **Approve** / **Request
-Changes** when a human is required, then use only their actual answer:
+Present **Approve** / **Request Changes** when a human is required. Show the
+command in the approval question: "Verified with `<verification_command>`
+(exit 0). Approve this completed <unit>?" Then use only their actual answer:
 
 ```bash
 # Only after the human chose Approve:
@@ -161,7 +216,7 @@ header: Autonomy
 multiSelect: false
 options:
   - label: Continue automatically
-    description: Continue through ordinary completion checkpoints; still ask for plans, enabled summaries, and failures.
+    description: Continue through ordinary completion checkpoints; still ask for plans, enabled summaries, verification command selection, and failures.
   - label: Review each checkpoint
     description: Wait for your approval at each ordinary completion checkpoint.
 ```
@@ -177,9 +232,9 @@ Explicit on-demand requests remain valid at any point during Construction.
 Never infer a grant from silence or repeat the offer after a choice is known.
 An autonomous grant waives ordinary completion questions consistently across
 iteration choices, while per-Unit Plan Approval, enabled pre-generation summary
-confirmation, skeleton approval, and failures still require the human. Grouped
-Plan Approval below changes the presentation only; every Unit still needs its
-own valid receipt.
+confirmation, verification command selection, skeleton approval, and failures
+still require the human. Grouped Plan Approval below changes the presentation
+only; every Unit still needs its own valid receipt.
 
 For a legacy workflow without the checkpoint field, retain the first
 Construction-stage review and the late human per-stage cascade under unit-major.
@@ -189,7 +244,7 @@ as a first-stage approval, never as proof of a working integrated skeleton.
 
 **Halt-and-ask on failure**
 
-When Code Generation returns failure, **always halt and present the halt-and-ask prompt regardless of autonomy mode**. The Build-and-Test failure loop-back's rung 4 also halts when its bound is exhausted or no identifiable fix exists. Required Plan Approvals and summary confirmations remain separate human stops.
+When Code Generation returns failure, **always halt and present the halt-and-ask prompt regardless of autonomy mode**. The Build-and-Test failure loop-back's rung 4 also halts when its bound is exhausted or no identifiable fix exists. Required Plan Approvals, summary confirmations, and verification command selection remain separate human stops.
 
 - Solo Unit failure: halt immediately; on the swarm / worktree path emit `BOLT_FAILED` (with `--slug` for halt-and-ask correlation), present retry / skip / abort.
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts, emit `BOLT_FAILED` for the failed Unit with `Succeeded=[names]`, present `"Units [X, Y] succeeded, Unit [Z] failed with: [error]. Options: retry Z, skip Z, abort Construction."`

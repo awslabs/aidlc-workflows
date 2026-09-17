@@ -1206,8 +1206,20 @@ All Inception phase artifacts:
    iteration choice. Eligible new source-producing solo Unit workflows start
    unit-major and serial; an explicit swarm choice requires stage-major first,
    then `state set-construction-execution swarm`. Approval mode is a separate
-   decision. Confirm the first integrated Unit and its real check when
-   skeleton-on applies. Then ask whether one session or several teams own Units;
+   decision. Confirm the first integrated Unit when skeleton-on applies. For
+   checkpoint-enabled work, propose a real project check from the scan and show
+   **Use this command to verify each completed Unit?** with the exact command
+   and **Approve** / **Request Changes**. Record `log decision --checkpoint
+   verification-command --command` before asking, wait for the human, record
+   `log answer` with the same stage/checkpoint/command and actual answer, then
+   only for **Approve** run `state set-construction-verification-command`.
+   **Request Changes** means propose another command. The receipt must precede
+   the state field; never use generic `state set` or auto-approve. This command
+   is reused for all Unit/batch checkpoints and changes require a new receipt.
+   If no runnable check exists yet (greenfield), the human may defer; the first
+   checkpoint then asks before verification. See the
+   [exact recording commands](../../guide/12-cli-commands.md#construction-verification-command-record-human-authorization).
+   Then ask whether one session or several teams own Units;
    team ownership records `set-unit-ownership team` (unit-major and serial
    required) and asks whether approvals happen after every stage
    (`set-unit-gate-rhythm per-stage`, default) or once after the Unit chain
@@ -1325,15 +1337,17 @@ grouping or walk order. Runtime batches are computed from
 For new source-producing solo Unit workflows, the default is **unit-major,
 serial execution with verified checkpoints**. Each Unit finishes its applicable
 per-unit stages before the next. With skeleton-on, the first DAG Unit must
-produce a working integrated slice, pass a real end-to-end check, and receive
-human skeleton approval before later Units start, even with stage-major chosen.
+produce a working integrated slice, pass the recorded, human-authorized
+end-to-end verification command, and receive human skeleton approval before
+later Units start, even with stage-major chosen.
 The legacy first-stage gate is a stage review, not proof of that result.
 
 Eligible skeleton-off flows offer **Continue automatically** / **Review each
 checkpoint** at Construction entry; skeleton-on offers after the real skeleton
-checkpoint. Known choices are not repeated. Plan Approval and enabled summary
-confirmation remain human-required under either choice; summary confirmation
-applies only when `directive.ceremony.summary_confirmation === "on"`. Explicit
+checkpoint. Known choices are not repeated. Plan Approval, verification command
+selection, and enabled summary confirmation remain human-required under either
+choice; summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`. Explicit
 stage-major/swarm selection controls parallel execution independently of
 completion approval.
 

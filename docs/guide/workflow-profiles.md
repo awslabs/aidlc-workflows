@@ -206,9 +206,11 @@ and you can explicitly grant or revoke autonomy during Construction.
 Approval policy and execution are separate. To fan out eligible Code Generation
 batches, explicitly choose stage-major order and swarm execution; guided and
 automatic batch completion are both supported. Unit-major stays serial.
-Plan Approval for every Unit and pre-generation summary confirmation still need
-your answer; eligible swarm plans can share one **Approve Plans** presentation
-with individual receipts. Failures still halt. Existing workflows retain their
+Plan Approval for every Unit, verification command selection, and pre-generation
+summary confirmation still need your answer; eligible swarm plans can share one
+**Approve Plans** presentation with individual receipts. The recorded,
+human-authorized verification command is reused at every Unit/batch checkpoint;
+changing it requires a new human receipt. Failures still halt. Existing workflows retain their
 recorded iteration and legacy behavior when the new checkpoint/execution fields
 are absent. See [Construction commands](12-cli-commands.md#construction-order-and-execution).
 

@@ -54,6 +54,14 @@ solo Unit workflows record three independent settings:
 | `Construction Iteration` | `unit-major` | Finish one Unit's applicable stages before the next |
 | `Construction Execution` | `serial` | Build serially; explicit swarm execution requires stage-major |
 
+`Construction Verification Command` is a separate intent-level Runtime State
+field, with no automatic default. Delivery Planning proposes a real project check
+and records a human approval receipt before the typed setter writes it. A
+greenfield project without a runnable check may defer to the first checkpoint.
+The same command is reused for all Unit/batch checkpoints; choosing or changing
+it requires the [recorded-command flow](../guide/12-cli-commands.md#construction-verification-command-record-human-authorization),
+never generic `state set` or an autonomy grant.
+
 Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
 an included source-producing per-unit stage. Design-only and no-Unit work keep
 their existing stage flow. Under skeleton-on, plan the first DAG Unit as the
@@ -69,7 +77,8 @@ after the real skeleton checkpoint. The conductor follows `offer_autonomy`,
 records the human's choice through `bolt set-autonomy`, and asks no repeated
 ladder once a choice is known. On-demand grant/revoke requests remain available.
 Autonomy changes ordinary completion approvals; it never supplies a human Plan
-Approval or an enabled summary confirmation, or makes a failed check pass.
+Approval, verification command selection, or an enabled summary confirmation,
+or makes a failed check pass.
 Summary confirmation applies only when
 `directive.ceremony.summary_confirmation === "on"`.
 
@@ -90,8 +99,8 @@ the actual grant. For example, a team can recommend:
 
 Until our integrated checks have proved reliable, recommend **Review each
 checkpoint**. Review the working first slice and each ordinary completed Unit
-or swarm batch before proceeding. Plan Approval and any enabled summary
-confirmation remain human decisions even when we later select
+or swarm batch before proceeding. Plan Approval, verification command selection,
+and any enabled summary confirmation remain human decisions even when we later select
 **Continue automatically**.
 ```
 
@@ -104,15 +113,23 @@ autonomy grant or a silent switch to swarm execution.
 ## Checkpoint and approval evidence
 
 When `run-stage` carries `construction_checkpoint`, the Unit body and reviews
-have already run. Route it before body/reviewer/gate logic, run
-`bolt checkpoint --action verify --unit <Unit> --kind <unit|skeleton>
---check-cmd '<real project check>'`, and approve only current verified evidence.
-A skeleton always needs the human; ordinary Units follow `human_required`.
+have already run. Route it before body/reviewer/gate logic. With
+`command_authorized: false`, ask the verification-command question and complete
+the human decision/answer/setter flow before any `verify`, then re-run `next`.
+Otherwise run `bolt checkpoint --action verify --unit <unit> --kind <unit|skeleton>`;
+it executes the recorded, human-authorized command, not text selected at verify
+time. Approve only current verified evidence and show "Verified with
+`<verification_command>` (exit 0)" in the approval question. A skeleton always
+needs the human; ordinary Units follow `human_required`.
 `swarm_checkpoint` similarly routes a completed batch before the next batch,
 using `bolt swarm-checkpoint --action status|approve|reject --batch <N>
 --units <comma-separated Units>`. Guided approval waits for the real answer;
 automatic approval omits `--user-input`. Both return to `next`, never approve
 the whole Code Generation stage for one Unit or batch.
+
+Version-3 checkpoint proofs store the command's SHA-256 and display label, not
+raw command text, alongside output byte counts and digests rather than raw
+output. Earlier proof versions require re-verification with the authorized command.
 
 A final stage directive carrying `construction_policy.completion_only: true`
 and `human_completion_required: false` only reconciles recorded approvals: skip

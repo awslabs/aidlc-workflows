@@ -1208,8 +1208,8 @@ the first working integrated Unit has passed its skeleton checkpoint with
 skeleton-on. A known choice is not asked again; on-demand changes remain valid.
 
 Autonomy controls ordinary completion approvals. Every Unit still needs Plan
-Approval, and a skeleton checkpoint always needs human approval. Pre-generation
-summary confirmation needs the human only when
+Approval, and verification command selection and skeleton checkpoint approval
+always need the human. Pre-generation summary confirmation needs the human only when
 `directive.ceremony.summary_confirmation === "on"`. Failures halt. Existing
 workflows without `Construction Checkpoints` retain their legacy first-stage
 and late stage approvals; team-owned Unit gates retain their own policy.
@@ -1234,9 +1234,10 @@ To opt an existing workflow into verified checkpoints, preferably before Unit
 work begins, use `aidlc engine state set-construction-checkpoints enabled`.
 `disabled` retains the legacy checkpoint flow. These typed setters update
 runtime preferences. Generic `state set` refuses `Construction Checkpoints`,
-`Construction Execution`, and `Construction Iteration`; use
-`set-construction-checkpoints`, `set-construction-execution`, or
-`set-construction-iteration`, respectively.
+`Construction Execution`, `Construction Iteration`, and `Construction Verification
+Command`; use `set-construction-checkpoints`, `set-construction-execution`,
+`set-construction-iteration`, or the receipt-bound
+`set-construction-verification-command`, respectively.
 During Construction, changing these preferences requires a fresh human request;
 an unattended run cannot disable checkpoints to get past a refusal.
 
@@ -1273,6 +1274,56 @@ If the application source or plan changed, re-present any required Plan Approval
 The requirement concerns application source, not a blanket commit of unrelated
 framework records or other files.
 
+### Construction verification command — record human authorization
+
+For checkpoint-enabled work, Delivery Planning proposes a real project check from
+the project scan, such as `bun test`, `pytest`, or `make check`. Show the exact
+command with **Use this command to verify each completed Unit?** as a structured
+**Approve** / **Request Changes** question. Record the decision before asking:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+```
+
+Wait for the human. Only after their actual **Approve** answer, run:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command "<cmd>"
+```
+
+These are the `aidlc-log` decision/answer checkpoint forms. Both require the same
+`--stage`, `--checkpoint verification-command`, and canonical `--command`.
+Leading/trailing whitespace is trimmed before recording, hashing, and execution.
+The resulting command must be nonblank, at most 8192 characters, and a single
+line with no control characters (including newline, CR, tab, or NUL). Put
+multiline checks in a script and record its invocation.
+`decision` records `DECISION_RECORDED` with `Checkpoint: Construction Verification
+Command` and `Command SHA-256`. `answer` requires a matching pending decision and,
+unless `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, a `HUMAN_TURN` after that decision.
+`--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
+`--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
+another command without setting state. Other answers are refused. The receipt
+carries the stage, checkpoint, SHA-256 of that canonical command, a
+control-character-free display label truncated to 120 characters, and the
+human's exact choice.
+`aidlc-audit append` cannot mint this reserved receipt.
+
+The typed setter writes `- **Construction Verification Command**: <cmd>` under
+`## Runtime State` in `aidlc-state.md` only when the latest current-workflow
+approval receipt matches its digest. It does not ask for another human turn:
+the receipt, not the state field, authorizes execution. Verification checks the
+same binding; older-workflow and isolated-stage receipts do not authorize it,
+and a later receipt for a different command supersedes the earlier one. A field
+without its matching receipt, or a receipt without the matching field, is not
+authorization. Do not write this field directly or through generic `state set`.
+
+The recorded command is reused at every Unit/batch checkpoint in this intent.
+Selection and later changes always require this decision/answer/setter flow,
+even under autonomous completion. If no runnable check exists yet (greenfield),
+the human may defer during Delivery Planning; leave the field unset and the first
+checkpoint will ask. Never invent or auto-approve a placeholder command.
+
 ### `aidlc engine bolt checkpoint` - verify and approve a completed Unit
 
 The engine names the Unit and checkpoint kind (`unit` or `skeleton`). The body,
@@ -1280,25 +1331,34 @@ reviews, and receipts already exist; follow the checkpoint instead of rebuilding
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
-aidlc engine bolt checkpoint --action verify --unit "<Unit>" --kind <unit|skeleton> --check-cmd '<real project check>'
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action approve --unit "<Unit>" --kind <unit|skeleton> --user-input 'Approve'
 aidlc engine bolt checkpoint --action reject --unit "<Unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
-Verification runs an actual project check and stores proof bound to current
-artifacts, source, and attempt. For a skeleton, prove the integrated slice end
-to end; for an ordinary Unit, check that Unit's result. Approval requires a
-current verified proof. Supply `--user-input` only for the real human's answer;
-a verified ordinary Unit with `human_required: false` is approved without it.
+Verification runs the recorded, human-authorized `Construction Verification
+Command` and stores proof bound to current artifacts, source, and attempt. It
+does not accept a command argument. If `construction_checkpoint.command_authorized`
+is false, do not run `verify`: complete the
+[recorded-command flow](#construction-verification-command-record-human-authorization),
+then re-run `next`. A skeleton's command must prove the integrated slice end to
+end and check ordinary Units' working results. Approval requires a current
+verified proof. Show "Verified with `<verification_command>` (exit 0)" in the
+human approval question; `verification_command` is the command's display label.
+Supply `--user-input` only for the real human's answer; a verified ordinary Unit
+with `human_required: false` is approved without it.
 A skeleton always requires the human. Missing or stale evidence is explained
 in `errors`: repair the named review/receipt or take human Request Changes,
 without inventing verification. Re-run `next` after each action, never report
 one Unit's checkpoint as approval of the whole Code Generation stage.
 
-The version-2 proof and CLI JSON retain the command, exit status, and captured
-stdout/stderr byte counts and SHA-256 digests, never the raw output. The conductor
-re-runs the project check directly to see diagnostics. Version-1 proofs are
-unverified after upgrading; run `checkpoint --action verify` again before approval.
+The version-3 proof and CLI JSON retain `command_sha256` and `command_label`, not
+raw command text, plus exit status and captured stdout/stderr byte counts and
+SHA-256 digests, never raw output. Approval binds `Verification Command SHA-256`
+on `GATE_APPROVED` to the proof's `command_sha256`. When diagnostics are needed,
+use the same authorized project check, not a newly chosen command. Version-1 and
+version-2 proofs are unverified after upgrading; authorize the recorded command
+and run `checkpoint --action verify` again before approval.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 

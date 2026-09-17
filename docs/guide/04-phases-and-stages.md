@@ -234,12 +234,21 @@ Its code must run through a real end-to-end check, and you approve the verified
 skeleton before later Units begin. This happens even if you explicitly choose
 stage-major order. A first design-stage review alone is not a working skeleton.
 
+The check is the intent's recorded, human-authorized `Construction Verification
+Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
+from the project scan and records your **Approve** answer before setting it. You
+may defer if no runnable check exists yet; the first checkpoint then asks before
+verification. A missing authorization or later command change always requires
+the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
+never a command chosen at verify time. The approval question shows **Verified
+with `<verification_command>` (exit 0)**.
+
 The autonomy offer is **Continue automatically** / **Review each checkpoint**:
 for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
 and skeleton-on offers it after the real skeleton checkpoint. An existing choice
 is not repeated; on-demand grant/revoke requests remain available. Plan Approval,
-enabled summary confirmation, and failures still need human attention under
-either choice. Summary confirmation applies only when
+enabled summary confirmation, verification command selection, and failures still
+need human attention under either choice. Summary confirmation applies only when
 `directive.ceremony.summary_confirmation === "on"`.
 
 The new default does not convert existing workflows, design-only work, or flows
@@ -317,7 +326,7 @@ path; serial inline Unit work uses its lifecycle and checkpoint receipts.
 
 ### Halt-and-ask on failure
 
-Failures always stop Construction, even in autonomous mode. The Build-and-Test loop-back's rung 4 also stops for the human; required Plan Approvals and summary confirmations remain separate human decisions.
+Failures always stop Construction, even in autonomous mode. The Build-and-Test loop-back's rung 4 also stops for the human; required Plan Approvals, summary confirmations, and verification command selection remain separate human decisions.
 
 - If a solo Unit's Code Generation fails, Construction halts immediately and offers **retry** (re-run just that Unit), **skip** (mark it `[S]` and continue — dependents will likely also fail), or **abort**.
 - If one Unit in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Units' artifacts on disk, and presents the same retry / skip / abort choice for the failed Unit only.
@@ -340,7 +349,7 @@ Failures always stop Construction, even in autonomous mode. The Build-and-Test l
 - The real skeleton is the first complete integrated Unit, verified and human-approved before later Units; a legacy first-stage gate is only a stage review.
 - Ordinary completion follows the recorded autonomy policy. `completion_only` stage directives settle existing approvals without repeating bodies, reviewers, or human completion questions.
 - An autonomy answer does not choose swarm or change iteration order. Explicit stage-major/swarm selection supports guided or automatic batch checkpoints.
-- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Enabled summary confirmation and failures still require the human.
+- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Enabled summary confirmation, verification command selection, and failures still require the human.
 
 ---
 

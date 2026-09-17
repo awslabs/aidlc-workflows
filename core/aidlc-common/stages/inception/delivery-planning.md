@@ -186,8 +186,55 @@ Preserve an existing explicit choice. If the human approves changing iteration,
 record it with `{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>`.
 Do not silently migrate a legacy workflow: without the checkpoint field it keeps
 its prior first-stage review and late stage-gate cascade. Team-owned work keeps
-its own per-stage or unit-end `unit_gate` policy. Plan Approval and summary
-confirmation remain required under either order and autonomy choice.
+its own per-stage or unit-end `unit_gate` policy. Plan Approval, summary
+confirmation, and verification command selection remain human decisions under
+either order and autonomy choice.
+
+**Construction verification command.** For checkpoint-enabled work, preserve an
+existing human-authorized command. Otherwise propose a real project check from
+the project scan (`bun test`, `pytest`, `make check`, or the project's equivalent)
+alongside the iteration/execution settings. This intent-level command is reused
+at every Unit/batch checkpoint; it must check completed Units' working results
+and, with skeleton-on, demonstrate the integrated slice end to end. If no runnable
+check exists yet (greenfield), the human may defer selection; leave the field
+unset and explain that the first checkpoint will ask before verification. Never
+invent a placeholder or treat deferral as approval.
+
+Use one nonblank line of at most 8192 characters with no control characters
+(including newline, CR, tab, or NUL). The tools trim leading/trailing whitespace
+before recording, hashing, and executing the command. Put multiline checks in a
+script and record its invocation. Before presenting a candidate, record:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+```
+
+Show the actual proposed command in the structured question and wait for the human:
+
+```question
+prompt: "Use this command to verify each completed Unit? `<cmd>`"
+header: Verification
+multiSelect: false
+options:
+  - label: Approve
+    description: Record this command for all Unit and batch checkpoints in this intent.
+  - label: Request Changes
+    description: Propose a different project check before running verification.
+```
+
+Only after the human chooses **Approve**, record their exact answer, then set the
+command using the matching tool-owned receipt:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command "<cmd>"
+```
+
+For **Request Changes**, record the same `log answer` with
+`--details "Request Changes"`, leave the state unchanged, and propose another
+command. Never auto-approve, write the state field without the receipt, or use
+generic `state set`. A later change requires a new human decision/answer receipt
+and the typed setter; an autonomy grant does not authorize command selection.
 
 **Construction staffing.** After classifying iteration, ask:
 

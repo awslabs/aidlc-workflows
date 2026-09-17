@@ -53,12 +53,22 @@ end-to-end project check must pass, and a human must approve that verified
 skeleton. A legacy first Construction-stage approval is only a stage review;
 it does not establish that an integrated skeleton has been built.
 
+All Unit/batch checkpoints reuse the intent's recorded, human-authorized
+`Construction Verification Command`. Delivery Planning proposes it from the
+project scan; `log decision`/`answer --checkpoint verification-command --command`
+record the human's **Approve** before `state set-construction-verification-command`
+writes the matching Runtime State field. A human may defer when no runnable
+check exists yet; the first checkpoint then asks. The current approval receipt,
+not the field alone, authorizes execution. Changing it requires a new receipt
+and typed setter, never generic `state set` or an automatic choice.
+
 Skeleton-off offers **Continue automatically** / **Review each checkpoint** at
 Construction entry; skeleton-on offers it after the real skeleton checkpoint.
 Only an emitted offer with no recorded choice prompts automatically. On-demand
 requests can change the choice during Construction. The answer controls ordinary
-completion questions; it never grants Plan Approval, an enabled summary
-confirmation, or successful verification of a failed check.
+completion questions; it never grants Plan Approval, verification command
+selection, an enabled summary confirmation, or successful verification of a
+failed check.
 
 ```text
 Eligible new source-producing solo Unit workflow:
@@ -77,6 +87,10 @@ After the per-unit work:
 
 **Route checkpoints before bodies.** A `construction_checkpoint` directive
 verifies and approves existing Unit work; it does not rerun Code Generation.
+With `command_authorized: false`, ask the verification-command question before
+any `verify`, complete the human decision/answer/setter flow, then call `next`.
+Show "Verified with `<verification_command>` (exit 0)" in the approval question;
+`verification_command` is the recorded command's display label.
 A `swarm_checkpoint` handles a completed batch before later batch work. After
 either action, call `next`, never approve the whole stage for one Unit or batch.
 A stage with `construction_policy.completion_only: true` and
@@ -85,11 +99,13 @@ prompt, then reports `awaiting-approval` and `approved` without invented user
 input. Other completion gates follow `human_completion_required`; the legacy
 path without policy retains its existing human-gate procedure.
 
-Checkpoint proofs retain the command and exit status with stdout/stderr byte
-counts and SHA-256 digests only; neither the proof file nor checkpoint CLI JSON
-retains raw check output. The conductor re-runs the project check directly when
-diagnostics are needed. Legacy version-1 proofs require re-verification before
-the Unit can be approved.
+Version-3 checkpoint proofs retain the command's `command_sha256` and
+`command_label`, not raw command text, plus exit status and stdout/stderr byte
+counts and SHA-256 digests; neither the proof file nor checkpoint CLI JSON
+retains raw check output. Diagnostics use the same authorized project check,
+not a newly chosen command. Legacy version-1 and version-2 proofs require
+re-verification before the Unit can be approved. `GATE_APPROVED` binds
+`Verification Command SHA-256` to the proof's digest.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,

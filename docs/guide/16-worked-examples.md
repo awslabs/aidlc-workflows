@@ -355,8 +355,9 @@ confirmation, Plan Approval, code, checks, and reviews before the next begins:
 - **notification-email** — Delivery rules, renderer, SQS consumer, and digest cron job using the approved preference-lookup contract; 4 source files and 5 test files.
 
 The conductor may automatically approve each verified ordinary Unit checkpoint
-under your recorded grant. Plan Approval still waits for you, as does summary
-confirmation when `directive.ceremony.summary_confirmation === "on"`. Once all
+under your recorded grant. Plan Approval and verification command selection still
+wait for you, as does summary confirmation when
+`directive.ceremony.summary_confirmation === "on"`. Once all
 Units are approved, completion-only stage directives reconcile bookkeeping without
 another round of stage-body or reviewer work.
 
@@ -398,7 +399,7 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 | Units of work | No Unit DAG; stage-level work | 3 |
 | Construction walk | Existing stage-level flow | New unit-major, serial checkpoint flow (2.9 still plans delivery groupings) |
 | Conditional stages | Most skipped | Most executed |
-| Approval gates | Ordinary stage approvals | Verified human skeleton checkpoint; later completion follows the recorded choice; Plan Approval and summaries remain human |
+| Approval gates | Ordinary stage approvals | Verified human skeleton checkpoint; later completion follows the recorded choice; Plan Approval, verification command selection, and summaries remain human |
 
 ---
 

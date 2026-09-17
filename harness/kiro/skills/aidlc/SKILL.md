@@ -114,7 +114,9 @@ its **Construction directive routing** procedure: team-owned `unit_gate` keeps
 its own policy; `swarm_checkpoint` follows the swarm module's Batch checkpoint
 procedure before body or settled-swarm handling, then returns to `next`;
 `construction_checkpoint` verifies/approves existing Unit work without
-regenerating it; `construction_policy.completion_only` settles recorded
+regenerating it; with `command_authorized: false`, route to the verification-command
+question before any `verify`, and show `verification_command` in the checkpoint
+approval question. `construction_policy.completion_only` settles recorded
 Unit approvals without body, questions, reviewers, or a learnings prompt. A
 checkpoint action always returns to `next`, never report-approves the whole Code
 Generation stage for one Unit. When `construction_policy.offer_autonomy` is

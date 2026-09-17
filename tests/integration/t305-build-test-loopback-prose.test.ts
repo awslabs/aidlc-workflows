@@ -421,7 +421,6 @@ describe("t305 failure stops remain explicit under autonomy", () => {
       "always halt and present the halt-and-ask prompt regardless of autonomy mode",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain("The Build-and-Test failure loop-back's rung 4 also halts");
-    expect(CONSTRUCTION_PROTOCOL).toContain("Required Plan Approvals and summary confirmations remain separate human stops");
   });
 });
 

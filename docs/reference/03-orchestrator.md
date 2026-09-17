@@ -221,7 +221,7 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
-| Runtime State | Revision count, Construction checkpoints, iteration and execution selection, plus optional Unit ownership and Unit gate rhythm |
+| Runtime State | Revision count, Construction checkpoints, iteration and execution selection, receipt-bound Construction Verification Command, plus optional Unit ownership and Unit gate rhythm |
 | Phase Progress | Per-phase status |
 | Stage Progress | Per-stage checkboxes generated from the compiled graph, organized by phase (see below) |
 | Unit Progress | Present only for team-owned unit-major Construction; a derived DAG/artifact/receipt/gate projection rewritten on every `next` |
@@ -489,11 +489,27 @@ When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with
 `construction_checkpoint`: `{kind, unit, stages, fingerprint, ready, verified,
-approved, human_required, errors, proof_path}`. A skeleton checkpoint requires
-an actual end-to-end project check, current artifact/source/attempt-bound proof,
+approved, human_required, verification_command, command_authorized, errors,
+proof_path}`. `verification_command` is the command's display label, not the full
+command. A skeleton checkpoint requires an actual end-to-end project check,
+current artifact/source/attempt-bound proof,
 and a real human approval. An ordinary Unit checkpoint requires verification
 and follows the recorded completion approval policy. A first design-stage review
 is not evidence of a shipped skeleton.
+
+The intent's `Construction Verification Command` is recorded during Delivery
+Planning or, if the human defers because no runnable check exists, at the first
+checkpoint. `log decision`/`answer --checkpoint verification-command --command`
+bind the actual human approval to the canonical command digest, then
+`state set-construction-verification-command` writes the matching Runtime State
+field. The latest current-workflow `VERIFICATION_COMMAND_RECORDED` receipt is the
+authority, not the field alone. When `command_authorized: false`, route to that
+question before any `verify`, even under autonomy, then re-run `next`. Every
+Unit/batch checkpoint reuses the authorized command; changing it requires a new
+receipt and typed setter, never generic `state set`. The approval question shows
+"Verified with `<verification_command>` (exit 0)". Version-3 proofs store the
+command's SHA-256 and display label, not raw command text; older proofs require
+re-verification.
 
 **Route metadata before generic gates.** The conductor handles `unit_gate`
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`
@@ -523,7 +539,8 @@ confirmation applies only when
 skeleton-on offers after the real skeleton checkpoint. A known choice is never
 prompted again. Explicit on-demand requests remain valid during Construction;
 escalation needs a fresh human turn. Autonomy waives ordinary completion questions,
-not skeleton approval, Plan Approval, enabled summary confirmation, or failure stops.
+not skeleton approval, Plan Approval, verification command selection, enabled
+summary confirmation, or failure stops.
 
 **Execution choice.** Eligible new source-producing solo Unit workflows select
 serial execution independently of
