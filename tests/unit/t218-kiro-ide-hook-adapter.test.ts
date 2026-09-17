@@ -21,7 +21,7 @@
 // with the context on stdin (1.x) or in USER_PROMPT (0.12) and asserts the
 // observable effect.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -61,6 +61,11 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+// Every case spawns the Kiro IDE adapter one or more times and each spawn costs
+// close to a second on Windows, so bun's 5s default is one slow run away from a
+// timeout there. Per-case literals below stay as they are.
+setDefaultTimeout(30_000);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
