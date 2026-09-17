@@ -291,7 +291,7 @@ class UnitReview {
   }
 
   refusal(): GuardRefusalRecord["refusal"] {
-    const dir = join(docsRoot(this.dir), ".aidlc-guard-refusals");
+    const dir = join(docsRoot(this.dir), ".aidlc-engine", "guard-refusals");
     const records = readdirSync(dir).filter((name) => name.endsWith(".json"))
       .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as GuardRefusalRecord)
       .filter((record) => record.refusal.stage === STAGE && record.refusal.unit === UNIT);

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 992,
+    "total": 1003,
     "enumeratedByClass": {
-      "function": 682,
+      "function": 693,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 409,
+      "function": 420,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -1346,6 +1346,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:aidlcEngineCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2873,6 +2885,14 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
@@ -3180,9 +3200,49 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardOperationInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardOperationMatchesCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardOperationMatchesRemedy",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRecoveryAskForRefusal",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
@@ -3707,6 +3767,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isGuardRecoveryEngineInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isGuardRecoveryOperation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4706,6 +4790,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseGuardRestartContinuationCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5751,6 +5847,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:renderGuardOperation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:renderSourcePathKeys",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6117,6 +6225,10 @@
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -6126,6 +6238,10 @@
       "unitId": "function:reviewArtifactEntries",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
@@ -6138,6 +6254,10 @@
       "unitId": "function:reviewArtifactFingerprint",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
@@ -6155,6 +6275,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
         }
@@ -6166,6 +6290,10 @@
       "unitId": "function:reviewAttemptAccounting",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
@@ -6224,6 +6352,18 @@
         {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedArtifactUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -6448,6 +6588,18 @@
         {
           "file": "tests/unit/t315-plugin-build.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sameGuardOperation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -7236,6 +7388,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:summaryInputReviewFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryScopeForRecordPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -7263,6 +7427,10 @@
       "unitId": "function:teamUnitGateStatus",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t278-per-unit-wave.test.ts",
           "mechanism": "cli"
@@ -8446,6 +8614,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-claude-hook-project-root.test.ts",
           "mechanism": "cli"
         },
@@ -8510,6 +8682,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
@@ -8525,6 +8701,10 @@
       "unitId": "aidlc-review-freeze",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
@@ -8737,6 +8917,10 @@
       "unitId": "aidlc-write-audit-log",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
           "mechanism": "cli"
@@ -9499,6 +9683,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
           "mechanism": "cli"
         },
@@ -9824,6 +10012,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t25.test.ts",
           "mechanism": "sdk"
         },
@@ -10072,6 +10264,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"
         },
@@ -10119,6 +10315,14 @@
       "unitId": "aidlc-log review",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
           "mechanism": "cli"
@@ -10193,6 +10397,10 @@
         },
         {
           "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10356,6 +10564,14 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11020,6 +11236,10 @@
       "unitId": "aidlc-state unit",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
           "mechanism": "cli"

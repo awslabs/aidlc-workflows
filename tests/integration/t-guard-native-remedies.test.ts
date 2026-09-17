@@ -287,7 +287,7 @@ class Fixture {
   }
 
   marker(): ActiveDirectiveMarker | null {
-    const path = join(seededRecordDir(this.project), ".aidlc-active-directive.json");
+    const path = join(seededRecordDir(this.project), ".aidlc-engine", "active-directive.json");
     return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) as ActiveDirectiveMarker : null;
   }
 

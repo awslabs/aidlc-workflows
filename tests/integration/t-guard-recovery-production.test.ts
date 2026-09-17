@@ -338,7 +338,7 @@ class Journey {
   }
 
   marker(): Json {
-    return JSON.parse(readFileSync(join(this.record, ".aidlc-active-directive.json"), "utf-8"));
+    return JSON.parse(readFileSync(join(this.record, ".aidlc-engine", "active-directive.json"), "utf-8"));
   }
 
   humanPrompt(prompt: string): void {
@@ -417,7 +417,7 @@ class Journey {
     expect(typeof requested.reviewFile).toBe("string");
     expect(typeof requested.requestId).toBe("string");
     const draft = resolve(this.dir, requested.reviewFile as string);
-    expect(relative(this.record, draft)).toMatch(/^\.aidlc-reviews\//);
+    expect(relative(this.record, draft)).toMatch(/^\.aidlc-engine\/reviews\//);
     const row = this.events("REVIEW_REQUESTED", STAGE).at(-1)!;
     expect(auditBlockField(row.block, "Request Id")).toBe(requested.requestId as string);
     return {
@@ -470,7 +470,7 @@ class Journey {
     const row = this.events("REVIEW_COMPLETED", STAGE).at(-1)!;
     expect(auditBlockField(row.block, "Request Id")).toBe(pending.requestId);
     const record = auditBlockField(row.block, "Review Record");
-    expect(record).toMatch(/^\.aidlc-reviews\//);
+    expect(record).toMatch(/^\.aidlc-engine\/reviews\//);
     const recordPath = join(this.record, record!);
     return { recordPath, bytes: readFileSync(recordPath, "utf-8") };
   }
@@ -527,7 +527,7 @@ class Journey {
 describe("production guards: summary, terminal review, and recovery compose", () => {
   productionTest("a refused verdict announces persisted acceptance so its retry does not lose the notice", () => {
     const p = new Journey("verdict-refusal-keeps-notice");
-    succeeded(p.tool("utility", ["change-control", "relaxed"]), "Select relaxed Change Control");
+    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
     p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -549,7 +549,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
 
   productionTest("terminal review records relaxed summary acceptance and announces it once", () => {
     const p = new Journey("verdict-relaxed-acceptance");
-    succeeded(p.tool("utility", ["change-control", "relaxed"]), "Select relaxed Change Control");
+    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
     const original = p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -572,7 +572,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
 
   productionTest("terminal review retains its pending request when relaxed acceptance cannot be recorded", () => {
     const p = new Journey("verdict-acceptance-ledger-failure");
-    succeeded(p.tool("utility", ["change-control", "relaxed"]), "Select relaxed Change Control");
+    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
     p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
