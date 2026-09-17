@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
   readPlanApprovalChallenge,
   readPlanApprovalResponse,
+  readPlanApprovalSessionBinding,
   resolvePlanApprovalSession,
   sessionsDir,
   stateDigest,
@@ -291,6 +292,47 @@ describe("t338 Plan Approval session isolation", () => {
     );
     expect(receipt.receipt?.session).toBe("session-b");
     expect(receipt.receipt?.challengeId).toBe(challenge.challengeId);
+  });
+
+  test("two live challenges sharing one intent id retire the binding instead of letting the last writer win", () => {
+    const project = createProject();
+    const intentId = `intent-${randomUUID()}`;
+    // Two sessions present plans with the same intent id. Whichever challenge
+    // writes second must not steal the binding from the first — the token is
+    // ambiguous and resolves nothing.
+    const first = writeChallenge(project, "session-a", { intentId });
+    const second = writeChallenge(project, "session-b", { intentId });
+
+    expect(resolvePlanApprovalSession(project, intentId)).toBeNull();
+    expect(readPlanApprovalSessionBinding(project, intentId)).toBeNull();
+
+    // Recording by token writes nothing under either session.
+    expect(
+      recordPlanApprovalHumanResponse(project, intentId, "Approve Plan").recorded,
+    ).toBe(false);
+    expect(readPlanApprovalResponse(project, "session-a")).toBeNull();
+    expect(readPlanApprovalResponse(project, "session-b")).toBeNull();
+
+    // Certifying by token emits no receipt.
+    expect(() =>
+      recordPlanApprovalReceipt(
+        project,
+        evidenceFor(project, second),
+        intentId,
+        "Approve Plan",
+      ),
+    ).toThrow();
+    expect(receiptFiles(project)).toEqual([]);
+
+    // Each session's own challenge still stands and remains usable by its real
+    // session name.
+    expect(readPlanApprovalChallenge(project, "session-a")?.challengeId).toBe(
+      first.challengeId,
+    );
+    expect(
+      recordPlanApprovalHumanResponse(project, "session-b", "Approve Plan")
+        .recorded,
+    ).toBe(true);
   });
 
   test("a stale binding whose named challenge was replaced never resolves", () => {

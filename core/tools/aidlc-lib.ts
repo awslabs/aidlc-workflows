@@ -3293,14 +3293,39 @@ export function writePlanApprovalChallenge(
   const path = planApprovalChallengePath(projectDir, challenge.session);
   if (!path) throw new Error("Plan Approval challenge requires a nonblank session");
   writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
-  writePlanApprovalSessionBinding(projectDir, {
-    version: 1,
-    token: challenge.intentId,
-    session: challenge.session,
-    challengeId: challenge.challengeId,
-    intentId: challenge.intentId,
-    boundAt: isoTimestamp(),
-  });
+  // The binding is keyed by the intent token, not the session. Two live
+  // challenges under different sessions sharing one intent id would let the
+  // last writer silently steal the binding — the same session crossing this
+  // mechanism exists to close. When the standing binding names another session
+  // whose challenge is still live, retire it and mint nothing: the token is
+  // ambiguous and resolves no session until the collision clears. A stale or
+  // same-session binding is overwritten normally.
+  const standing = readPlanApprovalSessionBinding(projectDir, challenge.intentId);
+  const standingChallenge = standing
+    ? readPlanApprovalChallenge(projectDir, standing.session)
+    : null;
+  if (
+    standing &&
+    standing.session !== challenge.session &&
+    standingChallenge &&
+    standingChallenge.challengeId === standing.challengeId &&
+    standingChallenge.intentId === standing.intentId
+  ) {
+    try {
+      unlinkSync(planApprovalSessionBindingPath(projectDir, challenge.intentId));
+    } catch {
+      // Missing binding is already retired.
+    }
+  } else {
+    writePlanApprovalSessionBinding(projectDir, {
+      version: 1,
+      token: challenge.intentId,
+      session: challenge.session,
+      challengeId: challenge.challengeId,
+      intentId: challenge.intentId,
+      boundAt: isoTimestamp(),
+    });
+  }
   try {
     unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
   } catch {
