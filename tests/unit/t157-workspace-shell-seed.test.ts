@@ -168,6 +168,11 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         expect(stub, harness.name).not.toMatch(/^@/m);
         expect(stub, harness.name).toContain("aidlc/spaces/default/memory/");
         expect(existsSync(harness.onboardingDist)).toBe(true);
+      } else if (harness.capabilities.memoryInclude === "cloud-agents-md") {
+        // Devin Cloud: the project-root AGENTS.md is the ambient channel
+        // (auto-read at session start) and names the method tree in prose.
+        const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
+        expect(agentsMd, harness.name).toContain("aidlc/spaces/default/memory/");
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
         // the native include surface; AGENTS.md is the auto-read rules file.

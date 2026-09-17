@@ -36,6 +36,7 @@ type HarnessCapabilities = {
     | "copilot-agents-md"
     | "cursor-rule"
     | "devin-rules"
+    | "cloud-agents-md"
     | "kiro-resources"
     | "kiro-steering"
     | "opencode-instructions";
@@ -142,6 +143,25 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "devin-hooks",
+  },
+  "devin-cloud": {
+    harnessDir: ".aidlc",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md", "aidlc.devin.md", "blueprint.aidlc.yaml"],
+    skillsRoot: ".agents/skills",
+    plugin: {
+      kind: "kiro",
+      manifestDir: ".aidlc-plugin",
+      wiringFile: null,
+    },
+    memoryInclude: "cloud-agents-md",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "unsupported",
   },
   "kiro-ide": {
     harnessDir: ".kiro",
@@ -302,7 +322,14 @@ function validateManifest(
       (manifest.onboarding?.projectRoot === true &&
         manifest.onboarding.dst === "AGENTS.md" &&
         manifest.harnessDir === ".aidlc" &&
-        manifest.skipRunnerGen === true) ||
+        manifest.skipRunnerGen === true &&
+        manifest.name === "copilot") ||
+    (capabilities.memoryInclude === "cloud-agents-md") !==
+      (manifest.onboarding?.projectRoot === true &&
+        manifest.onboarding.dst === "AGENTS.md" &&
+        manifest.harnessDir === ".aidlc" &&
+        manifest.skipRunnerGen === true &&
+        manifest.name === "devin-cloud") ||
     (capabilities.memoryInclude === "cursor-rule") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc")
   ) {

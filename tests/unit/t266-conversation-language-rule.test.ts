@@ -452,6 +452,10 @@ describe("t266 conversation-language rule layer", () => {
           surface = join(harness.engineRoot, "rules", "aidlc.md");
           required = `aidlc/spaces/default/memory/`;
           break;
+        case "cloud-agents-md":
+          surface = join(harness.distRoot, "AGENTS.md");
+          required = `aidlc/spaces/default/memory/`;
+          break;
         default:
           throw new Error(
             `${harness.name} declares memoryInclude "${include}" with no assertion here — ` +

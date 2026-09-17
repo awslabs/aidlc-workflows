@@ -200,11 +200,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
       expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
       const inventory = fileInventory(built);
-      if (harness.name === "kiro") {
+      if (harness.capabilities.plugin.kind === "kiro") {
         expect(harness.capabilities.plugin.wiringFile).toBeNull();
         expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
         expect(existsSync(join(built, "hooks", "hooks.json"))).toBe(false);
-        expect(existsSync(join(built, ".kiro", "hooks"))).toBe(false);
+        expect(
+          existsSync(join(built, harness.manifest.harnessDir, "hooks")),
+        ).toBe(false);
       } else {
         const wiringFile = harness.capabilities.plugin.wiringFile;
         expect(wiringFile, `${harness.name}: wiring file`).not.toBeNull();

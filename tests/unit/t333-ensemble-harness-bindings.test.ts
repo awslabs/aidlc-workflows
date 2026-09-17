@@ -51,6 +51,7 @@ const HARNESS_DISPLAY_NAMES: Record<ShippedHarnessName, string> = {
   copilot: "GitHub Copilot",
   cursor: "Cursor",
   devin: "Devin",
+  "devin-cloud": "Devin Cloud",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
   opencode: "opencode",
