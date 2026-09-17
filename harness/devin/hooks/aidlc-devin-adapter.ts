@@ -593,12 +593,21 @@ function extractDevinAgentId(text: string): string {
 function classifySubagentOutcome(
   env: { success: boolean | null; text: string },
 ): "success" | "failure" | "cancelled" | null {
-  const text = env.text;
-  if (/\bcancell?ed\b/i.test(text)) return "cancelled";
-  if (/\b(failed|failure|crashed|terminated|error)\b/i.test(text)) {
-    return "failure";
+  // Classify the notification's grammar, never the free-form body: only the
+  // first line's head (the part before the first ':') carries the state verb.
+  // Captured grammar: "Subagent <id> completed successfully:" and
+  // "Subagent <id> completed. Its full report is delivered …". The
+  // failure/cancelled verb sets below are extrapolations of that same
+  // "Subagent <id> <verb>" notification shape, not captured strings.
+  const firstLine = env.text.split("\n", 1)[0] ?? "";
+  const head = firstLine.split(":", 1)[0];
+  if (/^Subagent\s+/i.test(head.trim())) {
+    if (/\bcancell?ed\b/i.test(head)) return "cancelled";
+    if (/\b(failed|failure|crashed|terminated|timed out)\b/i.test(head)) {
+      return "failure";
+    }
+    if (/\b(completed|finished|succeeded)\b/i.test(head)) return "success";
   }
-  if (/\b(completed|finished|succeeded)\b/i.test(text)) return "success";
   // The envelope's own failure flag is terminal evidence even when the output
   // text does not spell a known outcome word.
   if (env.success === false) return "failure";

@@ -1679,6 +1679,49 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test("36a: a success report body mentioning 'error'/'cancelled' still classifies as success", () => {
+    const dir = scratchProject(true);
+    try {
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir, "agent-body"));
+      const r = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(
+          dir,
+          "agent-body",
+          "Subagent agent-body completed successfully:\n\nfixed the cancelled job error and the error retry path",
+        ),
+      );
+      expect(r.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(1);
+      expect(readAudit(dir)).toContain("**Outcome**: success");
+      expect(ledgerFile(dir)).toContain('"outcome":"success"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("36b: output outside the notification grammar records no terminal state", () => {
+    const dir = scratchProject(true);
+    try {
+      runAdapter(dir, "log-subagent", backgroundLaunchPayload(dir, "agent-weird"));
+      const r = runAdapter(
+        dir,
+        "observe-subagent",
+        readSubagentPayload(
+          dir,
+          "agent-weird",
+          "intermediate stream: processed 3 items, no verdict yet",
+        ),
+      );
+      expect(r.code).toBe(0);
+      expect(auditCompletionCount(dir)).toBe(0);
+      expect(ledgerFile(dir)).toContain('"terminal":null');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("37: repeated read_subagent on a terminal agent emits exactly one SUBAGENT_COMPLETED", () => {
     const dir = scratchProject(true);
     try {
