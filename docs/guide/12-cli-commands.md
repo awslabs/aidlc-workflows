@@ -1295,6 +1295,11 @@ in `errors`: repair the named review/receipt or take human Request Changes,
 without inventing verification. Re-run `next` after each action, never report
 one Unit's checkpoint as approval of the whole Code Generation stage.
 
+The version-2 proof and CLI JSON retain the command, exit status, and captured
+stdout/stderr byte counts and SHA-256 digests, never the raw output. The conductor
+re-runs the project check directly to see diagnostics. Version-1 proofs are
+unverified after upgrading; run `checkpoint --action verify` again before approval.
+
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
 After a swarm batch settles, the engine may return `swarm_checkpoint` before

@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -238,27 +239,71 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0")).toThrow("not ready");
   });
 
-  test("runs the explicit command in the project and persists pass/failure output", () => {
+  test("runs the explicit command in the project and persists only pass/failure output summaries", () => {
     const dir = project();
     const verified = pass(dir);
-    const proof = JSON.parse(readFileSync(verified.proof_path, "utf-8"));
+    const rawProof = readFileSync(verified.proof_path, "utf-8");
+    const proof = JSON.parse(rawProof);
+    const output = "integrated check passed\n";
+    expect(proof.version).toBe(2);
     expect(proof.command).toBe(verified.verification!.command);
     expect(proof.exit_code).toBe(0);
-    expect(proof.stdout).toContain("integrated check passed");
+    expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update(output).digest("hex"));
+    expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength(output));
+    expect(verified.verification!.stderr_bytes).toBe(0);
+    expect(verified.verification!.stderr_sha256).toBe(createHash("sha256").update("").digest("hex"));
+    expect(rawProof).not.toContain(output.trim());
+    expect(JSON.stringify(verified)).not.toContain(output.trim());
     expect(verified.proof_path).toStartWith(join(seededRecordDir(dir), ".aidlc-construction-checkpoints"));
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
+    const marker = `SECRET_MARKER_${randomUUID()}`;
     const failed = verifyConstructionCheckpoint(dir, "alpha", "unit",
-      writeCheck(dir, "console.error('project check failed'); process.exit(7);\n"));
+      writeCheck(dir, `console.log('${marker}'); console.error('${marker}'); process.exit(7);\n`));
     expect(failed.verified).toBe(false);
     expect(failed.approved).toBe(false);
     expect(failed.verification!.exit_code).toBe(7);
-    expect(failed.verification!.stderr).toContain("project check failed");
+    expect(failed.verification!.stderr_bytes).toBeGreaterThan(0);
+    expect(failed.verification!.stdout_sha256).toBe(createHash("sha256").update(`${marker}\n`).digest("hex"));
+    expect(failed.verification!.stderr_sha256).toBe(failed.verification!.stdout_sha256);
+    expect(JSON.stringify(failed)).not.toContain(marker);
+    expect(readFileSync(failed.proof_path, "utf-8")).not.toContain(marker);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve")).toThrow("Verify");
     for (const cmd of ["", " \n\t", "a".repeat(8193), "echo\0bad"]) {
       expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", cmd)).toThrow("explicit");
     }
   }, 60_000);
+
+  test("legacy output-bearing proofs revoke verification and prior approval without throwing", () => {
+    const dir = project();
+    const verified = pass(dir);
+    human(dir);
+    expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
+    const proof = {
+      ...verified.verification!, version: 1, stdout: "legacy check output", stderr: "",
+      stdout_bytes: undefined, stderr_bytes: undefined, stdout_sha256: undefined, stderr_sha256: undefined,
+    };
+    writeFileSync(verified.proof_path, JSON.stringify(proof));
+    const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(current.ready).toBe(true);
+    expect(current.verified).toBe(false);
+    expect(current.approved).toBe(false);
+    expect(current.verification).toBeNull();
+  }, 30_000);
+
+  test("output summaries bind captured bytes without lossy UTF-8 decoding", () => {
+    const dir = project();
+    const stdout = Buffer.from([0x61, 0xc3, 0xa9, 0xff, 0x00, 0x0a]);
+    const stderr = Buffer.from([0xfe, 0x0a]);
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit", writeCheck(dir,
+      `process.stdout.write(Buffer.from(${JSON.stringify([...stdout])}));\n` +
+      `process.stderr.write(Buffer.from(${JSON.stringify([...stderr])}));\n`));
+    expect(verified.verified).toBe(true);
+    expect(verified.verification!.stdout_bytes).toBe(stdout.length);
+    expect(verified.verification!.stderr_bytes).toBe(stderr.length);
+    expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update(stdout).digest("hex"));
+    expect(verified.verification!.stderr_sha256).toBe(createHash("sha256").update(stderr).digest("hex"));
+  }, 30_000);
 
   test.skipIf(process.platform === "win32" || !fs.existsSync("/bin/bash"))(
     "Bash project checks verify, while a failed pipeline revokes prior approval",
@@ -272,8 +317,9 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       expect(verified.approved).toBe(false);
       expect(verified.verification!.command).toBe(command);
       expect(verified.verification!.exit_code).toBe(0);
-      expect(verified.verification!.stdout).toBe("bash check passed\n");
-      expect(verified.verification!.stderr).toBe("");
+      expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update("bash check passed\n").digest("hex"));
+      expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength("bash check passed\n"));
+      expect(verified.verification!.stderr_bytes).toBe(0);
       expect(verified.verification!.evidence_unchanged).toBe(true);
       human(dir);
       expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
@@ -300,7 +346,8 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       expect(verified.verified).toBe(true);
       expect(verified.approved).toBe(false);
       expect(verified.verification!.exit_code).toBe(0);
-      expect(verified.verification!.stdout).toBe("POSIX fallback passed\n");
+      expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update("POSIX fallback passed\n").digest("hex"));
+      expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength("POSIX fallback passed\n"));
       expect(verified.verification!.evidence_unchanged).toBe(true);
     } finally {
       spawn.mockRestore();

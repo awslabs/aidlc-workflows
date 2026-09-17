@@ -85,6 +85,12 @@ prompt, then reports `awaiting-approval` and `approved` without invented user
 input. Other completion gates follow `human_completion_required`; the legacy
 path without policy retains its existing human-gate procedure.
 
+Checkpoint proofs retain the command and exit status with stdout/stderr byte
+counts and SHA-256 digests only; neither the proof file nor checkpoint CLI JSON
+retains raw check output. The conductor re-runs the project check directly when
+diagnostics are needed. Legacy version-1 proofs require re-verification before
+the Unit can be approved.
+
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
 but still records individual receipts. Pre-generation summary confirmation is

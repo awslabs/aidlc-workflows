@@ -58,7 +58,7 @@ import {
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
 export interface ConstructionCheckpointProof {
-  version: 1;
+  version: 2;
   id: string;
   kind: ConstructionCheckpointKind;
   unit: string;
@@ -68,8 +68,10 @@ export interface ConstructionCheckpointProof {
   finished_at: string | null;
   exit_code: number | null;
   signal: string | null;
-  stdout: string;
-  stderr: string;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_sha256: string;
+  stderr_sha256: string;
   error: string | null;
   evidence_unchanged: boolean;
   verified: boolean;
@@ -95,6 +97,7 @@ export interface ConstructionCheckpoint {
 const PROOF_DIR = ".aidlc-construction-checkpoints";
 const CHECK_TIMEOUT_MS = 120_000;
 const CHECK_OUTPUT_BYTES = 1024 * 1024;
+const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
 
 export function checkpointPolicyEnabled(stateContent: string): boolean {
   return constructionCheckpointsApply(stateContent);
@@ -185,11 +188,14 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
     const proof = JSON.parse(bytes.toString("utf-8")) as ConstructionCheckpointProof;
     if (
       proof === null || typeof proof !== "object" ||
-      proof.version !== 1 || typeof proof.id !== "string" ||
+      proof.version !== 2 || typeof proof.id !== "string" ||
       typeof proof.fingerprint !== "string" ||
       typeof proof.command !== "string" || !proof.command.trim() ||
       typeof proof.started_at !== "string" ||
-      typeof proof.stdout !== "string" || typeof proof.stderr !== "string"
+      !Number.isSafeInteger(proof.stdout_bytes) || proof.stdout_bytes < 0 ||
+      !Number.isSafeInteger(proof.stderr_bytes) || proof.stderr_bytes < 0 ||
+      typeof proof.stdout_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.stdout_sha256) ||
+      typeof proof.stderr_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.stderr_sha256)
     ) return null;
     return proof;
   } catch (error) {
@@ -439,9 +445,11 @@ export function verifyConstructionCheckpoint(
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     const proof: ConstructionCheckpointProof = {
-      version: 1, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
+      version: 2, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
       command: checkCmd, started_at: new Date().toISOString(), finished_at: null,
-      exit_code: null, signal: null, stdout: "", stderr: "", error: null,
+      exit_code: null, signal: null, error: null,
+      stdout_bytes: 0, stderr_bytes: 0,
+      stdout_sha256: EMPTY_OUTPUT_SHA256, stderr_sha256: EMPTY_OUTPUT_SHA256,
       evidence_unchanged: false, verified: false,
     };
     // Starting a new check revokes an earlier pass, including after a crash.
@@ -455,13 +463,16 @@ export function verifyConstructionCheckpoint(
     : existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
   const args = process.platform === "win32" ? ["/d", "/s", "/c", checkCmd] : ["-c", checkCmd];
   const check = spawnSync(command, args, {
-    cwd: projectDir, encoding: "utf-8", timeout: CHECK_TIMEOUT_MS,
+    cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
     maxBuffer: CHECK_OUTPUT_BYTES, killSignal: "SIGKILL", windowsHide: true,
   });
   const proof: ConstructionCheckpointProof = {
     ...before.proof,
     finished_at: new Date().toISOString(), exit_code: check.status,
-    signal: check.signal, stdout: check.stdout ?? "", stderr: check.stderr ?? "",
+    signal: check.signal,
+    stdout_bytes: check.stdout?.length ?? 0, stderr_bytes: check.stderr?.length ?? 0,
+    stdout_sha256: createHash("sha256").update(check.stdout ?? "").digest("hex"),
+    stderr_sha256: createHash("sha256").update(check.stderr ?? "").digest("hex"),
     error: check.error?.message ?? null,
   };
   return withAuditLock(projectDir, () => {
