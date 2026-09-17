@@ -32,6 +32,10 @@ import {
   activeSpace,
   activeUnitCheckpoint,
   auditBlockField,
+  authorizedVerificationCommand,
+  verificationCommandDetails,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  VERIFICATION_COMMAND_RECOVERY,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -737,6 +741,7 @@ export function main(argv: string[]): void {
       "set-construction-iteration",
       "set-construction-checkpoints",
       "set-construction-execution",
+      "set-construction-verification-command",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
       "refresh-unit-progress",
@@ -782,6 +787,9 @@ export function main(argv: string[]): void {
         break;
       case "set-construction-execution":
         handleSetConstructionPolicy("Construction Execution", args.slice(1));
+        break;
+      case "set-construction-verification-command":
+        handleSetConstructionVerificationCommand(args.slice(1));
         break;
       case "set-unit-ownership":
         handleSetUnitOwnership(args.slice(1));
@@ -863,7 +871,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -922,6 +930,9 @@ function handleSet(args: string[]): void {
       case "Construction Iteration":
         setter = "set-construction-iteration <unit-major|stage-major>";
         break;
+      case "Construction Verification Command":
+        setter = 'set-construction-verification-command "<cmd>"';
+        break;
     }
     if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use aidlc-state.ts ${setter}.`);
   }
@@ -956,6 +967,25 @@ function handleSet(args: string[]): void {
 
   writeStateFile(pd, content);
   console.log(JSON.stringify({ updated: true, fields: args.length }));
+  });
+}
+
+function handleSetConstructionVerificationCommand(args: string[]): void {
+  if (args.length !== 1) error('Usage: aidlc-state.ts set-construction-verification-command "<cmd>"');
+  const command = verificationCommandDetails(args[0]);
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    // setOrInsertField uses a replacement string when the field exists. Quote
+    // dollar signs there so shell expansions remain exact command bytes.
+    const value = getField(content, VERIFICATION_COMMAND_CHECKPOINT) === null
+      ? command.command : command.command.replaceAll("$", "$$$$");
+    const updated = setOrInsertField(content, "## Runtime State", VERIFICATION_COMMAND_CHECKPOINT, value);
+    if (!authorizedVerificationCommand(pd, updated)) {
+      error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    writeStateFile(pd, updated);
+    console.log(JSON.stringify({ updated: true, command_sha256: command.sha256, command_label: command.label }));
   });
 }
 

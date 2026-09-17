@@ -5280,6 +5280,8 @@ function applyConstructionCheckpointShape(
     verified: checkpoint.verified, approved: checkpoint.approved,
     human_required: checkpoint.human_required, errors: checkpoint.errors,
     proof_path: checkpoint.proof_path,
+    verification_command: checkpoint.verification_command,
+    command_authorized: checkpoint.command_authorized,
   };
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;

@@ -106,17 +106,37 @@ function next(p: string) {
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as {
     kind: string; stage: string; unit?: string; gate?: boolean; batch?: number;
-    construction_checkpoint?: { kind: string; unit: string; human_required: boolean };
+    construction_checkpoint?: { kind: string; unit: string; human_required: boolean; verification_command: string | null; command_authorized: boolean };
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
   };
 }
 
-function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
-  const script = join(seededRecordDir(p), `check-${unit}.cjs`);
-  writeFileSync(script, `const fs=require('node:fs'); if(!fs.readFileSync('src/${unit}.ts','utf8').includes('${unit}'))process.exit(1);`);
+function recordCommand(p: string): string {
+  const script = join(seededRecordDir(p), "check.cjs");
+  if (readFileSync(seededStateFile(p), "utf-8").includes("- **Construction Verification Command**:")) {
+    return readFileSync(seededStateFile(p), "utf-8").match(/^- \*\*Construction Verification Command\*\*: (.+)$/m)![1];
+  }
+  writeFileSync(script, "const fs=require('node:fs'); for(const unit of ['alpha','beta']) if(!fs.readFileSync('src/'+unit+'.ts','utf8').includes(unit))process.exit(1);");
   const quote = (value: string) => process.platform === "win32"
     ? `"${value.replaceAll('"', '""')}"`
     : `'${value.replaceAll("'", "'\\''")}'`;
+  const command = `${quote(process.execPath)} ${quote(script)}`;
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command];
+  for (const [tool, args] of [
+    ["log", ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]],
+    ["log", ["answer", ...identity, "--details", "Approve"]],
+    ["state", ["set-construction-verification-command", command]],
+  ] as const) {
+    const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p], {
+      encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  }
+  return command;
+}
+
+function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
+  recordCommand(p);
   const invoke = (args: string[]) => {
     const result = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
@@ -125,9 +145,7 @@ function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     return JSON.parse(result.stdout);
   };
-  const checked = invoke([
-    "--action", "verify", "--check-cmd", `${quote(process.execPath)} ${quote(script)}`,
-  ]);
+  const checked = invoke(["--action", "verify"]);
   expect(checked.errors).toEqual([]);
   expect(checked.verified).toBe(true);
   appendAuditEntry("HUMAN_TURN", {}, p);
@@ -173,6 +191,12 @@ describe("t342 Construction checkpoint routing", () => {
     const directive = next(p);
     expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
     expect(directive.construction_checkpoint?.human_required).toBe(true);
+    expect(directive.construction_checkpoint?.command_authorized).toBe(false);
+    expect(directive.construction_checkpoint?.verification_command).toBeNull();
+    const command = recordCommand(p);
+    const recorded = next(p).construction_checkpoint;
+    expect(recorded?.command_authorized).toBe(true);
+    expect(recorded?.verification_command).toBe(command.slice(0, 120));
     approve(p, "alpha");
     const following = next(p);
     expect(following.unit).toBe("beta");

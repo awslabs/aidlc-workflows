@@ -1191,6 +1191,9 @@ function handleSetAutonomy(args: string[]): void {
 
 function handleCheckpoint(args: string[]): void {
   const flags = parseFlags(args);
+  if (flags["check-cmd"] !== undefined) {
+    error("checkpoint no longer accepts --check-cmd. Record a human-approved command with aidlc-log.ts decision/answer --checkpoint verification-command --command \"<cmd>\", then aidlc-state.ts set-construction-verification-command \"<cmd>\"; run checkpoint --action verify without --check-cmd.");
+  }
   if (!flags.unit) error("checkpoint requires --unit <name>");
   const kind = flags.kind ?? "unit";
   if (kind !== "unit" && kind !== "skeleton") {
@@ -1205,7 +1208,7 @@ function handleCheckpoint(args: string[]): void {
       break;
     case "verify":
       result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["check-cmd"] ?? "",
+        pd, flags.unit, checkpointKind,
       );
       break;
     case "approve":

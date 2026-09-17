@@ -1,6 +1,7 @@
 // covers: function:checkpointPolicyEnabled, function:resolveConstructionCheckpoint,
 // function:verifyConstructionCheckpoint, function:approveConstructionCheckpoint,
 // function:rejectConstructionCheckpoint, audit:GATE_APPROVED, audit:GATE_REJECTED
+// covers: function:authorizedVerificationCommand, function:verificationCommandDetails, audit:VERIFICATION_COMMAND_RECORDED, subcommand:aidlc-state:set-construction-verification-command
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -19,6 +20,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-construction-checkpoints.ts";
 import {
   approvedConstructionUnits,
+  authorizedVerificationCommand,
+  verificationCommandDetails,
   artifactFilename,
   auditBlockField,
   findStageBySlug,
@@ -34,6 +37,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
+  AIDLC_SRC,
   createTestProject,
   resetAidlcEnv,
   seedAidlcMemory,
@@ -154,12 +158,34 @@ function writeCheck(project: string, body: string): string {
   return `${quote(process.execPath)} ${quote(script)}`;
 }
 
+function cli(project: string, tool: string, args: string[], env = process.env) {
+  const result = childProcess.spawnSync(process.execPath, [
+    join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", project,
+  ], { encoding: "utf-8", env });
+  return { code: result.status, out: `${result.stdout}${result.stderr}` };
+}
+
+function recordCommand(project: string, command: string): void {
+  if (authorizedVerificationCommand(project, readFileSync(seededStateFile(project), "utf-8"))?.command === command) return;
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command];
+  for (const args of [
+    ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"],
+    ["answer", ...identity, "--details", "Approve"],
+  ]) {
+    const result = cli(project, "log", args, { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
+    expect(result.code, result.out).toBe(0);
+  }
+  const result = cli(project, "state", ["set-construction-verification-command", command]);
+  expect(result.code, result.out).toBe(0);
+}
+
 function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha") {
   const command = writeCheck(project,
     "const fs = require('node:fs');\n" +
     "if (!fs.readFileSync('src/alpha.ts', 'utf8').includes('alpha')) process.exit(3);\n" +
     "console.log('integrated check passed');\n");
-  const result = verifyConstructionCheckpoint(project, unit, kind, command);
+  recordCommand(project, command);
+  const result = verifyConstructionCheckpoint(project, unit, kind);
   expect(result.errors).toEqual([]);
   expect(result.verified).toBe(true);
   return result;
@@ -191,15 +217,19 @@ describe("t341 Construction checkpoint verification and evidence", () => {
 
   test("refreshing unchanged completion evidence or rerunning the same check preserves approval", () => {
     const dir = project();
-    const checked = pass(dir);
+    pass(dir);
     human(dir);
     const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve");
     complete(dir, "alpha");
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
-    const repeated = verifyConstructionCheckpoint(dir, "alpha", "unit", checked.verification!.command);
+    const repeated = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(repeated.fingerprint).toBe(approved.fingerprint);
     expect(repeated.approved).toBe(true);
-    const differentCheck = verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0");
+    recordCommand(dir, "exit 0");
+    const stale = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(stale.verified).toBe(false);
+    expect(stale.approved).toBe(false);
+    const differentCheck = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(differentCheck.verified).toBe(true);
     expect(differentCheck.approved).toBe(false);
   }, 30_000);
@@ -232,21 +262,23 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(resolved.approved).toBe(false);
     for (const unit of ["missing", "Alpha", "alpha ", "../alpha"]) {
       expect(() => resolveConstructionCheckpoint(dir, unit, "unit")).toThrow();
-      expect(() => verifyConstructionCheckpoint(dir, unit, "unit", "exit 0")).toThrow();
+      expect(() => verifyConstructionCheckpoint(dir, unit, "unit")).toThrow();
     }
     writeFileSync(seededStateFile(dir), state().replace("- **Construction Checkpoints**: enabled\n", ""));
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").enabled).toBe(false);
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0")).toThrow("not ready");
+    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("not ready");
   });
 
-  test("runs the explicit command in the project and persists only pass/failure output summaries", () => {
+  test("runs the authorized command and persists its digest and label, not raw command or output", () => {
     const dir = project();
     const verified = pass(dir);
     const rawProof = readFileSync(verified.proof_path, "utf-8");
     const proof = JSON.parse(rawProof);
     const output = "integrated check passed\n";
-    expect(proof.version).toBe(2);
-    expect(proof.command).toBe(verified.verification!.command);
+    expect(proof.version).toBe(3);
+    expect(proof).not.toHaveProperty("command");
+    expect(proof.command_sha256).toBe(authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!.sha256);
+    expect(proof.command_label).toBe(verified.verification_command);
     expect(proof.exit_code).toBe(0);
     expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update(output).digest("hex"));
     expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength(output));
@@ -258,8 +290,8 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
     const marker = `SECRET_MARKER_${randomUUID()}`;
-    const failed = verifyConstructionCheckpoint(dir, "alpha", "unit",
-      writeCheck(dir, `console.log('${marker}'); console.error('${marker}'); process.exit(7);\n`));
+    recordCommand(dir, writeCheck(dir, `console.log('${marker}'); console.error('${marker}'); process.exit(7);\n`));
+    const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(failed.verified).toBe(false);
     expect(failed.approved).toBe(false);
     expect(failed.verification!.exit_code).toBe(7);
@@ -270,18 +302,17 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(readFileSync(failed.proof_path, "utf-8")).not.toContain(marker);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve")).toThrow("Verify");
     for (const cmd of ["", " \n\t", "a".repeat(8193), "echo\0bad"]) {
-      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", cmd)).toThrow("explicit");
+      expect(() => verificationCommandDetails(cmd)).toThrow("nonblank");
     }
   }, 60_000);
 
-  test("legacy output-bearing proofs revoke verification and prior approval without throwing", () => {
+  test.each([1, 2])("legacy v%i proofs revoke verification and prior approval without throwing", (version) => {
     const dir = project();
     const verified = pass(dir);
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
     const proof = {
-      ...verified.verification!, version: 1, stdout: "legacy check output", stderr: "",
-      stdout_bytes: undefined, stderr_bytes: undefined, stdout_sha256: undefined, stderr_sha256: undefined,
+      ...verified.verification!, version, command: "exit 0",
     };
     writeFileSync(verified.proof_path, JSON.stringify(proof));
     const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
@@ -295,9 +326,10 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const dir = project();
     const stdout = Buffer.from([0x61, 0xc3, 0xa9, 0xff, 0x00, 0x0a]);
     const stderr = Buffer.from([0xfe, 0x0a]);
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit", writeCheck(dir,
+    recordCommand(dir, writeCheck(dir,
       `process.stdout.write(Buffer.from(${JSON.stringify([...stdout])}));\n` +
       `process.stderr.write(Buffer.from(${JSON.stringify([...stderr])}));\n`));
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.stdout_bytes).toBe(stdout.length);
     expect(verified.verification!.stderr_bytes).toBe(stderr.length);
@@ -312,10 +344,11 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       const command = 'set -o pipefail; checks=(src/alpha.ts); ' +
         // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expands the array in the project check.
         '[[ -f "${checks[0]}" ]] && cat <(printf "%s\\n" "bash check passed")';
-      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit", command);
+      recordCommand(dir, command);
+      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
       expect(verified.verified).toBe(true);
       expect(verified.approved).toBe(false);
-      expect(verified.verification!.command).toBe(command);
+      expect(verified.verification!.command_sha256).toBe(createHash("sha256").update(command).digest("hex"));
       expect(verified.verification!.exit_code).toBe(0);
       expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update("bash check passed\n").digest("hex"));
       expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength("bash check passed\n"));
@@ -323,7 +356,8 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       expect(verified.verification!.evidence_unchanged).toBe(true);
       human(dir);
       expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
-      const failed = verifyConstructionCheckpoint(dir, "alpha", "unit", "set -o pipefail; false | true");
+      recordCommand(dir, "set -o pipefail; false | true");
+      const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
       expect(failed.verification!.exit_code).toBe(1);
       expect(failed.verification!.evidence_unchanged).toBe(true);
       expect(failed.verified).toBe(false);
@@ -341,7 +375,8 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const spawn = spyOn(childProcess, "spawnSync");
     try {
       const command = 'test -f src/alpha.ts && printf "%s\\n" "POSIX fallback passed"';
-      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit", command);
+      recordCommand(dir, command);
+      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
       expect(spawn).toHaveBeenCalledWith("/bin/sh", ["-c", command], expect.objectContaining({ cwd: dir }));
       expect(verified.verified).toBe(true);
       expect(verified.approved).toBe(false);
@@ -359,7 +394,8 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const dir = project();
     const command = writeCheck(dir,
       "require('node:fs').appendFileSync('src/alpha.ts', '// changed during verification\\n');\n");
-    const result = verifyConstructionCheckpoint(dir, "alpha", "unit", command);
+    recordCommand(dir, command);
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(result.verification!.exit_code).toBe(0);
     expect(result.verification!.evidence_unchanged).toBe(false);
     expect(result.verified).toBe(false);
@@ -373,7 +409,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const original = readFileSync(path, "utf-8");
     writeFileSync(path, `${original}\nChanged requirement\n`);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0")).toThrow("completion");
+    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("completion");
     writeFileSync(path, original);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 2;\n");
@@ -390,7 +426,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const missing = resolveConstructionCheckpoint(dir, "alpha", "unit");
     expect(missing.ready).toBe(false);
     expect(missing.errors.join("\n")).toContain("required outputs");
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0")).toThrow("not ready");
+    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("not ready");
     const other = project();
     appendAuditEntry("UNIT_STARTED", {
       Stage: "functional-design", Unit: "alpha",
@@ -400,6 +436,127 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const unbound = project();
     rmSync(join(seededRecordDir(unbound), "construction", "alpha", "code-generation", "source-manifest.json"));
     expect(resolveConstructionCheckpoint(unbound, "alpha", "unit").errors.join("\n")).toContain("source manifest");
+  });
+});
+
+describe("t341 verification command consent", () => {
+  test("missing receipt, hand-written field, and mismatched command cannot execute or write proof", () => {
+    const dir = project();
+    const path = resolveConstructionCheckpoint(dir, "alpha", "unit").proof_path;
+    const refused = () => {
+      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("VERIFICATION_COMMAND_RECORDED");
+      expect(resolveConstructionCheckpoint(dir, "alpha", "unit").command_authorized).toBe(false);
+      expect(fs.existsSync(path)).toBe(false);
+    };
+    refused();
+    writeFileSync(seededStateFile(dir), readFileSync(seededStateFile(dir), "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Verification Command**: exit 0",
+    ));
+    refused();
+    recordCommand(dir, "exit 0");
+    writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"), "Construction Verification Command", "exit 1"));
+    refused();
+    const generic = cli(dir, "state", ["set", "Construction Verification Command=exit 0"], {
+      ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    });
+    expect(generic.code).not.toBe(0);
+    expect(generic.out).toContain("set-construction-verification-command");
+    const supplied = cli(dir, "bolt", ["checkpoint", "--action", "verify", "--unit", "alpha", "--check-cmd", "exit 0"]);
+    expect(supplied.code).not.toBe(0);
+    expect(supplied.out).toContain("verification-command");
+    const setter = cli(dir, "state", ["set-construction-verification-command", "exit 2"]);
+    expect(setter.code).not.toBe(0);
+    expect(setter.out).toContain("Command SHA-256");
+  }, 30_000);
+
+  test("answers require the pending command digest and a fresh unused human turn even under autonomy", () => {
+    const dir = project(true);
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command"];
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    human(dir);
+    const decision = cli(dir, "log", ["decision", ...identity, "--command", "exit 0", "--decision", "Use this command?", "--options", "Approve,Request Changes"], env);
+    expect(decision.code, decision.out).toBe(0);
+    const mismatch = cli(dir, "log", ["answer", ...identity, "--command", "exit 1", "--details", "Approve"], env);
+    expect(mismatch.code).not.toBe(0);
+    expect(mismatch.out).toContain("Command SHA-256");
+    const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
+    expect(absent.code).not.toBe(0);
+    expect(absent.out).toContain("HUMAN_TURN");
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    human(dir);
+    const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
+    expect(approved.code, approved.out).toBe(0);
+    const replay = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
+    expect(replay.code).not.toBe(0);
+    const nextDecision = cli(dir, "log", ["decision", ...identity, "--command", "exit 2", "--decision", "Use another command?", "--options", "Approve,Request Changes"], env);
+    expect(nextDecision.code, nextDecision.out).toBe(0);
+    expect(cli(dir, "log", ["answer", ...identity, "--command", "exit 2", "--details", "Approve"], env).code).not.toBe(0);
+  }, 30_000);
+
+  test("Request Changes consumes the question without authorizing a command; other answers refuse", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0"];
+    const decision = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+    expect(decision.code, decision.out).toBe(0);
+    const invalid = cli(dir, "log", ["answer", ...identity, "--details", "CONDUCTOR DEFAULT Approve"]);
+    expect(invalid.code).not.toBe(0);
+    const rejected = cli(dir, "log", ["answer", ...identity, "--details", "Request Changes"]);
+    expect(rejected.code, rejected.out).toBe(0);
+    expect(rejected.out).toContain("QUESTION_ANSWERED");
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    expect(cli(dir, "log", ["answer", ...identity, "--details", "Approve"]).code).not.toBe(0);
+  }, 30_000);
+
+  test("canonical command bytes survive dollar substitutions and long labels are bounded", () => {
+    const dir = project();
+    recordCommand(dir, "exit 0");
+    const command = 'printf "%s" \'$& $` $1 $$\'; exit 0 # ' + "x".repeat(150);
+    recordCommand(dir, `  ${command}  `);
+    const authorization = authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!;
+    expect(authorization.command).toBe(command);
+    expect(authorization.sha256).toBe(createHash("sha256").update(command).digest("hex"));
+    expect(authorization.label).toBe(command.slice(0, 120));
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(verified.verified).toBe(true);
+    expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update("$& $` $1 $$").digest("hex"));
+    for (const invalid of ["echo a\necho b", "echo\rb", "echo\tb", "echo\u001bb"]) {
+      const refused = cli(dir, "state", ["set-construction-verification-command", invalid]);
+      expect(refused.code).not.toBe(0);
+      expect(refused.out).toContain("control characters");
+    }
+  }, 30_000);
+
+  test("authorization rejects workflow restarts and ambiguous or superseding receipts, ignoring isolated rows", () => {
+    const dir = project();
+    recordCommand(dir, "exit 0");
+    const content = readFileSync(seededStateFile(dir), "utf-8");
+    const rows = readAuditShardEvents(dir);
+    const receipt = rows.findLast((row) => row.event === "VERIFICATION_COMMAND_RECORDED")!;
+    const different = {
+      ...receipt, shard: "later.md", timestamp: "2099-01-01T00:00:00Z",
+      block: receipt.block.replace(verificationCommandDetails("exit 0").sha256, verificationCommandDetails("exit 1").sha256),
+    };
+    expect(authorizedVerificationCommand(dir, content, rows)?.command).toBe("exit 0");
+    expect(authorizedVerificationCommand(dir, state(), rows)).toBeNull();
+    expect(authorizedVerificationCommand(dir, content, [...rows, different])).toBeNull();
+    expect(authorizedVerificationCommand(dir, content, [...rows, {
+      ...different, block: `${different.block}\n**Workflow**: single-stage:code-generation\n`,
+    }])?.command).toBe("exit 0");
+    expect(authorizedVerificationCommand(dir, content, [...rows, {
+      ...receipt, shard: "tied.md",
+    }])).toBeNull();
+    expect(authorizedVerificationCommand(dir, content, [...rows, {
+      ...different, event: "WORKFLOW_STARTED", block: "**Event**: WORKFLOW_STARTED\n",
+    }])).toBeNull();
+  }, 30_000);
+
+  test("public audit append cannot mint a verification-command receipt", () => {
+    const dir = project();
+    const refused = cli(dir, "audit", ["append", "VERIFICATION_COMMAND_RECORDED", "--field", "Command SHA-256=forged"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("reserved");
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   });
 });
 
@@ -510,7 +667,7 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     const destination = join(root, "redirect");
     mkdirSync(destination);
     symlinkSync(destination, join(root, ".aidlc-construction-checkpoints"), process.platform === "win32" ? "junction" : "dir");
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0")).toThrow();
+    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow();
     rmSync(join(root, ".aidlc-construction-checkpoints"));
     const manifest = join(root, "construction", "alpha", "code-generation", "source-manifest.json");
     writeFileSync(join(destination, "manifest.json"), readFileSync(manifest));
@@ -556,6 +713,6 @@ describe("t341 review evidence is independent of project check success", () => {
     writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"),
       "Change Control", "relaxed"));
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 99;\n");
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit", "exit 0")).toThrow("review");
+    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("review");
   }, 60_000);
 });

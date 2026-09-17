@@ -7659,6 +7659,7 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
   "PLAN_APPROVAL_RECORDED",
 ]);
 const DOCUMENT_AUDIT_EVENTS = new Set([
@@ -8123,6 +8124,64 @@ export function hasOpenGate(stateContent: string | null): boolean {
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanActedSinceGate(projectDir);
 }
+
+// The state stores a human-readable command, but only the latest tool-owned
+// receipt in this workflow authorizes its execution. Never trust the field alone.
+export const VERIFICATION_COMMAND_CHECKPOINT = "Construction Verification Command";
+
+export interface VerificationCommand {
+  command: string;
+  sha256: string;
+  label: string;
+}
+
+export function verificationCommandDetails(command: string): VerificationCommand {
+  const canonical = command.trim();
+  if (!canonical || canonical.length > 8192 || hasUnsafeSingleLineCharacter(canonical) || /[\x80-\x9f]/.test(canonical)) {
+    throw new Error("Construction verification command must be nonblank, at most 8192 characters, and contain no control characters. Put multiline checks in a script and record its invocation.");
+  }
+  return {
+    command: canonical,
+    sha256: createHash("sha256").update(canonical, "utf8").digest("hex"),
+    label: canonical.slice(0, 120),
+  };
+}
+
+export function authorizedVerificationCommand(
+  projectDir: string,
+  stateContent: string,
+  rows?: AuditShardEvent[],
+): VerificationCommand | null {
+  const field = getField(stateContent, VERIFICATION_COMMAND_CHECKPOINT);
+  if (!field || !activeIntentUuid(projectDir)) return null;
+  let command: VerificationCommand;
+  try {
+    command = verificationCommandDetails(field);
+  } catch {
+    return null;
+  }
+  const unreadable: string[] = [];
+  const events = (rows ?? readAuditShardEvents(projectDir, undefined, undefined, unreadable)).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return null;
+  const workflows = maximalAttemptEvents(events.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return null;
+  const receipts = maximalAttemptEvents(events.filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED"));
+  if (receipts.length !== 1) return null;
+  const receipt = receipts[0];
+  return attemptEventDefinitelyBefore(workflows[0], receipt) &&
+    auditBlockField(receipt.block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT &&
+    auditBlockField(receipt.block, "Command SHA-256") === command.sha256 &&
+    auditBlockField(receipt.block, "User Input") === "Approve"
+    ? command : null;
+}
+
+export const VERIFICATION_COMMAND_RECOVERY =
+  'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
+  '--command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
+  'then aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command "<cmd>" --details "Approve". ' +
+  'Apply the receipt with aidlc-state.ts set-construction-verification-command "<cmd>".';
 
 // --- Consolidated-summary confirmation evidence ---
 //

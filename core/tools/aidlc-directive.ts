@@ -209,6 +209,8 @@ export interface RunStageDirective {
     human_required: boolean;
     errors: string[];
     proof_path: string;
+    verification_command: string | null;
+    command_authorized: boolean;
   };
   swarm_checkpoint?: {
     batch: number;
@@ -1115,11 +1117,14 @@ function checkRunStageShared(
       errors.push(`${kind}: construction_checkpoint must name this Construction Unit`);
     } else {
       checkEnum(checkpoint, "kind", ["unit", "skeleton"], kind, errors);
-      for (const field of ["ready", "verified", "approved", "human_required"]) {
+      for (const field of ["ready", "verified", "approved", "human_required", "command_authorized"]) {
         if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: construction_checkpoint.${field} must be boolean`);
       }
       for (const field of ["fingerprint", "proof_path"]) {
         if (typeof checkpoint[field] !== "string") errors.push(`${kind}: construction_checkpoint.${field} must be string`);
+      }
+      if (checkpoint.verification_command !== null && typeof checkpoint.verification_command !== "string") {
+        errors.push(`${kind}: construction_checkpoint.verification_command must be string or null`);
       }
       for (const field of ["stages", "errors"]) {
         if (!Array.isArray(checkpoint[field]) || !checkpoint[field].every((entry: unknown) => typeof entry === "string")) {

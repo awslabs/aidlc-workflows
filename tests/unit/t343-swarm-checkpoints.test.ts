@@ -622,10 +622,21 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       ? `"${process.execPath.replaceAll('"', '""')}"`
       : `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 1')) process.exit(1)"`;
-    expect(verifyConstructionCheckpoint(pd, "alpha", "unit", check).verified).toBe(true);
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", check];
+    for (const [tool, args] of [
+      ["log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]],
+      ["log", ["answer", ...identity, "--details", "Approve"]],
+      ["state", ["set-construction-verification-command", check]],
+    ] as const) {
+      const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", pd], {
+        encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    }
+    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
     human(pd);
     expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve").approved).toBe(true);
-    expect([...approvedConstructionUnits(pd, content)]).toEqual(["alpha"]);
+    expect([...approvedConstructionUnits(pd, readFileSync(seededStateFile(pd), "utf-8"))]).toEqual(["alpha"]);
     expect(() => resolveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exactly");
     expect(resolveSwarmCheckpoint(pd, 1, ["beta"]).ready).toBe(false);
     converge(pd, 1, ["beta"]);

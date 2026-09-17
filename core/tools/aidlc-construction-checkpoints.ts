@@ -11,6 +11,9 @@ import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  authorizedVerificationCommand,
+  VERIFICATION_COMMAND_RECOVERY,
+  type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
   eventMatchesClaimAttempt,
@@ -58,12 +61,13 @@ import {
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
 export interface ConstructionCheckpointProof {
-  version: 2;
+  version: 3;
   id: string;
   kind: ConstructionCheckpointKind;
   unit: string;
   fingerprint: string;
-  command: string;
+  command_sha256: string;
+  command_label: string;
   started_at: string;
   finished_at: string | null;
   exit_code: number | null;
@@ -92,6 +96,8 @@ export interface ConstructionCheckpoint {
   run_floors: Record<string, string>;
   proof_path: string;
   verification: ConstructionCheckpointProof | null;
+  verification_command: string | null;
+  command_authorized: boolean;
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
@@ -144,6 +150,7 @@ export interface ConstructionEvidence {
   dag: BoltDagResolution;
   rows: AuditShardEvent[];
   allRows: AuditShardEvent[];
+  verificationCommand: VerificationCommand | null;
   source: WorkspaceSourceState | null;
   listing: WorkspaceSourceListing | null;
   scope: string;
@@ -170,6 +177,7 @@ export function loadConstructionEvidence(projectDir: string, stateContent?: stri
   return {
     state, root, intent, allRows, rows, scope, source, listing: source?.listing ?? null,
     dag: resolveBoltDag(projectDir),
+    verificationCommand: authorizedVerificationCommand(projectDir, state, rows),
     stages: unitMajorConstructionStageSlugs(scope, state, true),
     workflow: onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED")),
     grant: onlyLatest(rows.filter((row) => row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED")),
@@ -188,9 +196,11 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
     const proof = JSON.parse(bytes.toString("utf-8")) as ConstructionCheckpointProof;
     if (
       proof === null || typeof proof !== "object" ||
-      proof.version !== 2 || typeof proof.id !== "string" ||
+      proof.version !== 3 || typeof proof.id !== "string" ||
       typeof proof.fingerprint !== "string" ||
-      typeof proof.command !== "string" || !proof.command.trim() ||
+      typeof proof.command_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.command_sha256) ||
+      typeof proof.command_label !== "string" || !proof.command_label.trim() ||
+      proof.command_label.length > 120 || hasUnsafeSingleLineCharacter(proof.command_label) || /[\x80-\x9f]/.test(proof.command_label) ||
       typeof proof.started_at !== "string" ||
       !Number.isSafeInteger(proof.stdout_bytes) || proof.stdout_bytes < 0 ||
       !Number.isSafeInteger(proof.stderr_bytes) || proof.stderr_bytes < 0 ||
@@ -209,6 +219,7 @@ interface Snapshot {
   root: string;
   rows: AuditShardEvent[];
   state: string;
+  verificationCommand: VerificationCommand | null;
 }
 
 function locked<T>(
@@ -383,6 +394,7 @@ function snapshot(
   const ready = errors.length === 0;
   const verified = ready && proof !== null &&
     proof.kind === kind && proof.unit === unit &&
+    shared.verificationCommand !== null && proof.command_sha256 === shared.verificationCommand.sha256 &&
     proof.fingerprint === fingerprint && proof.verified === true &&
     proof.evidence_unchanged === true && proof.exit_code === 0 &&
     proof.signal === null && proof.error === null &&
@@ -402,16 +414,18 @@ function snapshot(
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
     auditBlockField(gate.block, "Gate Scope") === "unit-end" &&
     auditBlockField(gate.block, "Fingerprint") === fingerprint &&
-    auditBlockField(gate.block, "Verification Command SHA-256") === digest(proof?.command) &&
+    auditBlockField(gate.block, "Verification Command SHA-256") === proof?.command_sha256 &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&
     eventMatchesClaimAttempt(projectDir, gate.block, unit) &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       (kind !== "skeleton" && auditBlockField(gate.block, "Autonomous") === "true"));
   return {
-    root, rows, state,
+    root, rows, state, verificationCommand: shared.verificationCommand,
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
+      verification_command: shared.verificationCommand?.label ?? null,
+      command_authorized: shared.verificationCommand !== null,
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof,
     },
@@ -436,17 +450,18 @@ export function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  checkCmd: string,
 ): ConstructionCheckpoint {
-  if (!checkCmd.trim() || checkCmd.length > 8192 || checkCmd.includes("\0")) {
-    throw new Error("An explicit nonblank project check command (at most 8192 characters) is required.");
-  }
   const before = locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
+    const authorization = current.verificationCommand;
+    if (!authorization) {
+      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
+    }
     const proof: ConstructionCheckpointProof = {
-      version: 2, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
-      command: checkCmd, started_at: new Date().toISOString(), finished_at: null,
+      version: 3, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
+      command_sha256: authorization.sha256, command_label: authorization.label,
+      started_at: new Date().toISOString(), finished_at: null,
       exit_code: null, signal: null, error: null,
       stdout_bytes: 0, stderr_bytes: 0,
       stdout_sha256: EMPTY_OUTPUT_SHA256, stderr_sha256: EMPTY_OUTPUT_SHA256,
@@ -455,13 +470,13 @@ export function verifyConstructionCheckpoint(
     // Starting a new check revokes an earlier pass, including after a crash.
     writeRecordFileNoFollow(current.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     const selection = resolveWorkflowSelection(projectDir);
-    return { ...current, proof, intent: selection.intent!, space: selection.space };
+    return { ...current, proof, command: authorization.command, intent: selection.intent!, space: selection.space };
   });
   // Match swarm checkConverged: preserve Bash project checks where available.
   const command = process.platform === "win32"
     ? process.env.ComSpec ?? "cmd.exe"
     : existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
-  const args = process.platform === "win32" ? ["/d", "/s", "/c", checkCmd] : ["-c", checkCmd];
+  const args = process.platform === "win32" ? ["/d", "/s", "/c", before.command] : ["-c", before.command];
   const check = spawnSync(command, args, {
     cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
     maxBuffer: CHECK_OUTPUT_BYTES, killSignal: "SIGKILL", windowsHide: true,
@@ -489,7 +504,8 @@ export function verifyConstructionCheckpoint(
       throw error;
     }
     proof.evidence_unchanged = after.root === before.root &&
-      after.result.ready && after.result.fingerprint === before.result.fingerprint;
+      after.result.ready && after.result.fingerprint === before.result.fingerprint &&
+      after.verificationCommand?.sha256 === proof.command_sha256;
     proof.verified = proof.exit_code === 0 && proof.signal === null &&
       proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
@@ -509,6 +525,7 @@ function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Rec
     Fingerprint: checkpoint.fingerprint,
     "Run floor": checkpoint.run_floor,
     "Run floors": JSON.stringify(checkpoint.run_floors),
+    ...(checkpoint.verification ? { "Verification Command SHA-256": checkpoint.verification.command_sha256 } : {}),
     ...claimAttemptFields(projectDir, checkpoint.unit),
   };
 }
@@ -549,7 +566,6 @@ export function approveConstructionCheckpoint(
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result),
       "Verification Id": rechecked.result.verification!.id,
-      "Verification Command SHA-256": digest(rechecked.result.verification!.command),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, projectDir);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

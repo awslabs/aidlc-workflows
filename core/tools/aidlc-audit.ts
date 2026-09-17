@@ -84,6 +84,7 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   // Break-glass: the human typed the override phrase and the conductor ran
   // `answer --override`; the receipt binds to content and attempt only.
@@ -254,6 +255,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
+  VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
   REVIEW_REQUESTED: "Review Requested",
@@ -340,6 +342,7 @@ function jsonError(message: string): never {
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "ARTIFACT_CREATED",
@@ -469,6 +472,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "AUTONOMY_MODE_SET",

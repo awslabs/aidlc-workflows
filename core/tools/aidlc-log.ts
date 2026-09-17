@@ -13,6 +13,11 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  attemptEventDefinitelyBefore,
+  maximalAttemptEvents,
+  verificationCommandDetails,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  VERIFICATION_COMMAND_RECOVERY,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
@@ -380,10 +385,11 @@ function handleDecision(args: string[]): void {
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "verification-command" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command`,
     );
   }
 
@@ -413,6 +419,11 @@ function handleDecision(args: string[]): void {
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
+  const verificationCommand = flags.checkpoint === "verification-command"
+    ? verificationCommandDetails(flags.command ?? "") : null;
+  if (verificationCommand && (flags.single !== undefined || flags.unit !== undefined)) {
+    error("Construction verification commands apply to the whole intent; omit --single and --unit.");
+  }
   // The plan-approval checkpoint reads Change Control inside the evidence, only
   // when the source the plan was written against has moved; that read traces a
   // memory edit and raises an invalid memory value as its own error.
@@ -446,6 +457,11 @@ function handleDecision(args: string[]): void {
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
+  }
+  if (verificationCommand) {
+    fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
+    fields["Command SHA-256"] = verificationCommand.sha256;
+    fields["Command Label"] = verificationCommand.label;
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
@@ -533,6 +549,7 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
     "SUMMARY_CONFIRMATION_RECORDED",
+    "VERIFICATION_COMMAND_RECORDED",
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -564,7 +581,8 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
       pending = true;
     } else if (
       event.event === "QUESTION_ANSWERED" ||
-      event.event === "SUMMARY_CONFIRMATION_RECORDED"
+      event.event === "SUMMARY_CONFIRMATION_RECORDED" ||
+      event.event === "VERIFICATION_COMMAND_RECORDED"
     ) {
       pending = false;
     }
@@ -708,6 +726,36 @@ function pendingSummaryDecision(
   return { pending: true, humanAfterDecision: false };
 }
 
+function pendingVerificationDecision(pd: string, stage: string, sha256: string): {
+  pending: boolean; humanAfterDecision: boolean;
+} {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  const absent = { pending: false, humanAfterDecision: false };
+  if (unreadable.length) return absent;
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return absent;
+  // A later proposal or answer supersedes the old question, even when its
+  // command or stage differs. Cross-shard ties never pick an arbitrary winner.
+  const actions = maximalAttemptEvents(rows.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "VERIFICATION_COMMAND_RECORDED"].includes(row.event) &&
+    auditBlockField(row.block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT,
+  ));
+  if (actions.length !== 1) return absent;
+  const decision = actions[0];
+  if (decision.event !== "DECISION_RECORDED" ||
+    !attemptEventDefinitelyBefore(workflows[0], decision) ||
+    auditBlockField(decision.block, "Stage") !== stage ||
+    auditBlockField(decision.block, "Command SHA-256") !== sha256) return absent;
+  return {
+    pending: true,
+    humanAfterDecision: rows.some((row) => row.event === "HUMAN_TURN" &&
+      attemptEventDefinitelyBefore(decision, row)),
+  };
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -716,14 +764,24 @@ function handleAnswer(args: string[]): void {
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "verification-command" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command`,
     );
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  const verificationCheckpoint = flags.checkpoint === "verification-command";
+  const verificationCommand = verificationCheckpoint
+    ? verificationCommandDetails(flags.command ?? "") : null;
+  if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
+    error("Construction verification commands apply to the whole intent; omit --single and --unit.");
+  }
+  if (verificationCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
+    error('Construction verification command requires the exact human choice "Approve" or "Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+  }
   if (flags["batch-file"] !== undefined) {
     handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
     return;
@@ -796,6 +854,12 @@ function handleAnswer(args: string[]): void {
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
   }
+  if (verificationCommand) {
+    fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
+    fields["Command SHA-256"] = verificationCommand.sha256;
+    fields["Command Label"] = verificationCommand.label;
+    fields["User Input"] = flags.details;
+  }
   if (flags.unit) {
     fields.Unit = flags.unit;
     Object.assign(fields, claimAttemptFields(pd, flags.unit));
@@ -862,7 +926,7 @@ function handleAnswer(args: string[]): void {
     // a human-backed checkpoint below: its fresh-turn requirement is not waived
     // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      autonomousDecision || humanPresenceGuardDisabled()
+      (autonomousDecision && !verificationCheckpoint) || humanPresenceGuardDisabled()
         ? null
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
@@ -871,6 +935,22 @@ function handleAnswer(args: string[]): void {
           `chosen by the assistant (${answerAuthorship.category}: "${answerAuthorship.phrase}"). ` +
           `This question must be answered by the human. Re-present it and wait for their reply.`,
       );
+    }
+
+    if (verificationCommand) {
+      const pending = pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256);
+      if (!pending.pending) {
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
+      }
+      if (!humanPresenceGuardDisabled() &&
+        (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))) {
+        error("No unused HUMAN_TURN follows the verification-command decision. End the turn, wait for the human's choice, then run aidlc-log.ts answer --stage \"<stage>\" --checkpoint verification-command --command \"<cmd>\" --details \"Approve\"." + unattendedHumanPresenceHint());
+      }
+      const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage }));
+      return;
     }
 
     if (summaryCheckpoint) {
