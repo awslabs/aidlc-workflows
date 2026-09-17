@@ -7599,11 +7599,11 @@ export function isRequestChangesChoice(text: string | undefined | null): boolean
   return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
-// The Codex question-rendering guide tells the conductor to append
-// "(Recommended)" to the recommended option's label, and request_user_input
-// returns the decorated label. Stage gates and Plan Approval remove the one
-// trailing decorator before matching offered labels (case-insensitive,
-// surrounding whitespace tolerated). Nothing else about the text changes.
+// Every harness question-rendering guide tells the conductor to append
+// "(Recommended)" to the recommended option's label, and the picker returns the
+// decorated label. Stage gates and Plan Approval remove the one trailing
+// decorator before matching offered labels (case-insensitive, surrounding
+// whitespace tolerated). Nothing else about the text changes.
 const RECOMMENDED_DECORATOR_RE = /\s*\(recommended\)\s*$/i;
 export function stripRecommendedDecorator(text: string): string {
   return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
