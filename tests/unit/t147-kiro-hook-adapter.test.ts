@@ -1369,6 +1369,66 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("5d10: the refusal relays the core guard's own remedy, not a paraphrase", () => {
+    // Reducing the core call to `.code === 2` replaced the AIDLC-UNIT /
+    // AIDLC-TESTING-CONTRACT remedy with a generic line, which left the conductor
+    // without a deterministic retry: it knows it was refused and not what to send.
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "log-subagent", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-developer-agent",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: "start the unit" },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stderr, "the core guard names what is missing").toContain("Code generation cannot start");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d11: two concurrent identical dispatches leave two windows, not one", async () => {
+    // The reviewer asked for the concurrent case. Two adapter PROCESSES admitting the
+    // same bytes at the same moment must append two groups: the ledger is append-only
+    // precisely because a keyed map once collapsed them and the first close released
+    // both. Each still needs its own close.
+    const dir = scratchProject(true);
+    try {
+      const payload = JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-developer-agent",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: "identical bytes" },
+      });
+      const adapter = join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts");
+      const spawnOne = () => {
+        const proc = Bun.spawn(["bun", adapter, "log-subagent"], {
+          cwd: dir,
+          stdin: Buffer.from(payload, "utf-8"),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, AIDLC_PROJECT_DIR: dir } as NodeJS.ProcessEnv,
+        });
+        return proc.exited;
+      };
+      const [a, b] = await Promise.all([spawnOne(), spawnOne()]);
+      expect(a, "first concurrent admission").toBe(0);
+      expect(b, "second concurrent admission").toBe(0);
+      const opens = readFileSync(findDelegationLedger(dir), "utf-8")
+        .split("\n")
+        .filter((line) => line.includes('"op":"open"'));
+      expect(opens.length, "two dispatches are two windows").toBe(2);
+      const groups = new Set(
+        opens.map((line) => String((JSON.parse(line) as { group?: unknown }).group ?? "")),
+      );
+      expect(groups.size, "and two distinct groups").toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5d6: an aged-out open's close cannot swallow a later identical dispatch", () => {
     // The credit accounting this replaces failed OPEN in the other direction: an
     // expired open is skipped at replay, so ITS close matched nothing and was

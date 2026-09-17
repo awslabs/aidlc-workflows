@@ -291,13 +291,19 @@ const DISPATCH_TOOL_NAMES = new Set([
 // life, which is a worse failure than losing the attribution.
 const DELEGATION_TTL_MS = 6 * 60 * 60 * 1000;
 
-/** Run a packaged core hook body and hand back its exit code and stderr. The
- *  guards below map a 2 onto Kiro's reject contract; anything else fails open. */
+/** Run a packaged core hook body and hand back its exit code, stdout and stderr. The
+ *  guards below map a 2 onto Kiro's reject contract; anything else fails open.
+ *
+ *  stdout used to be piped and then dropped. The Plan Approval guard writes real
+ *  output on BOTH outcomes - the AIDLC-UNIT / AIDLC-TESTING-CONTRACT remedy on a
+ *  refusal, and the one-time "N file(s) changed since this plan was approved" notice
+ *  when relaxed Change Control rebases a receipt - so a caller that reduces this to an
+ *  exit code turns a deterministic retry into a guess. */
 function runCoreHook(
   hook: string,
   payload: Record<string, unknown>,
   cwd: string,
-): { code: number; stderr: string } {
+): { code: number; stdout: string; stderr: string } {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", hook]
@@ -308,7 +314,11 @@ function runCoreHook(
     stdout: "pipe",
     stderr: "pipe",
   });
-  return { code: r.exitCode ?? 0, stderr: r.stderr?.toString() ?? "" };
+  return {
+    code: r.exitCode ?? 0,
+    stdout: r.stdout?.toString() ?? "",
+    stderr: r.stderr?.toString() ?? "",
+  };
 }
 // Which targets need the hook payload at all. Everything else keeps its
 // zero-latency path, touching neither channel.
@@ -1487,13 +1497,25 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
         );
         return 2;
       }
-      if (planApprovalRefusesDispatch(dispatchTool, ide.toolArgs ?? {}, projectDir)) {
+      const admission = planApprovalRefusesDispatch(
+        dispatchTool,
+        ide.toolArgs ?? {},
+        projectDir,
+      );
+      if (admission.refused) {
+        // The core guard's own message, not a paraphrase: it names the unit and the
+        // testing contract the conductor must supply, and that is the retry.
         process.stderr.write(
-          "Plan Approval has not admitted this dispatch yet: the delegate cannot start " +
-            "until the gate for this stage is approved.\n",
+          admission.stderr.trim().length > 0
+            ? admission.stderr
+            : "Plan Approval has not admitted this dispatch yet: the delegate cannot start " +
+              "until the gate for this stage is approved.\n",
         );
         return 2;
       }
+      // Admitted. Anything the guard printed on the way through belongs to the human -
+      // the relaxed Change Control notice is written exactly once, here.
+      if (admission.stdout.trim().length > 0) process.stdout.write(admission.stdout);
       openDelegation(latchSession, payload, kiroDispatch(payload)?.agents ?? []);
     } else if (ide.event === "PostToolUse") {
       closeDelegation(latchSession, payload);
@@ -2441,7 +2463,7 @@ function planApprovalRefusesDispatch(
   toolName: string,
   toolArgs: Record<string, unknown>,
   pd: string,
-): boolean {
+): { refused: boolean; stdout: string; stderr: string } {
   // ONE derivation, and it is the ledger's. `kiroDispatch` treats the `subagent_`
   // SUFFIX as authoritative and arguments as the fallback (`namedAgent || directAgent`),
   // which matches this harness's rule that a platform-provided identity outranks an
@@ -2456,9 +2478,16 @@ function planApprovalRefusesDispatch(
   // kiroDispatch on purpose - putting it there would let a completion audit record the
   // developer for a delegate whose real identity was in the prose.
   if (toolName === "invoke_sub_agent" && agent === "") agent = "aidlc-developer-agent";
-  if (agent === "") return false; // nothing this guard is about
+  const silent = { refused: false, stdout: "", stderr: "" };
+  if (agent === "") return silent; // nothing this guard is about
   try {
-    return runCoreHook(
+    // The core guard's OWN words travel back, both ways. On a refusal they carry the
+    // AIDLC-UNIT / AIDLC-TESTING-CONTRACT remedy, which is the conductor's only
+    // deterministic retry; a generic line in its place turns a fixable refusal into a
+    // guess. On admission, relaxed Change Control prints the one-time "N file(s)
+    // changed since this plan was approved" notice here and nowhere else - recorded in
+    // the audit, never surfaced, unless this relays it.
+    const r = runCoreHook(
       "plan-approval-guard",
       {
         hook_event_name: "PreToolUse",
@@ -2467,9 +2496,10 @@ function planApprovalRefusesDispatch(
         cwd: pd,
       },
       pd,
-    ).code === 2;
+    );
+    return { refused: r.code === 2, stdout: r.stdout, stderr: r.stderr };
   } catch {
-    return false;
+    return silent;
   }
 }
 
