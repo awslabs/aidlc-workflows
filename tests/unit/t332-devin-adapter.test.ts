@@ -633,7 +633,8 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   });
 
   test("13g: record-human-turn with Devin 3000.6.14 native shape (unwrapped) mints a HUMAN_TURN and recognizes the selection", () => {
-    // Captured from evidence/devin-e2e-run/fourth-run/devin-session-1.txt step 46:
+    // Captured from a Devin 3000.6.14 interactive session export (see
+    // tests/fixtures/devin-hook-payloads/PROVENANCE.md):
     // the real interactive Devin 3000.6.14 answer shape is a single object
     // {selected: ["<label>"], skipped: false} keyed by question TEXT, with NO
     // {answers:...} wrapper. The parser now recognizes this third shape directly

@@ -69,7 +69,7 @@ These are evidence-qualified findings, not permission to weaken guards or silent
 - **Synthetic regression:** tests a supplied shape or state. It proves only its assertions, not that the current host emits that shape.
 - **Historical result:** belongs to its recorded revision, environment, and intervention history. A skip, environment blocker, modified log, or manually seeded approval is not a fresh live PASS.
 
-The old frontmatter-revert `.log` explicitly warned that version text had been edited afterward. Its historical content remains in Git, but it is not preserved here as authoritative current-build test evidence. Original captures and `evidence/devin-e2e-run/` are untouched.
+The old frontmatter-revert `.log` explicitly warned that version text had been edited afterward. Its historical content remains in Git, but it is not preserved here as authoritative current-build test evidence. Original captures survive only as the redacted fixtures under `tests/fixtures/devin-hook-payloads/` (see its PROVENANCE.md); the raw `evidence/devin-e2e-run/` transcripts were removed.
 
 ## Historical source map
 

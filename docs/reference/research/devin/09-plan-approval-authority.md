@@ -48,6 +48,6 @@ Retired: a matching state hash alone proves continuation validity; next must imm
 - `tests/unit/t330-authority-rebinding.test.ts`
 - `tests/unit/t332-devin-adapter.test.ts`
 - `tests/integration/t328-authority-rebinding.test.ts`
-- `evidence/devin-e2e-run/first-run/SUMMARY.md`
+- `tests/fixtures/devin-hook-payloads/PROVENANCE.md` (the removed `evidence/devin-e2e-run/` transcripts' redaction record)
 
 [Back to findings index](index.md)

@@ -1,11 +1,11 @@
 {
   "$schema": "devin-hook-capture-provenance/v1",
   "cliVersion": "devin 3000.6.14 (18033302)",
-  "cliBinary": "/home/wiley/.local/bin/devin (resolves through _versions/current to 3000.6.14)",
+  "cliBinary": "<user-home>/.local/bin/devin (resolves through _versions/current to 3000.6.14)",
   "os": "Linux 5.15.167.4-microsoft-standard-WSL2",
   "bunVersion": "1.3.14",
   "captureDate": "2026-09-05",
-  "captureRoot": "/tmp/devin-capture-s02/proj (throwaway fixture, outside the aidlc-workflows checkout)",
+  "captureRoot": "<tmpdir>/devin-capture/proj (throwaway fixture, outside the aidlc-workflows checkout)",
   "captureMethod": {
     "description": "A minimal capture-only project with .devin/hooks.v1.json (native format, no outer 'hooks' wrapper) wiring SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse to a single .devin/capture-logger.ts bun script. The logger reads one JSON event from stdin, writes it pretty-printed to a uniquely named file under ./captures/, writes NOTHING to stdout, and exits 0. One file per event avoids the shared-append race for parallel hooks. Blank matcher captures all tools. No SubagentStop event was added (undocumented).",
     "loggerPath": ".devin/capture-logger.ts",

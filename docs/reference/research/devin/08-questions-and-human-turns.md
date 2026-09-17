@@ -20,7 +20,7 @@ A HUMAN_TURN is evidence of interaction in the engine's model; it is not a Plan 
 
 ## Evidence and limits
 
-The headless S02 C07/C08 captures contain cancelled attempts, not answered PostToolUse envelopes. Later interactive session exports under evidence/devin-e2e-run/fourth-run informed native-answer fixtures. An exported tool response is not automatically a raw hook-stdin capture; keep those provenance levels separate.
+The headless S02 C07/C08 captures contain cancelled attempts, not answered PostToolUse envelopes. Later interactive session exports (previously under the now-removed `evidence/devin-e2e-run/fourth-run/`; provenance in `tests/fixtures/devin-hook-payloads/PROVENANCE.md`) informed native-answer fixtures. An exported tool response is not automatically a raw hook-stdin capture; keep those provenance levels separate.
 
 t332 covers object response, selected/Other compatibility shapes, successful unknown responses, cancellation, wrapped/unwrapped native-shaped maps, and a seeded Plan Approval response. This does not prove a fresh end-to-end interactive approval on the current host.
 
@@ -52,7 +52,7 @@ Retired: string-only hook responses; Claude-only inner answer shapes; exit 0 mea
 - `tests/smoke/t250-question-fence-never-echo.test.ts`
 - `tests/unit/t181-conductor-skill-parity.test.ts`
 - `tests/fixtures/devin-hook-payloads/capture-provenance.json`
-- `evidence/devin-e2e-run/fourth-run/devin-session-1.txt`
+- `tests/fixtures/devin-hook-payloads/PROVENANCE.md` (supersedes the removed `evidence/devin-e2e-run/` session exports)
 - `core/knowledge/aidlc-shared/worktree-info-schema.md`
 
 [Back to findings index](index.md)
