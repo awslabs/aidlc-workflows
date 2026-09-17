@@ -43,6 +43,7 @@ Pick your harness:
 | **opencode** (≥ 1.17) | `/aidlc` | [AI-DLC on opencode](opencode.md) — the split `.aidlc/` + `.opencode/` layout, the adapter plugin, what's different on opencode. |
 | **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `/aidlc` | [AI-DLC on GitHub Copilot](copilot.md) — one install for both surfaces, the `.github/` merge, folder trust, what's different on Copilot. |
 | **Devin CLI** (≥ 3000.10.21) | `/aidlc` | [AI-DLC on Devin CLI](devin.md) — prerequisites, install, the hooks.v1.json adapter, what's different on Devin. |
+| **Devin Cloud** | `@skills:aidlc` | [AI-DLC on Devin Cloud](devin-cloud.md) — cooperative enforcement (no hook transport), the deterministic-vs-cooperative guarantee table, blueprint + playbook entry. |
 
 AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**.
 

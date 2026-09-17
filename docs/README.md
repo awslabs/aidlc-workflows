@@ -58,6 +58,7 @@ provider setup, trust prompts, project refreshes, and the first workflow.
 | opencode | [AI-DLC on opencode](guide/harnesses/opencode.md) |
 | GitHub Copilot | [AI-DLC on GitHub Copilot](guide/harnesses/copilot.md) |
 | Devin CLI | [AI-DLC on Devin CLI](guide/harnesses/devin.md) |
+| Devin Cloud | [AI-DLC on Devin Cloud](guide/harnesses/devin-cloud.md) |
 
 ## Choose Your Guide
 

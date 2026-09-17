@@ -77,6 +77,7 @@ guide in the table below. The complete walkthrough is in
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
 | Devin CLI >= 3000.10.21 | `aidlc config --harness devin` | Devin CLI | `/aidlc` | [Devin CLI](docs/guide/harnesses/devin.md) |
+| Devin Cloud | copy `dist/devin-cloud/` into the repo | devin.ai session | `@skills:aidlc` | [Devin Cloud](docs/guide/harnesses/devin-cloud.md) |
 
 Model-provider setup belongs to the harness. Claude Code and the shipped Codex
 configuration default to Amazon Bedrock; GitHub Copilot uses GitHub sign-in or
