@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-state:set-construction-checkpoints, subcommand:aidlc-state:set-construction-execution, function:isAutonomousConstructionGate, function:isConstructionSwarmEnabled
 // covers: function:constructionCheckpointGaps
+// covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -345,5 +346,52 @@ describe("t342 Construction checkpoint routing", () => {
     expect(`${refused.stdout}${refused.stderr}`).toContain("fresh human request");
     appendAuditEntry("HUMAN_TURN", {}, p);
     expect(set().status).toBe(0);
+  }, 30_000);
+
+  test.each([
+    { field: "Construction Checkpoints", value: "disabled", command: "set-construction-checkpoints" },
+    { field: "Construction Execution", value: "swarm", command: "set-construction-execution" },
+    { field: "Construction Iteration", value: "unit-major", command: "set-construction-iteration" },
+  ])("generic set cannot change $field even after a human turn", ({ field, value, command }) => {
+    const p = fixture({ iteration: "stage-major", autonomy: "autonomous" });
+    const file = seededStateFile(p);
+    const before = readFileSync(file);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const assertGenericRefused = () => {
+      const refused = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-state.ts"), "set", `${field}=${value}`, "--project-dir", p,
+      ], { encoding: "utf-8", env });
+      const output = `${refused.stdout}${refused.stderr}`;
+      expect(refused.status, output).not.toBe(0);
+      expect(output).toContain(field);
+      expect(output).toContain(command);
+      expect(readFileSync(file)).toEqual(before);
+    };
+    assertGenericRefused();
+    appendAuditEntry("HUMAN_TURN", {}, p);
+    assertGenericRefused();
+    const changed = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--project-dir", p,
+    ], { encoding: "utf-8", env });
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    expect(readFileSync(file, "utf-8")).toContain(`- **${field}**: ${value}`);
+  }, 30_000);
+
+  test("generic set refuses a mixed policy batch without changing any state bytes", () => {
+    const p = fixture({ autonomy: "autonomous" });
+    const file = seededStateFile(p);
+    const before = readFileSync(file);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const refused = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), "set", "Lifecycle Phase=inception",
+      "Construction Checkpoints=disabled", "--project-dir", p,
+    ], { encoding: "utf-8", env });
+    const output = `${refused.stdout}${refused.stderr}`;
+    expect(refused.status, output).not.toBe(0);
+    expect(output).toContain("Construction Checkpoints");
+    expect(output).toContain("set-construction-checkpoints");
+    expect(readFileSync(file)).toEqual(before);
   }, 30_000);
 });

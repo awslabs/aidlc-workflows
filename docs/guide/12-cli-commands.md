@@ -1233,7 +1233,10 @@ aidlc engine state set-construction-execution swarm
 To opt an existing workflow into verified checkpoints, preferably before Unit
 work begins, use `aidlc engine state set-construction-checkpoints enabled`.
 `disabled` retains the legacy checkpoint flow. These typed setters update
-runtime preferences; generic `state set` remains engine-owned.
+runtime preferences. Generic `state set` refuses `Construction Checkpoints`,
+`Construction Execution`, and `Construction Iteration`; use
+`set-construction-checkpoints`, `set-construction-execution`, or
+`set-construction-iteration`, respectively.
 During Construction, changing these preferences requires a fresh human request;
 an unattended run cannot disable checkpoints to get past a refusal.
 

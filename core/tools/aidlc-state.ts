@@ -906,6 +906,25 @@ function handleGet(args: string[]): void {
 
 function handleSet(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts set <field=value> ...");
+  // Validate the entire batch before applying any field changes.
+  for (const pair of args) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx <= 0) error(`Invalid field=value pair: ${pair}`);
+    const field = pair.slice(0, eqIdx);
+    let setter: string | undefined;
+    switch (field) {
+      case "Construction Checkpoints":
+        setter = "set-construction-checkpoints <enabled|disabled>";
+        break;
+      case "Construction Execution":
+        setter = "set-construction-execution <serial|swarm>";
+        break;
+      case "Construction Iteration":
+        setter = "set-construction-iteration <unit-major|stage-major>";
+        break;
+    }
+    if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use aidlc-state.ts ${setter}.`);
+  }
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: hold the audit lock across read→decide→write so
   // two concurrent `set`s of different fields can't clobber each other (A reads
@@ -916,14 +935,8 @@ function handleSet(args: string[]): void {
 
   for (const pair of args) {
     const eqIdx = pair.indexOf("=");
-    if (eqIdx <= 0) error(`Invalid field=value pair: ${pair}`);
     const field = pair.slice(0, eqIdx);
     let value = pair.slice(eqIdx + 1);
-
-    if (field === "Construction Checkpoints" || field === "Construction Execution") {
-      content = setConstructionPolicyField(content, field, value);
-      continue;
-    }
 
     // Special values
     if (value === "NOW") {
