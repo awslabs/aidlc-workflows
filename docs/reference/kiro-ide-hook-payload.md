@@ -164,7 +164,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape. Which arm actually
   carries the identity is a per-build fact, and it moved: IDE 1.1.14 sends
-  `invoke_sub_agent` again — `subagent_<agent>` 0 across a 73-event capture — but
+  `invoke_sub_agent` again — `subagent_<agent>` 0 across a capture of 73 hook
+  firings — but
   with a populated `{name, prompt, explanation, preset, contextFiles}` argument
   object, so on that build the argument arm is the live one while the suffix arm
   keeps precedence in code. The precedence order is what the adapter guarantees;
