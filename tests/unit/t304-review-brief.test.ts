@@ -198,7 +198,7 @@ function recordReviewViaRecordAndOpenGate(
   expect(completed.status, completed.out).toBe(0);
   const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
   expect(reviewRecord).toMatch(
-    /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+    /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
   );
   expect(existsSync(draft)).toBe(false);
   expect(
@@ -710,6 +710,12 @@ describe("t304 executable review brief scenarios", () => {
     );
     const stage = findStageBySlug("requirements-analysis")!;
     const brief = renderReviewBrief(proj, stage, "stale");
+    // #1082: the `stale` lead line must not assert a cause that may not apply. A
+    // conductor edit can self-invalidate the receipt with nothing upstream changed,
+    // and the accurate cause is appended below as **Changed upstream:** anyway.
+    expect(brief).toContain("**Why now:**");
+    expect(brief).not.toContain("Re-check required after upstream work changed");
+    expect(brief).toContain("the previous review receipt is no longer valid");
     const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
     expect(brief).toContain(`**Changed upstream:** \`${relativeQuestions}\``);
     expect(brief).toContain(
@@ -922,6 +928,27 @@ describe("t304 executable review brief scenarios", () => {
     expect(brief).toContain("`src/app.ts`");
     expect(brief).toContain(`\`${unitAArtifact}\``);
     expect(brief).toContain(`${artifacts.get("unit-a")}#Review`);
+  });
+
+  test("an unknown reject selector names only rejectable current findings (#1082)", () => {
+    // The accepted selectors are in hand at the throw. Without them a stem-vs-full-path
+    // mismatch in the artifact is invisible: the reader is told their selector is wrong
+    // and has to guess which identifier the gate actually holds.
+    const { proj, relativeArtifact } = requirementProject([
+      ROW_RESOLVED,
+      ROW_NEW_SECOND,
+    ]);
+    const stage = findStageBySlug("requirements-analysis")!;
+    let message = "";
+    try {
+      rejectedFindingDispositionField(proj, stage, ["wrong/path.md#R-01=Not applicable"]);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("not a current review finding");
+    expect(message).toContain("Current rejectable findings:");
+    expect(message).toContain(`${relativeArtifact}#R-02`);
+    expect(message).not.toContain(`${relativeArtifact}#R-01`);
   });
 
   test("reviewer-free stages cannot record finding dispositions", () => {
@@ -1201,7 +1228,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     };
     for (const forged of [
       { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": reviewRecord, "Review Record Digest": recordDigest },
-      { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": ".aidlc-reviews/requirements-analysis/stage/0123456789abcdef/1.json", "Review Record Digest": `sha256:${"0".repeat(64)}` },
+      { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": ".aidlc-engine/reviews/requirements-analysis/stage/0123456789abcdef/1.json", "Review Record Digest": `sha256:${"0".repeat(64)}` },
       { ...base, "Request Id": `review:${"f".repeat(32)}` },
       { ...base },
     ]) {

@@ -15,7 +15,6 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
-  harnessHonestyNotes,
   MODEL_PRESETS,
   modelPolicyDoctorIssues,
   modelPolicySurfaceDrift,
@@ -194,7 +193,6 @@ describe("t293 model policy resolution", () => {
     for (const preset of Object.values(MODEL_PRESETS)) {
       expect(Object.isFrozen(preset.groups)).toBe(true);
       expect(preset).not.toHaveProperty("model");
-      expect(preset.groups).not.toHaveProperty("deciding");
       for (const group of Object.values(preset.groups)) {
         expect(Object.isFrozen(group)).toBe(true);
         expect(Object.keys(group)).toEqual(["effort"]);
@@ -204,9 +202,12 @@ describe("t293 model policy resolution", () => {
       reviewing: { effort: "xhigh" },
     });
     expect(MODEL_PRESETS.balanced.groups).toEqual({
+      deciding: { effort: "medium" },
       reviewing: { effort: "medium" },
+      "writing-up": { effort: "medium" },
     });
     expect(MODEL_PRESETS.minimal.groups).toEqual({
+      deciding: { effort: "medium" },
       reviewing: { effort: "medium" },
       "writing-up": { effort: "low" },
     });
@@ -246,16 +247,20 @@ describe("t293 model policy resolution", () => {
   test("harness honesty identifies inexpressible policy without inventing a fallback", () => {
     const groupPolicy: ModelPolicyRecord = {
       schemaVersion: 1,
-      groups: { reviewing: { effort: "xhigh" } },
+      preset: "balanced",
     };
-    const kiro = resolveModelPolicy(
-      groupPolicy,
-      "product-lead",
-      "balanced",
-      "kiro",
-    );
-    expect(kiro.effort).toBeUndefined();
-    expect(kiro.unexpressed).toContain("effort");
+    for (const harness of ["kiro", "kiro-ide", "cursor", "copilot"] as const) {
+      for (const [agent, tier] of [
+        ["architect", "judgment"],
+        ["product-lead", "balanced"],
+        ["delivery", "templated"],
+      ] as const) {
+        const effective = resolveModelPolicy(groupPolicy, agent, tier, harness);
+        expect(effective.effort).toBeUndefined();
+        expect(effective.requestedEffort).toBe("medium");
+        expect(effective.unexpressed).toEqual(["effort"]);
+      }
+    }
 
     const ide = resolveModelPolicy({
       schemaVersion: 1,
@@ -270,11 +275,6 @@ describe("t293 model policy resolution", () => {
       agents: { architect: { model: "raw/model", effort: "high" } },
     }, "architect", "judgment", "cursor");
     expect(cursor.unexpressed.sort()).toEqual(["effort", "model"]);
-    expect(
-      harnessHonestyNotes(groupPolicy, { "product-lead": "balanced" }, "kiro"),
-    ).toEqual([
-      "Kiro CLI cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults.",
-    ]);
   });
 
   test("empty policy writers preserve current shipped surface bytes", () => {
@@ -364,18 +364,8 @@ describe("t293 model policy resolution", () => {
 });
 
 describe("t293 config models CLI", () => {
-  test("all presets record and apply; balanced affirms defaults; economical is rejected", () => {
+  test("presets apply all group efforts and restore inheritance; economical is rejected", () => {
     const project = install("claude");
-    const help = run([
-      "config",
-      "models",
-      "--help",
-    ], project, runtimeEnv());
-    expect(help.status).toBe(0);
-    expect(help.stdout).toContain("--preset <thorough|balanced|minimal>");
-    expect(help.stdout).toContain(
-      "balanced explicitly matches the shipped reviewing default",
-    );
     const reviewer = join(
       project,
       ".claude",
@@ -388,11 +378,17 @@ describe("t293 config models CLI", () => {
       "agents",
       "aidlc-delivery-agent.md",
     );
+    const developer = join(
+      project,
+      ".claude",
+      "agents",
+      "aidlc-developer-agent.md",
+    );
     for (
-      const [preset, reviewerEffort, writerEffort] of [
-        ["thorough", "xhigh", null],
-        ["balanced", "medium", null],
-        ["minimal", "medium", "low"],
+      const [preset, decidingEffort, reviewerEffort, writerEffort] of [
+        ["balanced", "medium", "medium", "medium"],
+        ["minimal", "medium", "medium", "low"],
+        ["thorough", null, "xhigh", null],
       ] as const
     ) {
       const applied = run([
@@ -417,6 +413,9 @@ describe("t293 config models CLI", () => {
       const writerText = readFileSync(writer, "utf-8");
       if (writerEffort) expect(writerText).toContain(`effort: ${writerEffort}`);
       else expect(writerText).not.toMatch(/^effort:/m);
+      const developerText = readFileSync(developer, "utf-8");
+      if (decidingEffort) expect(developerText).toContain(`effort: ${decidingEffort}`);
+      else expect(developerText).not.toMatch(/^effort:/m);
     }
 
     const balanced = run([

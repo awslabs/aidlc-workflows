@@ -4,7 +4,7 @@
 // of compaction — fired at the real compaction moment, with full state-file
 // context available.
 //
-// Also writes aidlc-docs/.aidlc-recovery.md as a breadcrumb for the orchestrator
+// Also writes <record>/.aidlc-engine/recovery.md as a breadcrumb for the orchestrator
 // to detect compaction-related state corruption on the next turn.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

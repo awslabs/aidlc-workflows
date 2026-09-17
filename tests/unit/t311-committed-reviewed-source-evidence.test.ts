@@ -7,7 +7,7 @@
 // receipt's Unit Source Fingerprint is the sha256 of the serialized unit
 // listing; this suite pins that writeUnitSourceSnapshot dual-writes those
 // EXACT bytes into the committed record (construction/<unit>/<stage>/
-// reviewed-source-<hash12>.tsv) beside the gitignored .aidlc-source-review
+// reviewed-source-<hash12>.tsv) beside the gitignored .aidlc-engine/source-review
 // copy, that parseUnitSourceListing round-trips the committed bytes and
 // rejects every malformed shape, and that the two exported attribution
 // predicates (normalizeManifestSourcePath, sourcePathIsExcluded) hold the
@@ -88,7 +88,7 @@ function snapshotFixture(): {
     fingerprint,
     hex,
     committedPath: reviewedSourceEvidencePath(record, "alpha", "code-generation", hex.slice(0, 12)),
-    localPath: join(record, ".aidlc-source-review", "code-generation", `unit-alpha-${hex.slice(0, 12)}.tsv`),
+    localPath: join(record, ".aidlc-engine/source-review", "code-generation", `unit-alpha-${hex.slice(0, 12)}.tsv`),
     rewrite,
     manifestSha256: claims.rawBytesSha256,
   };
@@ -195,9 +195,9 @@ describe("t311 committed reviewed-source evidence", () => {
     expect(sourcePathIsExcluded("app.ts", true)).toBe(false);
 
     // Nested sensor dirs under an embedded record are excluded regardless of shell.
-    expect(sourcePathIsExcluded("services/api/aidlc/spaces/default/intents/i/.aidlc-sensors/probe.ts", false)).toBe(true);
-    expect(sourcePathIsExcluded("aidlc/spaces/default/intents/i/.aidlc-sensors/probe.ts", false)).toBe(true);
+    expect(sourcePathIsExcluded("services/api/aidlc/spaces/default/intents/i/.aidlc-engine/sensors/probe.ts", false)).toBe(true);
+    expect(sourcePathIsExcluded("aidlc/spaces/default/intents/i/.aidlc-engine/sensors/probe.ts", false)).toBe(true);
     expect(sourcePathIsExcluded("aidlc/spaces/default/intents/i/src/app.ts", false)).toBe(false);
-    expect(sourcePathIsExcluded("src/.aidlc-sensors/probe.ts", false)).toBe(false);
+    expect(sourcePathIsExcluded("src/.aidlc-engine/sensors/probe.ts", false)).toBe(false);
   });
 });

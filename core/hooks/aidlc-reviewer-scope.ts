@@ -18,7 +18,7 @@
 // was already passed, so a blocked call is a recoverable nudge, not a halt.
 //
 // How the hook knows a review is in flight: the conductor writes a dispatch
-// record (reviewerDispatchPath, `<record>/.aidlc-reviewer-dispatch.json`) at
+// record (reviewerDispatchPath, `<record>/.aidlc-engine/reviewer-dispatch.json`) at
 // stage-protocol-reviewer.md §12a step 1 before invoking a per-unit reviewer, and deletes it at step 3
 // when the verdict is read. The record carries {reviewer, stage, unit,
 // exempt[]} - the facts no harness payload delivers. Identity comes from the
@@ -101,7 +101,7 @@ export interface ScopeVerdict {
 }
 
 /** Optional path context for the pure matcher. The live hook supplies both:
- *  recordRoot is the directory beside `.aidlc-reviewer-dispatch.json`, and cwd
+ *  recordRoot is the parent of the dispatch file's `.aidlc-engine/` directory, and cwd
  *  is the harness tool cwd. Tests can omit it to exercise the lexical fallback. */
 export interface ScopeContext {
   recordRoot?: string;
@@ -909,7 +909,7 @@ export async function run(input: string): Promise<number> {
         toolInput,
         { unit: unitScope.unit, exempt: [] },
         {
-          recordRoot: dirname(reviewerDispatchPath(projectDir)),
+          recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
           cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
         },
       );
@@ -1021,7 +1021,7 @@ export async function run(input: string): Promise<number> {
   try {
     const cwdField = (parsed as { cwd?: unknown }).cwd;
     verdict = evaluateReviewerScope(toolName, toolInput, dispatch, {
-      recordRoot: dirname(recordPath),
+      recordRoot: dirname(dirname(recordPath)),
       cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
     });
   } catch (e) {

@@ -30,7 +30,7 @@
 //   via stdout-line count, not exit code.
 //
 // * Why --incremental --tsBuildInfoFile: persist compile state across
-//   fires under the active record's .aidlc-sensors/.tsbuildinfo-<sha256>.
+//   fires under the active record's .aidlc-engine/sensors/.tsbuildinfo-<sha256>.
 //   The hash is derived from the project-relative tsconfig path, so monorepo
 //   package configs do not overwrite one shared cache. Subsequent fires
 //   re-check only changed files instead of the entire project. This doesn't

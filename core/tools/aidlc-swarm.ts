@@ -769,7 +769,7 @@ function captureReviewedRecordSnapshot(
         };
       } catch {
         // Reviews completed before committed evidence was introduced still
-        // retain these exact, receipt-bound bytes in .aidlc-source-review.
+        // retain these exact, receipt-bound bytes in .aidlc-engine/source-review.
         // Promote them into the transferred snapshot so an in-flight swarm can
         // finish after upgrading without weakening the new provenance record.
         evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");

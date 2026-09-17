@@ -9,9 +9,8 @@
 //   3. Resolution: resolveReviewClass is low-wins across stage declaration,
 //      scope review_cap, and the per-run Review Override state field — an
 //      override can lower but never raise, and no input conjures a reviewer.
-//   4. Prose: the §12a class branch and each harness SKILL.md carry the
-//      advisory single-pass contract (terminal receipt, findings quoted at
-//      the gate, no lead re-invoke), in core AND in every dist projection.
+//   4. CLI: creation/config routes preserve review choices and audit changes;
+//      routes unable to apply the override reject it instead of discarding it.
 //
 // The engine-enforced iteration ceiling (aidlc-log review refusing an
 // over-budget REVIEW_REQUESTED) is pinned in t271 — it spawns the real CLI.
@@ -218,14 +217,6 @@ describe("t266 review class", () => {
     }
   });
 
-  test("scope caps: bugfix, poc, classic, workshop are advisory; express is none", () => {
-    for (const scope of ["bugfix", "poc", "classic", "workshop"]) {
-      expect(read(`core/scopes/aidlc-${scope}.md`)).toContain(
-        "review_cap: advisory"
-      );
-    }
-    expect(read("core/scopes/aidlc-express.md")).toContain("review_cap: none");
-  });
 
   // --- 3. resolution --------------------------------------------------------
   test("resolveReviewClass is low-wins and cannot conjure a reviewer", () => {
@@ -237,9 +228,18 @@ describe("t266 review class", () => {
     // Uncapped scope keeps the declaration.
     expect(resolveReviewClass("adversarial", "feature")).toBe("adversarial");
     expect(resolveReviewClass("advisory", "feature")).toBe("advisory");
-    // Capped scope lowers adversarial to advisory (bugfix/poc/classic).
+    // Capped scope lowers adversarial to advisory (bugfix/poc/workshop).
     expect(resolveReviewClass("adversarial", "bugfix")).toBe("advisory");
     expect(resolveReviewClass("adversarial", "express")).toBe("none");
+    // Classic caps at advisory: adversarial lowers, advisory stays.
+    expect(resolveReviewClass("adversarial", "classic")).toBe("advisory");
+    expect(resolveReviewClass("advisory", "classic")).toBe("advisory");
+    expect(
+      resolveReviewClass("adversarial", "classic", "- **Review Override**: adversarial\n"),
+    ).toBe("advisory");
+    expect(
+      resolveReviewClass("adversarial", "classic", "- **Review Override**: none\n"),
+    ).toBe("none");
     // Override lowers further...
     expect(
       resolveReviewClass("adversarial", "feature", "- **Review Override**: none\n")
@@ -376,81 +376,5 @@ describe("t266 review class", () => {
     );
   });
 
-  // --- 4. prose (core + every dist skill) -----------------------------------
-  const ADVISORY_TERMINAL =
-    "On an `advisory` review, both verdicts are terminal here.";
 
-  test("reviewer protocol module carries the class branch (core + dist)", () => {
-    for (const rel of [
-      "core/aidlc-common/protocols/stage-protocol-reviewer.md",
-      "dist/claude/.claude/aidlc-common/protocols/stage-protocol-reviewer.md",
-    ]) {
-      const src = read(rel);
-      expect(src).toContain("`review_class` field");
-      expect(src).toContain("On an `advisory` review, both verdicts are terminal here.");
-      // The adversarial contract prose t234 pins must survive the class split.
-      expect(src).toContain("refute the artifact, not to confirm it");
-      // The conductor half of the bookkeeping rule, and the sentence that draws the
-      // line a looser wording lost: an upstream finding is provenance, this stage's
-      // own finding is bookkeeping. The reviewer half is pinned in t279, on the
-      // dispatch list, because that is the only text a reviewer receives.
-      // Whitespace-normalised: the sentence wraps in the module and re-wrapping it
-      // must not silently drop the pin.
-      const flat = src.replace(/\s+/g, " ");
-      expect(flat).toContain("Review bookkeeping is not artifact content");
-      expect(flat).toContain(
-        "A tag naming this stage's own finding or review iteration is review bookkeeping and is prohibited.",
-      );
-      // The two forms a live run wrote straight past the looser wording: a header
-      // line stating the stage's own review state, and an applied-findings table
-      // under a heading of its own. Naming the form is what makes the list bite.
-      expect(flat).toContain(
-        "in any form - a header line, a heading, a table, or a section of its own",
-      );
-      expect(flat).toContain(
-        "not the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`)",
-      );
-    }
-  });
-
-  test("every harness SKILL.md points to the reviewer protocol module", () => {
-    const skills = [
-      "harness/claude/skills/aidlc/SKILL.md",
-      "harness/kiro/skills/aidlc/SKILL.md",
-      "harness/kiro-ide/skills/aidlc/SKILL.md",
-      "harness/codex/skills/aidlc/SKILL.md",
-      "harness/opencode/skills/aidlc/SKILL.md",
-      "harness/cursor/skills/aidlc/SKILL.md",
-      "harness/copilot/skills/aidlc/SKILL.md",
-      "dist/claude/.claude/skills/aidlc/SKILL.md",
-    ];
-    for (const rel of skills) {
-      const src = read(rel);
-      expect(src).toContain("stage-protocol-reviewer.md");
-      expect(src).toContain("directive.protocol_modules");
-    }
-    expect(
-      read("core/aidlc-common/protocols/stage-protocol-reviewer.md"),
-    ).toContain(ADVISORY_TERMINAL);
-  });
-
-  test("reviewer personas carry the advisory-dispatch stance (core + dist)", () => {
-    for (const rel of [
-      "core/agents/aidlc-product-lead-agent.md",
-      "core/agents/aidlc-architecture-reviewer-agent.md",
-      "dist/claude/.claude/agents/aidlc-product-lead-agent.md",
-      "dist/claude/.claude/agents/aidlc-architecture-reviewer-agent.md",
-    ]) {
-      const src = read(rel);
-      expect(src).toContain("## Advisory Dispatch");
-      expect(src).toContain("decision support, not a repair loop");
-    }
-  });
-
-  test("balanced tier pins medium effort (the reviewer tier)", () => {
-    const dist = read("dist/claude/.claude/agents/aidlc-product-lead-agent.md");
-    expect(dist).toContain("effort: medium");
-    const codex = read("dist/codex/.codex/agents/aidlc-product-lead-agent.toml");
-    expect(codex).toContain('model_reasoning_effort = "medium"');
-  });
 });

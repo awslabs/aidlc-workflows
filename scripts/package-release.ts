@@ -17,7 +17,13 @@ import { createTarGz, type ArchiveEntry } from "../core/tools/aidlc-archive.ts";
 import { parseVersion, PREVIEW_CHANNEL, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { projectionFiles, walkFiles } from "../core/tools/aidlc-distribution.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
-import { digest, type ReleaseAsset, type ReleaseManifest } from "../core/tools/aidlc-release.ts";
+import {
+  digest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
+  type ReleaseAsset,
+  type ReleaseManifest,
+} from "../core/tools/aidlc-release.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,6 +66,18 @@ function sameNames(actual: readonly string[], expected: readonly string[]): bool
     actual.every((name, index) => name === expected[index]);
 }
 
+function versionedInstaller(
+  sourcePath: string,
+  marker: string,
+  replacement: string,
+): string {
+  const source = readFileSync(sourcePath, "utf-8");
+  if (source.split(marker).length !== 2) {
+    throw new Error(`${relative(REPO_ROOT, sourcePath)} must contain exactly one ${marker}`);
+  }
+  return source.replace(marker, replacement);
+}
+
 function sourceHarnesses(): string[] {
   return directoryNames(join(REPO_ROOT, "harness"))
     .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")));
@@ -82,6 +100,14 @@ function verifyGeneratedInventory(): {
     throw new Error(
       `generated release harness inventory differs from source: expected ` +
         `${harnesses.join(", ") || "none"}, found ${releaseHarnesses.join(", ") || "none"}`,
+    );
+  }
+  const copyHarnesses = directoryNames(join(REPO_ROOT, "dist"))
+    .filter((name) => name !== "plugins");
+  if (!sameNames(copyHarnesses, harnesses)) {
+    throw new Error(
+      `generated copy harness inventory differs from source: expected ` +
+        `${harnesses.join(", ") || "none"}, found ${copyHarnesses.join(", ") || "none"}`,
     );
   }
 
@@ -255,15 +281,28 @@ function build(argv: string[]): void {
   const assets: ReleaseAsset[] = [];
   const distributions: ReleaseManifest["distributions"] = [];
 
+  const copyRuntimeEntries: ArchiveEntry[] = [];
   const runtimeEntries: ArchiveEntry[] = [];
   for (const distribution of generated.harnesses) {
-    const root = join(REPO_ROOT, "dist-release", distribution);
+    const root = join(REPO_ROOT, "dist", distribution);
+    const nativeRoot = join(REPO_ROOT, "dist-release", distribution);
     const projection = projectionFiles(root);
+    const nativeProjection = projectionFiles(nativeRoot);
+    if (
+      nativeProjection.stamp.distribution !== projection.stamp.distribution ||
+      nativeProjection.descriptor.productName !== projection.descriptor.productName
+    ) {
+      throw new Error(`${distribution}: copy and native projection identities differ`);
+    }
     distributions.push({
       name: projection.stamp.distribution,
       productName: projection.descriptor.productName,
     });
-    runtimeEntries.push(...entriesFor(root).map((entry) => ({
+    copyRuntimeEntries.push(...entriesFor(root).map((entry) => ({
+      ...entry,
+      path: `runtime/${distribution}/${entry.path}`,
+    })));
+    runtimeEntries.push(...entriesFor(nativeRoot).map((entry) => ({
       ...entry,
       path: `runtime/${distribution}/${entry.path}`,
     })));
@@ -276,14 +315,16 @@ function build(argv: string[]): void {
       for (const harness of readdirSync(pluginRoot).sort()) {
         const harnessRoot = join(pluginRoot, harness);
         if (!statSync(harnessRoot).isDirectory()) continue;
-        runtimeEntries.push(...entriesFor(harnessRoot).map((entry) => ({
+        const entries = entriesFor(harnessRoot).map((entry) => ({
           ...entry,
           path: `plugins/${plugin}/${harness}/${entry.path}`,
-        })));
+        }));
+        copyRuntimeEntries.push(...entries);
+        runtimeEntries.push(...entries);
       }
     }
   }
-  const runtimeName = `aidlc-runtime-${BUILD_VERSION}.tar.gz`;
+  const runtimeName = releaseRuntimeAsset(BUILD_VERSION);
   const runtimePath = join(output, runtimeName);
   writeFileSync(runtimePath, createTarGz(runtimeEntries));
   assets.push({
@@ -292,6 +333,13 @@ function build(argv: string[]): void {
     bytes: statSync(runtimePath).size,
     kind: "runtime",
   });
+  const copyRuntimeName = releaseCopyRuntimeAsset(BUILD_VERSION);
+  const copyRuntimePath = join(output, copyRuntimeName);
+  writeFileSync(copyRuntimePath, createTarGz(copyRuntimeEntries));
+  writeFileSync(
+    `${copyRuntimePath}.sha256`,
+    `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`,
+  );
 
   for (const input of binaryInputs(binaries)) {
     const verification = buildVerification(
@@ -338,7 +386,14 @@ function build(argv: string[]): void {
   }
 
   const installer = join(output, "install.sh");
-  copyFileSync(join(REPO_ROOT, "scripts", "install.sh"), installer);
+  writeFileSync(
+    installer,
+    versionedInstaller(
+      join(REPO_ROOT, "scripts", "install.sh"),
+      "PACKAGED_VERSION=''",
+      `PACKAGED_VERSION='${BUILD_VERSION}'`,
+    ),
+  );
   chmodSync(installer, 0o755);
   assets.push({
     name: "install.sh",
@@ -348,7 +403,14 @@ function build(argv: string[]): void {
   });
 
   const powershellInstaller = join(output, "install.ps1");
-  copyFileSync(join(REPO_ROOT, "scripts", "install.ps1"), powershellInstaller);
+  writeFileSync(
+    powershellInstaller,
+    versionedInstaller(
+      join(REPO_ROOT, "scripts", "install.ps1"),
+      "$PackagedVersion = ''",
+      `$PackagedVersion = '${BUILD_VERSION}'`,
+    ),
+  );
   assets.push({
     name: "install.ps1",
     sha256: digest(powershellInstaller),

@@ -55,7 +55,7 @@
 //   2. CUSTOM SENSOR FIRES — tui: answering the stage gate(s) by keystroke makes
 //      the orchestrator write a produced artefact under aidlc-docs/, which trips
 //      the custom sensor's matches glob while a custom stage is active ->
-//      SENSOR_FIRED audit row + a detail dir under aidlc-docs/.aidlc-sensors/.
+//      SENSOR_FIRED audit row + a detail dir under aidlc-docs/.aidlc-engine/sensors/.
 //      (This is provable only by a real human-driven run that actually answers
 //      the gate so the artefact lands, which is the point.)
 //   3. CUSTOM RULE REACHES THE AGENT — two ways, both data: (a) the compiled
@@ -543,7 +543,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         // audit event.
         //
         // FINDING (verified against aidlc-sensor.ts:267-271 + :319-326 + :581 — NOT
-        // softened): a sensor's DETAIL FILE under aidlc-docs/.aidlc-sensors/<stage>/
+        // softened): a sensor's DETAIL FILE under aidlc-docs/.aidlc-engine/sensors/<stage>/
         // is written ONLY when the sensor FAILS (the "Detail path" audit field is
         // likewise emitted only in the SENSOR_FAILED branch). The reused
         // required-sections sensor PASSES on these well-formed artefacts (they carry

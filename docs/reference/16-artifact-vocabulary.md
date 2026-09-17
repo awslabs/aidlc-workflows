@@ -60,7 +60,7 @@ Things that are **not** artifacts in this registry:
 - **Filenames.** The on-disk `.md` file and the canonical name don't have
   to match (they usually do, except at collisions).
 - **State plumbing.** `aidlc-state.md`, `audit.md`, and
-  `.aidlc-recovery.md` are managed by tools (`aidlc-state.ts`, hook
+  `.aidlc-engine/recovery.md` are managed by tools (`aidlc-state.ts`, hook
   scripts), not by stages via `produces[]`. They never appear in the
   registry.
 - **Runtime values.** Strings like "user's prose answer" or
@@ -196,10 +196,12 @@ Every artifact except `traceability` resolves to `<canonical-name>.md`;
 **Review records are not artifacts.** A reviewer-bearing stage's review result
 (verdict, findings, reviewer, request id, the fingerprints it binds, and the
 review text) lives in a framework-owned record at
-`<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` for stage scope,
-or `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` for a Unit,
+`<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` for stage scope,
+or `<record>/.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` for a Unit,
 written only by `aidlc-log.ts review --verdict` and named, with its digest, by
-the `REVIEW_COMPLETED` row. The stage's `review_artifact` names which declared
+the `REVIEW_COMPLETED` row. The same command writes a readable copy of the
+review text at `<stage dir>/reviews/review-NN.md` beside the reviewed artifact;
+the copy is for people, is not an artifact, and is never read back. The stage's `review_artifact` names which declared
 artifact the review is about (the gate's `**Review:**` path and the
 `--reject-finding <artifact>#R-NN` selector key); the reviewer never writes to
 it. A terminal `## Review` section inside an artifact is a review recorded
@@ -207,8 +209,8 @@ before review records existed: readable for migration, never written anew.
 
 **Summary authorizations are not artifacts either.** The active summary
 confirmation for a stage (and Unit) lives at
-`<record>/.aidlc-summary-authorization/<stage>/stage.json` for stage scope, or
-`<record>/.aidlc-summary-authorization/<stage>/units/<unit>.json` for a Unit,
+`<record>/.aidlc-engine/summary-authorization/<stage>/stage.json` for stage scope, or
+`<record>/.aidlc-engine/summary-authorization/<stage>/units/<unit>.json` for a Unit,
 written by `aidlc-log.ts answer --checkpoint summary-confirmation` on `Looks
 correct` and removed on `Request changes`. It holds the `Summary Authorization
 Id` the receipt row carries; the write-audit hook reads it to stamp the stage's

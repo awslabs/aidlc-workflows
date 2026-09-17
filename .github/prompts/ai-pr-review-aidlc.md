@@ -61,11 +61,13 @@ for an active attempt. P0 requires a reachable disclosure or privilege crossing.
 
 Inspection is a publication gate. Inspect every path in
 `.ai-review-context/changed-files.json` plus the related base-tree contracts
-needed to review it. If any command, tool, sandbox, file read, or repository
-inspection fails, return `"status": "failed"` and explain the failure in
-`validation`. A failed or partial inspection must never be represented as
-`findings: []`. When inspection succeeds, return every manifest path exactly
-once in `inspection.changedFiles`.
+needed to review it. The runner verifies that the read-only sandbox starts and
+that each Codex process exits successfully. The publisher records the immutable
+manifest paths itself. Return `inspection.status` as `"complete"` only after
+the required evidence is accessible and inspected. If required evidence remains
+inaccessible after fallback, return `"failed"`; the validator will block
+publication. Record recovered, non-blocking validation limitations in
+`residualRisk`. Do not return `inspection.changedFiles`.
 
 The final response is the review for deterministic publication. Do not pause
 for a human draft and do not emit an approval or merge instruction. Return one
@@ -75,10 +77,7 @@ strict JSON object with no Markdown fence, preamble, progress, or trailing text:
 {
   "base": "<40-character-base-sha>",
   "head": "<40-character-head-sha>",
-  "inspection": {
-    "status": "complete",
-    "changedFiles": ["every exact path from changed-files.json"]
-  },
+  "inspection": {"status": "complete"},
   "validation": ["what was inspected or deterministically established"],
   "findings": [
     {

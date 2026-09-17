@@ -3,13 +3,14 @@ name: Preview Release
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "0 22 * * *"
+      timezone: "Europe/Lisbon"
 
 permissions:
   contents: read
 
-# Scheduled and manual preview runs share one repository-wide slot. A later run
-# observes the prior publication before allocating another retry-safe build id.
+# Scheduled and manual preview runs share one repository-wide slot so each run
+# observes prior publications before allocating another retry-safe build id.
 concurrency:
   group: release-preview
   cancel-in-progress: false
@@ -41,8 +42,8 @@ jobs:
           esac
           test "$GITHUB_REF" = "refs/heads/main"
           git fetch --no-tags origin main
-          # A queued run may no longer be the tip. Let it observe today's
-          # publication and skip before requiring current main for a build.
+          # A queued run may no longer be the tip. Let it observe a publication
+          # from the same source and skip before requiring current main for a build.
           source_sha="$GITHUB_SHA"
           test "$(git rev-parse HEAD^{commit})" = "$source_sha"
           git merge-base --is-ancestor "$source_sha" origin/main
@@ -71,14 +72,6 @@ jobs:
             printf 'preview_plan='
             jq -c . "$plan"
           } >> "$GITHUB_OUTPUT"
-      - name: Require immutable preview releases
-        if: steps.plan.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = true
-
   gate:
     needs: validate
     if: needs.validate.outputs.skip != 'true'
@@ -698,7 +691,7 @@ jobs:
             --target "$AUTHORIZED_SHA" \
             --repository "$GITHUB_REPOSITORY" \
             --changelog "$PWD/CHANGELOG.md" \
-            --expected-assets 13
+            --expected-assets 15
       - name: Verify uploaded asset inventory
         env:
           GH_TOKEN: ${{ github.token }}

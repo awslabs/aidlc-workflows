@@ -259,10 +259,9 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
 
         // --- answer the gates via the shared answer-gate primitive (§3) -------
         // It answers every tab/menu by taking the Recommended default (Enter) and
-        // TERMINATES on the on-disk requirements artefact. Terminator pins the
-        // exact final-artefact name `requirements.md` (see FINDING above) so the
-        // loop does not stop early on the questions file. Run it as a long-lived
-        // subprocess; its own backstops error loud, so a hang surfaces as nonzero.
+        // TERMINATES on the POST-APPROVAL state fields, not requirements.md or the
+        // questions file. Run it as a long-lived subprocess; its own backstops
+        // error loud, so a hang surfaces as nonzero.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -279,13 +278,18 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
               // at Step 7 (approval). Terminating on the file stopped the answer-gate
               // BEFORE the approval gate (verified live 2026-06-06: terminator met
               // after 7 answers, requirements.md present, but `[x] requirements-
-              // analysis` was false — the t73 terminator-race). The approve tool
-              // writes `- **Last Completed Stage**: requirements-analysis` atomically
-              // with GATE_APPROVED + STAGE_COMPLETED, so this signal means the stage
-              // genuinely completed AND was approved — the post-condition assertions
-              // 9/10/11 (the `[x]` mark, Current-Stage-advanced, completed>4) require.
+              // analysis` was false — the t73 terminator-race). Verified 2026-09-13:
+              // handleApprove writes Last Completed Stage first (aidlc-state.ts:5719),
+              // BEFORE handleAdvance writes Current Stage (aidlc-state.ts:4506).
+              // The loop polls disk first and the test kills the session ~60 ms
+              // after termination; waiting only for the first write killed approve
+              // mid-flight (GATE_APPROVED present, no next-stage STAGE_STARTED).
+              // Require BOTH approval and advancement for assertions 9/10/11
+              // (the `[x]` mark, Current-Stage-advanced, completed>4).
               "--until-state-field",
               "Last Completed Stage=^requirements-analysis$",
+              "--also-state-field",
+              "Current Stage=^(?!requirements-analysis$).+",
               // No per-gate timeout: requirements-analysis may legitimately spend
               // more than 200s before the first menu while reading inputs and
               // writing memory/questions. The live NDJSON trace captured that exact

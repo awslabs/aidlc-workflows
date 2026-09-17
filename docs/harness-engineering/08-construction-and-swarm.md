@@ -51,12 +51,12 @@ demands. The shipped default lives in the org rule you author at
 
 - The **walking-skeleton gate** is the first in-scope Construction EXECUTE
   stage for greenfield scopes — `mvp`, `enterprise`, `feature`, `poc`,
-  `classic`, `workshop`, `infra`. That gate is always presented. The planned
+  `workshop`, `infra`. That gate is always presented. The planned
   first Bolt in `bolt-plan.md` is advisory; stance resolves
   `org.md` → `team.md` → `project.md`.
 - The **skeleton ceremony is skipped** for incremental scopes — `bugfix`,
-  `refactor`, `security-patch`. There is nothing to bootstrap on an existing
-  codebase, so the first Construction stage runs like any other.
+  `refactor`, `security-patch` — and for the v1-style `classic` scope. Classic
+  declares `skeleton: off`; its first Construction stage runs like any other.
 - After that first Construction gate, the **ladder prompt** fires once: "How
   should the remaining Bolts run?" with two options, continue autonomously or
   gate every remaining Construction *stage*. The chosen answer persists as

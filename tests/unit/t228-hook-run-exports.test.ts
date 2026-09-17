@@ -217,7 +217,7 @@ describe("hooks expose run without import-time effects", () => {
       try {
         writeMinimalState(projectDir);
         seedAuditFile(projectDir);
-        const healthDir = join(seededRecordDir(projectDir), ".aidlc-hooks-health");
+        const healthDir = join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health");
         const auditBefore = readAudit(projectDir);
         const result = importSubject(subject, projectDir);
         expect(result.code).toBe(0);
@@ -260,7 +260,7 @@ describe("spawned hook contract smoke", () => {
         JSON.stringify({ hook_event_name: "SessionEnd", reason: "logout" }),
       );
       expect(result.code).toBe(0);
-      expect(existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "session-end.last"))).toBe(true);
+      expect(existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "session-end.last"))).toBe(true);
     } finally {
       cleanupTestProject(projectDir);
     }

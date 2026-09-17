@@ -6,6 +6,7 @@ BASE_URL=${AIDLC_RELEASE_BASE_URL:-https://github.com/$RELEASE_REPOSITORY/releas
 RELEASE_WORKFLOW=${AIDLC_RELEASE_WORKFLOW:-}
 GH_BIN=${AIDLC_GH_BIN:-}
 PROVENANCE_VERIFIER_AVAILABLE=0
+PACKAGED_VERSION=''
 VERSION=
 FROM=
 OFFLINE=0
@@ -119,6 +120,10 @@ while [ "$#" -gt 0 ]; do
     *) usage "unknown argument: $1" ;;
   esac
 done
+
+if [ -z "$VERSION" ] && [ -z "$FROM" ]; then
+  VERSION=$PACKAGED_VERSION
+fi
 
 [ "$(id -u)" -ne 0 ] || fail 4 failed "refusing a root install; run as the target user"
 if [ -n "$VERSION" ] && ! printf '%s\n' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then

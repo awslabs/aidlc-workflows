@@ -418,7 +418,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     const hash = fingerprint?.slice("sha256:".length) as string;
     const snapshot = join(
       seededRecordDir(p),
-      ".aidlc-source-review",
+      ".aidlc-engine/source-review",
       "code-generation",
       `baseline-${hash.slice(0, 12)}.tsv`,
     );
@@ -458,7 +458,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     const hash = fingerprint?.slice("sha256:".length) as string;
     const snapshot = join(
       seededRecordDir(p),
-      ".aidlc-source-review",
+      ".aidlc-engine/source-review",
       "code-generation",
       `baseline-${hash.slice(0, 12)}.tsv`,
     );

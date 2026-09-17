@@ -378,8 +378,20 @@ export function rejectedFindingDispositionField(
       candidate.artifact === spec.artifact && candidate.id === spec.id
     );
     if (!finding) {
+      // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
+      const available = findings
+        .filter((candidate) =>
+          candidate.status === "New" || candidate.status === "Unresolved"
+        )
+        .map((candidate) => `${candidate.artifact}#${candidate.id}`)
+        .sort();
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for this gate.`,
+        `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for this gate. ` +
+          (available.length > 0
+            ? `Current rejectable findings: ${available.join(", ")}.`
+            : findings.length > 0
+              ? "This gate has no New or Unresolved review findings to reject."
+              : "This gate has no current review findings."),
       );
     }
     if (finding.status !== "New" && finding.status !== "Unresolved") {
@@ -821,10 +833,12 @@ export function renderReviewBrief(
         : contexts.some((context) => context.verdict === "NOT-READY")
           ? "The review did not complete with actionable findings."
           : "No blocking concerns were found.";
+  // `stale` also covers a conductor edit that self-invalidated the receipt, so naming
+  // only upstream change misleads; the accurate cause is appended below either way.
   const why = {
     first: "First review completed.",
     revision: "Revision re-checked.",
-    stale: "Re-check required after upstream work changed.",
+    stale: "Re-check required: the previous review receipt is no longer valid.",
   }[reason];
 
   const lines = [
@@ -991,7 +1005,7 @@ if (import.meta.main) {
   try {
     main(process.argv.slice(2));
   } catch (error) {
-    process.stderr.write(`aidlc-review-brief: ${String(error)}\n`);
+    process.stderr.write(`${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}\n`);
     process.exit(1);
   }
 }
