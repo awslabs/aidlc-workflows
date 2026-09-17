@@ -2083,9 +2083,69 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
+// The repository NAME for a checkout whose project root is a LINKED GIT
+// WORKTREE, else null so the caller keeps `basename(projectDir)`.
+//
+// `git worktree add` names its directory after a branch, so in a linked worktree
+// basename(projectDir) is a branch name rather than a repository name. The shared
+// git dir lives inside the MAIN checkout, so its parent's basename is the
+// repository name.
+//
+// TWO things make this safe, and both are load-bearing:
+//
+//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
+//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
+//     two coincide only when the project root IS the toplevel; resolving against
+//     the toplevel otherwise climbs too high, and if a git dir happens to sit
+//     there (a repository vendored in another, or a home directory that is itself
+//     a repository) it would silently return a DIFFERENT repository's name.
+//  2. A linked worktree is the only topology where those two paths differ
+//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
+//     a subdirectory of one, and for a repository nested inside another — all of
+//     which return null here and keep today's answer byte-for-byte. That is what
+//     makes this change worktree-only rather than a re-definition of identity for
+//     every project root below its repository root.
+//
+// Deliberately NOT the `origin` remote: that would also cover a clone whose
+// directory name differs from the repository, but remote names are mutable (a
+// rename or a re-point would move a workspace's store) and it would change
+// resolution for every checkout whose remote and directory names differ. A
+// location is stable; widening identity to the remote is a separate decision.
+function gitRevParseSingle(projectDir: string, flag: string): string | null {
+  const r = spawnSync("git", ["rev-parse", flag], {
+    cwd: projectDir,
+    encoding: "utf-8",
+  });
+  if (r.status !== 0) return null;
+  const out = r.stdout?.trim();
+  return out ? out : null;
+}
+
+function mainCheckoutRepoName(projectDir: string): string | null {
+  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
+  if (gitDirRaw === null) return null; // not a git repository
+  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
+  if (commonRaw === null) return null;
+  let gitDirAbs: string;
+  let commonAbs: string;
+  try {
+    // Resolved against projectDir — the directory both were measured in.
+    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
+    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
+  } catch {
+    return null;
+  }
+  if (gitDirAbs === commonAbs) return null; // not a linked worktree
+  const name = basename(dirname(commonAbs));
+  return name.length > 0 ? name : null;
+}
+
 // The deterministic repo NAME for codekb keying (NOT the intent slug):
 //   1 recorded repo  -> that name
-//   0 recorded repos (workspace root IS the repo) -> basename(projectDir)
+//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
+//                       (mainCheckoutRepoName), falling back to basename(projectDir)
+//                       when git cannot answer. Identical to basename(projectDir)
+//                       for every root that is not a linked worktree.
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
@@ -2100,7 +2160,12 @@ export function codekbRepoName(
     selection.intent ?? undefined,
     selection.space,
   );
-  return repos.length === 1 ? repos[0] : basename(projectDir);
+  if (repos.length === 1) return repos[0];
+  // Multi-repo (2+) keeps the basename namespace unchanged; only the
+  // NOTHING-RECORDED case consults git, where the project root is the repo and a
+  // worktree basename is otherwise mistaken for the repository name.
+  if (repos.length > 1) return basename(projectDir);
+  return mainCheckoutRepoName(projectDir) ?? basename(projectDir);
 }
 
 // --- Codekb scope of analysis -------------------------------------------------
@@ -18533,6 +18598,20 @@ export interface RepoResolution {
 //   - multiple recorded repos: --repo is REQUIRED to disambiguate; it must name one
 //     of the set.
 // Throws (string message) on any disambiguation failure so the tool can surface it.
+//
+// A repo NAME becomes a working DIRECTORY through repoDir (an immediate child of
+// the workspace root). That is right for a multi-repo workspace and wrong whenever
+// the workspace root IS the repository, where no such child exists — so the
+// resolved cwd is verified rather than returned unchecked, and the caller gets a
+// message naming the path instead of a downstream git failure in a missing dir.
+function repoCwdOrThrow(projectDir: string, repoName: string): string {
+  const cwd = repoDir(projectDir, repoName);
+  if (existsSync(cwd)) return cwd;
+  throw new Error(
+    `Repo "${repoName}" resolves to ${cwd}, which does not exist. A recorded repo (or --repo) names a checkout that must be an immediate child of the workspace root. If the workspace root IS the repository, record no repos and pass no --repo.`,
+  );
+}
+
 export function resolveConstructionRepo(
   projectDir: string,
   requestedRepo: string | undefined,
@@ -18554,14 +18633,14 @@ export function resolveConstructionRepo(
     // repos.length === 0 (legacy) AND an explicit --repo: honour it as a sibling
     // anchor (the caller may be operating multi-repo on an unrecorded intent),
     // resolving cwd to the named sibling dir.
-    return { repo: requestedRepo, cwd: repoDir(projectDir, requestedRepo) };
+    return { repo: requestedRepo, cwd: repoCwdOrThrow(projectDir, requestedRepo) };
   }
   if (repos.length === 0) {
     // Legacy single-repo / projectDir-is-the-repo: run git in projectDir's cwd.
     return { repo: null, cwd: projectDir };
   }
   if (repos.length === 1) {
-    return { repo: repos[0], cwd: repoDir(projectDir, repos[0]) };
+    return { repo: repos[0], cwd: repoCwdOrThrow(projectDir, repos[0]) };
   }
   throw new Error(
     `This intent spans ${repos.length} repos (${repos.join(", ")}); pass --repo <name> to disambiguate which to operate on.`,
