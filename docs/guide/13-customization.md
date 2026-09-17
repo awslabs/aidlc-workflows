@@ -132,24 +132,28 @@ You can override scope at any time during a workflow:
 ## Intent Configuration
 
 The seven intent settings are `depth`, `test-strategy`, `review`,
-`change-control`, `sensors`, `learnings`, and `summary-confirmation`, in that
-order. They all use one atomic setter, `config-change`; the slash flags and
-`config set` routes are front ends to that same operation. Mix settings in one
-command rather than chaining separate updates:
+`guard-policy`, `sensors`, `learnings`, and `summary-confirmation`, in that
+order. Five more keys, `guard.plan-approval`, `guard.review-freeze`,
+`guard.state-transition`, `guard.reviewer-scope`, and `guard.human-presence`,
+switch one guard off or back on for a single piece of work. They all use one
+atomic setter, `config-change`; the slash flags and `config set` routes are front
+ends to that same operation. Mix settings in one command rather than chaining
+separate updates:
 
 ```
-/aidlc --depth standard --test-strategy minimal --review advisory --change-control relaxed --sensors off --learnings on --summary-confirmation off
-/aidlc config set change-control strict --sensors on --learnings on
-/aidlc --scope bugfix --review none --change-control relaxed --sensors off
+/aidlc --depth standard --test-strategy minimal --review advisory --guard-policy relaxed --sensors off --learnings on --summary-confirmation off
+/aidlc config set guard-policy strict --sensors on --learnings on
+/aidlc --scope bugfix --review none --guard-policy relaxed --sensors off
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all seven keys,
-and `config list` (optionally `--json`) returns all seven, including effective
-values and sources for Change Control and ceremonies:
+the remaining `--key value` flags. `config get <key>` accepts all twelve keys,
+and `config list` (optionally `--json`) returns all twelve, including effective
+values and sources for Guard Policy, the five fences, and the ceremonies:
 
 ```
-/aidlc config get change-control
+/aidlc config get guard-policy
+/aidlc config get guard.plan-approval
 /aidlc config get summary-confirmation
 /aidlc config list --json
 ```
@@ -158,33 +162,35 @@ values and sources for Change Control and ceremonies:
 `--project-dir` selectors, with at least one setting required. For example:
 
 ```bash
-bun .claude/tools/aidlc-utility.ts config-change --change-control relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
+bun .claude/tools/aidlc-utility.ts config-change --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
 Selectors target the same intent for state, memory policy, and audit without
 switching the active cursors. All supplied values are validated before mutation;
 invalid values or unknown flags refuse the whole update, naming the offending
-flag. A memory-enforced strict policy refuses an explicit relaxed Change Control
-setting together with every companion setting and scope change. Explicit strict
-and unrelated settings remain allowed. One lock covers the state read, shared
+flag. A memory-enforced strict policy refuses an explicit `relaxed` or `off`
+Guard Policy setting together with every companion setting and scope change.
+Explicit strict and unrelated settings remain allowed. One lock covers the state read, shared
 applier, complete audit batch, and single state write; an audit failure leaves
 state untouched. `Last Updated` changes only for a real stored change, including
 a provenance change. Repeating the same stored choice is a no-op.
 
-Scope changes accept the same seven flags and use the same applier. A
-same-as-current scope still applies supplied settings. Scope-owned Change
-Control and ceremony rows track new scope defaults, while explicit human
+Scope changes accept the same flags and use the same applier. A
+same-as-current scope still applies supplied settings. The scope-owned Guard
+Policy and ceremony rows track new scope defaults, while explicit human
 overrides and absent legacy rows are preserved. Under strict memory policy,
-an implicit scope change still updates the scope-owned Change Control line;
+an implicit scope change still updates the scope-owned Guard Policy line;
 memory continues to control the effective value. Explicit flags take precedence over scope defaults and record
 human provenance. `review adversarial` clears the `Review Override` field to an
 empty string, so stage declarations and scope review caps still apply.
 
 ### Ceremony Switches
 
-Scopes own three independent ceremony defaults. Each accepts `on` or `off`;
-an omitted scope key means `on`. Classic sets sensors and learnings to `on`
-and summary confirmation to `off`.
+Scopes own three independent ceremony defaults. Each accepts `on` or `off`.
+Every shipped scope now declares all three explicitly rather than relying on a
+default; a scope file that omits one still falls back to `on`. Classic sets
+sensors and learnings to `on` and summary confirmation to `off`. Express is the
+only shipped scope with all three off.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|
@@ -195,7 +201,7 @@ and summary confirmation to `off`.
 Precedence is global kill switch (`1`) → valid intent field → scope default →
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
-`Change Control` in `aidlc-state.md`, each with a source label such as
+`Guard Policy` in `aidlc-state.md`, each with a source label such as
 `on (from scope classic)`. A flag changes the label to `set by you` and
 records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
@@ -212,14 +218,18 @@ stage-start event and remains fixed through completion; resume with a different
 scope is refused. Legacy isolated starts without a recorded scope retain
 summary confirmation and do not enforce this scope comparison.
 
-### Change Control
+### Guard Policy
 
-Change Control is one setting with two values, `strict` and `relaxed`. It decides what happens when something you already approved or confirmed turns out to have changed underneath: the source files moved after you approved a code plan, a reviewed document was edited after its review, or an output was saved without the current summary confirmation.
+Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. It decides how far the framework's guards stand aside for the piece of work you are on. It covers two things: what happens when something you already approved turns out to have changed underneath, and how hard the five fences hold against work nobody asked for.
+
+**When an approved input changed.** The source files moved after you approved a code plan, a reviewed document was edited after its review, or an output was saved without the current summary confirmation.
 
 - `strict` reopens the approval. The run stops with one plain sentence naming what changed (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Look them over and approve the plan again to continue.`) and asks you again.
-- `relaxed` keeps going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it (`... Continuing (Change Control: relaxed). Say 'review the plan again' to reopen approval.`), and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
+- `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it (`... Continuing (Guard Policy: relaxed or off). Say 'review the plan again' to reopen approval.`), and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
 
-Neither value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under both values. Change Control only decides the consequence of an input change, not whether the framework notices it.
+**How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan approval and review freeze. `off` lowers those two plus state transition and reviewer scope. No value lowers human presence, and a lowered fence still writes an audit row every time it lets something through.
+
+No value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, no evidence is deleted, an agent can never answer for you, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under all three values. Guard Policy decides the consequence of a change or an undirected action, not whether the framework notices it.
 
 #### Defaults per scope
 
@@ -228,17 +238,64 @@ Neither value removes a gate. Every approval question is still asked, a reviewer
 | enterprise, security-patch, infra | strict |
 | poc, express, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
 
-A composed scope carries the value the composer proposed and you approved at its gate; a matched stock scope carries that scope's default.
+No shipped scope defaults to `off`; it is something you ask for. A composed scope carries the value the composer proposed and you approved at its gate; a matched stock scope carries that scope's default.
 
 #### The three places to set it
 
-1. **The scope file.** `change_control: strict | relaxed` in `scopes/aidlc-<name>.md` is the value every new intent on that scope starts with (absent means strict).
-2. **Memory.** A `## Change Control` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and per-intent values. An explicit `--change-control relaxed` is refused with a sentence naming the file, and none of the command's companion settings or scope change is applied. `Mode: relaxed` or an empty section changes nothing; any other value is a validation error naming the file and the two allowed values.
-3. **The intent.** `/aidlc --change-control strict|relaxed`, `/aidlc config set change-control <value>`, or a plain-chat request such as "stop asking me to re-approve when files change" uses the shared `config-change` setter for the running piece of work (`/aidlc --status` shows it as `Change Control: relaxed (set by you)`). It can be combined with the other setting flags in the same transaction.
+1. **The scope file.** `guard_policy: strict | relaxed | off` in `scopes/aidlc-<name>.md` is the value every new intent on that scope starts with. Every shipped scope declares it; a scope file that declares none starts strict.
+2. **Memory.** A `## Guard Policy` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and per-intent values. An explicit `--guard-policy relaxed` or `--guard-policy off` is refused with a sentence naming the file, and none of the command's companion settings or scope change is applied. `Mode: relaxed`, `Mode: off`, or an empty section changes nothing; any other value is a validation error naming the file and the three allowed values.
+3. **The intent.** `/aidlc --guard-policy strict|relaxed|off`, `/aidlc config set guard-policy <value>`, or a plain-chat request such as "stop asking me to re-approve when files change" uses the shared `config-change` setter for the running piece of work (`/aidlc --status` shows it as `Guard Policy: relaxed (set by you)`). It can be combined with the other setting flags in the same transaction.
 
 #### Where the value lives
 
-The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Change Control**: <value> (from scope <name>)`, rewritten by the flag or the chat request, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `CHANGE_CONTROL_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it; an invalid field is unavailable until `/aidlc --change-control strict|relaxed` repairs it. The next intent starts from its scope's default again.
+The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Guard Policy**: <value> (from scope <name>)`, rewritten by the flag or the chat request, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `GUARD_POLICY_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it; an invalid field is unavailable until `/aidlc --guard-policy` with one of the three values repairs it. The next intent starts from its scope's default again.
+
+#### This setting used to be called Change Control
+
+Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key, state field, or memory heading is read without comment. Nothing writes an old name again: a state file still carrying a `Change Control` line has that line renamed in place the next time the setting is written, so the setting never appears twice. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
+
+### The five fences
+
+A fence is a guard that refuses an action nothing asked for: no step the workflow is currently running calls for it. Each fence can be switched off for one piece of work and switched back on.
+
+| Fence | What it refuses | Config key | Machine-wide kill switch |
+|-------|-----------------|------------|--------------------------|
+| Plan approval | code before an approved plan | `guard.plan-approval` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` |
+| Review freeze | edits to reviewed content after a review receipt | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` |
+| State transition | direct lifecycle commands in place of the workflow's own | `guard.state-transition` | none |
+| Reviewer scope | a reviewer agent writing outside the Unit it was given | `guard.reviewer-scope` | `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` |
+| Human presence | an approval or an answer with no real human turn behind it | `guard.human-presence` | `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` |
+
+```
+/aidlc config set guard.plan-approval off
+/aidlc config set guard.plan-approval on
+```
+
+Switching one off writes `- **Guards Off**: plan-approval (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on writes `GUARD_RESTORED`. The line names only what you lowered, so it is easy to see what is down and put it back, and `/aidlc --status` prints a `Fences:` line with all five and where each setting came from. For one fence the order of precedence is the machine-wide kill switch, then your per-work switch, then the Guard Policy word, then on.
+
+A fence is lowered by a switch and by nothing else. Typing something in the session does not lower one, however clearly you meant it: the framework can tell that you spoke, but not what you asked for, and a fence that opened on any keystroke would be no fence at all. When one holds, the refusal names the switch, so opening it is one deliberate move rather than a guess about your intent.
+
+Human presence is the strictest of the five. It is what makes your approval yours, so no Guard Policy value lowers it: only its own switch or its kill switch can.
+
+### Who asked for this: the authority chain
+
+Every action a guard sees is classified before anything is decided. Is it covered by something you said, by the workflow's own instruction, or by neither?
+
+- **Your grant.** A message you sent after the workflow last told the agent what to do. It covers everything done to carry that message out, including work by any agent dispatched for it, and it lasts until the workflow issues its next instruction.
+- **The workflow's instruction.** The stage the engine currently has in force. It covers the work that instruction asks for, whoever does it, including an approval still pending inside it. It does not cover the loop skipping one of its own steps, which is exactly what a fence notices.
+- **Neither.** Something outside the instruction with nothing from you since: the narrowest cover, and the one an unreadable signal falls back to.
+
+The question is never who is typing. A developer agent acts on the conductor's word and the conductor acts on yours, so authority flows down the chain: when the conductor dispatches an agent, the authority in force at that moment is stamped on the dispatch and the agent inherits it. An agent can never mint a grant for itself, and an unreadable signal narrows what is covered rather than widening it. The signals are ones the framework already keeps: the turn markers under `.aidlc-engine/` that record your last prompt against the workflow's last advancing command, the counters on the active-directive marker, and the dispatch stamp on the in-flight agent ledger.
+
+What this classification decides is the changed-input question above: under `strict`, a grant is what lets the framework ask you about the change instead of stopping and waiting for the next boundary. It does NOT lower a fence. Its other job is the record: every time a lowered fence lets something through, the audit row names the authority in force, so a reader can see who was working when it happened.
+
+### What you see when a guard decides
+
+- **It stands aside.** One line, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work. Recorded in the audit trail: <detail>`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the switch is already off.
+
+  You see that line on Claude Code, Codex, opencode, and Kiro CLI. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. Every hook refusal reason is already invisible on that harness for the same reason. The row is written only when the intent already has an audit trail, so on a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
+- **It holds.** The refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.plan-approval off. It is recorded, and it comes back on for the next piece of work.`
+- **It asks.** Under `strict`, an input that changed after you approved something is asked about once, naming what changed.
 
 ---
 

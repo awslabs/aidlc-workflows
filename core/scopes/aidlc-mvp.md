@@ -7,7 +7,10 @@ keywords:
 description: Skip operations, ship the core
 skeleton: on
 runner: true
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # mvp scope

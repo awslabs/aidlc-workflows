@@ -7,7 +7,10 @@ keywords:
   - simplify
 description: Clean up existing code
 skeleton: off
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # refactor scope

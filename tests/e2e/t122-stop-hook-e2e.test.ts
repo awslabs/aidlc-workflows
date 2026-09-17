@@ -240,9 +240,11 @@ function runEngineNextDirective(proj: string): ProgressDirective {
     ...(typeof parsed.unit === "string" && parsed.unit.trim().length > 0
       ? { unit: parsed.unit.trim() }
       : {}),
-    ...(typeof parsed.continue_token === "string" &&
-    parsed.continue_token.trim().length > 0
-      ? { continueToken: parsed.continue_token.trim() }
+    // The directive's 8-character receipt; the marker still stores it under
+    // its historical continue_token name, so the local field keeps that name.
+    ...(typeof parsed.receipt === "string" &&
+    parsed.receipt.trim().length > 0
+      ? { continueToken: parsed.receipt.trim() }
       : {}),
     ...(typeof parsed.part === "number" && Number.isInteger(parsed.part)
       ? { part: parsed.part }

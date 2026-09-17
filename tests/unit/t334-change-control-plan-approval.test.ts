@@ -7,13 +7,13 @@
 // subcommand:aidlc-testing-posture:fingerprint, subcommand:aidlc-testing-posture:begin,
 // hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED
 //
-// t334 - Change Control at the Plan Approval checkpoint. The plan binds to the
+// t334 - Guard Policy at the Plan Approval checkpoint. The plan binds to the
 // workspace source it was written against; when that source moves after the
 // human approved (or is about to approve), `strict` refuses with the remedy and
 // `relaxed` records one CHANGE_ACCEPTED row naming the files, tells the human
 // once, re-baselines the recorded source, and continues into generation. The
 // content members of the approval (plan, instructions, Testing Contract) reopen
-// approval under BOTH values: Change Control never touches them.
+// approval under EVERY value: no Guard Policy value touches them.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,11 +21,12 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
-  CHANGE_CONTROL_FIELD,
+  getField,
+  GUARD_POLICY_FIELD,
   readAuditShardEvents,
   readPlanApprovalReceipt,
   sessionsDir,
-  setField,
+  setGuardPolicyLine,
   stateDigest,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -86,8 +87,16 @@ function acceptedRows(project: string) {
   return readAuditShardEvents(project).filter((entry) => entry.event === "CHANGE_ACCEPTED");
 }
 
-/** A code-generation project at the plan step, on `mode`, with a git baseline. */
-function createProject(mode: "strict" | "relaxed"): string {
+type Mode = "strict" | "relaxed" | "off";
+
+/** The one line the human hears when a relaxed or off policy carries source drift through. */
+function driftNotice(count: string, paths: string): string {
+  return `${count} changed since this plan was approved: ${paths}. Continuing (Guard Policy: relaxed or off). Say 'review the plan again' to reopen approval.`;
+}
+
+/** A code-generation project at the plan step, on `mode`, with a git baseline.
+ *  The fixture carries the retired `Change Control` line; the writer renames it. */
+function createProject(mode: Mode): string {
   const project = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
   projects.push(project);
   const statePath = join(seededRecordDir(project), "aidlc-state.md");
@@ -97,7 +106,9 @@ function createProject(mode: "strict" | "relaxed"): string {
       /^- \[[ xSR?-]\] code-generation(\s+\S\s+)EXECUTE$/m,
       "- [-] code-generation$1EXECUTE",
     );
-  state = setField(state, CHANGE_CONTROL_FIELD, `${mode} (set by you)`);
+  state = setGuardPolicyLine(state, `${mode} (set by you)`);
+  expect(getField(state, GUARD_POLICY_FIELD)).toBe(`${mode} (set by you)`);
+  expect(state).not.toContain("- **Change Control**:");
   writeFileSync(statePath, state, "utf-8");
   mkdirSync(join(project, "src"), { recursive: true });
   writeFileSync(join(project, "src", "base.ts"), "export const base = 1;\n");
@@ -221,9 +232,7 @@ describe("t334 (1) relaxed accepts source drift at the checkpoint record and re-
 
     const decision = decide(project, questions, "relaxed-decision");
     expect(decision.code, decision.stderr).toBe(0);
-    expect(changeNotices(decision.stdout)).toEqual([
-      "1 file changed since this plan was approved: src/drifted.ts. Continuing (Change Control: relaxed). Say 'review the plan again' to reopen approval.",
-    ]);
+    expect(changeNotices(decision.stdout)).toEqual([driftNotice("1 file", "src/drifted.ts")]);
     const rebaselined = plannedSourceTag(questions);
     expect(rebaselined).not.toBe(planned);
 
@@ -250,6 +259,22 @@ describe("t334 (1) relaxed accepts source drift at the checkpoint record and re-
 });
 
 describe("t334 (2) relaxed accepts source drift at the answer and certifies the source found", () => {
+  test("off accepts the same drift at the decision with the same one line and one row", () => {
+    const project = createProject("off");
+    const questions = presentPlan(project);
+    const planned = plannedSourceTag(questions);
+    writeFileSync(join(project, "src", "drifted.ts"), "export const drifted = 1;\n");
+    startSession(project, "off-decision");
+    const decision = decide(project, questions, "off-decision");
+    expect(decision.code, decision.stderr).toBe(0);
+    expect(changeNotices(decision.stdout)).toEqual([driftNotice("1 file", "src/drifted.ts")]);
+    expect(plannedSourceTag(questions)).not.toBe(planned);
+    const rows = acceptedRows(project);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Checkpoint")).toBe("plan-approval");
+    expect(auditBlockField(rows[0].block, "Changed")).toBe("src/drifted.ts");
+  }, 60000);
+
   test("drift between the decision and the answer records once; the receipt carries the new source and generation begins", () => {
     const project = createProject("relaxed");
     const questions = presentPlan(project);
@@ -262,9 +287,7 @@ describe("t334 (2) relaxed accepts source drift at the answer and certifies the 
 
     const answered = answer(project, questions, "relaxed-answer");
     expect(answered.code, answered.stderr).toBe(0);
-    expect(changeNotices(answered.stdout)).toEqual([
-      "2 files changed since this plan was approved: src/base.ts, src/late.ts. Continuing (Change Control: relaxed). Say 'review the plan again' to reopen approval.",
-    ]);
+    expect(changeNotices(answered.stdout)).toEqual([driftNotice("2 files", "src/base.ts, src/late.ts")]);
     // The tag is what the human saw; the receipt is what generation compares against.
     expect(plannedSourceTag(questions)).toBe(planned);
     const rows = acceptedRows(project);
@@ -327,9 +350,7 @@ describe("t334 (3) relaxed accepts source drift at generation start and re-basel
     const rows = acceptedRows(project);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Changed")).toBe("src/after.ts");
-    expect(auditBlockField(rows[0].block, "Details")).toBe(
-      "1 file changed since this plan was approved: src/after.ts. Continuing (Change Control: relaxed). Say 'review the plan again' to reopen approval.",
-    );
+    expect(auditBlockField(rows[0].block, "Details")).toBe(driftNotice("1 file", "src/after.ts"));
     const noticed = rowsAfterGuard.length === 1 ? guard.stdout : started.stdout;
     expect(noticed).toContain("1 file changed since this plan was approved: src/after.ts.");
     const authority = resolveCodeGenerationAuthority(project, { unit: null });
@@ -441,8 +462,8 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
   }, 60000);
 });
 
-describe("t334 (5) the approval's content members reopen approval under both values", () => {
-  for (const mode of ["strict", "relaxed"] as const) {
+describe("t334 (5) the approval's content members reopen approval under every value", () => {
+  for (const mode of ["strict", "relaxed", "off"] as const) {
     test(`an edited plan, instructions, or Testing Contract is refused under ${mode}`, () => {
       const project = createProject(mode);
       const questions = presentPlan(project);

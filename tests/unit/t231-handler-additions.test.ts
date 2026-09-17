@@ -28,6 +28,20 @@ const POSIX_SH = process.platform === "win32"
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 const NO_STATE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
+const RENAME_NOTICE =
+  "Change Control is now Guard Policy (--guard-policy, config key guard-policy, scope key guard_policy, " +
+  "memory heading ## Guard Policy). The old names still work in this release and are removed in the next minor.";
+/** Every fence kill switch held at "0" so the test host's environment cannot lower a fence. */
+const FENCE_ENV_CLEAR = {
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "0",
+  AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "0",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+};
+
+function renameNotices(stream: string): number {
+  return stream.split("\n").filter((line) => line === RENAME_NOTICE).length;
+}
 
 type RunResult = {
   status: number;
@@ -148,34 +162,64 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("one config-change exposes all seven settings through get and both list formats", () => {
+  test("one config-change exposes all twelve settings through get and both list formats", () => {
     const project = stateProject();
     const changed = utility([
       "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
-      "--review", "advisory", "--change-control", "relaxed", "--sensors", "off",
-      "--learnings", "off", "--summary-confirmation", "off",
-    ], project);
+      "--review", "advisory", "--guard-policy", "relaxed", "--sensors", "off",
+      "--learnings", "off", "--summary-confirmation", "off", "--guard.human-presence", "off",
+    ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
+    expect(renameNotices(changed.stderr)).toBe(0);
+    // The seven settings the human names plus the five per-run fence switches,
+    // in the order config list prints them. relaxed lowers two fences by
+    // itself; the switch lowered a third; the rest read their default.
     const expected = {
       depth: "Minimal",
       "test-strategy": "Comprehensive",
       review: "advisory",
-      "change-control": "relaxed (set by you)",
+      "guard-policy": "relaxed (set by you)",
       sensors: "off (set by you)",
       learnings: "off (set by you)",
       "summary-confirmation": "off (set by you)",
+      "guard.plan-approval": "off (guard policy relaxed (set by you))",
+      "guard.review-freeze": "off (guard policy relaxed (set by you))",
+      "guard.state-transition": "on (default)",
+      "guard.reviewer-scope": "on (default)",
+      "guard.human-presence": "off (set by you)",
     };
     for (const [key, value] of Object.entries(expected)) {
-      const read = utility(["config-get", key], project);
+      const read = utility(["config-get", key], project, FENCE_ENV_CLEAR);
       expect(read.status, read.stderr).toBe(0);
-      expect(read.stdout).toBe(`${value}\n`);
+      expect(read.stdout, key).toBe(`${value}\n`);
     }
-    const human = utility(["config-list"], project);
+    const human = utility(["config-list"], project, FENCE_ENV_CLEAR);
     expect(human.status, human.stderr).toBe(0);
     expect(human.stdout).toBe(Object.entries(expected).map(([key, value]) => `${key}: ${value}\n`).join(""));
-    const json = utility(["config-list", "--json"], project);
+    const json = utility(["config-list", "--json"], project, FENCE_ENV_CLEAR);
     expect(json.status, json.stderr).toBe(0);
     expect(parseJson<Record<string, string>>(json.stdout)).toEqual(expected);
+    expect(Object.keys(parseJson<Record<string, string>>(json.stdout))).toEqual(Object.keys(expected));
+  });
+
+  test("the retired change-control key is read as guard-policy, renames the fixture's line in place, and prints the notice once", () => {
+    const project = stateProject();
+    expect(stateField(project, "Change Control")).toBe("strict (from scope feature)");
+    expect(stateField(project, "Guard Policy")).toBe("");
+    const changed = dispatcher(["engine", "config", "set", "change-control", "relaxed"], project);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(renameNotices(changed.stderr)).toBe(1);
+    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
+    expect(stateField(project, "Change Control")).toBe("");
+    const retiredRead = utility(["config-get", "change-control"], project);
+    expect(retiredRead.status, retiredRead.stderr).toBe(0);
+    expect(retiredRead.stdout).toBe("relaxed (set by you)\n");
+    expect(renameNotices(retiredRead.stderr)).toBe(1);
+    const currentRead = utility(["config-get", "guard-policy"], project);
+    expect(currentRead.stdout).toBe("relaxed (set by you)\n");
+    expect(renameNotices(currentRead.stderr)).toBe(0);
+    const listed = utility(["config-list", "--json"], project);
+    expect(Object.keys(parseJson<Record<string, string>>(listed.stdout))).not.toContain("change-control");
   });
 
   test("config get rejects unknown keys and missing workflows", () => {
@@ -210,17 +254,35 @@ describe("t231 config get/list/set handlers", () => {
     ["depth", "minimal", "Depth", "Minimal"],
     ["test-strategy", "comprehensive", "Test Strategy", "Comprehensive"],
     ["review", "advisory", "Review Override", "advisory"],
-    ["change-control", "relaxed", "Change Control", "relaxed (set by you)"],
+    ["guard-policy", "relaxed", "Guard Policy", "relaxed (set by you)"],
+    ["guard-policy", "off", "Guard Policy", "off (set by you)"],
     ["sensors", "off", "Sensors", "off (set by you)"],
     ["learnings", "off", "Learnings", "off (set by you)"],
     ["summary-confirmation", "off", "Summary Confirmation", "off (set by you)"],
-  ])("engine config set accepts %s as the leading setting", (key, value, field, expected) => {
+  ])("engine config set accepts %s %s as the leading setting", (key, value, field, expected) => {
     const project = stateProject();
     const changed = dispatcher(["engine", "config", "set", key, value], project);
     expect(changed.status, changed.stderr).toBe(0);
+    expect(renameNotices(changed.stderr)).toBe(0);
     expect(stateField(project, field)).toBe(expected);
     expect(utility(["config-get", key], project).stdout).toBe(`${expected}\n`);
   });
+
+  test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope", "human-presence"])(
+    "engine config set accepts guard.%s as the leading setting and config get reads the switch",
+    (fence) => {
+      const project = stateProject();
+      const key = `guard.${fence}`;
+      const lowered = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
+      expect(lowered.status, lowered.stderr).toBe(0);
+      expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);
+      expect(utility(["config-get", key], project, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
+      const restored = dispatcher(["engine", "config", "set", key, "on"], project, FENCE_ENV_CLEAR);
+      expect(restored.status, restored.stderr).toBe(0);
+      expect(stateField(project, "Guards Off")).toBe("none");
+      expect(utility(["config-get", key], project, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
+    },
+  );
 });
 
 describe("t231 plugin list and sync handlers", () => {

@@ -85,6 +85,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -179,7 +180,11 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
-  parseChangeControl,
+  parseGuardPolicy,
+  noteGuardPolicyRename,
+  humanPresenceGuardDisabled,
+  engineDir,
+  isPlainObject,
   parseCeremonySetting,
   pipelineLinkEvidence,
   parseBoltDag,
@@ -335,6 +340,10 @@ interface PreparedEmission {
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
+    // The steering payload behind the current part's receipt, stored so
+    // `continue <receipt>` can rebuild the next part without a self-describing
+    // token. Present only on load-steering markers.
+    steering_payload?: SteeringTokenPayload;
     ask_type?: string;
     remedies?: Array<Pick<GuardRemedy, "op" | "action" | "operation" | "interaction">>;
   };
@@ -531,7 +540,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
         ? {
             part: transported.part,
             parts: transported.parts,
-            continue_token: transported.continue_token,
+            // The marker's continue_token field carries the part's 8-character
+            // receipt; the field keeps its historical name so the shared cursor
+            // code and its tests stay stable.
+            continue_token: transported.receipt,
+            ...(preparedSteeringPayload
+              ? { steering_payload: preparedSteeringPayload }
+              : {}),
           }
         : {}),
       ...(preparedTransportIdentity
@@ -539,6 +554,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
             rules_bundle: preparedTransportIdentity.bundle,
             directive_sha256: preparedTransportIdentity.directiveSha256,
           }
+        : {}),
+      // On a run-stage marker the payload is only the route hint behind a later
+      // `continue` that cannot be matched (a stateless route has no state file
+      // to route from); on a load-steering marker it is the current part's
+      // payload as well.
+      ...(transported.kind === "run-stage" && preparedSteeringPayload
+        ? { steering_payload: preparedSteeringPayload }
         : {}),
       state_sha256: markerStateHash,
     };
@@ -673,6 +695,125 @@ function guardRecoveryAskMarkerIsCurrent(
 }
 
 
+// --- The fallback delivery cursor ------------------------------------------
+//
+// The active-directive marker is the cursor for a chunked rules delivery. One
+// publication path REFUSES the write rather than taking it: under legacy Kiro
+// IDE Plan Approval ownership the marker is preserved so an in-flight approval
+// survives. A delivery walked in that window therefore had nowhere to record
+// which part the conductor holds, every `continue` mismatched, and the engine
+// answered part one forever.
+//
+// This file is that cursor when the marker cannot be it. It holds exactly what
+// the marker would have held (the part's receipt and its payload), it is written
+// only where the marker itself is written (never from a read-only probe), and it
+// is REMOVED the moment a delivery finishes. That last part is what keeps the
+// at-most-once property: once the stage is running there is no cursor, so a
+// replayed receipt answers with the run-stage instead of re-delivering rules.
+function steeringCursorPath(projectDir: string): string {
+  return join(engineDir(projectDir), "steering-cursor.json");
+}
+
+function writeSteeringCursor(
+  projectDir: string,
+  receipt: string,
+  payload: SteeringTokenPayload,
+  markerRevision: number | null,
+): void {
+  try {
+    mkdirSync(dirname(steeringCursorPath(projectDir)), { recursive: true });
+    writeFileSync(
+      steeringCursorPath(projectDir),
+      `${JSON.stringify({ version: 1, receipt, payload, marker_revision: markerRevision })}\n`,
+      "utf-8",
+    );
+  } catch {
+    // Advisory: the marker is the primary cursor, and a delivery whose marker
+    // write succeeded never reads this file.
+  }
+}
+
+function clearSteeringCursor(projectDir: string): void {
+  try {
+    rmSync(steeringCursorPath(projectDir), { force: true });
+  } catch {
+    // Nothing to do: a stale cursor is only ever consulted when the marker
+    // holds no part, and its payload is re-validated against the route.
+  }
+}
+
+// Keep the fallback cursor in step with what was just published: a part in
+// flight records its receipt and payload, and anything else (a finished
+// delivery, an ask, an error) clears it.
+function recordSteeringCursor(
+  projectDir: string,
+  marker: { kind?: string; continue_token?: string } | undefined,
+  preserved: boolean,
+): void {
+  const receipt = marker?.continue_token;
+  // Written ONLY for a publication the marker refused to take. Everywhere else
+  // the marker is the cursor and this file must not exist, so those paths clear
+  // it and no behaviour outside legacy ownership changes at all.
+  if (
+    preserved &&
+    marker?.kind === "load-steering" &&
+    typeof receipt === "string" &&
+    receipt.length > 0 &&
+    preparedSteeringPayload !== null
+  ) {
+    writeSteeringCursor(
+      projectDir,
+      receipt,
+      preparedSteeringPayload,
+      currentMarkerRevision(projectDir),
+    );
+    return;
+  }
+  clearSteeringCursor(projectDir);
+}
+
+/** The live marker's revision, or null when there is no readable marker. */
+function currentMarkerRevision(projectDir: string): number | null {
+  try {
+    const state = loadStateFileIfPresent(projectDir);
+    const marker = readActiveDirectiveMarker(projectDir, state ?? "");
+    return typeof marker?.revision === "number" ? marker.revision : null;
+  } catch {
+    return null;
+  }
+}
+
+function readSteeringCursor(
+  projectDir: string,
+  receipt: string,
+): SteeringTokenPayload | null {
+  try {
+    const raw: unknown = JSON.parse(
+      readFileSync(steeringCursorPath(projectDir), "utf-8"),
+    );
+    if (!isPlainObject(raw) || raw.version !== 1) return null;
+    const stored = raw.receipt;
+    if (typeof stored !== "string" || !receiptMatches(receipt, stored)) return null;
+    if (!isPlainObject(raw.payload)) return null;
+    // The cursor is only good while the marker has NOT moved since it was
+    // written. That single comparison separates the two cases that otherwise
+    // look identical:
+    //
+    //   - legacy Kiro IDE ownership PRESERVED the marker, so its revision is
+    //     unchanged and this cursor is the only record of the part in flight.
+    //   - the context was reset (a compaction, a destroyed or rebuilt marker),
+    //     which bumps or removes the revision. A conductor that lost its earlier
+    //     parts must restart at part one, so a surviving receipt must NOT be
+    //     allowed to skip them.
+    if (raw.marker_revision !== currentMarkerRevision(projectDir)) return null;
+    return markerSteeringPayload(
+      { steering_payload: raw.payload } as ActiveDirectiveMarker,
+    );
+  } catch {
+    return null;
+  }
+}
+
 function emit(directive: Directive): void {
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
@@ -729,6 +870,11 @@ function emit(directive: Directive): void {
           publication === "legacy-plan-approval-reissued" ||
           publication === "legacy-plan-approval-transport"
         ) {
+          // The marker was PRESERVED to protect an in-flight legacy approval, so
+          // it did not take this part's cursor. Record the cursor beside it, or
+          // the conductor's next `continue` has nothing to match and the
+          // delivery restarts at part one for as long as the window is open.
+          recordSteeringCursor(projectDir, prepared.marker, true);
           writePrepared(prepared);
           return;
         }
@@ -746,6 +892,8 @@ function emit(directive: Directive): void {
           )));
           return;
         }
+        // The marker took the cursor, so the fallback must not shadow it.
+        recordSteeringCursor(projectDir, prepared.marker, false);
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must
@@ -1543,7 +1691,7 @@ interface ParsedFlags {
   depth?: string;
   testStrategy?: string;
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
-  changeControl?: string; // --change-control <strict|relaxed>: the per-intent Change Control value
+  changeControl?: string; // --guard-policy <strict|relaxed|off> (retired spelling --change-control): the per-intent Guard Policy
   ceremony?: Partial<CeremonyPolicy>;
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
@@ -1724,15 +1872,16 @@ function parseNextFlags(args: string[]): ParsedFlags {
         flags.review = value;
         i++;
       }
-    } else if (a === "--change-control") {
+    } else if (a === "--guard-policy" || a === "--change-control") {
+      if (a === "--change-control") noteGuardPolicyRename();
       const value = args[i + 1];
       if (value === undefined || value.startsWith("--")) {
-        flags.parseError = "--change-control requires <strict|relaxed>.";
+        flags.parseError = `${a} requires <strict|relaxed|off>.`;
       } else {
-        const parsed = parseChangeControl(value);
+        const parsed = parseGuardPolicy(value);
         if (parsed === null) {
           flags.parseError =
-            `--change-control requires <strict|relaxed>; received "${value}".`;
+            `${a} requires <strict|relaxed|off>; received "${value}".`;
         } else {
           flags.changeControl = parsed;
         }
@@ -1869,7 +2018,7 @@ function createPrintDirective(
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  if (flags.changeControl) cmd.push(`--change-control ${flags.changeControl}`);
+  if (flags.changeControl) cmd.push(`--guard-policy ${flags.changeControl}`);
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
@@ -2296,6 +2445,26 @@ const publicationContexts = new WeakMap<
   { projectDir: string; stateHash: string }
 >();
 let requestedSteeringContinuation: SteeringTokenPayload | null = null;
+// The payload of the load-steering part being emitted in this invocation, so
+// prepareEmission can store it on the marker beside the part's receipt.
+let preparedSteeringPayload: SteeringTokenPayload | null = null;
+// Set while a `continue` that lost a race for its receipt is answered: the
+// loser proved it holds the current part, so it is handed the winner's
+// successor straight from the marker (any part, not only part one) and
+// publishes nothing, instead of restarting the delivery under the winner.
+let continuationLoserReadsMarker = false;
+// A receipt presented inside a READ-ONLY PROBE (the Stop hook's own consultation
+// or a route check), matched against the parts this route would issue rather than
+// against a cursor. A probe publishes nothing, so no cursor of any kind records
+// its walk, and this is the only way it can follow one.
+//
+// Nothing else uses this, deliberately. A missing or damaged marker must NOT
+// match a receipt against the route: the conductor may have lost the parts it
+// already held, and restarting at part one is the only answer that is always
+// complete. The one other case where the engine cannot write the marker, legacy
+// Kiro IDE Plan Approval ownership, has its own recorded cursor instead (see
+// steeringCursorPath), so it advances without weakening this rule.
+let receiptToMatchAgainstRoute: string | null = null;
 // Set when this invocation RE-ISSUED the directive already recorded on the active
 // marker instead of publishing a new one. `next` is a query: asking twice for the
 // same state must answer the same thing and change nothing.
@@ -3691,12 +3860,6 @@ function steeringChunks(content: RuleContent[]): RuleContent[][] {
   return chunks;
 }
 
-type SteeringTokenEnvelope = {
-  p: SteeringTokenPayload;
-  m: string;
-  probe?: true;
-};
-
 const STEERING_TOKEN_KEY_BYTES = 32;
 const STEERING_TOKEN_KEY_FILE = "steering-token-key";
 const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
@@ -3799,108 +3962,130 @@ function probeSteeringTokenKey(projectDir: string): Buffer {
     .digest();
 }
 
-function encodeSteeringToken(
+// The 8-character receipt for one steering part: the first characters of an
+// HMAC over the part's payload, keyed by the machine-local steering key. It
+// proves the conductor holds THIS part (the receipt exists only inside the
+// part's directive) and is short enough for a model to copy reliably. It gives
+// up signature strength against the old 610-character signed envelope, but the
+// threat here is a confused model, not an attacker: an attacker with the key on
+// disk defeated the envelope just as easily. The payload itself travels on the
+// active-directive marker, so `continue <receipt>` rebuilds the next part from
+// disk, never from anything the conductor typed.
+const STEERING_RECEIPT_LENGTH = 8;
+
+function steeringReceipt(payload: SteeringTokenPayload, key: Buffer): string {
+  return steeringTokenMac(payload, key).slice(0, STEERING_RECEIPT_LENGTH);
+}
+
+function mintSteeringReceipt(
   payload: SteeringTokenPayload,
   projectDir: string,
-): { token: string | null; error: string | null } {
+): { receipt: string | null; error: string | null } {
   const probe = isStopHookProbe();
   const loaded = steeringTokenKey(projectDir, !probe);
   const key = probe
     ? (loaded.error === null ? probeSteeringTokenKey(projectDir) : null)
     : loaded.key;
-  if (!key) return { token: null, error: loaded.error };
-  const envelope: SteeringTokenEnvelope = {
-    p: payload,
-    m: steeringTokenMac(payload, key),
-    ...(probe ? { probe: true } : {}),
-  };
-  return {
-    token: Buffer.from(JSON.stringify(envelope), "utf-8").toString("base64url"),
-    error: null,
-  };
+  if (!key) return { receipt: null, error: loaded.error };
+  return { receipt: steeringReceipt(payload, key), error: null };
 }
 
-function decodeSteeringToken(
-  token: string,
-  projectDir: string,
+// Constant-time comparison of a presented receipt with the marker's.
+function receiptMatches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, "utf-8");
+  const b = Buffer.from(expected, "utf-8");
+  return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+}
+
+// Inside a read-only probe there is no marker to match a receipt against, so the
+// receipt is compared with the receipt of every part THIS route would issue
+// (same key, same payloads). The matching part's payload is the continuation
+// the probe asked for; null means the receipt belongs to no current part.
+function probeMatchedPayload(
+  receipt: string,
+  directive: RunStageDirective,
+  route: RunStageRoute,
+  bundle: string,
+  directiveHash: string,
+  parts: number,
 ): SteeringTokenPayload | null {
-  try {
-    const decoded: unknown = JSON.parse(
-      Buffer.from(token, "base64url").toString("utf-8"),
-    );
-    if (
-      decoded === null ||
-      typeof decoded !== "object" ||
-      !("p" in decoded) ||
-      !("m" in decoded) ||
-      typeof (decoded as { m?: unknown }).m !== "string"
-    ) {
-      return null;
-    }
-    const envelope = decoded as { p: unknown; m: string; probe?: unknown };
-    if (envelope.p === null || typeof envelope.p !== "object") return null;
-    const probe = envelope.probe === true;
-    if (envelope.probe !== undefined && !probe) return null;
-    if (
-      probe &&
-      (
-        !("i" in envelope.p) ||
-        (envelope.p as { i?: unknown }).i !== 1
-      )
-    ) {
-      return null;
-    }
-    const loaded = steeringTokenKey(projectDir, false);
-    const key = probe ? probeSteeringTokenKey(projectDir) : loaded.key;
-    if (!key) return null;
-    const expected = Buffer.from(
-      steeringTokenMac(envelope.p as SteeringTokenPayload, key),
-      "base64url",
-    );
-    const actual = Buffer.from(envelope.m, "base64url");
-    if (
-      expected.length !== actual.length ||
-      !timingSafeEqual(expected, actual)
-    ) {
-      return null;
-    }
-    const value = envelope.p;
-    if (!("v" in value) || value.v !== 1) return null;
-    const p = value as Partial<SteeringTokenPayload>;
-    if (
-      typeof p.s !== "string" ||
-      typeof p.c !== "string" ||
-      typeof p.i !== "number" ||
-      !Number.isInteger(p.i) ||
-      p.i < 1 ||
-      typeof p.b !== "string" ||
-      typeof p.d !== "string" ||
-      typeof p.r !== "string" ||
-      typeof p.a !== "boolean" ||
-      (p.u !== null && typeof p.u !== "string") ||
-      (p.k !== null && typeof p.k !== "string") ||
-      typeof p.f !== "boolean" ||
-      (typeof p.g !== "boolean" && p.g !== GATE_UNRESOLVED) ||
-      (p.n !== undefined && p.n !== null && typeof p.n !== "string") ||
-      typeof p.x !== "boolean" ||
-      typeof p.p !== "boolean" ||
-      typeof p.w !== "boolean" ||
-      (p.z !== undefined && typeof p.z !== "boolean") ||
-      (p.q !== undefined && p.q !== "per-stage" && p.q !== "unit-end") ||
-      (p.j !== undefined && p.j !== "unit" && p.j !== "skeleton") ||
-      (p.y !== undefined && (
-        !Number.isSafeInteger(p.y.batch) || p.y.batch < 1 ||
-        !Array.isArray(p.y.units) || p.y.units.length === 0 ||
-        !p.y.units.every((unit) => typeof unit === "string")
-      )) ||
-      (p.h !== null && typeof p.h !== "string")
-    ) {
-      return null;
-    }
-    return p as SteeringTokenPayload;
-  } catch {
+  for (let part = 1; part <= parts; part++) {
+    const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part);
+    const minted = mintSteeringReceipt(candidate, route.codekbCtx.projectDir);
+    if (minted.receipt && receiptMatches(receipt, minted.receipt)) return candidate;
+  }
+  return null;
+}
+
+// The ready-to-run continuation command printed inside a load-steering part,
+// ahead of the payload, so the conductor copies one short line and never
+// reconstructs anything.
+function steeringNextCommand(receipt: string): string {
+  return `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${receipt}`;
+}
+
+// A run-stage directive carries its own rules whenever they fit beside it under
+// the transport cap. Every shipped stage does (18-20 KB of 28 KiB measured), so
+// this is the ordinary shape; chunked load-steering is the fallback for a bundle
+// a team's memory files pushed past the cap. The margin leaves room for the
+// narration line and validation the emission path adds afterwards.
+const INLINE_RULES_MARGIN_BYTES = 1024;
+
+function attachRulesIfTheyFit(
+  directive: RunStageDirective,
+  content: RuleContent[],
+): boolean {
+  if (content.length === 0) return true;
+  const candidate = { ...directive, rules_content: content };
+  if (
+    Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
+      DIRECTIVE_MAX_BYTES - INLINE_RULES_MARGIN_BYTES
+  ) {
+    return false;
+  }
+  directive.rules_content = content;
+  return true;
+}
+
+// The steering payload stored on the marker, if it is one this engine can act on.
+function markerSteeringPayload(
+  marker: ActiveDirectiveMarker | null,
+): SteeringTokenPayload | null {
+  const value = marker?.steering_payload;
+  if (value === null || value === undefined || typeof value !== "object") return null;
+  if (!("v" in value) || value.v !== 1) return null;
+  const p = value as Partial<SteeringTokenPayload>;
+  if (
+    typeof p.s !== "string" ||
+    typeof p.c !== "string" ||
+    typeof p.i !== "number" ||
+    !Number.isInteger(p.i) ||
+    p.i < 1 ||
+    typeof p.b !== "string" ||
+    typeof p.d !== "string" ||
+    typeof p.r !== "string" ||
+    typeof p.a !== "boolean" ||
+    (p.u !== null && typeof p.u !== "string") ||
+    (p.k !== null && typeof p.k !== "string") ||
+    typeof p.f !== "boolean" ||
+    (typeof p.g !== "boolean" && p.g !== GATE_UNRESOLVED) ||
+    (p.n !== undefined && p.n !== null && typeof p.n !== "string") ||
+    typeof p.x !== "boolean" ||
+    typeof p.p !== "boolean" ||
+    typeof p.w !== "boolean" ||
+    (p.z !== undefined && typeof p.z !== "boolean") ||
+    (p.q !== undefined && p.q !== "per-stage" && p.q !== "unit-end") ||
+    (p.j !== undefined && p.j !== "unit" && p.j !== "skeleton") ||
+    (p.y !== undefined && (
+      !Number.isSafeInteger(p.y.batch) || p.y.batch < 1 ||
+      !Array.isArray(p.y.units) || p.y.units.length === 0 ||
+      !p.y.units.every((unit) => typeof unit === "string")
+    )) ||
+    (p.h !== null && typeof p.h !== "string")
+  ) {
     return null;
   }
+  return p as SteeringTokenPayload;
 }
 
 function steeringTokenPayload(
@@ -3966,6 +4151,7 @@ function retainedTransportForCurrentState(
   bundle: string,
   directiveHash: string,
   chunks: RuleContent[][],
+  content: RuleContent[],
 ): Directive | null {
   if (engineInvocation?.commandKind !== "next") return null;
   if (engineInvocation.attemptId !== undefined) return null;
@@ -3995,28 +4181,33 @@ function retainedTransportForCurrentState(
   ) {
     return null;
   }
-  if (marker.kind === "run-stage") return directive;
+  if (marker.kind === "run-stage") {
+    // The issued run-stage is re-answered with its rules attached exactly as
+    // it was first issued (they fit, or it would have been chunked).
+    attachRulesIfTheyFit(directive, content);
+    return directive;
+  }
   if (marker.kind !== "load-steering") return null;
   const part = marker.part;
-  // Only part ONE of a multi-part delivery is ever retained. A marker published by a
-  // plain `next` is sessionless, so a repeat ask from the conductor that already
-  // holds parts 1..k-1 is indistinguishable from an ask by a compacted context or a
-  // brand-new process. Handing back part k would deliver the method layer with its
-  // earlier parts missing and nothing saying so, so a mid-delivery repeat restarts
-  // delivery from part one, which is always complete and costs one republication.
-  if (part !== 1) return null;
-  const token = marker.continue_token;
+  // A plain `next` retains only part ONE of a multi-part delivery. A marker
+  // published by a plain `next` is sessionless, so a repeat ask from the
+  // conductor that already holds parts 1..k-1 is indistinguishable from an ask
+  // by a compacted context or a brand-new process. Handing back part k would
+  // deliver the method layer with its earlier parts missing and nothing saying
+  // so, so a mid-delivery repeat restarts delivery from part one, which is
+  // always complete and costs one republication. The Stop-hook probe is the
+  // one exception: it reads the CURRENT part so the end-of-turn re-feed can
+  // name the receipt the conductor already holds instead of a fresh part one.
+  if (part !== 1 && !isStopHookProbe() && !continuationLoserReadsMarker) return null;
+  const receipt = marker.continue_token;
+  const payload = markerSteeringPayload(marker);
   if (
     !Number.isInteger(part) ||
     (part as number) < 1 ||
     (part as number) > chunks.length ||
     marker.parts !== chunks.length ||
-    typeof token !== "string"
-  ) {
-    return null;
-  }
-  const payload = decodeSteeringToken(token, projectDir);
-  if (
+    typeof receipt !== "string" ||
+    receipt.length === 0 ||
     !payload ||
     payload.i !== part ||
     payload.s !== directive.stage ||
@@ -4032,8 +4223,9 @@ function retainedTransportForCurrentState(
     bundle,
     part: part as number,
     parts: chunks.length,
+    receipt,
+    next: steeringNextCommand(receipt),
     rules_content: chunks[(part as number) - 1],
-    continue_token: token,
   };
   return Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES
     ? null
@@ -4059,8 +4251,36 @@ function transportRunStage(
   const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
   const directiveHash = sha256(JSON.stringify(directive));
   const chunks = steeringChunks(loaded.content);
-  const requested = requestedSteeringContinuation;
+  let requested = requestedSteeringContinuation;
   preparedTransportIdentity = { bundle, directiveSha256: directiveHash };
+  if (
+    requested &&
+    (requested.s !== directive.stage ||
+      requested.b !== bundle ||
+      requested.d !== directiveHash ||
+      requested.i > chunks.length)
+  ) {
+    // The delivery this receipt belongs to no longer exists: the rules or the
+    // directive changed underneath it, or it names a part that is gone. Old and
+    // new parts are never mixed, so the answer is a fresh delivery from part one
+    // (or the one-message run-stage), exactly as `next` would answer.
+    requested = null;
+    requestedSteeringContinuation = null;
+  }
+  if (!requested && receiptToMatchAgainstRoute !== null) {
+    // No marker recorded this delivery, so the receipt is matched against the
+    // parts this route issues. Unmatched restarts from part one below, exactly
+    // as an unmatched receipt does everywhere else.
+    requested = probeMatchedPayload(
+      receiptToMatchAgainstRoute,
+      directive,
+      route,
+      bundle,
+      directiveHash,
+      chunks.length,
+    );
+    receiptToMatchAgainstRoute = null;
+  }
 
   // --- `next` is idempotent for unchanged state -----------------------------
   //
@@ -4083,6 +4303,7 @@ function transportRunStage(
       bundle,
       directiveHash,
       chunks,
+      loaded.content,
     );
     if (retained) {
       retainedIssuedDirective = true;
@@ -4091,22 +4312,23 @@ function transportRunStage(
   }
 
   if (requested) {
-    if (
-      requested.s !== directive.stage ||
-      requested.b !== bundle ||
-      requested.d !== directiveHash
-    ) {
-      return errorDirective(
-        "This stage or its rules changed while they were being loaded, so what has arrived so far is stale. Run a fresh `next` to restart delivery from part 1.",
-      );
+    if (requested.i === chunks.length) {
+      preparedSteeringPayload = requested;
+      return directive;
     }
-    if (requested.i > chunks.length) {
-      return errorDirective(
-        "This request asks for a part of the stage rules that does not exist. Run a fresh `next` to restart delivery from part 1.",
-      );
-    }
-    if (requested.i === chunks.length) return directive;
-  } else if (chunks.length === 0) {
+  } else if (attachRulesIfTheyFit(directive, loaded.content)) {
+    // One message: the rules ride inside the run-stage directive. This is the
+    // ordinary case for every shipped stage; the chunked delivery below is the
+    // fallback for a bundle that does not fit beside its run-stage. The payload
+    // still travels on the marker as the route hint a later `continue` with an
+    // unmatched receipt is answered from.
+    preparedSteeringPayload = steeringTokenPayload(
+      directive,
+      route,
+      bundle,
+      directiveHash,
+      Math.max(1, chunks.length),
+    );
     return directive;
   }
 
@@ -4118,24 +4340,23 @@ function transportRunStage(
     directiveHash,
     index + 1,
   );
-  const encoded = encodeSteeringToken(
-    payload,
-    route.codekbCtx.projectDir,
-  );
-  if (!encoded.token) {
+  const minted = mintSteeringReceipt(payload, route.codekbCtx.projectDir);
+  if (!minted.receipt) {
     return errorDirective(
-      encoded.error ??
+      minted.error ??
         "This stage's rules cannot be loaded safely right now. Run a fresh `next` after repairing the local runtime files under `aidlc/`.",
     );
   }
+  preparedSteeringPayload = payload;
   const load: LoadSteeringDirective = {
     kind: "load-steering",
     stage: directive.stage,
     bundle,
     part: index + 1,
     parts: chunks.length,
+    receipt: minted.receipt,
+    next: steeringNextCommand(minted.receipt),
     rules_content: chunks[index],
-    continue_token: encoded.token,
   };
   if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
     return errorDirective(
@@ -4789,7 +5010,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (flags.depth) modifiers.push(`depth ${flags.depth}`);
     if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
     if (flags.review) modifiers.push(`review ${flags.review}`);
-    if (flags.changeControl) modifiers.push(`change-control ${flags.changeControl}`);
+    if (flags.changeControl) modifiers.push(`guard-policy ${flags.changeControl}`);
     for (const key of CEREMONY_KEYS) {
       if (flags.ceremony?.[key]) {
         modifiers.push(`${CEREMONY_FLAGS[key].slice(2)} ${flags.ceremony[key]}`);
@@ -8968,7 +9189,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const protectedTeamHumanGate =
         stageCheckbox.state !== "completed" &&
-        process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
+        !humanPresenceGuardDisabled(pd, stateContent);
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
         if (status === "awaiting-approval") {
@@ -8997,7 +9218,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         sequence.push(["revise", slug, "--unit", unit]);
       } else {
         if (
-          resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1" &&
+          !humanPresenceGuardDisabled(pd, stateContent) &&
           !flags.userInput?.trim()
         ) {
           emit(errorDirective(
@@ -9083,7 +9304,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
       !isAutonomousConstructionGate(stateContent, node, pd)
     ) &&
-    resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
+    !humanPresenceGuardDisabled(pd, stateContent);
 
   if (flags.overrideBlockingSensors) {
     if (
@@ -9566,39 +9787,87 @@ function handleTeamBoard(
   );
 }
 
-// Resume deterministic rule delivery without mutating workflow state. The
-// token carries the route and hashes of both the run-stage directive and rule
-// bundle. Rebuilding from current disk state makes stale or mixed deliveries
-// fail with a restart instruction instead of combining old and new steering.
-function handleContinue(args: string[], projectDir: string | undefined): void {
-  const token = args[0] ?? "";
-  const pd = resolveProjectDir(projectDir);
-  const payload = decodeSteeringToken(token, pd);
-  if (!payload || args.length !== 1) {
-    emit(errorDirective(
-      "Invalid steering continuation token: this stage's rules cannot be loaded from where they left off. Run a fresh `next` to restart delivery from part 1.",
-    ));
-    return;
+// A `continue` the engine cannot honour is answered as the bare `next` it is
+// equivalent to: the current issued step, silently. The invocation is
+// re-labelled so the idempotent transport keeps returning the issued directive
+// verbatim instead of republishing it, and the continuation state this call
+// began to prepare is dropped first.
+function answerAsNext(
+  projectDir: string | undefined,
+  hint: SteeringTokenPayload | null,
+): void {
+  requestedSteeringContinuation = null;
+  preparedSteeringPayload = null;
+  if (engineInvocation) {
+    engineInvocation = { ...engineInvocation, commandKind: "next" };
   }
+  // A stateful workflow routes from its state file. A stateless route (an
+  // explicit scope and stage, as the isolated stage-runner uses) has no state
+  // to read, so the route the delivery was minted for is replayed from the
+  // marker's payload instead.
+  const args =
+    hint && !hint.a
+      ? ["--scope", hint.c, "--stage", hint.s, ...(hint.x ? ["--single"] : [])]
+      : [];
+  handleNext(args, projectDir);
+}
+
+// Resume deterministic rule delivery. The conductor presents the 8-character
+// receipt printed at the top of the part it just applied; the engine finds the
+// matching payload on the active-directive marker and rebuilds the next part
+// from current disk state. Anything else - a mistyped receipt, a receipt for a
+// part already consumed, a marker that has moved on to run-stage, no delivery
+// in flight, a workflow state or route that moved underneath - is answered
+// exactly as a bare `next` would answer it. That keeps the cursor at-most-once
+// (an old receipt can never re-deliver an earlier part, and a compacted
+// conductor that lost its parts restarts from part one) without ever handing
+// the conductor an error for a copying slip.
+function handleContinue(args: string[], projectDir: string | undefined): void {
+  const receipt = (args[0] ?? "").trim();
+  const pd = resolveProjectDir(projectDir);
   const liveState = loadStateFileIfPresent(pd);
   const liveStateHash = liveState === null ? null : stateDigest(liveState);
-  if (payload.a && payload.h !== liveStateHash) {
-    emit(errorDirective(
-      "The saved position moved on: the workflow state changed while this stage's rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
-    ));
-    return;
+  let marker: ActiveDirectiveMarker | null = null;
+  try {
+    marker = readActiveDirectiveMarker(pd, liveState ?? "");
+  } catch {
+    marker = null;
   }
-  const node = nodeForSlug(payload.s);
-  if (!node) {
-    emit(errorDirective(
-      `Stage "${payload.s}" no longer exists. Run a fresh \`next\` after recompiling the stage graph.`,
-    ));
-    return;
-  }
-  if (payload.r !== steeringRouteHash(node, payload.c)) {
-    emit(errorDirective(
-      "Which stage runs next has changed: the stage route changed while its rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
-    ));
+  // The marker's payload is the route hint for every fallback below, whether or
+  // not the presented receipt matches it (a run-stage marker carries one too).
+  const hint = markerSteeringPayload(marker);
+  const payload =
+    args.length === 1 &&
+    hint !== null &&
+    typeof marker?.continue_token === "string" &&
+    receiptMatches(receipt, marker.continue_token)
+      ? hint
+      // The marker holds no matching part. It may never have been allowed to
+      // take one (legacy Kiro IDE Plan Approval preserves the marker), so the
+      // fallback cursor is consulted before this is treated as unmatched. Its
+      // payload goes through exactly the same route and state validation below.
+      : args.length === 1 && receipt.length > 0
+        ? readSteeringCursor(pd, receipt)
+        : null;
+  const node = payload ? nodeForSlug(payload.s) : undefined;
+  if (
+    !payload ||
+    !node ||
+    (payload.a && payload.h !== liveStateHash) ||
+    payload.r !== steeringRouteHash(node, payload.c)
+  ) {
+    // A read-only probe publishes nothing, so no cursor of any kind records its
+    // walk; its receipt is matched against the route's parts inside the `next`
+    // this becomes. Nothing else uses that path. In particular a MISSING or
+    // damaged marker must NOT match a receipt against the route: the conductor
+    // may have lost the parts it already held, and restarting at part one is
+    // the only answer that is always complete. The legacy Kiro IDE case, where
+    // the marker exists but refused the write, is served by the fallback cursor
+    // above instead.
+    if (isReadOnlyEngineProbe() && args.length === 1 && receipt.length > 0) {
+      receiptToMatchAgainstRoute = receipt;
+    }
+    answerAsNext(projectDir, hint);
     return;
   }
   activeStageValidityAdvisory =
@@ -9679,7 +9948,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   try {
     const advanced = advanceContinuationCursor(
       cursor,
-      token,
+      receipt,
       prepared.marker,
       prepared.resultSha256,
       engineInvocation?.attemptId,
@@ -9687,6 +9956,9 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       withLegacyOffer.session,
     );
     if (advanced === "advanced") {
+      // The marker moved and is the cursor again, so drop any fallback file left
+      // over from a legacy window that has since closed.
+      recordSteeringCursor(pd, prepared.marker, false);
       writePrepared(prepared);
       return;
     }
@@ -9704,17 +9976,29 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       advanced === "legacy-plan-approval-reissued" ||
       advanced === "legacy-plan-approval-transport"
     ) {
+      // The marker was preserved for an in-flight legacy approval and did not
+      // take this part. Without the fallback cursor the delivery could not
+      // advance past part one while that window stayed open.
+      recordSteeringCursor(pd, prepared.marker, true);
       writePrepared(prepared);
       return;
     }
-    const message = advanced === "superseded"
-      ? "This continuation token is no longer current for this workflow. Run a fresh `next`; do not reuse an earlier token."
-      : "The active workflow context changed while this continuation was prepared. Run a fresh `next`; do not use the prepared result.";
-    writePrepared(prepareEmission(errorDirective(message)));
+    // "superseded" (another caller consumed this receipt first) and "drift"
+    // (the context moved while this part was prepared) are both answered as
+    // the current issued step, never as an error the conductor must recover.
+    // This caller proved it held the current part, so it reads the winner's
+    // successor from the marker and publishes nothing: a lost race must not
+    // restart the delivery under the process that won it.
+    continuationLoserReadsMarker = true;
+    try {
+      answerAsNext(projectDir, payload);
+    } finally {
+      continuationLoserReadsMarker = false;
+    }
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
     writePrepared(prepareEmission(errorDirective(
-      "Continuation coordination is busy. This call did not commit a cursor change. Retry the current token; if it is reported superseded, run a fresh `next`.",
+      "The workflow is busy for a moment. Run the same command again.",
     )));
   }
 }
@@ -9941,6 +10225,7 @@ export function main(argv: string[]): void {
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;
+    preparedSteeringPayload = null;
     retainedIssuedDirective = false;
     preparedTransportIdentity = null;
   }

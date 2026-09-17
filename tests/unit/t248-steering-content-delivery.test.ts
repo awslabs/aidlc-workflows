@@ -1,9 +1,13 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
 // function:activeDirectiveStorageDir, hook:aidlc-deliver-stage-rules
 //
-// Deterministic stage-rule delivery. Rules cross the engine boundary through
-// bounded load-steering directives before run-stage; optional persona/knowledge
-// remains path-loaded with actionable warnings.
+// Deterministic stage-rule delivery. Rules ride inside the run-stage directive
+// (rules_content) whenever run-stage plus rules fit the transport cap; a bundle
+// that does not fit is chunked into load-steering parts, each carrying an
+// 8-character receipt and the ready `continue` command ahead of its payload.
+// Any `continue` the engine cannot honour is answered exactly as a bare `next`
+// would be, never as an error. Optional persona/knowledge remains path-loaded
+// with actionable warnings.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -14,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -22,12 +27,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
 } from "../../scripts/agent-knowledge.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { validateDirective } from "../../core/tools/aidlc-directive.ts";
 import {
   stageValidationAuditFields,
   type StageValidityNode,
@@ -47,6 +53,18 @@ import { resolveCapturedToolInput } from "../harness/sdk-drive.ts";
 
 const BUN = process.execPath;
 const MAX_DIRECTIVE_BYTES = 28 * 1024;
+const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
+const CONTINUE_COMMAND_PREFIX =
+  "bun .claude/tools/aidlc-orchestrate.ts continue ";
+// The steering payload stored on a marker. `n` (next_stage) and `q` (unit_gate)
+// are dropped by JSON when undefined, so only the rest are always present.
+const STEERING_PAYLOAD_KEYS = [
+  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k",
+  "f", "g", "n", "x", "p", "w", "z", "q", "h",
+] as const;
+const STEERING_PAYLOAD_REQUIRED_KEYS = [
+  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "h",
+] as const;
 const REVIEWER_AGENTS = [
   "aidlc-architecture-reviewer-agent",
   "aidlc-product-lead-agent",
@@ -59,8 +77,9 @@ type WireDirective = {
   bundle?: string;
   part?: number;
   parts?: number;
+  receipt?: string;
+  next?: string;
   rules_content?: RuleContent[];
-  continue_token?: string;
   rules_in_context?: string[];
   inline_context_paths?: string[];
   context_warnings?: string[];
@@ -68,6 +87,18 @@ type WireDirective = {
     state?: string;
   };
   message?: string;
+};
+
+type Marker = {
+  kind?: string;
+  part?: number;
+  parts?: number;
+  revision?: number;
+  continue_token?: string;
+  continue_token_sha256?: string;
+  steering_payload?: Record<string, unknown>;
+  cursor_harness?: string;
+  owner_session?: string;
 };
 
 type HookRewrite = {
@@ -86,6 +117,14 @@ function project(): string {
   return proj;
 }
 
+// A stateful project mid-ideation (Current Stage: feasibility, scope feature),
+// the shape whose run-stage plus rules fits one message (about 18.5 KB).
+function statefulProject(withState = "state-mid-ideation.md"): string {
+  const proj = setupIntegrationProject({ withState });
+  projects.push(proj);
+  return proj;
+}
+
 // Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
@@ -96,7 +135,7 @@ function invoke(
   subcommand: "next" | "continue",
   args: string[],
   env: NodeJS.ProcessEnv = process.env,
-): { directive: WireDirective; bytes: number } {
+): { directive: WireDirective; bytes: number; line: string } {
   cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
   cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
   const res = spawnSync(
@@ -115,32 +154,55 @@ function invoke(
   return {
     directive: JSON.parse(line) as WireDirective,
     bytes: Buffer.byteLength(line, "utf-8"),
+    line,
   };
 }
 
+// Run one full delivery: `next`, then `continue <receipt>` for every
+// load-steering part until the run-stage arrives. Rules delivered inline on a
+// one-message run-stage are folded into `contents` too, so reconstruction
+// assertions hold for both transport shapes.
 function drive(
   proj: string,
   args = ["--scope", "mvp", "--stage", "intent-capture"],
 ): {
   loads: WireDirective[];
+  lines: string[];
   contents: RuleContent[];
   final: WireDirective;
+  finalLine: string;
   sizes: number[];
 } {
   const loads: WireDirective[] = [];
+  const lines: string[] = [];
   const contents: RuleContent[] = [];
   const sizes: number[] = [];
   let result = invoke(proj, "next", args);
   sizes.push(result.bytes);
+  let hops = 0;
   while (result.directive.kind === "load-steering") {
     loads.push(result.directive);
+    lines.push(result.line);
     contents.push(...(result.directive.rules_content ?? []));
-    const token = result.directive.continue_token;
-    expect(token).toBeString();
-    result = invoke(proj, "continue", [token ?? ""]);
+    const receipt = result.directive.receipt;
+    expect(receipt).toMatch(RECEIPT_PATTERN);
+    expect(result.directive.next).toBe(`${CONTINUE_COMMAND_PREFIX}${receipt}`);
+    result = invoke(proj, "continue", [receipt ?? ""]);
     sizes.push(result.bytes);
+    hops += 1;
+    expect(hops).toBeLessThan(100);
   }
-  return { loads, contents, final: result.directive, sizes };
+  if (result.directive.kind === "run-stage") {
+    contents.push(...(result.directive.rules_content ?? []));
+  }
+  return {
+    loads,
+    lines,
+    contents,
+    final: result.directive,
+    finalLine: result.line,
+    sizes,
+  };
 }
 
 function reconstructed(contents: RuleContent[], path: string): string {
@@ -148,6 +210,85 @@ function reconstructed(contents: RuleContent[], path: string): string {
     .filter((entry) => entry.path === path)
     .map((entry) => entry.text)
     .join("");
+}
+
+function orgPath(proj: string): string {
+  return join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+}
+
+// Push the rule bundle past the transport cap so delivery is chunked: 12
+// sections of about 3.5 KB each on top of the shipped org.md.
+function inflateOrg(proj: string): void {
+  let filler = "";
+  for (let i = 0; i < 12; i++) {
+    filler +=
+      `\n## Extra rule section ${i}\n\n` +
+      `${"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(60)}\n`;
+  }
+  appendFileSync(orgPath(proj), filler, "utf-8");
+}
+
+function statefulMarkerPath(proj: string): string {
+  return join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+}
+
+function statelessMarkerPath(proj: string): string {
+  return join(
+    proj,
+    "aidlc",
+    "spaces",
+    "default",
+    "intents",
+    ".aidlc-engine",
+    "active-directive.json",
+  );
+}
+
+function readMarker(path: string): Marker {
+  return JSON.parse(readFileSync(path, "utf-8")) as Marker;
+}
+
+// The receipt construction: first 8 base64url characters of
+// HMAC-SHA256(key, JSON(payload)).
+function receiptFor(payload: unknown, key: Buffer | string): string {
+  return createHmac("sha256", key)
+    .update(JSON.stringify(payload), "utf-8")
+    .digest("base64url")
+    .slice(0, 8);
+}
+
+// sha256 of every file under a directory keyed by relative path: the
+// byte-identity check behind "a probe changed nothing".
+function treeDigest(root: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+      } else {
+        out[full.slice(root.length + 1)] = createHash("sha256")
+          .update(readFileSync(full))
+          .digest("hex");
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function flipLastChar(receipt: string): string {
+  const last = receipt.endsWith("A") ? "B" : "A";
+  return `${receipt.slice(0, -1)}${last}`;
+}
+
+function expectSteeringPayload(payload: Record<string, unknown> | undefined): void {
+  expect(payload).toBeDefined();
+  const keys = Object.keys(payload ?? {});
+  for (const key of STEERING_PAYLOAD_REQUIRED_KEYS) expect(keys).toContain(key);
+  for (const key of keys) {
+    expect(STEERING_PAYLOAD_KEYS as readonly string[]).toContain(key);
+  }
 }
 
 function runDispatchHook(
@@ -193,17 +334,24 @@ function reviewerExecutionSurface(
 }
 
 describe("t248 deterministic steering delivery", () => {
-  test("delivers substantive rules before run-stage and keeps knowledge path-loaded", () => {
+  // Old property: rules crossed the boundary as load-steering parts before the
+  // run-stage. New property: for a shipped stage they ride inside the one
+  // run-stage message as rules_content; knowledge stays path-loaded.
+  test("delivers substantive rules inside the run-stage and keeps knowledge path-loaded", () => {
     const proj = project();
     const result = drive(proj);
 
-    expect(result.loads.length).toBeGreaterThan(0);
+    expect(result.loads.length).toBe(0);
     expect(result.final.kind).toBe("run-stage");
+    expect(result.sizes[0]).toBeLessThanOrEqual(MAX_DIRECTIVE_BYTES);
     expect(result.final.rules_in_context).toEqual([
       "aidlc/spaces/default/memory/org.md",
       "aidlc/spaces/default/memory/phases/ideation.md",
     ]);
-    expect(result.final).not.toHaveProperty("rules_content");
+    expect(result.final.rules_content).toBeArray();
+    expect([
+      ...new Set((result.final.rules_content ?? []).map((entry) => entry.path)),
+    ]).toEqual(result.final.rules_in_context ?? []);
     expect(result.final).not.toHaveProperty("rules_content_omitted");
     expect(result.final).not.toHaveProperty("inline_context_content");
     expect(result.final).not.toHaveProperty("inline_context_omitted");
@@ -220,6 +368,8 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.contents.some((entry) => entry.path.endsWith("project.md"))).toBe(false);
   });
 
+  // Old property: a populated placeholder arrived in a load-steering part. New
+  // property: it arrives in the run-stage's inline rules_content, in order.
   test("a populated placeholder is delivered as part of the ordered bundle", () => {
     const proj = project();
     const teamPath = join(
@@ -236,14 +386,20 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     );
     const result = drive(proj);
+    expect(result.final.kind).toBe("run-stage");
     expect(
       reconstructed(
         result.contents,
         "aidlc/spaces/default/memory/team.md",
       ),
     ).toBe(readFileSync(teamPath, "utf-8"));
+    expect(result.final.rules_in_context).toContain(
+      "aidlc/spaces/default/memory/team.md",
+    );
   });
 
+  // Old property: a blockquoted policy was delivered verbatim in a part. New
+  // property: delivered verbatim inside the run-stage's rules_content.
   test("a blockquoted policy is substantive and delivered verbatim", () => {
     const proj = project();
     const teamPath = join(
@@ -269,23 +425,18 @@ describe("t248 deterministic steering delivery", () => {
     );
   });
 
+  // Old property: large rules chunked into token-continued parts. New property:
+  // the same chunking, continued by receipt; the closing run-stage carries no
+  // inline rules because they did not fit beside it.
   test("large rules are automatically chunked and every directive fits 28 KiB", () => {
     const proj = project();
-    const orgPath = join(
-      proj,
-      "aidlc",
-      "spaces",
-      "default",
-      "memory",
-      "org.md",
-    );
     const large = Array.from(
       { length: 240 },
       (_, i) =>
         `## Policy ${i}\n\nPolicy ${i} requires deterministic evidence ` +
         `${"x".repeat(280)}.\n\n`,
     ).join("");
-    writeFileSync(orgPath, large, "utf-8");
+    writeFileSync(orgPath(proj), large, "utf-8");
 
     const result = drive(proj);
     expect(result.loads.length).toBeGreaterThan(3);
@@ -293,6 +444,9 @@ describe("t248 deterministic steering delivery", () => {
       Array.from({ length: result.loads.length }, (_, i) => i + 1),
     );
     expect(result.loads.every((load) => load.parts === result.loads.length)).toBe(true);
+    expect(new Set(result.loads.map((load) => load.receipt)).size).toBe(
+      result.loads.length,
+    );
     expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(true);
     expect(
       reconstructed(
@@ -301,21 +455,16 @@ describe("t248 deterministic steering delivery", () => {
       ),
     ).toBe(large);
     expect(result.final.kind).toBe("run-stage");
-  });
+    expect(result.final).not.toHaveProperty("rules_content");
+  }, 30_000);
 
+  // Old and new property alike: chunk boundaries follow serialized size, so
+  // JSON-escaped control characters still split into bounded parts.
   test("JSON-escaped control characters are chunked by serialized size", () => {
     const proj = project();
-    const orgPath = join(
-      proj,
-      "aidlc",
-      "spaces",
-      "default",
-      "memory",
-      "org.md",
-    );
     const controls = "\u0000\u0001\u0002\t".repeat(5_000);
     const rule = `# Organization\n\n## Control Policy\n\n${controls}\n`;
-    writeFileSync(orgPath, rule, "utf-8");
+    writeFileSync(orgPath(proj), rule, "utf-8");
 
     const result = drive(proj);
     expect(result.loads.length).toBeGreaterThan(3);
@@ -329,10 +478,15 @@ describe("t248 deterministic steering delivery", () => {
       ),
     ).toBe(rule);
     expect(result.final.kind).toBe("run-stage");
-  });
+  }, 30_000);
 
-  test("plain next reuses a random, private machine-local token key", () => {
+  // Old property: repeated `next` reused one private machine-local key and so
+  // minted the same 610-char token. New property: the same key file mints the
+  // same 8-char receipt, the receipt is HMAC(key, payload) truncated, and a
+  // receipt under any other key is answered with part 1, never with part 2.
+  test("plain next reuses a random, private machine-local key and mints deterministic receipts", () => {
     const proj = project();
+    inflateOrg(proj);
     const first = invoke(proj, "next", [
       "--scope",
       "mvp",
@@ -346,9 +500,10 @@ describe("t248 deterministic steering delivery", () => {
       "intent-capture",
     ]).directive;
     expect(first.kind).toBe("load-steering");
+    expect(first.receipt).toMatch(RECEIPT_PATTERN);
     expect(restarted.part).toBe(1);
     expect(restarted.bundle).toBe(first.bundle);
-    expect(restarted.continue_token).toBe(first.continue_token);
+    expect(restarted.receipt).toBe(first.receipt);
 
     const keyPath = join(
       proj,
@@ -377,40 +532,49 @@ describe("t248 deterministic steering delivery", () => {
       ),
     ).toBe(false);
 
+    const marker = readMarker(statelessMarkerPath(proj));
+    expect(marker.kind).toBe("load-steering");
+    expect(marker.continue_token).toBe(first.receipt);
+    expectSteeringPayload(marker.steering_payload);
+    expect(marker.steering_payload?.i).toBe(1);
+    expect(receiptFor(marker.steering_payload, key)).toBe(first.receipt ?? "");
+
     const other = project();
-    invoke(other, "next", [
+    inflateOrg(other);
+    const otherFirst = invoke(other, "next", [
       "--scope",
       "mvp",
       "--stage",
       "intent-capture",
-    ]);
-    const otherKey = readFileSync(
-      join(
-        other,
-        "aidlc",
-        ".aidlc-sessions",
-        ".aidlc-steering-token-key",
-      ),
-      "utf-8",
-    ).trim();
-    expect(otherKey).not.toBe(encodedKey);
-  });
-
-  test("a continuation issued before the engine-directory migration remains valid", () => {
-    const proj = setupIntegrationProject({
-      withState: "state-brownfield-feature.md",
-    });
-    projects.push(proj);
-    const orgPath = join(
-      proj,
+    ]).directive;
+    const otherKeyPath = join(
+      other,
       "aidlc",
-      "spaces",
-      "default",
-      "memory",
-      "org.md",
+      ".aidlc-sessions",
+      ".aidlc-steering-token-key",
     );
+    const otherEncodedKey = readFileSync(otherKeyPath, "utf-8").trim();
+    expect(otherEncodedKey).not.toBe(encodedKey);
+    const underOtherKey = receiptFor(
+      marker.steering_payload,
+      Buffer.from(otherEncodedKey, "base64url"),
+    );
+    expect(underOtherKey).not.toBe(first.receipt);
+    expect(otherFirst.receipt).not.toBe(first.receipt);
+
+    const answered = invoke(proj, "continue", [underOtherKey]).directive;
+    expect(answered.kind).toBe("load-steering");
+    expect(answered.part).toBe(1);
+    expect(answered.receipt).toBe(first.receipt);
+  }, 30_000);
+
+  // Old property: a token issued before the engine-directory migration stayed
+  // valid. New property: the receipt does too, and continuing keeps the legacy
+  // marker and key locations instead of recreating the engine-dir ones.
+  test("a continuation issued before the engine-directory migration remains valid", () => {
+    const proj = statefulProject("state-brownfield-feature.md");
     appendFileSync(
-      orgPath,
+      orgPath(proj),
       Array.from(
         { length: 180 },
         (_, i) => `\n## Upgrade ${i}\n\n${"x".repeat(320)}\n`,
@@ -419,6 +583,7 @@ describe("t248 deterministic steering delivery", () => {
 
     const issued = invoke(proj, "next", []).directive;
     expect(issued.kind).toBe("load-steering");
+    expect(issued.part).toBe(1);
     const record = seededRecordDir(proj);
     renameSync(
       join(record, ".aidlc-engine", "active-directive.json"),
@@ -432,9 +597,10 @@ describe("t248 deterministic steering delivery", () => {
     const continued = invoke(
       proj,
       "continue",
-      [issued.continue_token ?? ""],
+      [issued.receipt ?? ""],
     ).directive;
-    expect(continued.kind).not.toBe("error");
+    expect(continued.kind).toBe("load-steering");
+    expect(continued.part).toBe(2);
     expect(existsSync(join(record, ".aidlc-active-directive.json"))).toBe(true);
     expect(
       existsSync(join(record, ".aidlc-engine", "active-directive.json")),
@@ -445,11 +611,12 @@ describe("t248 deterministic steering delivery", () => {
     ).toBe(false);
   });
 
+  // Old property: probes minted a probe-keyed token and a forged probe envelope
+  // errored. New property: probes mint a probe-keyed receipt without a key file
+  // or marker, and that receipt never advances a real delivery: it is answered
+  // with part 1 under the real key, never with part 2.
   test("engine observers are read-only for team and solo, and route checks bypass transport", () => {
-    const team = setupIntegrationProject({
-      withState: "state-brownfield-feature.md",
-    });
-    projects.push(team);
+    const team = statefulProject("state-brownfield-feature.md");
     const teamStatePath = seededStateFile(team);
     writeFileSync(
       teamStatePath,
@@ -458,21 +625,14 @@ describe("t248 deterministic steering delivery", () => {
         "- **Revision Count**: 0\n- **Construction Iteration**: unit-major\n- **Unit Ownership**: team",
       ),
     );
-    const teamOrg = join(
-      team,
-      "aidlc",
-      "spaces",
-      "default",
-      "memory",
-      "org.md",
-    );
     appendFileSync(
-      teamOrg,
+      orgPath(team),
       Array.from(
         { length: 180 },
         (_, i) => `\n## Probe Team ${i}\n\n${"x".repeat(320)}\n`,
       ).join(""),
     );
+    const teamKeyPath = join(seededRecordDir(team), ".aidlc-engine/steering-token-key");
     const teamProbe = invoke(
       team,
       "next",
@@ -480,80 +640,57 @@ describe("t248 deterministic steering delivery", () => {
       { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
     ).directive;
     expect(teamProbe.kind).toBe("load-steering");
-    expect(
-      existsSync(
-        join(seededRecordDir(team), ".aidlc-engine/steering-token-key"),
-      ),
-    ).toBe(false);
-    expect(
-      existsSync(
-        join(seededRecordDir(team), ".aidlc-engine/active-directive.json"),
-      ),
-    ).toBe(false);
+    expect(teamProbe.part).toBe(1);
+    expect(teamProbe.receipt).toMatch(RECEIPT_PATTERN);
+    expect(existsSync(teamKeyPath)).toBe(false);
+    expect(existsSync(statefulMarkerPath(team))).toBe(false);
+
+    // The probe receipt was minted under the deterministic probe key, so a real
+    // `continue` cannot match it: it is answered as a bare `next`, part 1 under
+    // the machine-local key that only now comes into existence.
     const continued = invoke(
       team,
       "continue",
-      [teamProbe.continue_token ?? ""],
+      [teamProbe.receipt ?? ""],
     ).directive;
-    expect(continued.kind).not.toBe("error");
-
-    const forgedEnvelope = JSON.parse(
-      Buffer.from(
-        teamProbe.continue_token ?? "",
-        "base64url",
-      ).toString("utf-8"),
-    ) as { p: Record<string, unknown>; m: string; probe: true };
-    forgedEnvelope.p.i = 2;
-    const probeKey = createHash("sha256")
-      .update(`aidlc-stop-probe:${resolve(team)}`, "utf-8")
-      .digest();
-    forgedEnvelope.m = createHmac("sha256", probeKey)
-      .update(JSON.stringify(forgedEnvelope.p), "utf-8")
-      .digest("base64url");
-    const forged = Buffer.from(
-      JSON.stringify(forgedEnvelope),
-      "utf-8",
-    ).toString("base64url");
-    expect(invoke(team, "continue", [forged]).directive).toMatchObject({
-      kind: "error",
-    });
+    expect(continued.kind).toBe("load-steering");
+    expect(continued.part).toBe(1);
+    expect(continued.receipt).toMatch(RECEIPT_PATTERN);
+    expect(continued.receipt).not.toBe(teamProbe.receipt);
+    expect(existsSync(teamKeyPath)).toBe(true);
+    expect(existsSync(statefulMarkerPath(team))).toBe(true);
+    const forged = invoke(team, "continue", [teamProbe.receipt ?? ""]).directive;
+    expect(forged.kind).toBe("load-steering");
+    expect(forged.part).toBe(1);
+    expect(forged.receipt).toBe(continued.receipt);
 
     // The SOLO probe is the case the deadlock was reported on. It used to mint the
     // machine-local steering key and publish the marker, and that publication is
     // what deleted the human's in-flight Plan Approval. A query must leave both
-    // absent, whatever the Unit Ownership.
-    const solo = setupIntegrationProject({
-      withState: "state-brownfield-feature.md",
-    });
-    projects.push(solo);
+    // absent, whatever the Unit Ownership. With rules that fit, the probe sees
+    // the same one-message run-stage a real `next` then issues, byte for byte.
+    const solo = statefulProject("state-brownfield-feature.md");
     const soloProbe = invoke(
       solo,
       "next",
       [],
       { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
-    ).directive;
-    expect(soloProbe.kind).toBe("load-steering");
+    );
+    expect(soloProbe.directive.kind).toBe("run-stage");
+    expect(soloProbe.directive.rules_content).toBeArray();
     expect(
       existsSync(
         join(seededRecordDir(solo), ".aidlc-engine/steering-token-key"),
       ),
     ).toBe(false);
-    expect(
-      existsSync(
-        join(seededRecordDir(solo), ".aidlc-engine/active-directive.json"),
-      ),
-    ).toBe(false);
-    expect(
-      invoke(solo, "continue", [soloProbe.continue_token ?? ""]).directive
-        .kind,
-    ).not.toBe("error");
+    expect(existsSync(statefulMarkerPath(solo))).toBe(false);
+    const soloReal = invoke(solo, "next", []);
+    expect(soloReal.line).toBe(soloProbe.line);
+    expect(existsSync(statefulMarkerPath(solo))).toBe(true);
 
     // A route check asks only which Unit would be routed, so it skips transport
-    // entirely: no load-steering, no token, no key, no marker.
-    const routed = setupIntegrationProject({
-      withState: "state-brownfield-feature.md",
-    });
-    projects.push(routed);
+    // entirely: no load-steering, no rules, no key, no marker.
+    const routed = statefulProject("state-brownfield-feature.md");
     const routeCheck = invoke(
       routed,
       "next",
@@ -561,41 +698,45 @@ describe("t248 deterministic steering delivery", () => {
       { ...process.env, AIDLC_ROUTE_CHECK: "1" },
     ).directive;
     expect(routeCheck.kind).toBe("run-stage");
+    expect(routeCheck).not.toHaveProperty("rules_content");
     expect(
       existsSync(join(seededRecordDir(routed), ".aidlc-engine/steering-token-key")),
     ).toBe(false);
-    expect(
-      existsSync(join(seededRecordDir(routed), ".aidlc-engine/active-directive.json")),
-    ).toBe(false);
-  });
+    expect(existsSync(statefulMarkerPath(routed))).toBe(false);
+  }, 30_000);
 
-  test("sessionless continuation consumes the same token exactly once", () => {
-    const proj = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
-    projects.push(proj);
-    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+  // Old property: the second use of a token errored "no longer current". New
+  // property: the first use advances to part 2; the second is answered as a
+  // bare `next`, which restarts delivery at part 1 with the same receipt.
+  test("sessionless continuation advances the same receipt exactly once", () => {
+    const proj = statefulProject("state-brownfield-feature.md");
     writeFileSync(
-      orgPath,
+      orgPath(proj),
       Array.from({ length: 180 }, (_, i) => `## Sessionless ${i}\n\n${"x".repeat(320)}\n\n`).join(""),
       "utf-8",
     );
     const first = invoke(proj, "next", []).directive;
     expect(first.kind).toBe("load-steering");
-    const token = first.continue_token ?? "";
-    const once = invoke(proj, "continue", [token]).directive;
-    const twice = invoke(proj, "continue", [token]).directive;
-    expect(once.kind).not.toBe("error");
-    expect(twice.kind).toBe("error");
-    expect(twice.message).toContain("no longer current");
-    const marker = JSON.parse(
-      readFileSync(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"), "utf-8"),
-    ) as { cursor_harness?: string; owner_session?: string };
+    const receipt = first.receipt ?? "";
+    const once = invoke(proj, "continue", [receipt]).directive;
+    const twice = invoke(proj, "continue", [receipt]).directive;
+    expect(once.kind).toBe("load-steering");
+    expect(once.part).toBe(2);
+    expect(once.receipt).not.toBe(receipt);
+    expect(twice.kind).toBe("load-steering");
+    expect(twice.part).toBe(1);
+    expect(twice.receipt).toBe(receipt);
+    const marker = readMarker(statefulMarkerPath(proj));
     expect(marker.cursor_harness).toBe("claude");
     expect(marker.owner_session).toStartWith("sessionless:");
+    expect(marker.part).toBe(1);
+    expect(marker.continue_token).toBe(receipt);
   });
 
+  // Old and new property alike: the drift advisory rides on every part and on
+  // the closing run-stage; the chain is now continued by receipt.
   test("stage validity advisory survives every steering continuation", () => {
-    const proj = setupIntegrationProject({ withState: "state-operation.md" });
-    projects.push(proj);
+    const proj = statefulProject("state-operation.md");
     const state = readFileSync(seededStateFile(proj), "utf-8");
     const graphRaw = JSON.parse(
       readFileSync(
@@ -631,7 +772,7 @@ describe("t248 deterministic steering delivery", () => {
     );
     writeFileSync(artifactPath, "requirements-v2\n", "utf-8");
     writeFileSync(
-      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      orgPath(proj),
       Array.from(
         { length: 180 },
         (_, i) => `## Validity ${i}\n\n${"x".repeat(320)}\n\n`,
@@ -641,30 +782,30 @@ describe("t248 deterministic steering delivery", () => {
 
     let directive = invoke(proj, "next", []).directive;
     expect(directive.kind).toBe("load-steering");
+    let hops = 0;
     while (directive.kind === "load-steering") {
       expect(directive.stage_validity?.state).toBe("drifted");
       directive = invoke(
         proj,
         "continue",
-        [directive.continue_token ?? ""],
+        [directive.receipt ?? ""],
       ).directive;
+      hops += 1;
+      expect(hops).toBeLessThan(100);
     }
     expect(directive.kind).toBe("run-stage");
     expect(directive.stage_validity?.state).toBe("drifted");
-  });
+  }, 30_000);
 
-  test("the old public-path MAC cannot forge a continuation that skips chunks", () => {
+  // Old property: a token re-signed with the old public-path MAC errored
+  // "Invalid steering continuation token". New property: no receipt that the
+  // machine-local key did not mint for the CURRENT part can skip chunks; a
+  // public-path-keyed receipt for the last part, a flipped character, an empty
+  // string and an overlong string are all answered with part 1, same receipt.
+  test("a forged receipt cannot skip chunks and is answered with part 1", () => {
     const proj = project();
-    const orgPath = join(
-      proj,
-      "aidlc",
-      "spaces",
-      "default",
-      "memory",
-      "org.md",
-    );
     writeFileSync(
-      orgPath,
+      orgPath(proj),
       Array.from(
         { length: 180 },
         (_, i) => `## Policy ${i}\n\n${"x".repeat(320)}\n\n`,
@@ -677,74 +818,106 @@ describe("t248 deterministic steering delivery", () => {
       "--stage",
       "intent-capture",
     ]).directive;
+    expect(first.kind).toBe("load-steering");
     expect(first.parts ?? 0).toBeGreaterThan(2);
-    const envelope = JSON.parse(
-      Buffer.from(first.continue_token ?? "", "base64url").toString("utf-8"),
-    ) as { p: { i: number }; m: string };
-    envelope.p.i = first.parts ?? 0;
+    const marker = readMarker(statelessMarkerPath(proj));
+    expectSteeringPayload(marker.steering_payload);
     const publicPathKey = createHash("sha256")
       .update(`aidlc-steering-token-v1\0${proj}`, "utf-8")
       .digest("hex");
-    envelope.m = createHmac("sha256", publicPathKey)
-      .update(JSON.stringify(envelope.p), "utf-8")
-      .digest("base64url");
-    const tampered = Buffer.from(
-      JSON.stringify(envelope),
-      "utf-8",
-    ).toString("base64url");
+    const skipToLast = receiptFor(
+      { ...marker.steering_payload, i: first.parts },
+      publicPathKey,
+    );
+    expect(skipToLast).toMatch(RECEIPT_PATTERN);
 
-    const result = invoke(proj, "continue", [tampered]).directive;
-    expect(result.kind).toBe("error");
-    expect(result.message).toContain("Invalid steering continuation token");
-    expect(result.message).toContain("Run a fresh `next`");
-  });
+    for (const forged of [
+      skipToLast,
+      flipLastChar(first.receipt ?? ""),
+      "",
+      `${first.receipt}${first.receipt}`,
+    ]) {
+      const result = invoke(proj, "continue", [forged]).directive;
+      expect(result.kind, forged).toBe("load-steering");
+      expect(result.part, forged).toBe(1);
+      expect(result.receipt, forged).toBe(first.receipt);
+    }
+  }, 30_000);
 
-  test("a changed rule invalidates an in-flight continuation", () => {
+  // Old property: a rule edited mid-delivery errored "rules changed ... Run a
+  // fresh `next`". New property: the receipt names a bundle that no longer
+  // exists, so the answer is part 1 of the CURRENT bundle under a new receipt,
+  // byte-identical to a fresh `next`; old and new parts are never mixed.
+  test("a changed rule restarts an in-flight continuation from part 1 of the current bundle", () => {
     const proj = project();
-    const first = invoke(proj, "next", [
-      "--scope",
-      "mvp",
-      "--stage",
-      "intent-capture",
-    ]).directive;
+    inflateOrg(proj);
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const first = invoke(proj, "next", args).directive;
+    expect(first.kind).toBe("load-steering");
     appendFileSync(
-      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      orgPath(proj),
       "\n## New Policy\n\nChanged during delivery.\n",
       "utf-8",
     );
-    const stale = invoke(proj, "continue", [first.continue_token ?? ""]).directive;
-    expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("Run a fresh `next`");
-  });
+    const stale = invoke(proj, "continue", [first.receipt ?? ""]);
+    expect(stale.directive.kind).toBe("load-steering");
+    expect(stale.directive.part).toBe(1);
+    expect(stale.directive.bundle).not.toBe(first.bundle);
+    expect(stale.directive.receipt).toMatch(RECEIPT_PATTERN);
+    expect(stale.directive.receipt).not.toBe(first.receipt);
+    expect(invoke(proj, "next", args).line).toBe(stale.line);
 
-  test("a changed workflow state invalidates an in-flight continuation", () => {
-    const proj = setupIntegrationProject({
-      withState: "state-mid-ideation.md",
-    });
-    projects.push(proj);
+    // The same holds when the state file routes the workflow.
+    const stateful = statefulProject();
+    inflateOrg(stateful);
+    const statefulFirst = invoke(stateful, "next", []).directive;
+    expect(statefulFirst.kind).toBe("load-steering");
+    appendFileSync(
+      orgPath(stateful),
+      "\n## New Policy\n\nChanged during delivery.\n",
+      "utf-8",
+    );
+    const statefulStale = invoke(stateful, "continue", [statefulFirst.receipt ?? ""]);
+    expect(statefulStale.directive.kind).toBe("load-steering");
+    expect(statefulStale.directive.part).toBe(1);
+    expect(statefulStale.directive.bundle).not.toBe(statefulFirst.bundle);
+    expect(statefulStale.directive.receipt).not.toBe(statefulFirst.receipt);
+    expect(invoke(stateful, "next", []).line).toBe(statefulStale.line);
+  }, 30_000);
+
+  // Old property: a moved workflow state errored "workflow state changed". New
+  // property: the receipt no longer matches the current state, so the answer
+  // is the new state's part 1 under a new receipt, identical to a fresh `next`.
+  test("a changed workflow state re-routes an in-flight continuation to the new part 1", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
     const first = invoke(proj, "next", []).directive;
+    expect(first.kind).toBe("load-steering");
     appendFileSync(
       seededStateFile(proj),
       "\n<!-- State changed during delivery. -->\n",
       "utf-8",
     );
 
-    const stale = invoke(proj, "continue", [
-      first.continue_token ?? "",
-    ]).directive;
-    expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("workflow state changed");
-    expect(stale.message).toContain("Run a fresh `next`");
+    const stale = invoke(proj, "continue", [first.receipt ?? ""]);
+    expect(stale.directive.kind).toBe("load-steering");
+    expect(stale.directive.part).toBe(1);
+    expect(stale.directive.receipt).toMatch(RECEIPT_PATTERN);
+    expect(stale.directive.receipt).not.toBe(first.receipt);
+    const fresh = invoke(proj, "next", []);
+    expect(fresh.line).toBe(stale.line);
   });
 
-  test("a changed scope route invalidates an in-flight continuation", () => {
+  // Old property: a changed scope route errored "stage route changed". New
+  // property: the marker's stored route replays the stateless `next`, whose
+  // answer is the new route's part 1 under a new receipt, identical to a fresh
+  // `next --scope --stage`.
+  test("a changed scope route re-routes an in-flight continuation to the new part 1", () => {
     const proj = project();
-    const first = invoke(proj, "next", [
-      "--scope",
-      "mvp",
-      "--stage",
-      "intent-capture",
-    ]).directive;
+    inflateOrg(proj);
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const first = invoke(proj, "next", args).directive;
+    expect(first.kind).toBe("load-steering");
     const gridPath = join(
       proj,
       ".claude",
@@ -764,12 +937,291 @@ describe("t248 deterministic steering delivery", () => {
     grid.mvp.stages[changed ?? "market-research"] = "SKIP";
     writeFileSync(gridPath, `${JSON.stringify(grid, null, 2)}\n`, "utf-8");
 
-    const stale = invoke(proj, "continue", [
-      first.continue_token ?? "",
-    ]).directive;
-    expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("stage route changed");
-    expect(stale.message).toContain("Run a fresh `next`");
+    const stale = invoke(proj, "continue", [first.receipt ?? ""]);
+    expect(stale.directive.kind).toBe("load-steering");
+    expect(stale.directive.part).toBe(1);
+    expect(stale.directive.receipt).toMatch(RECEIPT_PATTERN);
+    expect(stale.directive.receipt).not.toBe(first.receipt);
+    const fresh = invoke(proj, "next", args);
+    expect(fresh.line).toBe(stale.line);
+  });
+
+  test("one message: a stateful next carries its rules inline and any continue re-answers it byte for byte", () => {
+    const proj = statefulProject();
+    const first = invoke(proj, "next", []);
+    expect(first.directive.kind).toBe("run-stage");
+    expect(first.bytes).toBeLessThan(MAX_DIRECTIVE_BYTES);
+    expect(first.directive.rules_in_context).toEqual([
+      "aidlc/spaces/default/memory/org.md",
+      "aidlc/spaces/default/memory/phases/ideation.md",
+    ]);
+    const content = first.directive.rules_content ?? [];
+    expect([...new Set(content.map((entry) => entry.path))]).toEqual(
+      first.directive.rules_in_context ?? [],
+    );
+    for (const path of first.directive.rules_in_context ?? []) {
+      expect(reconstructed(content, path)).toBe(
+        readFileSync(join(proj, path), "utf-8"),
+      );
+    }
+    expect(first.directive).not.toHaveProperty("receipt");
+    expect(first.directive).not.toHaveProperty("next");
+
+    const marker = readMarker(statefulMarkerPath(proj));
+    expect(marker.kind).toBe("run-stage");
+    expect(marker).not.toHaveProperty("continue_token");
+    expect(marker).not.toHaveProperty("continue_token_sha256");
+    expectSteeringPayload(marker.steering_payload);
+    const markerBytes = readFileSync(statefulMarkerPath(proj), "utf-8");
+
+    expect(invoke(proj, "next", []).line).toBe(first.line);
+    expect(invoke(proj, "continue", ["bogus"]).line).toBe(first.line);
+    expect(invoke(proj, "continue", ["bogus123"]).line).toBe(first.line);
+    expect(readFileSync(statefulMarkerPath(proj), "utf-8")).toBe(markerBytes);
+  });
+
+  test("oversize forces chunks with the receipt and next command ahead of the payload", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const result = drive(proj, []);
+
+    expect(result.loads.length).toBeGreaterThan(1);
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.final).not.toHaveProperty("rules_content");
+    expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(true);
+    for (const [index, load] of result.loads.entries()) {
+      const line = result.lines[index];
+      expect(load.part).toBe(index + 1);
+      expect(load.parts).toBe(result.loads.length);
+      expect(load.receipt).toMatch(RECEIPT_PATTERN);
+      expect(load.next).toBe(`${CONTINUE_COMMAND_PREFIX}${load.receipt}`);
+      expect(line).not.toContain('"continue_token"');
+      const receiptAt = line.indexOf('"receipt"');
+      const nextAt = line.indexOf('"next"');
+      const rulesAt = line.indexOf('"rules_content"');
+      expect(receiptAt).toBeGreaterThan(0);
+      expect(nextAt).toBeGreaterThan(receiptAt);
+      expect(rulesAt).toBeGreaterThan(nextAt);
+    }
+    expect(new Set(result.loads.map((load) => load.receipt)).size).toBe(
+      result.loads.length,
+    );
+    for (const path of result.final.rules_in_context ?? []) {
+      expect(reconstructed(result.contents, path)).toBe(
+        readFileSync(join(proj, path), "utf-8"),
+      );
+    }
+    const marker = readMarker(statefulMarkerPath(proj));
+    expect(marker.kind).toBe("run-stage");
+    expect(marker).not.toHaveProperty("continue_token");
+    expectSteeringPayload(marker.steering_payload);
+  }, 30_000);
+
+  test("a mismatched receipt re-sends part 1 with the same receipt, stateful and stateless", () => {
+    const stateful = statefulProject();
+    inflateOrg(stateful);
+    const statefulFirst = invoke(stateful, "next", []);
+    expect(statefulFirst.directive.kind).toBe("load-steering");
+    for (const wrong of [
+      flipLastChar(statefulFirst.directive.receipt ?? ""),
+      "not-a-receipt",
+      "",
+    ]) {
+      const answer = invoke(stateful, "continue", [wrong]);
+      expect(answer.directive.kind, wrong).toBe("load-steering");
+      expect(answer.directive.part, wrong).toBe(1);
+      expect(answer.directive.receipt, wrong).toBe(statefulFirst.directive.receipt);
+      expect(answer.line, wrong).toBe(statefulFirst.line);
+    }
+
+    const stateless = project();
+    inflateOrg(stateless);
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const statelessFirst = invoke(stateless, "next", args);
+    expect(statelessFirst.directive.kind).toBe("load-steering");
+    for (const wrong of [
+      flipLastChar(statelessFirst.directive.receipt ?? ""),
+      "not-a-receipt",
+      "",
+    ]) {
+      const answer = invoke(stateless, "continue", [wrong]);
+      expect(answer.directive.kind, wrong).toBe("load-steering");
+      expect(answer.directive.part, wrong).toBe(1);
+      expect(answer.directive.receipt, wrong).toBe(statelessFirst.directive.receipt);
+      expect(answer.line, wrong).toBe(statelessFirst.line);
+    }
+  }, 30_000);
+
+  test("a consumed receipt restarts delivery at part 1, and after run-stage every old receipt re-answers the run-stage", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", []);
+    expect(first.directive.kind).toBe("load-steering");
+    const r1 = first.directive.receipt ?? "";
+    const second = invoke(proj, "continue", [r1]).directive;
+    expect(second.kind).toBe("load-steering");
+    expect(second.part).toBe(2);
+    expect(readMarker(statefulMarkerPath(proj)).part).toBe(2);
+
+    const replay = invoke(proj, "continue", [r1]);
+    expect(replay.directive.kind).toBe("load-steering");
+    expect(replay.directive.part).toBe(1);
+    expect(replay.directive.receipt).toBe(r1);
+    expect(replay.line).toBe(first.line);
+    expect(readMarker(statefulMarkerPath(proj)).part).toBe(1);
+
+    const receipts: string[] = [];
+    let current = replay.directive;
+    let hops = 0;
+    while (current.kind === "load-steering") {
+      receipts.push(current.receipt ?? "");
+      current = invoke(proj, "continue", [current.receipt ?? ""]).directive;
+      hops += 1;
+      expect(hops).toBeLessThan(100);
+    }
+    expect(current.kind).toBe("run-stage");
+    const finalLine = invoke(proj, "next", []).line;
+    expect(JSON.parse(finalLine)).toEqual(current);
+    for (const receipt of receipts) {
+      expect(invoke(proj, "continue", [receipt]).line, receipt).toBe(finalLine);
+    }
+    const marker = readMarker(statefulMarkerPath(proj));
+    expect(marker.kind).toBe("run-stage");
+    expect(marker).not.toHaveProperty("continue_token");
+    expect(marker).not.toHaveProperty("continue_token_sha256");
+  }, 60_000);
+
+  test("the Stop-hook probe retains the current part with its receipt and never publishes", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", []).directive;
+    expect(first.kind).toBe("load-steering");
+    const probeEnv = { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" };
+
+    const atOne = readFileSync(statefulMarkerPath(proj), "utf-8");
+    const probeOne = invoke(proj, "next", [], probeEnv).directive;
+    expect(probeOne.kind).toBe("load-steering");
+    expect(probeOne.part).toBe(1);
+    expect(probeOne.receipt).toBe(first.receipt);
+    expect(readFileSync(statefulMarkerPath(proj), "utf-8")).toBe(atOne);
+
+    const second = invoke(proj, "continue", [first.receipt ?? ""]).directive;
+    expect(second.part).toBe(2);
+    const atTwo = readFileSync(statefulMarkerPath(proj), "utf-8");
+    const before = readMarker(statefulMarkerPath(proj));
+    const probeTwo = invoke(proj, "next", [], probeEnv).directive;
+    expect(probeTwo.kind).toBe("load-steering");
+    expect(probeTwo.part).toBe(2);
+    expect(probeTwo.receipt).toBe(second.receipt);
+    expect(readFileSync(statefulMarkerPath(proj), "utf-8")).toBe(atTwo);
+    expect(readMarker(statefulMarkerPath(proj)).revision).toBe(before.revision);
+
+    // A plain `next` at part 2 is the compacted-context case and restarts.
+    const restarted = invoke(proj, "next", []).directive;
+    expect(restarted.part).toBe(1);
+    expect(restarted.receipt).toBe(first.receipt);
+  }, 30_000);
+
+  test("a Stop-hook probe walks an oversize delivery to run-stage and leaves state, audit, and marker byte-identical", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const probeEnv = { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" };
+    const runtime = join(proj, "aidlc");
+
+    // With no marker at all the probe mints its own part 1 under the probe key
+    // and matches each receipt against the parts the route would issue; it
+    // publishes nothing and creates no key file.
+    const untouched = treeDigest(runtime);
+    let directive = invoke(proj, "next", [], probeEnv).directive;
+    expect(directive.kind).toBe("load-steering");
+    const contents: RuleContent[] = [];
+    let hops = 0;
+    while (directive.kind === "load-steering") {
+      expect(directive.part).toBe(hops + 1);
+      expect(directive.receipt).toMatch(RECEIPT_PATTERN);
+      contents.push(...(directive.rules_content ?? []));
+      directive = invoke(proj, "continue", [directive.receipt ?? ""], probeEnv).directive;
+      hops += 1;
+      expect(hops).toBeLessThan(100);
+    }
+    expect(hops).toBeGreaterThan(1);
+    expect(directive.kind).toBe("run-stage");
+    expect(directive).not.toHaveProperty("rules_content");
+    for (const path of directive.rules_in_context ?? []) {
+      expect(reconstructed(contents, path)).toBe(
+        readFileSync(join(proj, path), "utf-8"),
+      );
+    }
+    expect(existsSync(statefulMarkerPath(proj))).toBe(false);
+    expect(treeDigest(runtime)).toEqual(untouched);
+
+    // With a real delivery in flight at part 1 the probe retains that part and
+    // walks the rest statelessly; the marker stays at part 1 throughout.
+    const first = invoke(proj, "next", []).directive;
+    expect(first).toMatchObject({ kind: "load-steering", part: 1 });
+    const issued = treeDigest(runtime);
+    let walked = invoke(proj, "next", [], probeEnv).directive;
+    expect(walked.receipt).toBe(first.receipt);
+    let walkedHops = 0;
+    while (walked.kind === "load-steering") {
+      walked = invoke(proj, "continue", [walked.receipt ?? ""], probeEnv).directive;
+      walkedHops += 1;
+      expect(walkedHops).toBeLessThan(100);
+    }
+    expect(walkedHops).toBe(hops);
+    expect(walked.kind).toBe("run-stage");
+    expect(treeDigest(runtime)).toEqual(issued);
+    expect(readMarker(statefulMarkerPath(proj)).part).toBe(1);
+  }, 60_000);
+
+  test("the directive validator requires receipt and next on load-steering and well-formed inline rules on run-stage", () => {
+    const chunked = statefulProject();
+    inflateOrg(chunked);
+    const load = invoke(chunked, "next", []).directive;
+    expect(load.kind).toBe("load-steering");
+    expect(validateDirective(load).valid).toBe(true);
+
+    const withoutReceipt = { ...load } as Record<string, unknown>;
+    delete withoutReceipt.receipt;
+    const noReceipt = validateDirective(withoutReceipt);
+    expect(noReceipt.valid).toBe(false);
+    if (!noReceipt.valid) {
+      expect(noReceipt.errors.join("\n")).toContain("receipt");
+    }
+
+    const withoutNext = { ...load } as Record<string, unknown>;
+    delete withoutNext.next;
+    const noNext = validateDirective(withoutNext);
+    expect(noNext.valid).toBe(false);
+    if (!noNext.valid) {
+      expect(noNext.errors.join("\n")).toContain("next");
+    }
+
+    expect(validateDirective({ ...load, receipt: 12345678 }).valid).toBe(false);
+    expect(validateDirective({ ...load, next: ["bun"] }).valid).toBe(false);
+    expect(
+      validateDirective({ ...load, continue_token: "x".repeat(610) }).valid,
+    ).toBe(false);
+    expect(
+      validateDirective({ ...load, rules_content: [{ path: "a.md" }] }).valid,
+    ).toBe(false);
+
+    const fitted = statefulProject();
+    const run = invoke(fitted, "next", []).directive;
+    expect(run.kind).toBe("run-stage");
+    expect(run.rules_content).toBeArray();
+    expect(validateDirective(run).valid).toBe(true);
+    expect(validateDirective({ ...run, rules_content: "oops" }).valid).toBe(false);
+    expect(
+      validateDirective({ ...run, rules_content: [{ path: 1, text: "x" }] }).valid,
+    ).toBe(false);
+    expect(
+      validateDirective({ ...run, rules_content: [{ path: "a.md", text: 2 }] }).valid,
+    ).toBe(false);
+    expect(validateDirective({ ...run, rules_content: ["a.md"] }).valid).toBe(false);
+    const withoutRules = { ...run } as Record<string, unknown>;
+    delete withoutRules.rules_content;
+    expect(validateDirective(withoutRules).valid).toBe(true);
   });
 
   test("missing required rules block before stage work with repair guidance", () => {

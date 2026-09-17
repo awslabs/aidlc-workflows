@@ -50,8 +50,12 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
+  decideFence,
   errorMessage,
+  guardStoodAsideLine,
   hooksHealthDir,
+  lowerFenceSentence,
+  recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
   isoTimestamp,
@@ -808,6 +812,42 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
   );
 }
 
+/**
+ * Whether this fence stands aside instead of refusing. Containment fence: a
+ * human's newer instruction is NOT a key here (decideGuard knows that), so this
+ * only ever returns true when `guard_policy: off` or the per-run switch lowered
+ * it. Then the cross-unit write proceeds with one line and one audit row.
+ */
+function reviewerScopeStandsAside(
+  projectDir: string,
+  parsed: ClaudeCodeHookInput,
+  toolName: string,
+  unit: string,
+  target: string,
+  stage?: string,
+): boolean {
+  let gate: ReturnType<typeof decideFence>;
+  try {
+    gate = decideFence(projectDir, "reviewer-scope", { hookInput: parsed });
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    return false;
+  }
+  if (gate.decision !== "stand-aside") return false;
+  const detail = `${target} (unit ${unit})`;
+  process.stdout.write(
+    `${guardStoodAsideLine("reviewer-scope", detail)}\n`,
+  );
+  recordGuardStoodAside(projectDir, {
+    fence: "reviewer-scope",
+    authority: gate.authority,
+    ...(stage ? { stage } : {}),
+    tool: toolName,
+    details: detail,
+  });
+  return true;
+}
+
 function emitReviewerScopeBlocked(
   projectDir: string,
   toolName: string,
@@ -943,6 +983,13 @@ export async function run(input: string): Promise<number> {
       return 0;
     }
     if (scopedVerdict.block) {
+      // This fence CONTAINS an agent: it never blocks a person, so a human's
+      // newer instruction is not a key for it (asking for a review is not asking
+      // for edits in another unit). Only `guard_policy: off` or the per-run
+      // switch lowers it, and then the write is logged rather than refused.
+      if (reviewerScopeStandsAside(projectDir, parsed, toolName, unitScope.unit, scopedVerdict.target ?? "")) {
+        return 0;
+      }
       emitReviewerScopeBlocked(
         projectDir,
         toolName,
@@ -954,7 +1001,7 @@ export async function run(input: string): Promise<number> {
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
       process.stderr.write(
-        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}.\n`,
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}. ${lowerFenceSentence("reviewer-scope")}\n`,
       );
       return 2;
     }
@@ -1055,6 +1102,9 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
+  if (reviewerScopeStandsAside(projectDir, parsed, toolName, dispatch.unit, verdict.target ?? "", dispatch.stage)) {
+    return 0;
+  }
   emitReviewerScopeBlocked(
     projectDir,
     toolName,
@@ -1063,7 +1113,9 @@ export async function run(input: string): Promise<number> {
     dispatch.unit,
   );
 
-  process.stderr.write(`${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`);
+  process.stderr.write(
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)} ${lowerFenceSentence("reviewer-scope")}\n`,
+  );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

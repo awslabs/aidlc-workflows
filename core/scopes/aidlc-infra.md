@@ -7,7 +7,10 @@ keywords:
   - infra
 description: Infrastructure changes
 skeleton: on
-change_control: strict
+guard_policy: strict
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # infra scope

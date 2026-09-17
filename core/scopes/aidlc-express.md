@@ -8,7 +8,10 @@ description: "Lightest run: requirements to deploy, no design pass, no reviewers
 skeleton: off
 runner: true
 review_cap: none
-change_control: relaxed
+guard_policy: relaxed
+sensors: off
+learnings: off
+summary_confirmation: off
 ---
 
 # express scope

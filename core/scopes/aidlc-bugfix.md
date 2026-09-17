@@ -9,7 +9,10 @@ description: Fix a specific bug
 skeleton: off
 runner: true
 review_cap: advisory
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # bugfix scope

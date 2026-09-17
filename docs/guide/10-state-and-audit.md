@@ -23,7 +23,7 @@ sidecar's final line ending.
 | Section | Purpose |
 |---------|---------|
 | **Project Information** | Project description, type (greenfield/brownfield), scope, start date, current phase, active agent |
-| **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level |
+| **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level, test strategy, and the per-intent settings: `Guard Policy`, `Guards Off` (present only once a fence was switched off for this piece of work), `Sensors`, `Learnings`, `Summary Confirmation` |
 | **Workspace State** | Project root, detected languages, frameworks, build system |
 | **Execution Plan Summary** | Total stages, completed count, in-progress stage |
 | **Runtime State** | Revision count, Construction checkpoints, iteration and execution settings, receipt-bound Construction Verification Command, and optional Unit ownership and Unit gate rhythm |
@@ -97,7 +97,7 @@ stateDiagram-v2
 
 The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
-### 102-event taxonomy
+### 105-event taxonomy
 
 Events are organized into 25 categories:
 
@@ -109,14 +109,14 @@ Events are organized into 25 categories:
 | **Session** | 5 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
 | **Navigation** | 7 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `PLUGIN_SELECTION_CHANGED` |
-| **Change Control** | 2 | `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED` |
+| **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (retired name, still read), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` |
 | **Ceremony** | 1 | `CEREMONY_SET` — emitted by `aidlc-utility.ts config-change` (also via the shared `scope-change` applier). Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default). `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. One row per real stored field/source change; no-op commands emit none. |
 | **Interaction** | 13 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED`, `CONSTRUCTION_POLICY_RECORDED`, `CHECKPOINT_VERIFICATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
 | **Unit Configuration and Lifecycle** | 7 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED` (write-audit-log hook), `ARTIFACT_REUSED` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` (log-subagent hook) |
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
-| **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook) |
+| **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
 | **Utility** | 1 | `HEALTH_CHECKED` |
 | **Error/Recovery** | 2 | `ERROR_LOGGED`, `RECOVERY_COMPLETED` |
@@ -143,7 +143,7 @@ Events are organized into 25 categories:
 Each entry follows a structured format with these fields:
 
 - **Timestamp** — ISO 8601 timestamp
-- **Event** - One of the 102 event types
+- **Event** - One of the 105 event types
 - **Details** — Event-specific data (stage name, decision, artifact path, etc.)
 
 Entries are appended chronologically. To review the history of a specific stage, search for its `STAGE_STARTED` and `STAGE_COMPLETED` entries and everything in between.

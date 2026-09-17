@@ -192,34 +192,46 @@ The intent-configuration handlers share a single mutation path:
 
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
-| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation` |
-| `aidlc engine config list [--json]` | `config-list` | Read all seven settings in that order; Change Control and ceremony values include effective sources |
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the five `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
+| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same seven settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the seven setting flags plus `--intent`, `--space`,
+`config-change` accepts only the twelve setting flags plus `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
 key order; it does not write. Both mutation handlers hold one `withAuditLock`
 across state read, apply, `appendAuditEntries` in caller-held-lock mode, and a
-single state write. If Change Control changes, call
+single state write. When the Guard Policy value moves, call
 `assertChangeControlLedgerWritable` before any write. A memory layer's
-`Mode: strict` refuses an explicit `--change-control relaxed` for the entire
-command, including companion settings and scope changes. Under that memory
-policy, an implicit scope change still updates the scope-owned Change Control
-line and records the change; memory continues to control the effective value.
+`Mode: strict` refuses an explicit `--guard-policy relaxed` or `--guard-policy
+off` for the entire command, including companion settings and scope changes.
+Under that memory policy, an implicit scope change still updates the scope-owned
+Guard Policy line and records the change; memory continues to control the
+effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
-`Review Override`; explicit Change Control and ceremony values use
+`Review Override`; explicit Guard Policy and ceremony values use
 `(set by you)`, while inherited scope defaults retain scope provenance. A
-scope change preserves explicit human overrides and absent legacy Change
-Control/ceremony rows. Only real stored field or source changes produce setting
-events or update `Last Updated`. The utility applier builds `CHANGE_CONTROL_SET`
-and `CEREMONY_SET` entries directly; `aidlc-lib.ts` still uses
-`appendChangeControlSetRow` when a governed checkpoint observes an effective
-memory-policy change. Do not add separate setter wrappers or split a combined
-request into multiple dispatcher calls.
+scope change preserves explicit human overrides and absent legacy Guard
+Policy/ceremony rows. Only real stored field or source changes produce setting
+events or update `Last Updated`. The utility applier builds `GUARD_POLICY_SET`,
+`CEREMONY_SET`, and the fence-switch `GUARD_DISABLED`/`GUARD_RESTORED` entries
+directly; `aidlc-lib.ts` still uses `appendGuardPolicySetRow` when a governed
+checkpoint observes an effective memory-policy change. Do not add separate setter
+wrappers or split a combined request into multiple dispatcher calls.
+
+A new setting writes its line through a named writer rather than a bare
+`setField`, so a record from an earlier release is migrated in place: the Guard
+Policy writer is `setGuardPolicyLine`, which renames a surviving `Change Control`
+line instead of adding a second one, and `setGuardsOffLine` inserts the `Guards
+Off` line under it when a fence is first switched. A retired key, flag, heading,
+or state field is read for one release and never written. The retired FLAG and
+CONFIG KEY paths call `noteGuardPolicyRename`, so a caller who types one sees
+exactly one deprecation line per process; a retired state field, memory heading,
+or scope frontmatter key is read silently, because the person reading a record
+written by an earlier release did not choose the old spelling.
 
 The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `codekb-scope-diff` handlers are **direct utility verbs**: stage prose invokes
@@ -270,12 +282,12 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
-   - `change_control` (optional): `strict` | `relaxed`. The Change Control default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once and continues). Absence means strict. Validated like `skeleton` (the loader names the file and the two values). A memory layer's `## Change Control` `Mode: strict` wins over any scope default.
+   - `guard_policy` (optional): `strict` | `relaxed` | `off`. The Guard Policy default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once and continue), and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. Validated like `skeleton` (the loader names the file and the three values). A memory layer's `## Guard Policy` `Mode: strict` wins over any scope default. `change_control` is the retired spelling, read for one release; naming both keys with different values is rejected.
    - `sensors` (optional): `on` | `off`, absent means on. Controls sensor execution and sensor gate checks. Per-intent flag: `/aidlc --sensors on|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`.
    - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
    - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
 
-   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Classic enables sensors and learnings and disables summary confirmation; other shipped scopes inherit on. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
+   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Every shipped scope declares all three explicitly: classic enables sensors and learnings and disables summary confirmation, express disables all three, and the other nine enable all three. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 

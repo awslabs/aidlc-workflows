@@ -1927,7 +1927,7 @@ function requireMergeDispatchDecision(
   if (!terminal) {
     fail(`Unit "${transaction.unit}" merge dispatch has no terminal result.`);
   }
-  if (!humanPresenceGuardDisabled()) {
+  if (!humanPresenceGuardDisabled(projectDir)) {
     const terminalIndex = all.indexOf(terminal);
     const previousGate = [...all]
       .reverse()
@@ -2077,15 +2077,18 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Usage: aidlc-unit gate <unit> --decision <approve|reject> --user-input <text>",
     );
   }
+  // Resolved before the human-presence checks below, because the per-run switch
+  // that lowers them is read from this workflow's state.
+  const pd = resolveProjectDir(projectDir);
   if (
-    !humanPresenceGuardDisabled() &&
+    !humanPresenceGuardDisabled(pd) &&
     isNonAnswer(userInput)
   ) {
     fail(
       `Refusing Unit "${unit}" merge approval: --user-input "${userInput}" is cancellation boilerplate, not a human decision.`,
     );
   }
-  const approvalAuthorship = humanPresenceGuardDisabled()
+  const approvalAuthorship = humanPresenceGuardDisabled(pd)
     ? null
     : selfAttributedDecisionMarker(userInput, "approval");
   if (approvalAuthorship) {
@@ -2094,7 +2097,6 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
         `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}".`,
     );
   }
-  const pd = resolveProjectDir(projectDir);
   const transaction = readUnitMergeTransaction(pd, unit);
   if (!transaction || !["pinned", "approved", "rejected"].includes(transaction.status)) {
     fail(`Unit "${unit}" has no pinned merge transaction.`);
@@ -2774,12 +2776,12 @@ function validateMergeRiskAcknowledgment(
       `Unit "${unit}" released-attempt recovery requires --user-input <human acknowledgment>.`,
     );
   }
-  if (!humanPresenceGuardDisabled() && isNonAnswer(answer)) {
+  if (!humanPresenceGuardDisabled(projectDir) && isNonAnswer(answer)) {
     fail(
       `Refusing Unit "${unit}" released-attempt recovery: --user-input "${answer}" is cancellation boilerplate.`,
     );
   }
-  const authorship = humanPresenceGuardDisabled()
+  const authorship = humanPresenceGuardDisabled(projectDir)
     ? null
     : selfAttributedDecisionMarker(answer, "approval");
   if (authorship) {
@@ -2788,7 +2790,7 @@ function validateMergeRiskAcknowledgment(
         `(${authorship.category}) in --user-input: "${authorship.phrase}".`,
     );
   }
-  if (!humanPresenceGuardDisabled()) {
+  if (!humanPresenceGuardDisabled(projectDir)) {
     const all = mainAuthorityAuditRows(projectDir);
     const floor = all.findLastIndex(
       (row) =>

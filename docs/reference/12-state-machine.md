@@ -409,7 +409,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**102 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 102 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `CHANGE_CONTROL_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` and are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**105 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 105 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -502,41 +502,63 @@ column.
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock) |
-| `CHANGE_CONTROL_SET` | `tools/aidlc-utility.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --change-control <strict\|relaxed>` or a changed scope-owned default in `scope-change`; lib's `appendChangeControlSetRow` records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
-| `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
+| `GUARD_POLICY_SET` | `tools/aidlc-utility.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --guard-policy <strict\|relaxed\|off>` or a changed scope-owned default in `scope-change`; lib's `appendGuardPolicySetRow` (through `governedGuardPolicy`) records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
+| `CHANGE_CONTROL_SET` | `Reserved (retired name)` | The name `GUARD_POLICY_SET` replaced. Written by releases before the rename and still read as the same setting history; no shipped emitter writes it. Same fields: `Old Value`, `New Value`, `Source` |
+| `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` or `off` and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
+| `GUARD_RESTORED` | `tools/aidlc-utility.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-run `off`. Fields: `Guard` (the fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
 | `CEREMONY_SET` | `tools/aidlc-utility.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
 All seven intent settings share `config-change`: `depth`, `test-strategy`,
-`review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`, in
-that order. The matching slash flags and every `config set <key> <value>` route
-can combine settings in one transaction. `config get` and `config list` expose
-all seven; Change Control and ceremony values include effective sources.
-`config-change` accepts only those setting flags plus `--intent`, `--space`,
-and `--project-dir`, requires at least one setting, and refuses unknown flags
-by name. Validation precedes the complete mutation, so invalid values cannot
-partially apply companion settings.
+`review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, in
+that order. Five per-fence keys, `guard.plan-approval`, `guard.review-freeze`,
+`guard.state-transition`, `guard.reviewer-scope`, and `guard.human-presence`,
+use the same setter and take `on` or `off`. The matching slash flags and every
+`config set <key> <value>` route can combine settings in one transaction.
+`config get` and `config list` expose all twelve keys; Guard Policy, fence, and
+ceremony values include effective sources, and the retired key `change-control`
+resolves to `guard-policy`. `config-change` accepts only those setting flags plus
+`--intent`, `--space`, and `--project-dir`, requires at least one setting, and
+refuses unknown flags by name. Validation precedes the complete mutation, so
+invalid values cannot partially apply companion settings.
 
-Change Control decides the consequence of an input change after a human
-approval or confirmation (`strict` reopens the approval with the existing
-remedy, `relaxed` records the change and continues); it never removes a gate,
-alters a reviewer's verdict, or deletes evidence. A governed checkpoint reads
-it only when it meets such a change. Configuration reads and writes,
-`intent-create`, and status also resolve the relevant policy. An invalid
-memory `Mode:` is a validation error naming the file and the two allowed values
-when read; a governed check that meets no input change reads nothing.
+Guard Policy (`strict`, `relaxed`, `off`) decides two things. First, the
+consequence of an input change after a human approval or confirmation: `strict`
+reopens the approval with the existing remedy, while `relaxed` and `off` record
+the change and continue. Second, which authority fences stand aside for this
+piece of work: `strict` lowers none, `relaxed` lowers `plan-approval` and
+`review-freeze`, and `off` lowers those two plus `state-transition` and
+`reviewer-scope`. No value removes a gate, alters a reviewer's verdict, deletes
+evidence, lets an agent answer for a human, or lowers `human-presence`. A
+governed checkpoint reads the setting only when it meets such a change.
+Configuration reads and writes, `intent-create`, and status also resolve the
+relevant policy. An invalid memory `Mode:` is a validation error naming the file
+and the three allowed values when read; a governed check that meets no input
+change reads nothing.
 
-An explicit `--change-control relaxed` under a memory layer's `Mode: strict`
-refuses the entire command, including other setting flags and any scope
-change, and names the memory file. Explicit strict and unrelated settings
-remain allowed. Scope-owned Change Control and ceremony values follow the new
-scope even under that memory policy, which still controls effective Change Control.
-Changed stored values or sources are audited with
-scope provenance; explicit human overrides and absent legacy rows are
-preserved. Explicit Change Control and ceremony flags store `<value> (set by
-you)`. A same-value source change still counts as a change; `review adversarial`
-clears `Review Override` to an empty string.
+An explicit `--guard-policy relaxed` or `--guard-policy off` under a memory
+layer's `Mode: strict` refuses the entire command, including other setting flags
+and any scope change, and names the memory file. Explicit strict and unrelated
+settings remain allowed. Scope-owned Guard Policy and ceremony values follow the
+new scope even under that memory policy, which still controls the effective
+value. Changed stored values or sources are audited with scope provenance;
+explicit human overrides and absent legacy rows are preserved. Explicit Guard
+Policy and ceremony flags store `<value> (set by you)`. A same-value source
+change still counts as a change; `review adversarial` clears `Review Override`
+to an empty string.
 
-Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. `classic` defaults sensors and learnings to `on` and summary confirmation to `off`; other scopes default all three to `on`. An explicit setting writes `on (set by you)` or `off (set by you)` to the selected intent. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
+The retired spellings resolve for one release and are never written: the scope
+key `change_control`, the state field `Change Control` (renamed in place by
+`setGuardPolicyLine` on the next write, so one setting never appears twice), the
+memory heading `## Change Control`, the flag `--change-control`, and the config
+key `change-control`. A caller that passes the retired flag or config key (or
+`validate-grid --change-control`) gets one deprecation line on stderr per process
+(`GUARD_POLICY_RENAME_NOTICE`, emitted by `noteGuardPolicyRename`) naming its
+removal in the next
+minor version. Naming both spellings with DIFFERENT values is refused, whether as
+`--guard-policy` and `--change-control` in one command or as `guard_policy` and
+`change_control` in one scope file; the same value under both names is accepted.
+
+Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. Every shipped scope declares all three explicitly: `classic` sets sensors and learnings to `on` and summary confirmation to `off`, `express` sets all three to `off`, and the other nine set all three to `on`. A scope file that omits a key still falls back to `on`. An explicit setting writes `on (set by you)` or `off (set by you)` to the selected intent. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
 
 Ceremony precedence is environment kill switch (`1`) → valid per-intent field
 → scope default → `on`. A kill switch never rewrites the saved override. An
@@ -576,7 +598,8 @@ and do not enforce that scope comparison.
 | `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the reviewer-module read-scope bound); one row per refusal |
 | `REVIEW_FREEZE_BLOCKED` | `hooks/aidlc-review-freeze.ts` | A file-tool or shell reviewed-output write refused because it would invalidate a fresh terminal review receipt before the gate (READY or terminal NOT-READY under the effective class); summary-owned questions are excluded unless explicitly named by `review_artifact`; one row per refusal |
 | `PLAN_APPROVAL_BLOCKED` | `hooks/aidlc-plan-approval-guard.ts` | A code-generation developer-agent dispatch or workspace mutation refused because the active unit or zero-Unit stage target lacked a current fingerprinted plan, test instructions, Testing Contract, explicit approval, or matching worker-brief marker; one row per refusal |
-| `GUARD_DISABLED` | `hooks/aidlc-plan-approval-guard.ts` | A tool call passed the Plan Approval guard because its deterministic off-switch environment variable was set while a workflow existed. Carries `Guard` (`plan-approval-guard`) and `Tool`; one row per streak, appended only when the newest row in the active shard is not already this event for the same guard |
+| `GUARD_DISABLED` | `hooks/aidlc-plan-approval-guard.ts`, `tools/aidlc-utility.ts` | Either a tool call passed the Plan Approval guard because its deterministic off-switch environment variable was set while a workflow existed (hook rows carry `Guard` = `plan-approval-guard` and `Tool`; one row per streak, appended only when the newest row in the active shard is not already this event for the same guard), or `config-change --guard.<fence> off` lowered one fence for this piece of work (switch rows carry `Guard` = the fence, `Scope`, and `Source`) |
+| `GUARD_STOOD_ASIDE` | `tools/aidlc-lib.ts` | A fence let an action through instead of refusing it, because the policy word, a per-run switch, or an environment kill switch had lowered it. The row is the evidence that stands in for the refusal, and the human hears one line beside it. The authority fields record who was working at the time; they are not what opened the fence. Carries `Guard` (the fence), `Authority` (`grant`, `instruction`, `none`), `Grant` (`turn-marker`, `marker-sequence`, `dispatch-stamp`, `none`), `Actor` (`main`, `subagent`, `unattended`), and optional `Stage`, `Tool`, `Details`. Written by `recordGuardStoodAside`, called by the fence hooks |
 
 ### Diagnostics and workspace
 
@@ -773,11 +796,12 @@ State-mutating commands emit their audit entries **before** mutating the state f
 `scope-change` use one shared settings applier. Under one `withAuditLock`, the
 caller reads the selected state, validates and computes the whole candidate,
 appends its `AuditEntryInput[]` through `appendAuditEntries` in caller-held-lock
-mode, and writes state once. When Change Control changes,
-`assertChangeControlLedgerWritable` runs before any write. `CHANGE_CONTROL_SET`
-and `CEREMONY_SET` rows are built by the utility applier, not separate setter
-wrappers; lib's `appendChangeControlSetRow` remains the emitter for effective
-memory observations. Only real stored field/source changes produce setting
+mode, and writes state once. When either path moves the Guard Policy value,
+`assertChangeControlLedgerWritable` runs before any write; both keep the check
+keyed on a `GUARD_POLICY_SET` row being in the batch. `GUARD_POLICY_SET`, `GUARD_DISABLED`
+and `GUARD_RESTORED` fence-switch rows, and `CEREMONY_SET` rows are built by the
+utility applier, not separate setter wrappers; lib's `appendGuardPolicySetRow`
+remains the emitter for effective memory observations. Only real stored field/source changes produce setting
 rows or update `Last Updated`; no-op commands do neither. As with other
 audit-first mutations, a state-write failure after a successful batch leaves
 visible audit/state drift, not a silently partial sequence of setting writes.
@@ -1019,8 +1043,12 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `record-verdict`, `retry-pending`, `request-changes`, `redo-jump`,
 `restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
 `abort-bolt`, `repair-source-boundary`, `reconfirm-summary`,
-`unset-unattended`). Routing decisions compare `op` and never the remedy
-sentence; the directive contract refuses an unknown `op`.
+`unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
+remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
+is the one remedy a refusal adds LAST, and only when the refusal is a fence
+holding: it turns that single fence off for this piece of work through
+`config-change --guard.<fence> off`, so the way past a fence is printed beside
+the thing that stopped the human instead of living on a reference page.
 
 **Operations and interaction.** Emitted remedies carry `interaction`, an
 `action` for presentation, `requiresHuman`, and `executableNow`. The conductor

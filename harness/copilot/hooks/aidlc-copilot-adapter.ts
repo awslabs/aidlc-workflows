@@ -549,7 +549,7 @@ export async function run(
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
-        ...(typeof value.continue_token === "string" && Buffer.byteLength(value.continue_token) <= 16 * 1024 ? { continueToken: value.continue_token } : {}),
+        ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
         resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;

@@ -1162,10 +1162,12 @@ function runEngineNextDirective(
         "unit" in parsed && typeof (parsed as { unit?: unknown }).unit === "string"
           ? (parsed as { unit: string }).unit.trim()
           : "";
+      // The 8-character receipt of the current rules part (the field is
+      // `receipt` on the wire; the hook keeps its historical variable name).
       const continueToken =
-        "continue_token" in parsed &&
-          typeof (parsed as { continue_token?: unknown }).continue_token === "string"
-          ? (parsed as { continue_token: string }).continue_token.trim()
+        "receipt" in parsed &&
+          typeof (parsed as { receipt?: unknown }).receipt === "string"
+          ? (parsed as { receipt: string }).receipt.trim()
           : "";
       const part =
         "part" in parsed &&
@@ -1239,33 +1241,29 @@ function continuationReason(
   kind: string,
   stage: string,
   continueToken?: string,
-  rulesContent?: Array<{ path: string; text: string }>,
   retained = false,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate") {
-    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier receipt.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
   }
   if (kind === "load-steering" && continueToken) {
-    const exactContent = JSON.stringify(rulesContent ?? []);
-    // Print order and execution order intentionally differ. The opaque token
-    // must precede the large payload so host truncation cannot discard it, but
-    // the conductor must still apply this chunk before advancing the cursor.
+    // Pointer plus receipt, never the payload. Hook messages are capped near
+    // 10 KB on every harness (Claude 10,000 characters, Codex about 2,500
+    // tokens, Kiro CLI 10,240 bytes), so a re-fed rules payload was being cut
+    // or spilled to a file. The receipt names the part the conductor already
+    // holds; if it no longer matches, the engine answers with the current step.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      "Preserve this step-two continuation command, but do not run it yet: " +
-      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
-      "First, apply every path/text entry in the exact `rules_content` payload below. " +
-      "Second, run the preserved command and keep following each load-steering step it " +
-      "returns, applying its rule chunk before every continuation, until it answers " +
-      "`run-stage`. Do not summarise or narrate these " +
-      `rule chunks to the user.\n\n${exactContent}`
+      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and ` +
+      "follow each step it returns until it answers `run-stage`. Do not summarise or " +
+      "narrate rule chunks to the user."
     );
   }
   return (
@@ -1670,7 +1668,6 @@ return blockStop(
     kind,
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
-    directive.rulesContent,
     directive.retained,
   ),
 );

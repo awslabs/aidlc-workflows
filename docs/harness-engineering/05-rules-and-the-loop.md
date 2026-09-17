@@ -56,33 +56,46 @@ table and the resolver mechanics are the normative contract:
 [Rule System § Filename-derived scope](../reference/08-rule-system.md#filename-derived-scope)
 and [§ Layout](../reference/08-rule-system.md#layout).
 
-### Holding Change Control for the whole repo
+### Holding Guard Policy for the whole repo
 
 One heading in these files is read as a structured setting rather than prose:
-`## Change Control`. It decides what happens when an input changes after a human
-approved or confirmed something (a plan whose source moved, a reviewed document
-edited after its review, an output saved without the current summary
-confirmation): `strict` reopens that approval; `relaxed` records the change
-once, tells the human in one line, and continues. By default each intent takes
-its scope's value and any person on the intent can flip it from chat or with
-`/aidlc --change-control <value>`. To hold `strict` for everyone, put one line
+`## Guard Policy`. It decides how far the guards stand aside for work in this
+space, in two respects. What happens when an input changes after a human approved
+or confirmed something (a plan whose source moved, a reviewed document edited
+after its review, an output saved without the current summary confirmation):
+`strict` reopens that approval, while `relaxed` and `off` record the change once,
+tell the human in one line, and continue. And which authority fences hold:
+`strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
+`off` lowers those two plus `state-transition` and `reviewer-scope`.
+`human-presence` is never lowered by the word. By default each intent takes its
+scope's value and any person on the intent can flip it from chat or with
+`/aidlc --guard-policy <value>`. To hold `strict` for everyone, put one line
 under the heading in `team.md` (or `org.md`, or `project.md` for one project):
 
 ```markdown
-## Change Control
+## Guard Policy
 
 Mode: strict
 ```
 
 A `Mode: strict` in any layer wins over the scope default and over the intent's
-own line; a chat or flag flip to relaxed is then refused with a sentence naming
-this file, and the next governed check on a running intent records the change
-as a `CHANGE_CONTROL_SET` row naming the file as its source. `Mode: relaxed`
-here has no effect (an intent can always be relaxed by its scope or by chat),
-and so does leaving the section empty. Any other value is a validation error
-naming the file and the two allowed values. The line is read with the same
-`Field: value` grammar as `## Testing Posture`, commented-out lines included:
-a `Mode:` inside an HTML comment declares nothing.
+own line; a chat or flag flip to `relaxed` or `off` is then refused with a
+sentence naming this file, and the next governed check on a running intent records
+the change as a `GUARD_POLICY_SET` row naming the file as its source. `Mode:
+relaxed` and `Mode: off` here have no effect (an intent can always be relaxed by
+its scope or by chat), and so does leaving the section empty. Any other value is a
+validation error naming the file and the three allowed values. The line is read
+with the same `Field: value` grammar as `## Testing Posture`, commented-out lines
+included: a `Mode:` inside an HTML comment declares nothing.
+
+A layer holding `strict` does not take away the per-work fence switch: a person
+can still run `/aidlc config set guard.<fence> off` for one piece of work, which
+is recorded as a `GUARD_DISABLED` row and comes back on for the next piece of
+work. Memory governs the policy word, not every individual key.
+
+The retired heading `## Change Control` is still read for one release, so a space
+whose memory files predate the rename keeps working; a section under the new
+heading wins when a file carries both.
 
 ---
 

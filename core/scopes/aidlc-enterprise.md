@@ -4,7 +4,10 @@ depth: Comprehensive
 keywords: []
 description: Regulated enterprise feature, full audit trail
 skeleton: on
-change_control: strict
+guard_policy: strict
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # enterprise scope

@@ -7,9 +7,14 @@
 
 import {
   type ClaudeCodeHookInput,
+  decideFence,
+  guardStoodAsideLine,
   isClaudeCodeHookInput,
+  lowerFenceSentence,
   parseArgs,
   parseWorkspaceCommand,
+  recordGuardStoodAside,
+  resolveProjectDirFromHook,
 } from "../tools/aidlc-lib.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
@@ -989,14 +994,44 @@ export async function run(input: string): Promise<number> {
     return 0;
   }
   if (parsed.tool_name !== "Bash") return 0;
+  // The fence is up only while nobody with authority asked for this. A human
+  // message newer than the engine's last directive, or a lowered fence, lets
+  // the command through with one line and one audit row instead of a refusal.
+  const standAside = (detail: string): boolean => {
+    let projectDir: string;
+    try {
+      projectDir = resolveProjectDirFromHook(import.meta.url);
+    } catch {
+      return false; // no workspace to read: the fence stays up
+    }
+    let gate: ReturnType<typeof decideFence>;
+    try {
+      gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
+    } catch {
+      return false;
+    }
+    if (gate.decision !== "stand-aside") return false;
+    process.stdout.write(
+      `${guardStoodAsideLine("state-transition", detail)}\n`,
+    );
+    recordGuardStoodAside(projectDir, {
+      fence: "state-transition",
+      authority: gate.authority,
+      tool: "Bash",
+      details: detail,
+    });
+    return true;
+  };
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
+    if (standAside(`aidlc-state.ts ${verb}`)) return 0;
     process.stderr.write(
       `Stage status cannot be changed with aidlc-state.ts ${verb} because that bypasses ` +
         "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
         "--stage <slug> --result " +
         "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.\n",
+        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+        `${lowerFenceSentence("state-transition")}\n`,
     );
     return 2;
   }
@@ -1008,11 +1043,12 @@ export async function run(input: string): Promise<number> {
   );
   if (delegatedCommand === null) return 0;
 
+  if (standAside(delegatedCommand)) return 0;
   process.stderr.write(
     `Delegated agent "${agentType}" cannot run ${delegatedCommand} because only the main ` +
       "workflow session can change stage status or routing. Return the artifact, contribution, " +
       "or review verdict to the main session without parking, resuming, reporting, routing, " +
-      "or presenting an approval question.\n",
+      `or presenting an approval question. ${lowerFenceSentence("state-transition")}\n`,
   );
   return 2;
 }

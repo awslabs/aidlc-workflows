@@ -4,15 +4,16 @@
 // subcommand:aidlc-log:review, subcommand:aidlc-orchestrate:report,
 // hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED
 //
-// t335 - Change Control at the review-receipt and summary-confirmation
-// checkpoints, and the five places it never reaches. Under `relaxed` a terminal
-// review receipt whose reviewed content changed afterwards stays valid for the
-// gate: the gate presentation says the reviewed content differs and names the
-// diff, one CHANGE_ACCEPTED row is written, and the reviewer's verdict is never
-// altered. An output saved without the current summary confirmation is recorded
-// and the stage continues. The review-freeze hook keeps refusing the write in
-// its window under both values, and no relaxed setting ever skips a human gate,
-// Plan Approval itself, the autonomous-mode plan stop, or the observer barrier.
+// t335 - Guard Policy at the review-receipt and summary-confirmation
+// checkpoints, and the five places it never reaches. Under `relaxed` (and
+// `off`) a terminal review receipt whose reviewed content changed afterwards
+// stays valid for the gate: the gate presentation says the reviewed content
+// differs and names the diff, one CHANGE_ACCEPTED row is written, and the
+// reviewer's verdict is never altered. An output saved without the current
+// summary confirmation is recorded and the stage continues. The review-freeze
+// and plan-approval fences hold under strict and stand aside (one line, one
+// GUARD_STOOD_ASIDE row) under relaxed and off; no value ever skips a human
+// gate, the autonomous-mode plan stop, or a review in progress.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -22,13 +23,15 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename,
   auditBlockField,
-  CHANGE_CONTROL_FIELD,
   checkSummaryConfirmationEvidence,
   freshReviewReceipts,
+  getField,
+  GUARD_POLICY_FIELD,
   loadStageGraphAll,
   readAuditShardEvents,
   readAllAuditShards,
   setField,
+  setGuardPolicyLine,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -88,19 +91,26 @@ function runHook(hook: string, project: string, payload: Record<string, unknown>
   return { code: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-/** A mid-inception project (requirements-analysis in progress) on `mode`. */
-function project(mode: "strict" | "relaxed"): string {
+type Mode = "strict" | "relaxed" | "off";
+
+/** A mid-inception project (requirements-analysis in progress) on `mode`. The
+ *  fixture still carries the retired `Change Control` line, as a record written
+ *  by an earlier release does; the writer renames it in place. */
+function project(mode: Mode): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-mid-inception.md"));
   const statePath = seededStateFile(proj);
-  writeFileSync(
-    statePath,
-    setField(readFileSync(statePath, "utf-8"), CHANGE_CONTROL_FIELD, `${mode} (set by you)`),
-  );
+  const state = setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${mode} (set by you)`);
+  expect(getField(state, GUARD_POLICY_FIELD)).toBe(`${mode} (set by you)`);
+  expect(state).not.toContain("- **Change Control**:");
+  writeFileSync(statePath, state);
   return proj;
 }
+
+/** The one line the human hears when a relaxed or off policy carries a change through. */
+const CONTINUING = "(Guard Policy: relaxed or off).";
 
 function stageDir(proj: string): string {
   const dir = join(seededRecordDir(proj), "inception", STAGE);
@@ -193,7 +203,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(receipts.acceptedChanges[0].checkpoint).toBe("review-receipt");
     expect(receipts.acceptedChanges[0].changed).toEqual([artifactRelative(proj)]);
     expect(receipts.acceptedChanges[0].notice).toBe(
-      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`,
+      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
     );
     // Reading is not recording: nothing is written until a transition runs.
     expect(acceptedRows(proj)).toHaveLength(0);
@@ -204,7 +214,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(revalidated.status, revalidated.stderr).toBe(0);
     const notices = printedNotices(revalidated.stdout);
     expect(notices).toEqual([
-      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`,
+      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
     ]);
     let rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
@@ -238,7 +248,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "first"], proj);
     expect(brief.status, brief.stderr).toBe(0);
     expect(brief.stdout).toContain(
-      `**Reviewed content differs:** ${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`,
+      `**Reviewed content differs:** ${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
     );
     expect(brief.stdout).toContain(`**Changed after review:** \`${artifactRelative(proj)}\``);
     expect(brief.stdout).toContain("**Decision options:**");
@@ -258,7 +268,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(directive).toMatchObject({
       kind: "print",
       change_notices: [
-        `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`,
+        `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
       ],
     });
     expect(acceptedRows(proj)).toHaveLength(1);
@@ -280,36 +290,44 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(acceptedRows(proj)).toHaveLength(0);
   });
 
-  test("the review-freeze hook still refuses the write in its window under relaxed", () => {
-    const proj = project("relaxed");
-    recordReadyReview(proj);
-    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
-    const blocked = runHook(FREEZE_HOOK, proj, {
-      hook_event_name: "PreToolUse",
-      tool_name: "Write",
-      tool_input: { file_path: artifact(proj) },
-    });
-    expect(blocked.code).toBe(2);
-    expect(blocked.stderr).toContain("review-freeze");
-    // A write that got past the hook is accepted; the freeze stays on afterwards too.
-    editReviewedArtifact(proj);
-    expect(
-      runHook(FREEZE_HOOK, proj, {
-        hook_event_name: "PreToolUse",
-        tool_name: "Edit",
-        tool_input: { file_path: artifact(proj) },
-      }).code,
-    ).toBe(2);
+  test("the review-freeze fence holds under strict and stands aside, logged, under relaxed and off", () => {
+    const stoodAside = (proj: string) =>
+      readAuditShardEvents(proj).filter((entry) => entry.event === "GUARD_STOOD_ASIDE");
     const strictProject = project("strict");
     recordReadyReview(strictProject);
     expect(run(STATE_TOOL, ["gate-start", STAGE], strictProject).status).toBe(0);
-    const strictBlocked = runHook(FREEZE_HOOK, strictProject, {
+    const blocked = runHook(FREEZE_HOOK, strictProject, {
       hook_event_name: "PreToolUse",
       tool_name: "Write",
       tool_input: { file_path: artifact(strictProject) },
     });
-    expect(strictBlocked.code).toBe(2);
-    expect(strictBlocked.stderr.replaceAll(strictProject, proj)).toBe(blocked.stderr);
+    expect(blocked.code).toBe(2);
+    expect(blocked.stderr).toContain("review-freeze");
+    expect(stoodAside(strictProject)).toHaveLength(0);
+
+    // relaxed and off lower this fence: the write goes through with one line
+    // and one GUARD_STOOD_ASIDE row; the receipt and its verdict are untouched.
+    for (const mode of ["relaxed", "off"] as const) {
+      const proj = project(mode);
+      recordReadyReview(proj);
+      expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+      const passed = runHook(FREEZE_HOOK, proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: artifact(proj) },
+      });
+      expect(passed.code, mode).toBe(0);
+      expect(passed.stdout, mode).toContain(
+        "Continuing past the review-freeze check because it is off for this piece of work. Recorded in the audit trail",
+      );
+      const rows = stoodAside(proj);
+      expect(rows, mode).toHaveLength(1);
+      expect(auditBlockField(rows[0].block, "Guard")).toBe("review-freeze");
+      expect(auditBlockField(rows[0].block, "Tool")).toBe("Write");
+      expect(auditBlockField(rows[0].block, "Stage")).toBe(STAGE);
+      expect(reviewCompletedRows(proj)).toHaveLength(1);
+      expect(auditBlockField(reviewCompletedRows(proj)[0].block, "Verdict")).toBe("READY");
+    }
   });
 
   test("an acceptance that cannot be recorded refuses the transition instead of continuing", () => {
@@ -317,7 +335,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     editReviewedArtifact(proj);
-    // The ledger fault seam makes every Change Control append fail in the
+    // The ledger fault seam makes every Guard Policy append fail in the
     // spawned tool, so the contract is pinned independent of file modes and of
     // who runs the suite.
     const refused = run(STATE_TOOL, ["gate-start", STAGE], proj, {
@@ -326,7 +344,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     });
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(
-      `Cannot continue under Change Control relaxed: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, or approve again.`,
+      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, or approve again.`,
     );
     expect(printedNotices(refused.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(0);
@@ -336,15 +354,42 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(acceptedRows(proj)).toHaveLength(1);
     // The config setter fails closed on the same ledger fault.
     const beforeConfig = readFileSync(seededStateFile(proj), "utf-8");
-    const beforeConfigRows = readAuditShardEvents(proj).filter((row) => row.event === "CHANGE_CONTROL_SET");
-    const changed = run(join(TOOLS, "aidlc-utility.ts"), ["config-change", "--change-control", "strict"], proj, {
+    const beforeConfigRows = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_POLICY_SET");
+    const changed = run(join(TOOLS, "aidlc-utility.ts"), ["config-change", "--guard-policy", "strict"], proj, {
       ...TEST_ENV,
       AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t335",
     });
     expect(changed.status).not.toBe(0);
     expect(changed.stderr).toContain("injected ledger fault: t335");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeConfig);
-    expect(readAuditShardEvents(proj).filter((row) => row.event === "CHANGE_CONTROL_SET")).toEqual(beforeConfigRows);
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "GUARD_POLICY_SET")).toEqual(beforeConfigRows);
+  });
+
+  test("off carries the change through the review checkpoint exactly as relaxed does", () => {
+    const proj = project("off");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    editReviewedArtifact(proj);
+    const receipts = freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage());
+    expect(receipts.stageVerdict).toBe("READY");
+    expect(receipts.stageStale).toBe(false);
+    expect(receipts.acceptedChanges).toHaveLength(1);
+    expect(receipts.acceptedChanges[0].notice).toBe(
+      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+    );
+    expect(acceptedRows(proj)).toHaveLength(0);
+    const revalidated = run(STATE_TOOL, ["gate-start", STAGE], proj);
+    expect(revalidated.status, revalidated.stderr).toBe(0);
+    expect(printedNotices(revalidated.stdout)).toEqual([
+      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+    ]);
+    expect(acceptedRows(proj)).toHaveLength(1);
+    expect(auditBlockField(acceptedRows(proj)[0].block, "Checkpoint")).toBe("review-receipt");
+    const approved = run(STATE_TOOL, ["approve", STAGE], proj);
+    expect(approved.status, approved.stderr).toBe(0);
+    expect(acceptedRows(proj)).toHaveLength(1);
+    expect(reviewCompletedRows(proj)).toHaveLength(1);
+    expect(auditBlockField(reviewCompletedRows(proj)[0].block, "Verdict")).toBe("READY");
   });
 });
 
@@ -443,14 +488,14 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
       stage: STAGE,
       unit: null,
       changed: [artifactRelative(proj)],
-      notice: `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing (Change Control: relaxed).`,
+      notice: `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing ${CONTINUING}`,
     });
     expect(acceptedRows(proj)).toHaveLength(0);
 
     const gate = run(STATE_TOOL, ["gate-start", STAGE], proj, SUMMARY_ENV);
     expect(gate.status, gate.stderr).toBe(0);
     expect(printedNotices(gate.stdout)).toEqual([
-      `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing (Change Control: relaxed).`,
+      `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing ${CONTINUING}`,
     ]);
     const rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
@@ -467,6 +512,25 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
     expect(
       readAuditShardEvents(proj).filter((entry) => entry.event === "SUMMARY_CONFIRMATION_RECORDED"),
     ).toHaveLength(1);
+  });
+
+  test("off accepts the early save the same way as relaxed", () => {
+    const proj = project("off");
+    const questions = join(stageDir(proj), `${STAGE}-questions.md`);
+    writeFileSync(artifact(proj), "# Requirements\n");
+    recordArtifactWriteViaHook(proj, artifact(proj), "Write");
+    confirm(proj, questions);
+    const checked = evidence(proj);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect(checked.acceptedChanges).toHaveLength(1);
+    expect(checked.acceptedChanges?.[0]).toMatchObject({
+      checkpoint: "summary-confirmation",
+      notice: `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing ${CONTINUING}`,
+    });
+    const gate = run(STATE_TOOL, ["gate-start", STAGE], proj, SUMMARY_ENV);
+    expect(gate.status, gate.stderr).toBe(0);
+    expect(acceptedRows(proj)).toHaveLength(1);
   });
 
   test("strict is today's refusal", () => {
@@ -507,15 +571,15 @@ describe("t335 (4) an invalid memory Mode is the validation error at the checkpo
   function declareInvalidMode(proj: string): string {
     const path = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
     const content = readFileSync(path, "utf-8");
-    expect(content).toContain("## Change Control");
-    writeFileSync(path, content.replace("## Change Control\n", "## Change Control\n\nMode: sometimes\n"));
+    expect(content).toContain("## Guard Policy\n");
+    writeFileSync(path, content.replace("## Guard Policy\n", "## Guard Policy\n\nMode: sometimes\n"));
     return path;
   }
 
   function expectValidationError(stderr: string, path: string): void {
     // The tool prints its error as a JSON line, so the quotes arrive escaped.
     expect(stderr).toContain(
-      `Invalid Change Control Mode \\"sometimes\\" in ${path} (section: Change Control). Expected one of: strict, relaxed.`,
+      `Invalid Guard Policy Mode \\"sometimes\\" in ${path} (section: Guard Policy). Expected one of: strict, relaxed, off.`,
     );
   }
 
@@ -559,14 +623,14 @@ describe("t335 (4) an invalid memory Mode is the validation error at the checkpo
     declareInvalidMode(summary);
     const opened = run(STATE_TOOL, ["gate-start", STAGE], summary, SUMMARY_ENV);
     expect(opened.status, opened.stderr).toBe(0);
-    expect(opened.stderr).not.toContain("Invalid Change Control Mode");
+    expect(opened.stderr).not.toContain("Invalid Guard Policy Mode");
 
     const review = project("relaxed");
     recordReadyReview(review);
     declareInvalidMode(review);
     const gate = run(STATE_TOOL, ["gate-start", STAGE], review);
     expect(gate.status, gate.stderr).toBe(0);
-    expect(gate.stderr).not.toContain("Invalid Change Control Mode");
+    expect(gate.stderr).not.toContain("Invalid Guard Policy Mode");
   });
 });
 
@@ -577,7 +641,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
   const UNIT_ENV = { ...TEST_ENV, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
 
   /** A Construction project under team ownership, one Unit, functional-design in progress. */
-  function teamProject(mode: "strict" | "relaxed"): string {
+  function teamProject(mode: Mode): string {
     const proj = createTestProject();
     tempDirs.push(proj);
     seedAidlcMemory(proj);
@@ -603,7 +667,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
         "- **Stages to Skip**: none",
         "- **Depth**: Standard",
         "- **Test Strategy**: Standard",
-        `- **Change Control**: ${mode} (set by you)`,
+        `- **Guard Policy**: ${mode} (set by you)`,
         "",
         "## Stage Progress",
         "",
@@ -681,7 +745,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(gate.status, gate.stderr).toBe(0);
     const relativeArtifact = relative(proj, reviewedUnitArtifact(proj));
     expect(printedNotices(gate.stdout)).toEqual([
-      `${relativeArtifact} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`,
+      `${relativeArtifact} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
     ]);
     const rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
@@ -710,49 +774,56 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     settleUnit(proj);
     editReviewedUnitArtifact(proj);
     const path = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    expect(readFileSync(path, "utf-8")).toContain("## Guard Policy\n");
     writeFileSync(
       path,
-      readFileSync(path, "utf-8").replace("## Change Control\n", "## Change Control\n\nMode: sometimes\n"),
+      readFileSync(path, "utf-8").replace("## Guard Policy\n", "## Guard Policy\n\nMode: sometimes\n"),
     );
     const refused = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(
-      `Invalid Change Control Mode \\"sometimes\\" in ${path} (section: Change Control). Expected one of: strict, relaxed.`,
+      `Invalid Guard Policy Mode \\"sometimes\\" in ${path} (section: Guard Policy). Expected one of: strict, relaxed, off.`,
     );
     expect(refused.stderr).not.toContain("Refusing gate for unit");
     expect(acceptedRows(proj)).toHaveLength(0);
   });
 });
 
-describe("t335 (3) never relaxed: five refusals byte-identical under both values", () => {
-  function pair(build: (mode: "strict" | "relaxed") => { proj: string; out: string }) {
+describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progress review refuse identically; the two lowered fences stand aside", () => {
+  /** The same scenario under all three values, normalised to the strict project's paths. */
+  function pair(build: (mode: Mode) => { proj: string; out: string }) {
     const strict = build("strict");
     const relaxed = build("relaxed");
+    const off = build("off");
     return {
       strict: strict.out,
       relaxed: relaxed.out.replaceAll(relaxed.proj, strict.proj),
+      off: off.out.replaceAll(off.proj, strict.proj),
     };
   }
 
-  test("a human gate: approving without a human turn refuses identically", () => {
-    const outcome = pair((mode) => {
+  test("a human gate: approving without a human turn refuses identically, under off too", () => {
+    const outcomes: Record<string, string> = {};
+    let strictProj = "";
+    for (const mode of ["strict", "relaxed", "off"] as const) {
       const proj = project(mode);
+      if (mode === "strict") strictProj = proj;
       recordReadyReview(proj);
       expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
       const refused = run(STATE_TOOL, ["approve", STAGE, "--user-input", "Approve"], proj, {
         ...TEST_ENV,
         AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
       });
-      expect(refused.status).not.toBe(0);
-      return { proj, out: refused.stderr };
-    });
-    expect(outcome.relaxed).toBe(outcome.strict);
-    expect(outcome.strict).toContain("no new human reply has been received");
+      expect(refused.status, mode).not.toBe(0);
+      outcomes[mode] = refused.stderr.replaceAll(proj, strictProj);
+    }
+    expect(outcomes.relaxed).toBe(outcomes.strict);
+    expect(outcomes.off).toBe(outcomes.strict);
+    expect(outcomes.strict).toContain("no new human reply has been received");
   });
 
-  test("Plan Approval itself: a developer dispatch without an approval refuses identically", () => {
-    const outcome = pair((mode) => {
-      const proj = project(mode);
+  test("Plan Approval itself: the fence holds under strict and stands aside, logged, under relaxed and off", () => {
+    const dispatch = (proj: string) => {
       const statePath = seededStateFile(proj);
       writeFileSync(
         statePath,
@@ -761,7 +832,7 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
           "- **Current Stage**: code-generation",
         ),
       );
-      const blocked = runHook(GUARD_HOOK, proj, {
+      return runHook(GUARD_HOOK, proj, {
         hook_event_name: "PreToolUse",
         tool_name: "Task",
         tool_input: {
@@ -770,11 +841,17 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
         },
         cwd: proj,
       });
-      expect(blocked.code).toBe(2);
-      return { proj, out: blocked.stderr };
-    });
-    expect(outcome.relaxed).toBe(outcome.strict);
-    expect(outcome.strict.length).toBeGreaterThan(0);
+    };
+    const strict = dispatch(project("strict"));
+    expect(strict.code).toBe(2);
+    expect(strict.stderr.length).toBeGreaterThan(0);
+    for (const mode of ["relaxed", "off"] as const) {
+      const passed = dispatch(project(mode));
+      expect(passed.code, mode).toBe(0);
+      expect(passed.stdout, mode).toContain(
+        "Continuing past the plan-approval check because it is off for this piece of work. Recorded in the audit trail: dispatch of aidlc-developer-agent",
+      );
+    }
   });
 
   test("the autonomous-mode plan stop: an autonomous swarm prepare without approved plans refuses identically", () => {
@@ -802,12 +879,16 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
       return { proj, out: `${refused.stdout}${refused.stderr}` };
     });
     expect(outcome.relaxed).toBe(outcome.strict);
+    expect(outcome.off).toBe(outcome.strict);
     expect(outcome.strict.length).toBeGreaterThan(0);
   });
 
-  test("the observer barrier: a framework record write during the human's answer refuses identically", () => {
-    const outcome = pair((mode) => {
+  test("the observer barrier: a framework record write during the human's answer is judged identically; only the output write follows the fence", () => {
+    const outcomes: Record<string, { forged: string; write: number }> = {};
+    let strictProj = "";
+    for (const mode of ["strict", "relaxed", "off"] as const) {
       const proj = project(mode);
+      if (mode === "strict") strictProj = proj;
       recordReadyReview(proj);
       expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
       const blocked = runHook(FREEZE_HOOK, proj, {
@@ -820,13 +901,19 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
         tool_name: "Write",
         tool_input: { file_path: artifact(proj) },
       });
-      expect(write.code).toBe(2);
-      return { proj, out: `${blocked.code}\n${blocked.stderr}\n${write.code}\n${write.stderr}` };
-    });
-    expect(outcome.relaxed).toBe(outcome.strict);
+      outcomes[mode] = {
+        forged: `${blocked.code}\n${blocked.stderr.replaceAll(proj, strictProj)}`,
+        write: write.code,
+      };
+    }
+    expect(outcomes.relaxed.forged).toBe(outcomes.strict.forged);
+    expect(outcomes.off.forged).toBe(outcomes.strict.forged);
+    expect(outcomes.strict.write).toBe(2);
+    expect(outcomes.relaxed.write).toBe(0);
+    expect(outcomes.off.write).toBe(0);
   });
 
-  test("the review-freeze refusal during a review in progress refuses identically", () => {
+  test("the review-freeze hook judges a write during a review in progress identically under every value", () => {
     const outcome = pair((mode) => {
       const proj = project(mode);
       const dir = stageDir(proj);
@@ -847,11 +934,12 @@ describe("t335 (3) never relaxed: five refusals byte-identical under both values
       return { proj, out: `${inProgress.code}\n${inProgress.stderr}` };
     });
     expect(outcome.relaxed).toBe(outcome.strict);
+    expect(outcome.off).toBe(outcome.strict);
   });
 });
 
 describe("t335 (6) the review command takes no workflow selector", () => {
-  // The selection-aware Change Control surfaces are change-control, scope-change,
+  // The selection-aware Guard Policy surfaces are config-change, scope-change,
   // status, intent-create, aidlc-state.ts, and validate-grid. The review command
   // is not one of them: a selector is refused before anything is resolved,
   // written, or requested, with the sentence the conductor is told to act on.

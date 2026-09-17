@@ -502,10 +502,26 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config guard-policy maps to config-change",
+      routerArgs: ["engine", "config", "set", "guard-policy", "relaxed"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard-policy", "relaxed"],
+      fixture: true,
+    },
+    {
+      // Retired spelling, read as guard-policy for one release; both routes
+      // print the same one-line rename notice.
       name: "config change-control maps to config-change",
       routerArgs: ["engine", "config", "set", "change-control", "relaxed"],
       tool: "aidlc-utility.ts",
       toolArgs: ["config-change", "--change-control", "relaxed"],
+      fixture: true,
+    },
+    {
+      name: "config guard.plan-approval maps to config-change",
+      routerArgs: ["engine", "config", "set", "guard.plan-approval", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard.plan-approval", "off"],
       fixture: true,
     },
     {
@@ -677,24 +693,28 @@ describe("t230 dispatcher route parity", () => {
     const changed = viaDispatcher([
       "engine", "config", "set", "depth", "minimal",
       "--test-strategy", "comprehensive", "--review", "advisory",
-      "--change-control", "relaxed", "--sensors", "off", "--learnings", "off",
-      "--summary-confirmation", "off", "--intent", selectedIntent, "--space", selectedSpace,
+      "--guard-policy", "relaxed", "--sensors", "off", "--learnings", "off",
+      "--summary-confirmation", "off", "--guard.human-presence", "off",
+      "--intent", selectedIntent, "--space", selectedSpace,
     ], projectDir);
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Change Control", "relaxed (set by you)"], ["Sensors", "off (set by you)"],
+      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "human-presence (set by you)"],
+      ["Sensors", "off (set by you)"],
       ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
+    // The record's retired Change Control line was renamed in place, not duplicated.
+    expect(selectedState).not.toContain("- **Change Control**:");
     const settingsAudit = readdirSync(join(selectedRecord, "audit"))
       .filter((name) => name.endsWith(".md"))
       .map((name) => readFileSync(join(selectedRecord, "audit", name), "utf-8"))
       .join("\n");
-    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|CHANGE_CONTROL_SET|CEREMONY_SET)\n/g)]
+    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|GUARD_POLICY_SET|CHANGE_CONTROL_SET|GUARD_DISABLED|CEREMONY_SET)\n/g)]
       .map((match) => match[1]).sort()).toEqual([
-        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET", "CHANGE_CONTROL_SET",
-        "DEPTH_CHANGED", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
+        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET",
+        "DEPTH_CHANGED", "GUARD_DISABLED", "GUARD_POLICY_SET", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
       ]);
 
     for (const [cliKey, field, auditKey] of [

@@ -9,7 +9,10 @@ keywords:
 description: Prove feasibility fast
 skeleton: on
 review_cap: advisory
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # poc scope

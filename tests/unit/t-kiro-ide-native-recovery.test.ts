@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
+  auditShardName,
   readPlanApprovalLegacyWindows,
   stateDigest,
   writeActiveDirectiveMarker,
@@ -56,7 +58,9 @@ afterAll(() => {
   }
 });
 
-function fixture(): string {
+// A relaxed guard policy lowers the plan-approval and review-freeze fences by
+// design; a strict one lowers nothing. Both variants share every other detail.
+function fixture(policy: "relaxed" | "strict" = "relaxed"): string {
   const project = mkdtempSync(join(scratch, "project-"));
   cpSync(join(runtimeRoot, "kiro-ide", ".kiro"), join(project, ".kiro"), {
     recursive: true,
@@ -78,13 +82,23 @@ function fixture(): string {
   const previous = readFileSync(
     join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8",
   ).replace("- **Scope**: feature", "- **Scope**: poc")
+    // The retired "Change Control" field name is deliberate: the engine still
+    // reads it as the Guard Policy alias for one release, and this fixture is
+    // where that alias stays exercised.
     .replace("- **Change Control**: strict (from scope feature)",
-      "- **Change Control**: relaxed (from scope poc)")
+      `- **Change Control**: ${policy} (from scope poc)`)
     .replace(
     /^- \*\*Current Stage\*\*:.*$/m,
     "- **Current Stage**: requirements-analysis",
   );
   writeFileSync(seededStateFile(project), previous);
+  // Seed the record's audit ledger a real workflow always has by this point: a
+  // guard that stands aside records its row best-effort, into a ledger that
+  // exists. Pinning the clone id keeps the spawned binary on the same shard.
+  writeFileSync(join(project, "aidlc", ".aidlc-clone-id"), "nativerecoverytest\n", "utf-8");
+  const ledger = join(seededRecordDir(project), "audit", auditShardName(project));
+  mkdirSync(dirname(ledger), { recursive: true });
+  writeFileSync(ledger, "# AI-DLC Audit Log\n", "utf-8");
   writeActiveDirectiveMarker(project, {
     kind: "run-stage",
     stage: "requirements-analysis",
@@ -169,35 +183,84 @@ function auditRows(project: string): string {
     .map((name) => readFileSync(join(audit, name), "utf-8")).join("\n");
 }
 
-describe("native Kiro IDE recovery from a stale upstream directive", () => {
-  test("populated shell next can publish authority while source writes stay blocked", () => {
-    const project = fixture();
-    expect(marker(project).stage).toBe("requirements-analysis");
-    const admitted = guard(project, "execute_pwsh", {
-      command: "aidlc engine orchestrate next",
+const STOOD_ASIDE_LINE =
+  "Continuing past the plan-approval check because it is off for this piece of work";
+const LOWER_FENCE_SWITCH = "config set guard.plan-approval off";
+
+// GUARD_STOOD_ASIDE rows whose Guard is plan-approval.
+function stoodAsideRows(project: string): number {
+  if (!existsSync(join(seededRecordDir(project), "audit"))) return 0;
+  return auditRows(project).split("\n## ").filter((block) =>
+    block.includes("**Event**: GUARD_STOOD_ASIDE") &&
+    block.includes("**Guard**: plan-approval")
+  ).length;
+}
+
+// The stand-aside contract for a fence the guard policy has lowered: the write
+// is admitted with exit 0, one spoken line names the fence, and exactly one
+// GUARD_STOOD_ASIDE row records it.
+function expectStoodAside(
+  result: { code: number | null; stdout: string; stderr: string },
+  project: string,
+): void {
+  expect(result.code, result.stderr).toBe(0);
+  expect(result.stdout).toContain(STOOD_ASIDE_LINE);
+  expect(stoodAsideRows(project)).toBe(1);
+}
+
+// Drive the stale upstream directive through `next` and every receipt-continued
+// part until the engine publishes code-generation authority.
+function publishAuthority(project: string): void {
+  expect(marker(project).stage).toBe("requirements-analysis");
+  const admitted = guard(project, "execute_pwsh", {
+    command: "aidlc engine orchestrate next",
+  });
+  console.log("NATIVE_RECOVERY populated next", JSON.stringify(admitted));
+  expect(admitted.code, admitted.stderr).toBe(0);
+  let response = run(project, ["engine", "orchestrate", "next"]);
+  expect(response.code, response.stderr).toBe(0);
+  let directive = JSON.parse(response.stdout);
+  for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
+    const args = ["engine", "orchestrate", "continue", directive.receipt];
+    const allowed = guard(project, "execute_pwsh", {
+      command: `aidlc ${args.join(" ")}`,
     });
-    console.log("NATIVE_RECOVERY populated next", JSON.stringify(admitted));
-    expect(admitted.code, admitted.stderr).toBe(0);
-    let response = run(project, ["engine", "orchestrate", "next"]);
+    expect(allowed.code, allowed.stderr).toBe(0);
+    response = run(project, args);
     expect(response.code, response.stderr).toBe(0);
-    let directive = JSON.parse(response.stdout);
-    for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
-      const args = ["engine", "orchestrate", "continue", directive.continue_token];
-      const allowed = guard(project, "execute_pwsh", {
-        command: `aidlc ${args.join(" ")}`,
-      });
-      expect(allowed.code, allowed.stderr).toBe(0);
-      response = run(project, args);
-      expect(response.code, response.stderr).toBe(0);
-      directive = JSON.parse(response.stdout);
-    }
-    expect(directive.kind, response.stdout).toBe("run-stage");
-    assertPublished(project);
-    const blocked = guard(project, "fs_write", {
-      path: join(project, "src", "slugify.ts"),
-      content: "export const slugify = () => '';\n",
-    });
-    expect(blocked.code, blocked.stderr).toBe(2);
+    directive = JSON.parse(response.stdout);
+  }
+  expect(directive.kind, response.stdout).toBe("run-stage");
+  assertPublished(project);
+}
+
+function sourceWriteOf(project: string) {
+  return guard(project, "fs_write", {
+    path: join(project, "src", "slugify.ts"),
+    content: "export const slugify = () => '';\n",
+  });
+}
+
+describe("native Kiro IDE recovery from a stale upstream directive", () => {
+  test("populated shell next can publish authority and a relaxed policy stands the plan-approval fence aside", () => {
+    const project = fixture();
+    publishAuthority(project);
+    // The fixture's relaxed policy lowers the plan-approval fence by the policy
+    // word alone, so the pre-approval source write stands aside, spoken once
+    // and recorded once, instead of being refused.
+    expectStoodAside(sourceWriteOf(project), project);
+  }, 120_000);
+
+  test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
+    const project = fixture("strict");
+    publishAuthority(project);
+    // Nothing has lowered the fence (no policy word, no per-run switch), so the
+    // ordering invariant holds: the write is refused, the refusal names the one
+    // switch that would lower it, and no stand-aside is recorded.
+    const blocked = sourceWriteOf(project);
+    expect(blocked.code, blocked.stdout).toBe(2);
+    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
+    expect(stoodAsideRows(project)).toBe(0);
   }, 120_000);
 
   test("an argument-less shell invokes native recovery and republishes authority", () => {
@@ -253,11 +316,11 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const rows = auditRows(project);
     expect(rows).toContain("DECISION_RECORDED");
     expect(rows).not.toContain("PLAN_APPROVAL_RECORDED");
-    const sourceWrite = () => guard(project, "fs_write", {
-      path: join(project, "src", "slugify.ts"),
-      content: "export const slugify = () => '';\n",
-    });
-    expect(sourceWrite().code).toBe(2);
+    const sourceWrite = () => sourceWriteOf(project);
+    // The relaxed policy lowers the fence: the pre-approval write stands aside
+    // with one recorded row rather than being refused. The approval below is
+    // still what admits generation on the strict path.
+    expectStoodAside(sourceWrite(), project);
     // Only the fixture's exact offered human choice may authorize this plan.
     const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
       { prompt: approveChoice }, true);

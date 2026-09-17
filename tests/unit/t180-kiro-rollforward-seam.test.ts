@@ -492,9 +492,12 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain('"kind":"load-steering"');
+      // The pre-dispatched answer is the one-message run-stage with its rules
+      // inline; there is no load-steering hop and no continuation token.
+      expect(r.stdout).toContain('"kind":"run-stage"');
       expect(r.stdout).toContain('"stage":"requirements-analysis"');
-      expect(r.stdout).toContain('"continue_token"');
+      expect(r.stdout).toContain('"rules_content"');
+      expect(r.stdout).not.toContain('"continue_token"');
       expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });

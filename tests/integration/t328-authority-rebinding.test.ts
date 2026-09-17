@@ -55,9 +55,10 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const SESSION = "01995000-0995-7000-8000-000000000995";
 const projects: string[] = [];
+// Removing every staged project can exceed bun's hook default under load.
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
-}, 30000);
+}, 120_000);
 
 type Run = { code: number | null; stdout: string; stderr: string };
 
@@ -266,10 +267,10 @@ function deliver(p: Project): { directive: Record<string, unknown>; trail: strin
     value.kind === "load-steering" ? `part ${value.part}/${value.parts}` : String(value.kind);
   trail.push(describe(directive));
   for (let i = 0; i < 30; i++) {
-    if (directive.kind !== "load-steering" || typeof directive.continue_token !== "string") {
+    if (directive.kind !== "load-steering" || typeof directive.receipt !== "string") {
       break;
     }
-    run = p.continueWith(directive.continue_token);
+    run = p.continueWith(directive.receipt);
     directive = JSON.parse(run.stdout.trim()) as Record<string, unknown>;
     trail.push(describe(directive));
   }
@@ -499,7 +500,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     expect(first.part).toBe(1);
     expect(Number(first.parts)).toBeGreaterThan(1);
     const second = JSON.parse(
-      p.continueWith(first.continue_token as string).stdout.trim(),
+      p.continueWith(first.receipt as string).stdout.trim(),
     ) as Record<string, unknown>;
     expect(second.part).toBe(2);
     // A conductor whose context was compacted mid-delivery, and a brand-new process,
@@ -510,7 +511,10 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     const again = JSON.parse(p.next().stdout.trim()) as Record<string, unknown>;
     expect(again.kind).toBe("load-steering");
     expect(again.part).toBe(1);
-    expect(again.continue_token).not.toBe(second.continue_token);
+    // Receipts are deterministic per part: the restart hands back part one's
+    // receipt again, never part two's.
+    expect(again.receipt).toBe(first.receipt);
+    expect(again.receipt).not.toBe(second.receipt);
   }, 180000);
 });
 

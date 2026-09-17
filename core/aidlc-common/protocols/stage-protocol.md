@@ -68,7 +68,7 @@ read framework or workflow source files to investigate it.
 **In Construction, the loop's bookkeeping is internal.** This phase repeats the
 same stage once per piece of work, and the machinery that drives the repetition
 is the largest pile of internal detail in the framework: which pass of the
-iteration this is, what a continuation token carries, whether a gate has
+iteration this is, what a rules receipt carries, whether a gate has
 resolved yet and to what, what a stage's `produces` list came out as, whether a
 design stage applies to this piece of work at all. None of it is spoken, in any
 words. A plain-language retelling is not an improvement on it, because the

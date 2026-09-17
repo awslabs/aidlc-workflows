@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-utility:config-change, subcommand:aidlc-utility:status,
 // subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:scope-change,
 // subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list,
-// subcommand:aidlc-orchestrate:next, audit:CEREMONY_SET, audit:CHANGE_CONTROL_SET,
+// subcommand:aidlc-orchestrate:next, audit:CEREMONY_SET, audit:GUARD_POLICY_SET,
 // audit:DEPTH_CHANGED, audit:TEST_STRATEGY_CHANGED, audit:REVIEW_CLASS_CHANGED, tool:aidlc
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -27,8 +27,15 @@ const tempDirs: string[] = [];
 const CEREMONY_FIELDS = ["Sensors", "Learnings", "Summary Confirmation"];
 const SETTING_EVENTS = [
   "DEPTH_CHANGED", "TEST_STRATEGY_CHANGED", "REVIEW_CLASS_CHANGED",
-  "CHANGE_CONTROL_SET", "CEREMONY_SET",
+  "GUARD_POLICY_SET", "CEREMONY_SET",
 ];
+/** Every fence kill switch held at "0" so the test host's environment cannot lower a fence. */
+const FENCE_ENV_CLEAR = {
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "0",
+  AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "0",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+};
 
 afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
@@ -146,7 +153,7 @@ describe("t338 atomic per-intent settings", () => {
     writeFileSync(state, setField(readFileSync(state, "utf-8"), "Last Updated", timestamp));
     const args = [
       "config-change", "--summary-confirmation", "on", "--review", "advisory",
-      "--sensors", "off", "--depth", "minimal", "--change-control", "strict",
+      "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
     ];
     const changed = run(UTILITY, args, proj);
@@ -156,7 +163,7 @@ describe("t338 atomic per-intent settings", () => {
       Depth: "Minimal",
       "Test Strategy": "Comprehensive",
       "Review Override": "advisory",
-      "Change Control": "strict (set by you)",
+      "Guard Policy": "strict (set by you)",
       Sensors: "off (set by you)",
       Learnings: "off (set by you)",
       "Summary Confirmation": "on (set by you)",
@@ -166,7 +173,7 @@ describe("t338 atomic per-intent settings", () => {
     const audit = settingRows(proj);
     expect(audit.map((row) => row.event)).toEqual([
       "DEPTH_CHANGED", "TEST_STRATEGY_CHANGED", "REVIEW_CLASS_CHANGED",
-      "CHANGE_CONTROL_SET", "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET",
+      "GUARD_POLICY_SET", "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET",
     ]);
     const fields = [
       { "Old Depth": "Standard", "New Depth": "Minimal" },
@@ -211,9 +218,10 @@ describe("t338 atomic per-intent settings", () => {
   ])("memory strict refuses the whole relaxed-and-sensor update through %s", (...command) => {
     const { proj, state } = project();
     const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
-    writeFileSync(memory, readFileSync(memory, "utf-8").replace("## Change Control\n", "## Change Control\n\nMode: strict\n"));
+    expect(readFileSync(memory, "utf-8")).toContain("## Guard Policy\n");
+    writeFileSync(memory, readFileSync(memory, "utf-8").replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n"));
     const before = readFileSync(state, "utf-8");
-    const refused = run(UTILITY, [...command, "--depth", "minimal", "--change-control", "relaxed", "--sensors", "on"], proj);
+    const refused = run(UTILITY, [...command, "--depth", "minimal", "--guard-policy", "relaxed", "--sensors", "on"], proj);
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain(memory);
     expect(readFileSync(state, "utf-8")).toBe(before);
@@ -223,15 +231,15 @@ describe("t338 atomic per-intent settings", () => {
 
   test("same-scope changes apply explicit settings without a scope-change row", () => {
     const { proj, state } = project();
-    const args = ["scope-change", "--scope", "classic", "--change-control", "strict", "--sensors", "off"];
+    const args = ["scope-change", "--scope", "classic", "--guard-policy", "strict", "--sensors", "off"];
     const changed = run(UTILITY, args, proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Scope")).toBe("classic");
-    expect(getField(content, "Change Control")).toBe("strict (set by you)");
+    expect(getField(content, "Guard Policy")).toBe("strict (set by you)");
     expect(getField(content, "Sensors")).toBe("off (set by you)");
     const audit = settingRows(proj);
-    expect(audit.map((row) => row.event)).toEqual(["CHANGE_CONTROL_SET", "CEREMONY_SET"]);
+    expect(audit.map((row) => row.event)).toEqual(["GUARD_POLICY_SET", "CEREMONY_SET"]);
     expect(auditBlockField(audit[0].block, "Source")).toBe("you");
     expect(auditBlockField(audit[1].block, "Source")).toBe("you");
     expect(readAuditShardEvents(proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
@@ -241,12 +249,12 @@ describe("t338 atomic per-intent settings", () => {
     expect(settingRows(proj)).toEqual(audit);
   });
 
-  test("a Change Control ledger fault prevents every setting and audit change", () => {
+  test("a Guard Policy ledger fault prevents every setting and audit change", () => {
     const { proj, state } = project();
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, [
       "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
-      "--review", "advisory", "--change-control", "strict", "--sensors", "on",
+      "--review", "advisory", "--guard-policy", "strict", "--sensors", "on",
       "--learnings", "on", "--summary-confirmation", "on",
     ], proj, { AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t338" });
     expect(refused.status).toBe(1);
@@ -350,8 +358,13 @@ describe("t338 atomic per-intent settings", () => {
     expect(enabled.status, enabled.stderr).toBe(0);
     const express = run(UTILITY, ["scope-change", "--scope", "express"], proj, { AIDLC_DISABLE_SENSORS: "1" });
     expect(express.status, express.stderr).toBe(0);
+    // express declares every ceremony off; the human's learnings choice is
+    // retained, so the clause names reviewers, the env-disabled sensors, and
+    // the scope-owned summary confirmation.
     const expressSummary = express.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(expressSummary?.split("; no ")[1]).toBe("reviewers or sensors");
+    expect(expressSummary?.split("; no ")[1]).toBe("reviewers, sensors, or summary confirmation");
+    expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("off (from scope express)");
 
     // Returning to classic must retain the human provenance even when the value matches its default.
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
@@ -381,7 +394,7 @@ describe("t338 atomic per-intent settings", () => {
     const before = readFileSync(state, "utf-8");
     const routed = run(ORCHESTRATE, [
       "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "advisory",
-      "--sensors", "off", "--depth", "minimal", "--change-control", "strict",
+      "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
     ], proj);
     expect(routed.status, routed.stderr).toBe(0);
@@ -394,36 +407,56 @@ describe("t338 atomic per-intent settings", () => {
     const args = command![1].split(/\s+/);
     expect(args).toEqual([
       "engine", "config", "set", "depth", "minimal", "--test-strategy", "comprehensive",
-      "--review", "advisory", "--change-control", "strict", "--sensors", "off",
+      "--review", "advisory", "--guard-policy", "strict", "--sensors", "off",
       "--learnings", "off", "--summary-confirmation", "on",
     ]);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(settingRows(proj)).toHaveLength(0);
     const changed = run(DISPATCHER, args, proj);
     expect(changed.status, changed.stderr).toBe(0);
-    const listed = run(UTILITY, ["config-list", "--json"], proj);
+    const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
       depth: "Minimal", "test-strategy": "Comprehensive", review: "advisory",
-      "change-control": "strict (set by you)", sensors: "off (set by you)",
+      "guard-policy": "strict (set by you)", sensors: "off (set by you)",
       learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
+      "guard.plan-approval": "on (default)", "guard.review-freeze": "on (default)",
+      "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",
+      "guard.human-presence": "on (default)",
     });
     expect(settingRows(proj)).toHaveLength(7);
+  });
+
+  test("the retired --change-control slash flag produces the same canonical command under the new name", () => {
+    const { proj, state } = project();
+    const before = readFileSync(state, "utf-8");
+    const routed = run(ORCHESTRATE, ["next", "--change-control", "off", "--sensors", "off"], proj);
+    expect(routed.status, routed.stderr).toBe(0);
+    const printed = directive(routed.stdout);
+    expect(printed.kind).toBe("print");
+    const command = printed.message.match(/`[^`]*\b(engine config set [^`]+)`/);
+    expect(command).not.toBeNull();
+    expect(command![1].split(/\s+/)).toEqual([
+      "engine", "config", "set", "guard-policy", "off", "--sensors", "off",
+    ]);
+    expect(printed.message).not.toContain("change-control");
+    expect(readFileSync(state, "utf-8")).toBe(before);
   });
 
   test("slash flags retain creation and scope-change values and refuse incompatible modes", () => {
     const { proj, state } = project();
     const scope = directive(run(ORCHESTRATE, [
-      "next", "--scope", "feature", "--summary-confirmation", "off", "--change-control", "relaxed",
+      "next", "--scope", "feature", "--summary-confirmation", "off", "--guard-policy", "relaxed",
     ], proj).stdout);
     expect(scope.kind).toBe("print");
     const command = scope.message.match(/`[^`]*\b(engine scope change [^`]+)`/);
     expect(command).not.toBeNull();
+    expect(command![1]).toContain("--guard-policy relaxed");
     const changed = run(DISPATCHER, command![1].split(/\s+/), proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Scope")).toBe("feature");
-    expect(getField(content, "Change Control")).toBe("relaxed (set by you)");
+    expect(getField(content, "Guard Policy")).toBe("relaxed (set by you)");
     expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const fresh = emptyProject();
     writeFileSync(join(fresh, "aidlc", "spaces", "default", "intents", "intents.json"), "[]\n");

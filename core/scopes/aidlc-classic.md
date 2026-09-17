@@ -5,7 +5,7 @@ keywords: []
 description: "V1-style ceremony through Inception and Construction - the implicit default"
 skeleton: off
 review_cap: advisory
-change_control: relaxed
+guard_policy: relaxed
 sensors: on
 learnings: on
 summary_confirmation: off

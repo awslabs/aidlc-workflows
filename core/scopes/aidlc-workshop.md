@@ -9,7 +9,10 @@ keywords:
 description: Facilitated group session with mandatory gates
 skeleton: on
 review_cap: advisory
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # workshop scope

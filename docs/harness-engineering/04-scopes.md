@@ -41,7 +41,7 @@ The scope frontmatter fields are:
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
 | `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic`) is not enabled. |
-| `change_control` | No | The scope's Change Control default, `strict` or `relaxed`: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once, tells the human in one line, and continues). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, and `infra`, relaxed on the rest. A memory layer's `## Change Control` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Change Control](../guide/13-customization.md#change-control). |
+| `guard_policy` | No | The scope's Guard Policy default, `strict`, `relaxed`, or `off`: how far the guards stand aside for work on this scope. It decides what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once, tell the human in one line, and continue) and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, and `infra`, relaxed on the other eight; no shipped scope declares off. A memory layer's `## Guard Policy` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Guard Policy](../guide/13-customization.md#guard-policy). `change_control` is the retired spelling, read for one release; a file naming both keys with different values is rejected. |
 | `sensors` | No | `on` or `off`; controls sensor execution and sensor gate checks. Absence means on. Per-intent override: `/aidlc --sensors on\|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`. |
 | `learnings` | No | `on` or `off`; controls the stage learnings read/write ritual. Absence means on. Per-intent override: `/aidlc --learnings on\|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`. |
 | `summary_confirmation` | No | `on` or `off`; controls the separate pre-output summary confirmation, not stage approval. Absence means on. Per-intent override: `/aidlc --summary-confirmation on\|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. This scope scalar is distinct from a stage's `required` / `if-present` declaration. |
@@ -49,9 +49,12 @@ The scope frontmatter fields are:
 The loader rejects duplicate scope `name` values across files and names both
 files in the error. Invalid ceremony values are rejected with the file, key,
 and the two allowed values. Resolution is kill switch (`1`) → valid intent
-line → scope default → on. Classic declares sensors and learnings on and summary confirmation off; its gated flow
-also caps reviews to one advisory pass and disables walking-skeleton
-ceremony, while explicit autonomy keeps the single pre-merge review.
+line → scope default → on. Every shipped scope declares all three ceremony keys
+explicitly rather than leaning on the default: classic declares sensors and
+learnings on and summary confirmation off, express declares all three off, and
+the other nine declare all three on. Classic's gated flow also caps reviews to
+one advisory pass and disables walking-skeleton ceremony, while explicit autonomy
+keeps the single pre-merge review.
 
 ### Freeform default
 
@@ -77,21 +80,34 @@ runs as a regular Bolt. Absence defaults to off, so composed/runtime-approved
 scopes and plugin scopes do not conjure a skeleton Bolt unless they opt in
 explicitly.
 
-### Change Control default
+### Guard Policy default
 
-The optional `change_control:` field is the value a new intent on this scope
+The optional `guard_policy:` field is the value a new intent on this scope
 starts with, written to its state file at creation as
-`- **Change Control**: <value> (from scope <name>)`. The human can flip it for
-that one intent with `/aidlc --change-control <value>` or a plain-chat request;
+`- **Guard Policy**: <value> (from scope <name>)`. The human can flip it for
+that one intent with `/aidlc --guard-policy <value>` or a plain-chat request;
 an older intent without this line remains strict until explicitly set, while
 the next new intent starts from the scope default again. To hold a value for
 everyone on the repo, do not edit eleven scope files: declare it once in memory
-(`## Change Control` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
+(`## Guard Policy` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
 `team.md`, or `project.md`). A memory `strict` wins over every scope default and
-refuses chat or flag flips by naming the file; a memory `relaxed` or an absent
-section has no effect. The validation error for anything other than the two
-values names the file and the allowed values; the per-intent command repairs an
-invalid state line.
+refuses chat or flag flips by naming the file; a memory `relaxed`, `off`, or an
+absent section has no effect. The validation error for anything other than the
+three values names the file and the allowed values; the per-intent command
+repairs an invalid state line.
+
+A scope word is a product statement about how much ceremony this kind of work
+deserves. It is not the only control: a human can lower any single fence for one
+piece of work with `/aidlc config set guard.<fence> off`, which writes the
+`Guards Off` state line and one `GUARD_DISABLED` audit row, and the environment
+kill switches remain the machine-wide override. Do not author a scope at `off`
+to spare people a fence they meet occasionally; the per-work switch exists for
+that, and it comes back on by itself.
+
+`change_control:` is the retired spelling of this key. It is read for one release
+and never written; a scope file that names both keys with the same value is
+accepted, and one that names them with different values is rejected naming the
+file and both values.
 
 **2. The membership tag — each stage's `scopes:` frontmatter.** A stage names the scopes it runs under in its own frontmatter, in `core/aidlc-common/stages/<phase>/<slug>.md`:
 

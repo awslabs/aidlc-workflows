@@ -233,11 +233,11 @@ function nextDirective(
   const directive = JSON.parse(first.stdout) as Record<string, unknown>;
   if (
     directive.kind === "load-steering" &&
-    typeof directive.continue_token === "string"
+    typeof directive.receipt === "string"
   ) {
     const continued = run(
       ORCH,
-      ["continue", directive.continue_token],
+      ["continue", directive.receipt],
       cwd,
       extraEnv,
     );
@@ -498,11 +498,11 @@ describe("t325 atomic team Unit claims", () => {
     expect(localRuntimeSnapshot(checkout)).toEqual(scopedRuntimeBefore);
     while (
       probeDirective.kind === "load-steering" &&
-      typeof probeDirective.continue_token === "string"
+      typeof probeDirective.receipt === "string"
     ) {
       const continued = run(
         ORCH,
-        ["continue", probeDirective.continue_token],
+        ["continue", probeDirective.receipt],
         checkout,
         { AIDLC_STOP_HOOK_PROBE: "1" },
       );

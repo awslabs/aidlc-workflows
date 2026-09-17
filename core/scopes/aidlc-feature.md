@@ -5,7 +5,10 @@ keywords: []
 description: Full lifecycle for new features, practical depth
 skeleton: on
 runner: true
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # feature scope

@@ -333,7 +333,7 @@ function runLegacyRecoveryNext(
     let directive: {
       kind?: string;
       ask_type?: string;
-      continue_token?: string;
+      receipt?: string;
       recovery_choice?: string;
     };
     try {
@@ -380,12 +380,12 @@ function runLegacyRecoveryNext(
       }
       return { ok: true, detail: stdout };
     }
-    if (!directive.continue_token) {
-      return { ok: false, detail: "load-steering recovery omitted its token" };
+    if (!directive.receipt) {
+      return { ok: false, detail: "load-steering recovery omitted its receipt" };
     }
     args = [
       "continue",
-      directive.continue_token,
+      directive.receipt,
       "--project-dir",
       projectDir,
     ];

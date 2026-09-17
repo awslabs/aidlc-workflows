@@ -151,6 +151,17 @@ function overlayAuthoredCopilotSources(dir: string): void {
   ]) cpSync(source, target);
 }
 
+const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
+
+// The shipped rule bundle fits one run-stage message; push org.md past the
+// transport cap so a delivery is chunked and carries receipts.
+function inflateRules(dir: string): void {
+  appendFileSync(
+    join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
+    Array.from({ length: 20 }, (_, index) => `\n## Multipart ${index}\n${"x".repeat(1500)}\n`).join(""),
+  );
+}
+
 function scratchProject(withState: boolean): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t249-")));
   scratchProjects.add(dir);
@@ -377,7 +388,7 @@ function driveToRunStage(dir: string, session: string) {
   const tokens: string[] = [];
   let result = runLifecycle(dir, session, forms[0] ?? "direct", ["next"], `${session}-next`);
   for (let part = 0; result.directive.kind === "load-steering"; part++) {
-    const token = String(result.directive.continue_token);
+    const token = String(result.directive.receipt);
     tokens.push(token);
     expect(marker(dir).continue_token_sha256).toBe(createHash("sha256").update(token).digest("hex"));
     result = runLifecycle(dir, session, forms[(part + 1) % forms.length] ?? "direct", ["continue", token], `${session}-continue-${part}`);
@@ -1231,50 +1242,44 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("21: real adjacent signed parts reset the cap and direct/source continuation reaches retained run-stage", () => {
     const dir = orchestrationProject();
     const session = "bounded-transport-owner";
-    appendFileSync(
-      join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
-      Array.from({ length: 20 }, (_, index) => `\n## Multipart ${index}\n${"x".repeat(1500)}\n`).join(""),
-    );
+    inflateRules(dir);
     let routed = runLifecycle(dir, session, "direct", ["next"], "part-1");
     expect(routed.directive).toMatchObject({ kind: "load-steering", part: 1 });
-    const token1 = String(routed.directive.continue_token);
+    const token1 = String(routed.directive.receipt);
+    expect(token1).toMatch(RECEIPT_PATTERN);
     const stop1 = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     expect((JSON.parse(stop1.stdout) as { decision?: string }).decision).toBe("block");
     const steeringReason = (JSON.parse(stop1.stdout) as { reason: string }).reason;
-    expect(steeringReason).toContain("Apply every path/text entry from its already-delivered `rules_content`");
-    expect(steeringReason).toContain(`continue "${token1}"`);
-    expect(steeringReason).toContain("every returned load-steering part until `run-stage`");
+    // The Stop hook names the receipt and the continue command only, never the
+    // rules payload: hook messages are capped near 10 KB on every harness.
+    expect(steeringReason).toMatch(/still has rules to load|delivered AIDLC rules part/);
+    expect(steeringReason).toContain(`continue ${token1}`);
+    expect(steeringReason).toContain("until `run-stage`");
     expect(steeringReason).toContain("do not summarise or narrate rule chunks");
+    expect(steeringReason).not.toContain("rules_content");
+    expect(steeringReason).not.toContain("Multipart 0");
+    expect(steeringReason.length).toBeLessThan(1_000);
 
     routed = runLifecycle(dir, session, "source", ["continue", token1], "part-2");
     expect(routed.directive).toMatchObject({ kind: "load-steering", part: 2 });
-    const token2 = String(routed.directive.continue_token);
-    let prefix = 0;
-    while (prefix < Math.min(token1.length, token2.length) && token1[prefix] === token2[prefix]) prefix++;
-    expect(prefix).toBeGreaterThan(24);
+    const token2 = String(routed.directive.receipt);
+    // Adjacent parts used to share a long signed-envelope prefix; receipts are
+    // independent 8-character values, distinct per part.
+    expect(token2).toMatch(RECEIPT_PATTERN);
+    expect(token2).not.toBe(token1);
     const stop2 = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session, stop_hook_active: true });
     expect((JSON.parse(stop2.stdout) as { decision?: string }).decision).toBe("block");
     expect(marker(dir).stop_count).toBe(1);
 
     for (let part = 2; routed.directive.kind === "load-steering"; part++) {
-      const token = String(routed.directive.continue_token);
+      const token = String(routed.directive.receipt);
       routed = runLifecycle(dir, session, part % 2 ? "direct" : "source", ["continue", token], `part-${part + 1}`);
     }
     expect(routed.directive.kind).toBe("run-stage");
-    for (const form of ["direct", "source"] as const) {
-      const spec = commandSpec(dir, form, ["continue", token1]);
-      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, `reuse-${form}`));
-      const rewritten = rewrittenCommand(pre);
-      const replay = runShell(dir, rewritten);
-      expect(replay.status, replay.stderr).toBe(0);
-      expect(JSON.parse(replay.stdout)).toMatchObject({ kind: "error" });
-      expect(replay.stdout).toContain("no longer current");
-      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, `reuse-${form}`, true, replay.stdout));
-    }
     const active = marker(dir);
     expect(active.kind).toBe("run-stage");
     expect(active.delivery).toBe("delivered");
-    expect((active.active_attempt as Record<string, unknown>).status).toBe("failed");
+    expect((active.active_attempt as Record<string, unknown>).status).toBe("settled");
     expect(JSON.stringify(active)).not.toContain("rules_content");
     expect(JSON.stringify(active)).not.toContain("text_result_for_llm");
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
@@ -1291,6 +1296,26 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(foreign.stdout).toBe("");
     expect(marker(dir).revision).toBe(beforeForeign);
     expect(existsSync(join(seededRecordDir(dir), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);
+
+    // A replayed receipt under a tracked Copilot attempt is refused as a stale
+    // attempt (a tracked `continue` cannot be re-answered as a fresh `next`
+    // under its own claim); the delivered run-stage cursor is left untouched.
+    for (const form of ["direct", "source"] as const) {
+      const spec = commandSpec(dir, form, ["continue", token1]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, `reuse-${form}`));
+      const rewritten = rewrittenCommand(pre);
+      const replay = runShell(dir, rewritten);
+      expect(replay.status, replay.stderr).toBe(0);
+      expect(JSON.parse(replay.stdout)).toMatchObject({ kind: "error" });
+      expect(replay.stdout).toContain("stale or superseded");
+      expect(replay.stdout).not.toContain("rules_content");
+      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, `reuse-${form}`, true, replay.stdout));
+    }
+    const afterReplay = marker(dir);
+    expect(afterReplay.kind).toBe("run-stage");
+    expect(afterReplay.delivery).toBe("delivered");
+    expect((afterReplay.active_attempt as Record<string, unknown>).status).toBe("failed");
+    expect(JSON.stringify(afterReplay)).not.toContain("rules_content");
 
     const parked = orchestrationProject();
     driveToRunStage(parked, "park-owner");
@@ -1393,21 +1418,26 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";
     const resumed = runLifecycle(dir, session, "compiled", ["--resume"], "compiled-resume");
-    expect(resumed.directive.kind).toBe("load-steering");
+    // The shipped bundle fits one message: --resume answers the run-stage with
+    // its rules inline.
+    expect(resumed.directive.kind).toBe("run-stage");
     expect(resumed.directive.stage).toBe("requirements-analysis");
+    expect(Array.isArray(resumed.directive.rules_content)).toBe(true);
 
     const routedDir = orchestrationProject();
+    inflateRules(routedDir);
     const first = runLifecycle(routedDir, session, "compiled", ["next"], "compiled-next");
     expect(first.directive.kind).toBe("load-steering");
-    const continued = runLifecycle(routedDir, session, "compiled", ["continue", String(first.directive.continue_token)], "compiled-continue");
+    const continued = runLifecycle(routedDir, session, "compiled", ["continue", String(first.directive.receipt)], "compiled-continue");
     expect(["load-steering", "run-stage"]).toContain(String(continued.directive.kind));
   }, 30000);
 
   test("21c: exact claim ownership failures deny while pre-claim correlation absence stays untracked", () => {
     const foreignSession = orchestrationProject();
+    inflateRules(foreignSession);
     const owner = "claim-owner";
     const first = runLifecycle(foreignSession, owner, "direct", ["next"], "claim-owner-next");
-    const token = String(first.directive.continue_token);
+    const token = String(first.directive.receipt);
     const spec = commandSpec(foreignSession, "source", ["continue", token]);
     const before = readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8");
     const deniedForeign = runAdapter(foreignSession, "guard-tool-call", commandPayload(
@@ -1426,26 +1456,28 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(before);
 
     const stateDrift = orchestrationProject();
+    inflateRules(stateDrift);
     const stateOwner = "state-owner";
     const stateFirst = runLifecycle(stateDrift, stateOwner, "direct", ["next"], "state-owner-next");
     appendFileSync(seededStateFile(stateDrift), "\n<!-- claim drift -->\n");
     const deniedState = runAdapter(stateDrift, "guard-tool-call", commandPayload(
       stateDrift,
       stateOwner,
-      commandSpec(stateDrift, "direct", ["continue", String(stateFirst.directive.continue_token)]).text,
+      commandSpec(stateDrift, "direct", ["continue", String(stateFirst.directive.receipt)]).text,
       "state-drift-attempt",
     ));
     expect(deniedState.stdout).toContain('"permissionDecision":"deny"');
     expect(deniedState.stdout).toContain("workflow state changed");
 
     const projectDrift = orchestrationProject();
+    inflateRules(projectDrift);
     const projectOwner = "project-owner";
     const projectFirst = runLifecycle(projectDrift, projectOwner, "direct", ["next"], "project-owner-next");
     rewriteMarker(projectDrift, (value) => { value.project_sha256 = "0".repeat(64); });
     const deniedProject = runAdapter(projectDrift, "guard-tool-call", commandPayload(
       projectDrift,
       projectOwner,
-      commandSpec(projectDrift, "direct", ["continue", String(projectFirst.directive.continue_token)]).text,
+      commandSpec(projectDrift, "direct", ["continue", String(projectFirst.directive.receipt)]).text,
       "project-drift-attempt",
     ));
     expect(deniedProject.stdout).toContain('"permissionDecision":"deny"');
@@ -1455,6 +1487,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {
     for (const order of ["stale-before-owner", "stale-after-owner"] as const) {
       const dir = orchestrationProject();
+      inflateRules(dir);
       const spec = commandSpec(dir, "direct", ["next"]);
       const attemptA = `${order}-attempt-a`;
       const attemptB = `${order}-attempt-b`;
@@ -1506,7 +1539,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(executedB.status, executedB.stderr).toBe(0);
       const directiveB = JSON.parse(executedB.stdout) as Record<string, unknown>;
       expect(directiveB.kind).toBe("load-steering");
-      const tokenB = String(directiveB.continue_token);
+      const tokenB = String(directiveB.receipt);
       const issuedB = marker(dir);
       expect(issuedB).toMatchObject({
         revision: claimedBRevision + 1,
@@ -1577,6 +1610,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("21e: untracked fresh next fails a stale pending candidate and stays undelivered", () => {
     const dir = orchestrationProject();
+    inflateRules(dir);
     const spec = commandSpec(dir, "direct", ["next"]);
     rewrittenCommand(runAdapter(
       dir, "guard-tool-call", commandPayload(dir, "tracked-owner", spec.text, "pending-tracked-next"),
@@ -1586,7 +1620,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(untracked.status, untracked.stderr).toBe(0);
     const directive = JSON.parse(untracked.stdout) as Record<string, unknown>;
     expect(directive.kind).toBe("load-steering");
-    const token = String(directive.continue_token);
+    const token = String(directive.receipt);
     const issued = marker(dir);
     expect(issued).toMatchObject({
       revision: pendingRevision + 1,
@@ -1610,9 +1644,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     for (const firstAttempt of ["host-attempt-a", "host-attempt-b"] as const) {
       const secondAttempt = firstAttempt === "host-attempt-a" ? "host-attempt-b" : "host-attempt-a";
       const dir = orchestrationProject();
+      inflateRules(dir);
       const session = `host-duplicate-${firstAttempt}`;
       const seeded = runLifecycle(dir, session, "direct", ["next"], `${firstAttempt}-seed`);
-      const token = String(seeded.directive.continue_token);
+      const token = String(seeded.directive.receipt);
       const direct = commandSpec(dir, "direct", ["continue", token]);
       const source = commandSpec(dir, "source", ["continue", token]);
       const firstSpec = firstAttempt === "host-attempt-a" ? direct : source;
@@ -1650,9 +1685,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     ] as const;
     for (const scenario of scenarios) {
       const dir = orchestrationProject();
+      inflateRules(dir);
       const session = `reused-${scenario.engine}`;
       const seeded = runLifecycle(dir, session, "direct", ["next"], `seed-${scenario.engine}`);
-      const token = String(seeded.directive.continue_token);
+      const token = String(seeded.directive.receipt);
       const first = noIdClaim(dir, session, commandSpec(dir, scenario.pre[0], ["continue", token]));
       const firstClaimRevision = Number(marker(dir).revision);
       const second = noIdClaim(dir, session, commandSpec(dir, scenario.pre[1], ["continue", token]), "vscode");
@@ -1678,13 +1714,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const secondRun = () => runShell(dir, second.updated);
       const runs = scenario.engine === "first" ? [firstRun(), secondRun()] : [secondRun(), firstRun()];
       for (const run of runs) expect(run.status, run.stderr).toBe(0);
+      // The shared attempt has one engine winner; the duplicate is refused as a
+      // stale tracked attempt (a tracked `continue` cannot be re-answered as a
+      // fresh `next` under its own claim), so the winner's cursor is untouched.
       const winner = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error");
       const loser = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind === "error");
       expect([winner, loser].filter(Boolean)).toHaveLength(2);
       expect(runs.filter((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error")).toHaveLength(1);
       expect(runs.filter((run) => (JSON.parse(run.stdout) as { kind: string }).kind === "error")).toHaveLength(1);
-      expect(loser?.stdout).toContain("no longer current");
+      expect(loser?.stdout).toContain("stale or superseded");
       const winnerDirective = JSON.parse(winner?.stdout ?? "{}") as Record<string, unknown>;
+      expect(winnerDirective).toMatchObject({ kind: "load-steering", part: 2 });
+      expect(String(winnerDirective.receipt)).toMatch(RECEIPT_PATTERN);
       const resultSha256 = createHash("sha256").update((winner?.stdout ?? "").trim()).digest("hex");
       const issued = marker(dir);
       expect(issued).toMatchObject({
@@ -1699,7 +1740,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       });
       if (winnerDirective.kind === "load-steering") {
         expect(issued.continue_token_sha256).toBe(
-          createHash("sha256").update(String(winnerDirective.continue_token)).digest("hex"),
+          createHash("sha256").update(String(winnerDirective.receipt)).digest("hex"),
         );
       } else {
         expect(issued.continue_token_sha256).toBeUndefined();
@@ -1745,9 +1786,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("21h: failed duplicate Post cannot cancel the candidate that later wins", () => {
     const dir = orchestrationProject();
+    inflateRules(dir);
     const session = "duplicate-failure-owner";
     const seeded = runLifecycle(dir, session, "direct", ["next"], "duplicate-failure-seed");
-    const token = String(seeded.directive.continue_token);
+    const token = String(seeded.directive.receipt);
     const first = noIdClaim(dir, session, commandSpec(dir, "direct", ["continue", token]));
     const second = noIdClaim(dir, session, commandSpec(dir, "source", ["continue", token]));
     expect(second.attemptId).toBe(first.attemptId);
@@ -1871,7 +1913,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(executed.status, executed.stderr).toBe(0);
         runAdapter(dir, "post-tool", commandPayload(dir, session, command, undefined, true, executed.stdout));
         if (shape === "missing") {
-          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "load-steering" });
+          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "run-stage" });
           expect(marker(dir)).toMatchObject({
             delivery: "issued",
             active_attempt: { id: claim.attemptId, status: "failed" },
@@ -1899,11 +1941,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-attempt", cwd: dir,
       toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
     });
-    expect(marker(dir)).toMatchObject({ kind: "load-steering", delivery: "delivered" });
+    expect(marker(dir)).toMatchObject({ kind: "run-stage", delivery: "delivered" });
   }, 30000);
 
   test("22d: canonical script identity includes symlink aliases and still rejects replay", () => {
     const dir = orchestrationProject();
+    inflateRules(dir);
     const session = "symlink-owner";
     const dispatcherAlias = join(dir, ".aidlc", "tools", "aidlc-alias.ts");
     const directAlias = join(dir, ".aidlc", "tools", "orchestrate-alias.ts");
@@ -1914,17 +1957,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const next = runShell(dir, rewrittenNext);
     expect(next.status, next.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenNext, "alias-next", true, next.stdout));
-    const nextDirective = JSON.parse(next.stdout) as { kind?: string; continue_token?: string };
+    const nextDirective = JSON.parse(next.stdout) as { kind?: string; receipt?: string };
     expect(nextDirective.kind).toBe("load-steering");
-    const token = String(nextDirective.continue_token);
+    const token = String(nextDirective.receipt);
     const continueCommand = `bun .aidlc/tools/orchestrate-alias.ts continue ${JSON.stringify(token)}`;
     const rewrittenContinue = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-continue")));
     const continued = runShell(dir, rewrittenContinue);
     expect(continued.status, continued.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenContinue, "alias-continue", true, continued.stdout));
     const replay = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-replay")));
+    const claimedReplayBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
     const replayed = runShell(dir, replay);
-    expect(replayed.stdout).toContain("no longer current");
+    // A replayed receipt under a tracked Copilot attempt is refused as a stale
+    // attempt and never re-delivers the consumed part; the cursor is untouched.
+    expect(JSON.parse(replayed.stdout)).toMatchObject({ kind: "error" });
+    expect(replayed.stdout).toContain("stale or superseded");
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(claimedReplayBytes);
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, "bun .aidlc/tools/aidlc.ts-missing next", "lookalike")).stdout)
       .toBe("");
   }, 30000);
@@ -1932,7 +1980,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("23: explicit Resume continues directly and does not arm a resume marker", () => {
     const dir = orchestrationProject();
     const resumed = runLifecycle(dir, "resume-direct-owner", "direct", ["next", "--resume"], "resume-direct");
-    expect(resumed.directive.kind).toBe("load-steering");
+    expect(resumed.directive.kind).toBe("run-stage");
     expect(resumed.directive.stage).toBe("requirements-analysis");
     expect(marker(dir).resume).toBeUndefined();
   }, 30000);
@@ -1999,7 +2047,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         ["next", "--resume"],
         `legacy-${status}-resume`,
       );
-      expect(resumed.directive.kind).toBe("load-steering");
+      expect(resumed.directive.kind).toBe("run-stage");
       expect(resumed.directive.stage).toBe("requirements-analysis");
       expect(marker(dir).resume).toMatchObject({ status: "superseded" });
     }

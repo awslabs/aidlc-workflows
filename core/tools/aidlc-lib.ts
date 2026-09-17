@@ -162,9 +162,10 @@ export interface ScopeDefinition {
   plugin?: string;
   runner?: boolean;
   skeleton?: boolean;
-  /** The scope's Change Control default (`change_control:` frontmatter);
-   *  absent means strict. Resolution lives in resolveChangeControl. */
-  changeControl?: ChangeControl;
+  /** The scope's Guard Policy default (`guard_policy:` frontmatter, or the
+   *  retired `change_control:`); absent means strict. Resolution lives in
+   *  resolveGuardPolicy. */
+  guardPolicy?: GuardPolicy;
   /** Scope-owned ceremony defaults; omitted settings stay on. */
   ceremony?: Partial<CeremonyPolicy>;
 }
@@ -5424,6 +5425,10 @@ export interface ActiveDirectiveMarker {
   remedies?: ActiveDirectiveGuardRemedy[];
   guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
+  // On a load-steering marker: the steering payload behind the current part's
+  // receipt (continue_token carries the 8-character receipt), so `continue`
+  // rebuilds the next part from disk. Opaque to this library.
+  steering_payload?: Record<string, unknown>;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
   event_sequence?: number; human_sequence?: number; engine_sequence?: number; conversation_sequence?: number;
@@ -6206,6 +6211,7 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
     if (typeof parsed.continue_token !== "string" || Buffer.byteLength(parsed.continue_token, "utf-8") > 16 * 1024) return null;
     if (contentSha256(parsed.continue_token) !== parsed.continue_token_sha256) return null;
   }
+  if (parsed.steering_payload !== undefined && !isPlainObject(parsed.steering_payload)) return null;
   if (parsed.kind === "load-steering" &&
     (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
       (parsed.part as number) > (parsed.parts as number) || parsed.continue_token === undefined)) return null;
@@ -6437,6 +6443,7 @@ export function writeActiveDirectiveMarker(
     units?: string[];
     rules_bundle?: string;
     directive_sha256?: string;
+    steering_payload?: Record<string, unknown>;
     ask_type?: string;
     remedies?: ActiveDirectiveGuardRemedy[];
   },
@@ -6754,6 +6761,7 @@ export function writeActiveDirectiveMarker(
       // retains the issued marker), so clearing here cannot discard a selection.
       guard_recovery_response: undefined,
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      steering_payload: marker.steering_payload,
       delivery: "issued",
       needs_rehydrate: copilotOwned,
       ...(nextAttempt ? { active_attempt: nextAttempt } : {}),
@@ -7150,6 +7158,7 @@ export function advanceContinuationCursor(
     units?: string[];
     rules_bundle?: string;
     directive_sha256?: string;
+    steering_payload?: Record<string, unknown>;
   },
   resultSha256: string,
   attemptId?: string,
@@ -7420,6 +7429,7 @@ export function advanceContinuationCursor(
         ? { directive_sha256: successor.directive_sha256 }
         : { directive_sha256: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      steering_payload: successor.steering_payload,
       delivery: "issued",
       needs_rehydrate: !base.owner_session?.startsWith("sessionless:"),
       ...(pending ? { active_attempt: matchingAttempt
@@ -7462,6 +7472,7 @@ export function invalidateActiveDirectiveContext(
         parts: undefined,
         continue_token: undefined,
         continue_token_sha256: undefined,
+        steering_payload: undefined,
       },
       result: true,
     };
@@ -10185,7 +10196,7 @@ export function checkSummaryConfirmationEvidence(
           // confirmation and its receipt are untouched either way. An output
           // with NO recorded write is missing evidence, not a changed input, so
           // that case refuses under both values.
-          if (unauthorized.length > 0 && changeControl() === "relaxed") {
+          if (unauthorized.length > 0 && changeControl() !== "strict") {
             const stamps = [
               ...new Set(
                 unauthorized.map(
@@ -10202,7 +10213,7 @@ export function checkSummaryConfirmationEvidence(
               current: stamps.join(", "),
               notice:
                 `${toPosix(relative(projectDir, artifactAbs))} was saved without the current ` +
-                "summary confirmation. Continuing (Change Control: relaxed).",
+                "summary confirmation. Continuing (Guard Policy: relaxed or off).",
             });
             continue;
           }
@@ -14641,8 +14652,8 @@ export function freshReviewReceipts(
       changeControlRead = true;
       try {
         resolvedRelaxed =
-          resolveChangeControl(projectDir, stateContent, { selection: options.selection }).value ===
-          "relaxed";
+          resolveGuardPolicy(projectDir, stateContent, { selection: options.selection }).value !==
+          "strict";
       } catch {
         resolvedRelaxed = false;
       }
@@ -14655,7 +14666,7 @@ export function freshReviewReceipts(
   const acceptedArtifactChanges = new Map<string, AcceptedChange>();
   const acceptedChanges: AcceptedChange[] = [];
   const relaxedReviewNotice = (artifact: string): string =>
-    `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`;
+    `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Guard Policy: relaxed or off).`;
   const resetUnitReviewState = (unit: string): void => {
     for (const [key, request] of pendingRequests) {
       if (request.unit === unit) pendingRequests.delete(key);
@@ -21573,6 +21584,9 @@ export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
 interface SubagentInflightEntry {
   sessionId: string | null;
   startedAtMs: number;
+  /** The authority in force when this agent was dispatched, so it inherits it
+   *  instead of being judged on its own (a dispatch cannot mint a grant). */
+  authority?: AuthorityCover;
 }
 
 interface SubagentInflightLedger {
@@ -21634,8 +21648,14 @@ function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
         entry.sessionId === null ||
         (typeof entry.sessionId === "string" &&
           validSessionId(entry.sessionId) === entry.sessionId);
+      const validAuthority =
+        entry.authority === undefined ||
+        entry.authority === "grant" ||
+        entry.authority === "instruction" ||
+        entry.authority === "none";
       if (
         !validIdentity ||
+        !validAuthority ||
         typeof entry.startedAtMs !== "number" ||
         !Number.isFinite(entry.startedAtMs) ||
         entry.startedAtMs <= 0
@@ -21645,6 +21665,7 @@ function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
       entries.push({
         sessionId: entry.sessionId ?? null,
         startedAtMs: entry.startedAtMs,
+        ...(entry.authority ? { authority: entry.authority } : {}),
       });
     }
     return { exists: true, malformed: false, entries };
@@ -21685,6 +21706,7 @@ function freshSubagentEntries(
 export function markSubagentInflight(
   projectDir: string,
   sessionId?: unknown,
+  authority?: AuthorityCover,
 ): boolean {
   const identity = subagentSessionIdentity(sessionId);
   if (!identity.valid) return false;
@@ -21697,7 +21719,14 @@ export function markSubagentInflight(
     }
     const nowMs = Date.now();
     const entries = freshSubagentEntries(current.entries, nowMs);
-    entries.push({ sessionId: identity.sessionId, startedAtMs: nowMs });
+    // The dispatch stamp: the authority in force at dispatch travels with the
+    // agent, so its actions are judged on what the human or the engine asked
+    // for, not on the agent's own (absent) authority.
+    entries.push({
+      sessionId: identity.sessionId,
+      startedAtMs: nowMs,
+      ...(authority ? { authority } : {}),
+    });
     writeSubagentInflightLedger(projectDir, entries);
     return true;
   });
@@ -22390,8 +22419,28 @@ export function isAutonomousSwarmStage(
 // artifactGuardDisabled in aidlc-state.ts). The suite sets this globally (the
 // dedicated guard test clears it), and it is the documented bypass for
 // synthetic CI runs that drive approve/answer against bare fixtures.
-export function humanPresenceGuardDisabled(): boolean {
-  return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
+//
+// Human presence is the KEY HOLDER, not a fence: no Guard Policy value lowers
+// it, because "a real person is behind this approval" is the one thing an agent
+// must never decide for itself. It has exactly two off-switches, and both are a
+// person's deliberate act: the environment variable above (a machine-wide
+// declaration) and `/aidlc config set guard.human-presence off`, which lowers
+// it for ONE piece of work and is recorded. Pass the project directory to have
+// the per-run switch honoured; without it only the environment variable is read
+// (the shape older callers relied on).
+export function humanPresenceGuardDisabled(
+  projectDir?: string,
+  stateContent?: string | null,
+): boolean {
+  if (resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1") return true;
+  if (projectDir === undefined) return false;
+  try {
+    const state = stateContent ?? authorityStateText(projectDir);
+    const fences = parseGuardsOffLine(getField(state, GUARDS_OFF_FIELD));
+    return fences.includes("human-presence");
+  } catch {
+    return false; // unreadable state: the key holder stays on
+  }
 }
 
 // An unattended driver is the only component that knows its prompt-submit
@@ -22402,11 +22451,16 @@ export function humanTurnMintAllowed(): boolean {
 }
 
 export function unattendedHumanPresenceHint(): string {
-  return humanTurnMintAllowed()
+  // Two sentences, and both are about how the person gets out of here. The
+  // unattended one explains why their prompts are not counting; the second
+  // names the switch, because a human who is present and being told to wait for
+  // a human needs the key in their hand, not a page reference.
+  const unattended = humanTurnMintAllowed()
     ? ""
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
+  return `${unattended} ${lowerFenceSentence("human-presence")}`;
 }
 
 export function setField(content: string, field: string, value: string): string {
@@ -22626,6 +22680,14 @@ export const GUARD_REMEDY_OPS = [
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
+  // Lower ONE fence for this piece of work. It reaches the human in whichever
+  // shape the refusing site speaks: as this remedy on a guard-recovery ask when
+  // the site builds a typed refusal (the review-freeze hook does), and as the
+  // lowerFenceSentence line on stderr when the site refuses straight from
+  // PreToolUse (plan approval, state transition, reviewer scope). Either way the
+  // way out is printed beside the thing that stopped them, rather than left in a
+  // reference page. Logged, and back on for the next piece of work.
+  "lower-fence",
 ] as const;
 export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 
@@ -22713,6 +22775,9 @@ export interface GuardRefusalInput {
     slug: string | null;
     batch: string | null;
   };
+  /** Set when this refusal IS a fence holding, so the way past it is offered
+   *  beside the reasons the workflow can resolve on its own. */
+  fence?: GuardFence;
 }
 
 function guardLifecycleState(
@@ -22736,6 +22801,53 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
     operation,
     command: renderGuardOperation(operation, { harnessDir: harnessDir() }),
   };
+}
+
+// A literal tool command for the remedies GuardRecoveryOperation does not model.
+// It covers exactly one kind today: the lower-fence switch, which is a
+// config-change rather than one of the two typed recovery operations
+// (restart-stage, abort-bolt). Argument values are shell-quoted unless they are
+// already safe bare words.
+function guardToolCommand(tool: string, args: string[]): string {
+  return [
+    "bun",
+    `${harnessDir()}/tools/${tool}`,
+    ...args.map((value) =>
+      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
+        ? value
+        : `'${value.replaceAll("'", "'\"'\"'")}'`
+    ),
+  ].join(" ");
+}
+
+/**
+ * "Turn this fence off for this piece of work": the in-band offer that makes the
+ * key reachable at the moment it is needed. It requires a human (it is their
+ * key), it is always executable, and it is recorded.
+ */
+export function lowerFenceRemedy(fence: GuardFence): GuardRemedy {
+  return {
+    op: "lower-fence",
+    action:
+      `Turn the ${fence} check off for this piece of work and continue. It is ` +
+      "recorded in the audit trail and comes back on for the next piece of work.",
+    command: guardToolCommand("aidlc-utility.ts", [
+      "config-change",
+      `--${guardFenceConfigKey(fence)}`,
+      "off",
+    ]),
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+/** The sentence a prose refusal adds so the switch is visible where it is needed. */
+export function lowerFenceSentence(fence: GuardFence): string {
+  return (
+    `If you meant to do this now, turn the check off for this piece of work with ` +
+    `/aidlc config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
+    "comes back on for the next piece of work."
+  );
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {
@@ -23009,6 +23121,11 @@ export function evaluateGuardRefusal(
     }
     remedies.push(...lifecycleResetRemedies(input, state));
   }
+
+  // The fence's own way out, always LAST: the workflow's own remedies come
+  // first (letting it finish the step is nearly always the right answer), and
+  // lowering the fence is the deliberate second choice.
+  if (input.fence !== undefined) remedies.push(lowerFenceRemedy(input.fence));
 
   return {
     code: input.code,
@@ -27697,9 +27814,10 @@ interface ScopeMetadata {
    *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
-  /** The scope's Change Control default (`change_control:` frontmatter).
-   *  Absent = strict. Resolution lives in resolveChangeControl. */
-  changeControl?: ChangeControl;
+  /** The scope's Guard Policy default (`guard_policy:` frontmatter, or the
+   *  retired `change_control:`). Absent = strict. Resolution lives in
+   *  resolveGuardPolicy. */
+  guardPolicy?: GuardPolicy;
   ceremony?: Partial<CeremonyPolicy>;
 }
 
@@ -27808,15 +27926,29 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       }
       meta.reviewCap = reviewCap;
     }
-    const changeControl = scalarField(fm, "change_control");
-    if (changeControl) {
-      if (changeControl !== "strict" && changeControl !== "relaxed") {
+    // `guard_policy` is the key; `change_control` is its retired spelling, read
+    // for one release. A file naming both must agree.
+    const guardPolicyRaw = scalarField(fm, "guard_policy");
+    const changeControlRaw = scalarField(fm, "change_control");
+    for (const [key, raw] of [["guard_policy", guardPolicyRaw], ["change_control", changeControlRaw]] as const) {
+      if (raw && parseGuardPolicy(raw) === null) {
         throw new Error(
-          `Scope file ${filePath} has invalid change_control value "${changeControl}". Expected "strict" or "relaxed".`
+          `Scope file ${filePath} has invalid ${key} value "${raw}". Expected "strict", "relaxed", or "off".`
         );
       }
-      meta.changeControl = changeControl;
     }
+    if (guardPolicyRaw && changeControlRaw && guardPolicyRaw !== changeControlRaw) {
+      throw new Error(
+        `Scope file ${filePath} names both guard_policy ("${guardPolicyRaw}") and change_control ("${changeControlRaw}") with different values. Keep guard_policy only.`
+      );
+    }
+    // scalarField returns "" for an absent key, not undefined, so the fallback
+    // has to test emptiness. With `??` a file carrying ONLY the retired key read
+    // as "no policy declared" and silently lost its value.
+    const guardPolicy = parseGuardPolicy(
+      guardPolicyRaw.length > 0 ? guardPolicyRaw : changeControlRaw,
+    );
+    if (guardPolicy !== null) meta.guardPolicy = guardPolicy;
     for (const key of CEREMONY_KEYS) {
       const value = scalarField(fm, key);
       if (!value) continue;
@@ -27958,7 +28090,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.plugin !== undefined) def.plugin = meta.plugin;
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
-    if (meta.changeControl !== undefined) def.changeControl = meta.changeControl;
+    if (meta.guardPolicy !== undefined) def.guardPolicy = meta.guardPolicy;
     if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
     out[name] = def;
   }
@@ -29328,24 +29460,54 @@ export function emitError(
 }
 
 // ---------------------------------------------------------------------------
-// Change Control
+// Guard Policy (the setting formerly called Change Control)
 //
-// One setting, two values. It decides what a governed checkpoint does when an
-// INPUT changed after the human approved or confirmed something: `strict`
-// refuses with the existing remedy, `relaxed` records a CHANGE_ACCEPTED row,
-// tells the human in one line, and continues. It never removes a gate, never
-// alters a reviewer's verdict, and never deletes evidence. The value is the
-// intent's own state line when present, else the scope default; any memory
+// One setting, three values, deciding how far the guards stand aside for a
+// piece of work. The guards are fences for the agents in the loop; the human
+// holds the key. `strict`: an input that changed after the human approved or
+// confirmed something is asked about once, naming what changed, and the
+// authority fences hold against work nobody directed. `relaxed`: a changed
+// input is recorded as a CHANGE_ACCEPTED row, told to the human in one line,
+// and the work continues; the plan-approval and review-freeze fences stand
+// aside and log. `off`: every fence stands aside and logs. No value removes a
+// gate, alters a reviewer's verdict, deletes evidence, or lets an agent answer
+// for the human (human presence is the key holder, not a fence). The value is
+// the intent's own state line when present, else the scope default; any memory
 // layer that declares strict wins over both and cannot be flipped from chat.
+//
+// The old name is read for one release: the scope key `change_control`, the
+// state field `Change Control`, the memory heading `## Change Control`, the
+// flag `--change-control`, and the config key `change-control` all still
+// resolve. Every writer emits the new name.
 // ---------------------------------------------------------------------------
 
-export type ChangeControl = "strict" | "relaxed";
-export const CHANGE_CONTROL_VALUES: readonly ChangeControl[] = ["strict", "relaxed"];
+export type GuardPolicy = "strict" | "relaxed" | "off";
+/** Retired spelling of GuardPolicy, kept for one release. */
+export type ChangeControl = GuardPolicy;
+export const GUARD_POLICY_VALUES: readonly GuardPolicy[] = ["strict", "relaxed", "off"];
+/** Retired alias of GUARD_POLICY_VALUES. */
+export const CHANGE_CONTROL_VALUES: readonly GuardPolicy[] = GUARD_POLICY_VALUES;
+export const GUARD_POLICY_FIELD = "Guard Policy";
+export const GUARD_POLICY_HEADING = "## Guard Policy";
+/** The retired state field and memory heading; read for one release, never written. */
 export const CHANGE_CONTROL_FIELD = "Change Control";
 export const CHANGE_CONTROL_HEADING = "## Change Control";
-export const CHANGE_CONTROL_MEMORY_LAYERS = ["org", "team", "project"] as const;
-export type ChangeControlMemoryLayer = (typeof CHANGE_CONTROL_MEMORY_LAYERS)[number];
+export const GUARD_POLICY_MEMORY_LAYERS = ["org", "team", "project"] as const;
+export type GuardPolicyMemoryLayer = (typeof GUARD_POLICY_MEMORY_LAYERS)[number];
+/** Retired aliases. */
+export const CHANGE_CONTROL_MEMORY_LAYERS = GUARD_POLICY_MEMORY_LAYERS;
+export type ChangeControlMemoryLayer = GuardPolicyMemoryLayer;
 export const CHANGE_CONTROL_MAX_LISTED_PATHS = 10;
+/** One line, printed once per process, when a caller used the retired name. */
+export const GUARD_POLICY_RENAME_NOTICE =
+  "Change Control is now Guard Policy (--guard-policy, config key guard-policy, scope key guard_policy, " +
+  "memory heading ## Guard Policy). The old names still work in this release and are removed in the next minor.";
+let guardPolicyRenameNoticed = false;
+export function noteGuardPolicyRename(write: (line: string) => void = (line) => console.error(line)): void {
+  if (guardPolicyRenameNoticed) return;
+  guardPolicyRenameNoticed = true;
+  write(GUARD_POLICY_RENAME_NOTICE);
+}
 
 export type ChangeCheckpoint =
   | "plan-approval"
@@ -29366,27 +29528,35 @@ export interface AcceptedChange {
   notice: string;
 }
 
-export interface ChangeControlMemoryDeclaration {
-  layer: ChangeControlMemoryLayer;
+export interface GuardPolicyMemoryDeclaration {
+  layer: GuardPolicyMemoryLayer;
   path: string;
-  value: ChangeControl;
+  /** The heading the declaration was read under (new or retired). */
+  heading: string;
+  value: GuardPolicy;
 }
+/** Retired alias. */
+export type ChangeControlMemoryDeclaration = GuardPolicyMemoryDeclaration;
 
-export interface ChangeControlResolution {
-  value: ChangeControl;
+export interface GuardPolicyResolution {
+  value: GuardPolicy;
   /** Where the value came from, worded for humans: `scope classic`,
    *  `project.md`, `you`, or `not set`. */
   source: string;
-  scopeDefault: ChangeControl;
+  scopeDefault: GuardPolicy;
   /** The intent's own valid state line, when it carries one. */
-  intent: { value: ChangeControl; source: string } | null;
+  intent: { value: GuardPolicy; source: string } | null;
   /** The state-derived value before memory is applied: the line, else strict. */
-  stateValue: ChangeControl;
+  stateValue: GuardPolicy;
   /** The field text exactly as stored, including invalid text; null when absent. */
   rawStateValue: string | null;
+  /** The state field the line was read from (new or retired); null when absent. */
+  stateField: string | null;
   /** The first memory layer declaring strict, when one does. */
-  memoryStrict: ChangeControlMemoryDeclaration | null;
+  memoryStrict: GuardPolicyMemoryDeclaration | null;
 }
+/** Retired alias. */
+export type ChangeControlResolution = GuardPolicyResolution;
 
 // The fields the two memory sections read through this grammar: Change Control
 // declares `Mode`; Testing Posture declares `Methodology` and `Ordering`
@@ -29453,26 +29623,63 @@ export function memorySectionBody(content: string, heading: string): string {
   return start < 0 ? "" : lines.slice(start).join("\n");
 }
 
-/** The value named by a memory `Mode:` line or a flag; null when it is not one of the two. */
-export function parseChangeControl(raw: string | null | undefined): ChangeControl | null {
+/** The value named by a memory `Mode:` line or a flag; null when it is not one of the three. */
+export function parseGuardPolicy(raw: string | null | undefined): GuardPolicy | null {
   if (raw === null || raw === undefined) return null;
   const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
-  return word === "strict" || word === "relaxed" ? word : null;
+  return word === "strict" || word === "relaxed" || word === "off" ? word : null;
 }
+/** Retired alias of parseGuardPolicy. */
+export const parseChangeControl = parseGuardPolicy;
 
 // The state line reads `<value> (<source>)`; only the value decides anything.
 // The source label is kept for `--status` and the human line.
-const CHANGE_CONTROL_STATE_LINE_RE = /^(strict|relaxed)\b(?:\s*\((.*)\))?\s*$/i;
+const GUARD_POLICY_STATE_LINE_RE = /^(strict|relaxed|off)\b(?:\s*\((.*)\))?\s*$/i;
 
-export function parseChangeControlStateLine(
+export function parseGuardPolicyStateLine(
   raw: string | null | undefined,
-): { value: ChangeControl; source: string } | null {
+): { value: GuardPolicy; source: string } | null {
   if (!raw) return null;
-  const match = CHANGE_CONTROL_STATE_LINE_RE.exec(raw.trim());
+  const match = GUARD_POLICY_STATE_LINE_RE.exec(raw.trim());
   if (!match) return null;
-  const value = match[1].toLowerCase() as ChangeControl;
+  const value = match[1].toLowerCase() as GuardPolicy;
   const label = (match[2] ?? "").trim();
   return { value, source: changeControlSourceFromLabel(label) };
+}
+/** Retired alias of parseGuardPolicyStateLine. */
+export const parseChangeControlStateLine = parseGuardPolicyStateLine;
+
+/** The state field carrying the policy line: the new name, else the retired one, else null. */
+export function guardPolicyStateField(state: string): string | null {
+  if (getField(state, GUARD_POLICY_FIELD) !== null) return GUARD_POLICY_FIELD;
+  if (getField(state, CHANGE_CONTROL_FIELD) !== null) return CHANGE_CONTROL_FIELD;
+  return null;
+}
+
+/**
+ * Write the policy line under its new name. A state file still carrying the
+ * retired `Change Control` line has that line renamed in place, so one setting
+ * never appears twice; a file with neither gets the line inserted after the
+ * scope configuration anchors, or appended.
+ */
+export function setGuardPolicyLine(content: string, line: string): string {
+  if (getField(content, GUARD_POLICY_FIELD) === null) {
+    const retired = new RegExp(`^(\\s*(?:[-*]\\s*)?\\*\\*)${CHANGE_CONTROL_FIELD}(\\*\\*:)`, "m");
+    if (retired.test(content)) {
+      content = content.replace(retired, `$1${GUARD_POLICY_FIELD}$2`);
+    } else {
+      const beforeInsert = content;
+      for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
+        content = content.replace(
+          new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+          `$1\n- **${GUARD_POLICY_FIELD}**:`,
+        );
+        if (content !== beforeInsert) break;
+      }
+      if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARD_POLICY_FIELD}**:\n`;
+    }
+  }
+  return setField(content, GUARD_POLICY_FIELD, line);
 }
 
 function changeControlSourceFromLabel(label: string): string {
@@ -29488,9 +29695,11 @@ export function changeControlSourceLabel(source: string): string {
 }
 
 /** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
-export function formatChangeControl(value: ChangeControl, source: string): string {
+export function formatGuardPolicy(value: GuardPolicy, source: string): string {
   return `${value} (${changeControlSourceLabel(source)})`;
 }
+/** Retired alias of formatGuardPolicy. */
+export const formatChangeControl = formatGuardPolicy;
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
 export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
@@ -29626,38 +29835,46 @@ function changeControlMemoryDir(
 }
 
 /**
- * Every memory layer that declares a Change Control mode, org then team then
- * project. An invalid `Mode:` value is a validation error naming the file and
- * the allowed values. An absent section or a missing `Mode:` line declares
- * nothing.
+ * Every memory layer that declares a Guard Policy mode, org then team then
+ * project. The `## Guard Policy` section is read first; a file still carrying
+ * the retired `## Change Control` section is read under that heading. An
+ * invalid `Mode:` value is a validation error naming the file and the allowed
+ * values. An absent section or a missing `Mode:` line declares nothing.
  */
-export function memoryChangeControlDeclarations(
+export function memoryGuardPolicyDeclarations(
   projectDir: string,
   selection: WorkflowSelectionOptions = {},
-): ChangeControlMemoryDeclaration[] {
+): GuardPolicyMemoryDeclaration[] {
   const memoryDir = changeControlMemoryDir(projectDir, selection);
-  const declarations: ChangeControlMemoryDeclaration[] = [];
-  for (const layer of CHANGE_CONTROL_MEMORY_LAYERS) {
+  const declarations: GuardPolicyMemoryDeclaration[] = [];
+  for (const layer of GUARD_POLICY_MEMORY_LAYERS) {
     const path = join(memoryDir, `${layer}.md`);
     if (!existsSync(path)) continue;
-    const body = memorySectionBody(readFileSync(path, "utf-8"), CHANGE_CONTROL_HEADING);
-    if (!body.trim()) continue;
-    const raw = structuredField(body, "Mode");
-    if (raw === null) continue;
-    const value = parseChangeControl(raw);
-    if (value === null) {
-      throw new Error(
-        `Invalid Change Control Mode "${raw}" in ${path} (section: Change Control). ` +
-          `Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
-      );
+    const content = readFileSync(path, "utf-8");
+    for (const heading of [GUARD_POLICY_HEADING, CHANGE_CONTROL_HEADING]) {
+      const body = memorySectionBody(content, heading);
+      if (!body.trim()) continue;
+      const raw = structuredField(body, "Mode");
+      if (raw === null) continue;
+      const value = parseGuardPolicy(raw);
+      const section = heading.replace(/^## /, "");
+      if (value === null) {
+        throw new Error(
+          `Invalid ${section} Mode "${raw}" in ${path} (section: ${section}). ` +
+            `Expected one of: ${GUARD_POLICY_VALUES.join(", ")}.`,
+        );
+      }
+      declarations.push({ layer, path, heading, value });
+      break;
     }
-    declarations.push({ layer, path, value });
   }
   return declarations;
 }
+/** Retired alias of memoryGuardPolicyDeclarations. */
+export const memoryChangeControlDeclarations = memoryGuardPolicyDeclarations;
 
 /** The scope's default from its frontmatter; strict when the scope declares none. */
-export function scopeChangeControlDefault(scope: string | null | undefined): ChangeControl {
+export function scopeGuardPolicyDefault(scope: string | null | undefined): GuardPolicy {
   if (!scope) return "strict";
   let mapping: Record<string, ScopeDefinition>;
   try {
@@ -29665,8 +29882,10 @@ export function scopeChangeControlDefault(scope: string | null | undefined): Cha
   } catch {
     return "strict";
   }
-  return mapping[scope.trim().toLowerCase()]?.changeControl ?? "strict";
+  return mapping[scope.trim().toLowerCase()]?.guardPolicy ?? "strict";
 }
+/** Retired alias of scopeGuardPolicyDefault. */
+export const scopeChangeControlDefault = scopeGuardPolicyDefault;
 
 /**
  * Resolved value = the intent's own valid line if present, else strict. Then,
@@ -29675,14 +29894,14 @@ export function scopeChangeControlDefault(scope: string | null | undefined): Cha
  * malformed state line is a validation error unless the repair command opts
  * into reading it tolerantly. Pure: reads state and memory, writes nothing.
  */
-export function resolveChangeControl(
+export function resolveGuardPolicy(
   projectDir: string,
   stateContent?: string | null,
   options: {
     tolerateInvalidState?: boolean;
     selection?: WorkflowSelectionOptions;
   } = {},
-): ChangeControlResolution {
+): GuardPolicyResolution {
   const selection = resolveWorkflowSelection(projectDir, options.selection);
   const statePath = stateFilePath(
     projectDir,
@@ -29698,20 +29917,21 @@ export function resolveChangeControl(
     }
   }
   const scope = getField(state, "Scope");
-  const scopeDefault = scopeChangeControlDefault(scope);
-  const rawStateValue = getField(state, CHANGE_CONTROL_FIELD);
-  const intent = parseChangeControlStateLine(rawStateValue);
+  const scopeDefault = scopeGuardPolicyDefault(scope);
+  const stateField = guardPolicyStateField(state);
+  const rawStateValue = stateField === null ? null : getField(state, stateField);
+  const intent = parseGuardPolicyStateLine(rawStateValue);
   if (rawStateValue !== null && intent === null && !options.tolerateInvalidState) {
     throw new Error(
-      `Invalid Change Control "${rawStateValue}" in ${statePath} ` +
-        `(field: ${CHANGE_CONTROL_FIELD}). Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}. ` +
-        "Run /aidlc --change-control strict or /aidlc --change-control relaxed to repair it.",
+      `Invalid Guard Policy "${rawStateValue}" in ${statePath} ` +
+        `(field: ${stateField}). Expected one of: ${GUARD_POLICY_VALUES.join(", ")}. ` +
+        "Run /aidlc --guard-policy strict, relaxed, or off to repair it.",
     );
   }
   const stateValue = intent?.value ?? "strict";
   const stateSource = intent?.source ?? "not set";
   const memoryStrict =
-    memoryChangeControlDeclarations(projectDir, {
+    memoryGuardPolicyDeclarations(projectDir, {
       intent: selection.intent ?? undefined,
       space: selection.space,
     }).find((declaration) => declaration.value === "strict") ?? null;
@@ -29723,6 +29943,7 @@ export function resolveChangeControl(
       intent,
       stateValue,
       rawStateValue,
+      stateField,
       memoryStrict,
     };
   }
@@ -29733,18 +29954,513 @@ export function resolveChangeControl(
     intent,
     stateValue,
     rawStateValue,
+    stateField,
     memoryStrict: null,
   };
 }
+/** Retired alias of resolveGuardPolicy. */
+export const resolveChangeControl = resolveGuardPolicy;
 
 /** The one sentence a chat or flag flip gets while a memory layer holds strict. */
-export function changeControlMemoryStrictRefusal(
-  declaration: ChangeControlMemoryDeclaration,
+export function guardPolicyMemoryStrictRefusal(
+  declaration: GuardPolicyMemoryDeclaration,
 ): string {
+  const section = declaration.heading.replace(/^## /, "");
   return (
-    `Change Control is set to strict in ${declaration.path} (section: Change Control), ` +
+    `Guard Policy is set to strict in ${declaration.path} (section: ${section}), ` +
     "so it cannot be changed from chat. Edit that line to change it for everyone on this repo."
   );
+}
+/** Retired alias of guardPolicyMemoryStrictRefusal. */
+export const changeControlMemoryStrictRefusal = guardPolicyMemoryStrictRefusal;
+
+// ---------------------------------------------------------------------------
+// Fences: the five guards a policy word or a per-run switch can lower.
+//
+// A fence is a hook that refuses an action nobody directed: no engine
+// instruction covers it and no human grant is newer than the engine's last
+// directive. The policy word lowers a fixed set; a human can lower any single
+// fence for one piece of work with `/aidlc config set guard.<fence> off`, which
+// writes the `Guards Off` state line and one GUARD_DISABLED row. Human presence
+// (a real human turn behind every approval and answer) is the key holder, not a
+// fence the policy word touches: only the per-run switch or its environment
+// kill switch lowers it.
+// ---------------------------------------------------------------------------
+
+export const GUARD_FENCES = [
+  "plan-approval",
+  "review-freeze",
+  "state-transition",
+  "reviewer-scope",
+  "human-presence",
+] as const;
+export type GuardFence = (typeof GUARD_FENCES)[number];
+export type FenceSetting = "on" | "off";
+export const GUARDS_OFF_FIELD = "Guards Off";
+/** Config keys of the per-run switches: `guard.plan-approval` and so on. */
+export const GUARD_FENCE_CONFIG_PREFIX = "guard.";
+export function guardFenceConfigKey(fence: GuardFence): string {
+  return `${GUARD_FENCE_CONFIG_PREFIX}${fence}`;
+}
+export function guardFenceFromConfigKey(key: string): GuardFence | null {
+  if (!key.startsWith(GUARD_FENCE_CONFIG_PREFIX)) return null;
+  const fence = key.slice(GUARD_FENCE_CONFIG_PREFIX.length);
+  return (GUARD_FENCES as readonly string[]).includes(fence) ? (fence as GuardFence) : null;
+}
+/** The environment kill switch of each fence, `1` forcing it off machine-wide.
+ *  The state-transition guard has none: the policy word and the per-run switch
+ *  are its only controls. */
+export const GUARD_FENCE_ENV: Partial<Record<GuardFence, string>> = {
+  "plan-approval": "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+  "review-freeze": "AIDLC_DISABLE_REVIEW_FREEZE_HOOK",
+  "reviewer-scope": "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK",
+  "human-presence": "AIDLC_SKIP_HUMAN_PRESENCE_GUARD",
+};
+export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
+  "plan-approval": "Plan approval (code before an approved plan)",
+  "review-freeze": "Review freeze (edits after a review receipt)",
+  "state-transition": "State transition (direct lifecycle commands)",
+  "reviewer-scope": "Reviewer scope (a reviewer outside its unit)",
+  "human-presence": "Human presence (a real human turn behind approvals and answers)",
+};
+
+/** The fences the policy word lowers by itself. */
+export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
+  if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
+  if (policy === "relaxed") return ["plan-approval", "review-freeze"];
+  return [];
+}
+
+export function parseGuardFence(raw: string | null | undefined): GuardFence | null {
+  if (raw === null || raw === undefined) return null;
+  const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
+  return (GUARD_FENCES as readonly string[]).includes(word) ? (word as GuardFence) : null;
+}
+
+/** The fences named on a `Guards Off` state line; `none` or an absent line is the empty list. */
+export function parseGuardsOffLine(raw: string | null | undefined): GuardFence[] {
+  if (!raw) return [];
+  const list = raw.replace(/\s*\(.*\)\s*$/, "").trim();
+  if (list === "" || list.toLowerCase() === "none") return [];
+  const fences: GuardFence[] = [];
+  for (const part of list.split(",")) {
+    const fence = parseGuardFence(part);
+    if (fence !== null && !fences.includes(fence)) fences.push(fence);
+  }
+  return fences;
+}
+
+/** The `Guards Off` line for a set of lowered fences, in canonical order. */
+export function formatGuardsOffLine(fences: readonly GuardFence[]): string {
+  const ordered = GUARD_FENCES.filter((fence) => fences.includes(fence));
+  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (set by you)`;
+}
+
+/** Write the `Guards Off` line, inserting it under the policy line when absent. */
+export function setGuardsOffLine(content: string, fences: readonly GuardFence[]): string {
+  if (getField(content, GUARDS_OFF_FIELD) === null) {
+    const beforeInsert = content;
+    for (const anchor of [GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${GUARDS_OFF_FIELD}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_OFF_FIELD}**:\n`;
+  }
+  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences));
+}
+
+export interface FenceResolution {
+  fence: GuardFence;
+  value: FenceSetting;
+  /** Human-worded: `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, `you`, `guard policy relaxed (from scope express)`, or `default`. */
+  source: string;
+}
+
+/**
+ * The effective setting of every fence for a state: the environment kill
+ * switch first, then the per-run `Guards Off` line, then the policy word,
+ * then on. Pure: reads the supplied state only.
+ */
+export function resolveFences(
+  policy: GuardPolicyResolution,
+  stateContent: string | null | undefined,
+): Record<GuardFence, FenceResolution> {
+  const perRun = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const byPolicy = fencesLoweredByPolicy(policy.value);
+  const out = {} as Record<GuardFence, FenceResolution>;
+  for (const fence of GUARD_FENCES) {
+    const env = GUARD_FENCE_ENV[fence];
+    if (env !== undefined && resolveProjectFlag(env) === "1") {
+      out[fence] = { fence, value: "off", source: `env ${env}` };
+    } else if (perRun.includes(fence)) {
+      out[fence] = { fence, value: "off", source: "you" };
+    } else if (byPolicy.includes(fence)) {
+      out[fence] = {
+        fence,
+        value: "off",
+        source: `guard policy ${policy.value} (${changeControlSourceLabel(policy.source)})`,
+      };
+    } else {
+      out[fence] = { fence, value: "on", source: "default" };
+    }
+  }
+  return out;
+}
+
+/** `on (default)`, `off (set by you)`, `off (env ...)`, `off (guard policy relaxed (from scope express))`. */
+export function formatFence(resolution: FenceResolution): string {
+  if (resolution.source === "default") return `${resolution.value} (default)`;
+  if (resolution.source === "you") return `${resolution.value} (set by you)`;
+  return `${resolution.value} (${resolution.source})`;
+}
+
+// ---------------------------------------------------------------------------
+// The chain of authority
+//
+// Every action a guard sees is covered by one of two authorities, or neither:
+//
+//   grant       a human message recorded AFTER the engine's last directive.
+//               It covers everything done to carry that message out, by the
+//               conductor and by any agent the conductor dispatches for it,
+//               and it lasts until the engine's next instruction.
+//   instruction the directive the engine currently has in force. It covers
+//               everything inside that instruction, whoever does it: the
+//               conductor wearing the persona inline, or a dispatched agent.
+//   none        work outside the instruction with no grant since. This is what
+//               the authority fences exist for.
+//
+// The question is never "who is acting". A developer agent acts on the
+// conductor's word, and the conductor on the human's; authority flows DOWN the
+// delegation chain. The hat (inline persona or subagent) is knowledge, not
+// authority, which is why `actor` is reported beside `covered` and never
+// substituted for it.
+//
+// Signals, all of them ones the framework already keeps:
+//   - the turn markers (.aidlc-engine/human-turn vs engine-touch): the human's
+//     last prompt against the engine's last ADVANCING invocation. Touched on
+//     every harness (the UserPromptSubmit seam and orchestrate's next / report
+//     / park), and already fail-closed on a missing or unreadable marker.
+//   - the active-directive marker's human_sequence / engine_sequence, where a
+//     harness keeps them (the Copilot claim path does).
+//   - the marker's own kind and delivery: what the engine last put in force.
+//   - a dispatch stamp on the in-flight subagent ledger, so an agent inherits
+//     the authority that was in force when it was dispatched.
+//   - agent_type / subagent_type on the hook payload (a dispatched agent) and
+//     AIDLC_UNATTENDED (nobody is watching).
+// ---------------------------------------------------------------------------
+
+export type AuthorityCover = "grant" | "instruction" | "none";
+export type AuthorityActor = "main" | "subagent" | "unattended";
+/** How a grant was proven, for the audit row and the printed line. */
+export type AuthorityGrantSource = "marker-sequence" | "turn-marker" | "dispatch-stamp";
+
+export interface Authority {
+  covered: AuthorityCover;
+  /** Who is at the keyboard or in the loop; knowledge, never authority. */
+  actor: AuthorityActor;
+  /** True when the operator declared that no human is watching. */
+  unattended: boolean;
+  /** Present when covered is "grant". */
+  grant?: { source: AuthorityGrantSource; sequence?: number };
+  /** Present when the engine has an instruction in force. */
+  instruction?: { stage: string; unit?: string; kind: ActiveDirectiveKind };
+}
+
+/** The directive kinds that ARE an instruction to do work. */
+const INSTRUCTION_KINDS = new Set<ActiveDirectiveKind>([
+  "run-stage",
+  "load-steering",
+  "dispatch-subagent",
+  "invoke-swarm",
+  "present-gate",
+]);
+
+/** The active intent's state text, or "" when there is none to read. */
+function authorityStateText(projectDir: string): string {
+  try {
+    const path = stateFilePathForSelection(
+      projectDir,
+      resolveWorkflowSelection(projectDir),
+    );
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The authority stamped on an in-flight dispatch, when this session is one.
+ * "grant" is the only value that widens what a dispatched agent may do, so
+ * anything else (no ledger, no entry, a malformed ledger) reads as unstamped.
+ */
+function stampedDispatchAuthority(
+  projectDir: string,
+  sessionId?: unknown,
+): AuthorityCover | null {
+  try {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists || current.malformed) return null;
+    const identity = subagentSessionIdentity(sessionId);
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    const entry = identity.valid
+      ? entries.find((candidate) => candidate.sessionId === identity.sessionId)
+      : undefined;
+    return entry?.authority ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function authorityActorFrom(hookInput: ClaudeCodeHookInput | null | undefined): {
+  actor: AuthorityActor;
+  unattended: boolean;
+} {
+  const unattended = process.env.AIDLC_UNATTENDED === "1";
+  const agentType = (() => {
+    if (!hookInput) return "";
+    const direct = typeof hookInput.agent_type === "string" ? hookInput.agent_type.trim() : "";
+    if (direct.length > 0) return direct;
+    const nested = hookInput.tool_input?.subagent_type;
+    return typeof nested === "string" ? nested.trim() : "";
+  })();
+  if (agentType.length > 0) return { actor: "subagent", unattended };
+  return { actor: unattended ? "unattended" : "main", unattended };
+}
+
+/**
+ * The authority covering the action a guard is about to judge. Pure reads: the
+ * turn markers, the active-directive marker, and the in-flight dispatch ledger.
+ * Fails toward the SMALLER authority on every miss, so an unreadable signal
+ * narrows what is covered instead of widening it.
+ */
+export function authorityFor(
+  projectDir: string,
+  options: {
+    hookInput?: ClaudeCodeHookInput | null;
+    stateContent?: string | null;
+    sessionId?: unknown;
+  } = {},
+): Authority {
+  const { actor, unattended } = authorityActorFrom(options.hookInput);
+  const state = options.stateContent ?? authorityStateText(projectDir);
+  let marker: ActiveDirectiveMarker | null = null;
+  try {
+    marker = readActiveDirectiveMarker(projectDir, state);
+  } catch {
+    marker = null;
+  }
+  const instruction =
+    marker?.version === 2 &&
+    marker.kind !== undefined &&
+    INSTRUCTION_KINDS.has(marker.kind) &&
+    marker.delivery !== "superseded"
+      ? {
+          stage: marker.stage,
+          ...(marker.unit ? { unit: marker.unit } : {}),
+          kind: marker.kind,
+        }
+      : undefined;
+  const settle = (
+    covered: AuthorityCover,
+    grant?: Authority["grant"],
+  ): Authority => ({
+    covered,
+    actor,
+    unattended,
+    ...(grant ? { grant } : {}),
+    ...(instruction ? { instruction } : {}),
+  });
+
+  // A dispatched agent inherits the authority stamped on it at dispatch time.
+  // Without a stamp it is treated as the loop's own work: the instruction, or
+  // nothing. A dispatch can never MINT a grant for itself.
+  if (actor === "subagent") {
+    const stamped = stampedDispatchAuthority(projectDir, options.sessionId);
+    if (stamped === "grant") {
+      return settle("grant", { source: "dispatch-stamp" });
+    }
+    return settle(instruction ? "instruction" : "none");
+  }
+
+  const humanSequence = marker?.human_sequence ?? 0;
+  const engineSequence = marker?.engine_sequence ?? 0;
+  if (humanSequence > engineSequence) {
+    return settle("grant", { source: "marker-sequence", sequence: humanSequence });
+  }
+  if (turnMarkersShowConversational(projectDir)) {
+    return settle("grant", { source: "turn-marker" });
+  }
+  return settle(instruction ? "instruction" : "none");
+}
+
+// ---------------------------------------------------------------------------
+// One decision function, one refusal shape
+//
+// Every guard calls this BEFORE it refuses, so the answer to "does this action
+// stop here?" is made in one place from one matrix:
+//
+//                        | grant       | instruction | neither
+//   drift, not strict    | stand aside | stand aside | stand aside
+//   drift, strict        | ask         | hold        | hold
+//   fence, key on        | hold        | hold        | hold
+//   fence, lowered       | stand aside | stand aside | stand aside
+//
+// stand-aside  the action proceeds, the human gets ONE line, and the ledger
+//              gets one row. Never "are you sure": the switch is already off.
+// ask          the guard has news the human lacked (an input changed after they
+//              approved), so it asks once, naming what changed.
+// hold         the fence. `next` presents the guard-recovery ask with remedies
+//              at the next boundary.
+// pass         nothing to decide; the caller proceeds silently.
+//
+// WHY "instruction" HOLDS A FENCE THAT IS STILL UP. The design table words that
+// cell "allowed (ordinary stage work)", and for the drift family that is what
+// happens. For a fence it cannot mean "allow whatever is happening": a fence
+// only ever REACHES this function once its own predicate has already found the
+// action outside what the instruction asked for (code before the approved plan,
+// an edit after the review receipt, a reviewer writing outside its unit, a
+// direct lifecycle command). The engine's instruction covers the work the
+// instruction asks for, including the approval still pending inside it; it does
+// not cover the loop skipping one of its steps. So an in-force instruction is
+// not itself a key: the fences go on controlling the agents in the workflow,
+// which is what they were built for, and it is the HUMAN's newer instruction
+// (or an explicit per-run switch) that lowers them.
+// ---------------------------------------------------------------------------
+
+export type GuardDecision = "pass" | "stand-aside" | "ask" | "hold";
+export type GuardSubject =
+  | { family: "drift" }
+  | { family: "fence"; fence: GuardFence; lowered: boolean };
+
+export function decideGuard(
+  subject: GuardSubject,
+  authority: Authority,
+  policy: GuardPolicy,
+): GuardDecision {
+  if (subject.family === "drift") {
+    if (policy !== "strict") return "stand-aside";
+    return authority.covered === "grant" ? "ask" : "hold";
+  }
+  // A FENCE is lowered by the policy word or by the human's own switch, and by
+  // nothing else. In particular a grant does not lower one, and the reason is
+  // worth stating plainly because the first draft of this function got it wrong.
+  //
+  // A grant is evidence that a human SPOKE after the engine last issued a
+  // directive. It is not evidence of WHAT they asked for. The signals available
+  // (the turn markers, the marker sequence counters) cannot tell "write the code
+  // now" apart from "yes, option 2" to some unrelated question. Letting any
+  // human keystroke lower a fence therefore voids the invariant the fence
+  // exists for: a live kiro-ide fixture proved it, silently admitting a source
+  // write before the plan was approved because the human had answered a
+  // question earlier in the same turn.
+  //
+  // The human still holds the key, and it still opens in one move: a held fence
+  // presents the guard-recovery ask carrying the lower-fence remedy, so choosing
+  // it writes the per-run switch and the work proceeds, recorded. That is a key
+  // the person turns deliberately rather than one that turns itself, and once
+  // turned nothing asks again for that piece of work.
+  return subject.lowered ? "stand-aside" : "hold";
+}
+
+/**
+ * The whole decision for one fence in one call: resolve the policy and the
+ * fence settings for this workflow, read the authority, and decide. Guards use
+ * this so no hook grows its own copy of the ladder.
+ */
+export function decideFence(
+  projectDir: string,
+  fence: GuardFence,
+  options: {
+    hookInput?: ClaudeCodeHookInput | null;
+    stateContent?: string | null;
+    sessionId?: unknown;
+    selection?: WorkflowSelectionOptions;
+  } = {},
+): { decision: GuardDecision; authority: Authority; policy: GuardPolicy; fenceSetting: FenceSetting } {
+  const state = options.stateContent ?? authorityStateText(projectDir);
+  let policy: GuardPolicyResolution;
+  try {
+    policy = resolveGuardPolicy(projectDir, state, {
+      tolerateInvalidState: true,
+      ...(options.selection ? { selection: options.selection } : {}),
+    });
+  } catch {
+    // An unreadable policy is the strictest policy: the fence stays up.
+    policy = {
+      value: "strict", source: "not set", scopeDefault: "strict", intent: null,
+      stateValue: "strict", rawStateValue: null, stateField: null, memoryStrict: null,
+    };
+  }
+  const setting = resolveFences(policy, state)[fence].value;
+  const authority = authorityFor(projectDir, options);
+  return {
+    decision: decideGuard({ family: "fence", fence, lowered: setting === "off" }, authority, policy.value),
+    authority,
+    policy: policy.value,
+    fenceSetting: setting,
+  };
+}
+
+/**
+ * The one line a human hears when a guard stands aside. It takes no authority:
+ * a fence stands aside only because it is lowered, so the reason is always the
+ * same and saying anything about who was working would misdescribe it. The
+ * authority still reaches the ledger, on the GUARD_STOOD_ASIDE row.
+ */
+export function guardStoodAsideLine(
+  fence: GuardFence,
+  detail?: string,
+): string {
+  return (
+    `Continuing past the ${fence} check because it is off for this piece of work. ` +
+    `Recorded in the audit trail${detail ? `: ${detail}` : "."}`
+  );
+}
+
+/**
+ * Record that a fence stood aside. Best-effort like every other advisory row:
+ * a ledger that cannot be written never turns a stand-aside back into a refusal,
+ * because what authorised the pass is the lowered switch (recorded when it was
+ * flipped, as GUARD_DISABLED) or the policy word in the intent's own state. This
+ * row is the trace of what that decision let through, not the decision itself.
+ */
+export function recordGuardStoodAside(
+  projectDir: string,
+  fields: {
+    fence: GuardFence;
+    authority: Authority;
+    stage?: string;
+    tool?: string;
+    details?: string;
+  },
+): boolean {
+  try {
+    if (!existsSync(auditFilePath(projectDir))) return false;
+    const audit = require("./aidlc-audit.ts") as {
+      appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
+    };
+    return withAuditLock(projectDir, () => {
+      audit.appendAuditEntryUnlocked(
+        "GUARD_STOOD_ASIDE",
+        {
+          Guard: fields.fence,
+          Authority: fields.authority.covered,
+          Grant: fields.authority.grant?.source ?? "none",
+          Actor: fields.authority.actor,
+          ...(fields.stage ? { Stage: fields.stage } : {}),
+          ...(fields.tool ? { Tool: fields.tool } : {}),
+          ...(fields.details ? { Details: fields.details } : {}),
+        },
+        projectDir,
+      );
+      return true;
+    });
+  } catch {
+    return false;
+  }
 }
 
 // Ledger append for the two Change Control rows. Under `relaxed` the
@@ -29763,14 +30479,14 @@ export function assertChangeControlLedgerWritable(): void {
 
 function changeControlLedgerAppend(
   projectDir: string,
-  event: "CHANGE_ACCEPTED" | "CHANGE_CONTROL_SET",
+  event: "CHANGE_ACCEPTED" | "GUARD_POLICY_SET",
   fields: Record<string, string>,
   selection: WorkflowSelection,
 ): void {
   const intent = selection.intent ?? undefined;
   if (!existsSync(stateFilePath(projectDir, intent, selection.space))) {
     throw new Error(
-      "Change Control has no intent record to write to: aidlc-state.md is missing.",
+      "Guard Policy has no intent record to write to: aidlc-state.md is missing.",
     );
   }
   // Test seam (the same idiom as the Plan Approval barriers): a set
@@ -29788,11 +30504,11 @@ function changeControlLedgerAppend(
   if (event === "CHANGE_ACCEPTED") {
     audit.appendAuditEntryUnlocked("CHANGE_ACCEPTED", fields, projectDir, intent, selection.space);
   } else {
-    audit.appendAuditEntryUnlocked("CHANGE_CONTROL_SET", fields, projectDir, intent, selection.space);
+    audit.appendAuditEntryUnlocked("GUARD_POLICY_SET", fields, projectDir, intent, selection.space);
   }
 }
 
-function appendChangeControlSetRow(
+function appendGuardPolicySetRow(
   projectDir: string,
   fields: { "Old Value": string; "New Value": string; Source: string },
   selectionOptions: WorkflowSelectionOptions = {},
@@ -29802,13 +30518,13 @@ function appendChangeControlSetRow(
   try {
     withAuditLock(
       projectDir,
-      () => changeControlLedgerAppend(projectDir, "CHANGE_CONTROL_SET", fields, selection),
+      () => changeControlLedgerAppend(projectDir, "GUARD_POLICY_SET", fields, selection),
       intent,
       selection.space,
     );
   } catch (error) {
     throw new Error(
-      `Cannot record the Change Control change (${fields["Old Value"]} to ${fields["New Value"]}, ` +
+      `Cannot record the Guard Policy change (${fields["Old Value"]} to ${fields["New Value"]}, ` +
         `source ${fields.Source}) in the audit ledger: ${errorMessage(error)}`,
     );
   }
@@ -29903,7 +30619,7 @@ export function recordAcceptedChanges(
         changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
       } catch (error) {
         throw new Error(
-          `Cannot continue under Change Control relaxed: the accepted change for "${change.stage}"` +
+          `Cannot continue under a relaxed or off Guard Policy: the accepted change for "${change.stage}"` +
             `${change.unit ? ` (unit ${change.unit})` : ""} could not be recorded in the audit ledger ` +
             `(${errorMessage(error)}). Repair the ledger, or approve again.`,
         );
@@ -29917,36 +30633,36 @@ export function recordAcceptedChanges(
 /**
  * Resolve the setting at a governed checkpoint and, when a memory edit moved
  * the effective value for this running intent since it was last recorded,
- * write one CHANGE_CONTROL_SET row naming that source. The previous effective
- * value is the newest CHANGE_CONTROL_SET row, else the state-derived value
- * (the intent's line when valid, otherwise strict).
+ * write one GUARD_POLICY_SET row naming that source. The previous effective
+ * value is the newest GUARD_POLICY_SET row (or a CHANGE_CONTROL_SET row written
+ * by an earlier release), else the state-derived value (the intent's line when
+ * valid, otherwise strict).
  */
-export function governedChangeControl(
+export function governedGuardPolicy(
   projectDir: string,
   stateContent?: string | null,
   selectionOptions: WorkflowSelectionOptions = {},
-): ChangeControlResolution {
+): GuardPolicyResolution {
   const selection = resolveWorkflowSelection(projectDir, selectionOptions);
   const intent = selection.intent ?? undefined;
-  const resolution = resolveChangeControl(projectDir, stateContent, {
+  const resolution = resolveGuardPolicy(projectDir, stateContent, {
     selection: { intent, space: selection.space },
   });
   if (!existsSync(stateFilePath(projectDir, intent, selection.space))) return resolution;
-  // The newest CHANGE_CONTROL_SET row is read and the flip row written under
-  // one lock, so two governed checks observing the same memory edit at once
-  // record it once.
+  // The newest setting row is read and the flip row written under one lock, so
+  // two governed checks observing the same memory edit at once record it once.
   withAuditLock(projectDir, () => {
     const events = readAuditShardEvents(projectDir, intent, selection.space);
-    let previous: ChangeControl | null = null;
+    let previous: GuardPolicy | null = null;
     for (const row of events) {
-      if (row.event !== "CHANGE_CONTROL_SET") continue;
-      previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
+      if (row.event !== "GUARD_POLICY_SET" && row.event !== "CHANGE_CONTROL_SET") continue;
+      previous = parseGuardPolicy(auditBlockField(row.block, "New Value")) ?? previous;
     }
     if (previous === null) {
       previous = resolution.stateValue;
     }
     if (previous !== resolution.value) {
-      appendChangeControlSetRow(
+      appendGuardPolicySetRow(
         projectDir,
         {
           "Old Value": previous,
@@ -29959,6 +30675,8 @@ export function governedChangeControl(
   }, intent, selection.space);
   return resolution;
 }
+/** Retired alias of governedGuardPolicy. */
+export const governedChangeControl = governedGuardPolicy;
 
 // --- Helpers ---
 

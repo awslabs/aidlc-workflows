@@ -106,6 +106,12 @@ ${onboarding}'''
 # user's Codex configuration. Agent roles also inherit that model; balanced
 # reviewers retain only their medium reasoning-effort cap.
 
+# Tool output budget. Codex cuts a shell result at 10,000 tokens (about 40 KB)
+# for the models in its catalog but at 10,000 BYTES for a model it does not
+# know (custom providers, --oss). AIDLC prints a workflow instruction of up to
+# 28 KiB as one shell result, so the budget is raised for every model.
+tool_output_token_limit = 20000
+
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
 # lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness

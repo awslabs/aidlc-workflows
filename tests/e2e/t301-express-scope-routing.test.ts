@@ -183,7 +183,10 @@ function runThroughBuild(p: string): void {
   expect(code.unit).toBeUndefined();
   expect(code.reviewer).toBeUndefined();
   expect(code.swarm_settled).toBeUndefined();
-  expect(code.protocol_modules).toEqual(["ensemble", "construction", "learnings"]);
+  // No learnings module: Express declares every ceremony off in its own
+  // frontmatter, so the ritual is absent here by the scope's word rather than by
+  // anything this journey does. Scopes that keep learnings on still carry it.
+  expect(code.protocol_modules).toEqual(["ensemble", "construction"]);
   expect(stateField(p, "Lifecycle Phase")).toBe("CONSTRUCTION");
   expect((code.produces as string[]).every((path) =>
     path.includes("/construction/code-generation/") &&

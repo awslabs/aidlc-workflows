@@ -9,7 +9,10 @@ keywords:
 description: CVE response
 skeleton: off
 runner: true
-change_control: strict
+guard_policy: strict
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # security-patch scope

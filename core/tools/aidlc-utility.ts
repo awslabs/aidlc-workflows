@@ -83,7 +83,21 @@ import {
   auditShards,
   assertChangeControlLedgerWritable,
   CHANGE_CONTROL_FIELD,
-  CHANGE_CONTROL_VALUES,
+  GUARD_POLICY_FIELD,
+  GUARD_POLICY_VALUES,
+  GUARD_FENCES,
+  GUARDS_OFF_FIELD,
+  type GuardFence,
+  type FenceSetting,
+  guardFenceConfigKey,
+  guardFenceFromConfigKey,
+  guardPolicyStateField,
+  parseGuardsOffLine,
+  setGuardsOffLine,
+  setGuardPolicyLine,
+  resolveFences,
+  formatFence,
+  noteGuardPolicyRename,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -99,13 +113,13 @@ import {
   parseParkedStampInstant,
   resolveCeremony,
   scopeCeremonyDefault,
-  type ChangeControlMemoryDeclaration,
-  changeControlMemoryStrictRefusal,
-  formatChangeControl,
-  memoryChangeControlDeclarations,
-  parseChangeControl,
-  parseChangeControlStateLine,
-  resolveChangeControl,
+  type GuardPolicyMemoryDeclaration,
+  guardPolicyMemoryStrictRefusal,
+  formatGuardPolicy,
+  memoryGuardPolicyDeclarations,
+  parseGuardPolicy,
+  parseGuardPolicyStateLine,
+  resolveGuardPolicy,
   createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
@@ -300,8 +314,22 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const CONFIG_KEYS = ["depth", "test-strategy", "review", "change-control", "sensors", "learnings", "summary-confirmation"] as const;
+// The per-run fence switches read as config keys: `guard.plan-approval` and so on.
+const GUARD_FENCE_CONFIG_KEYS = GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
+  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope", "guard.human-presence"];
+const CONFIG_KEYS = [
+  "depth",
+  "test-strategy",
+  "review",
+  "guard-policy",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
+  ...GUARD_FENCE_CONFIG_KEYS,
+] as const;
 type ConfigKey = (typeof CONFIG_KEYS)[number];
+// Retired key spellings, accepted for one release and read as their new name.
+const RETIRED_CONFIG_KEYS: Record<string, ConfigKey> = { "change-control": "guard-policy" };
 type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 type ReviewOverride = "adversarial" | "advisory" | "none";
 
@@ -374,7 +402,7 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
     const beforeInsert = content;
     const previousFields = CEREMONY_KEYS.slice(0, CEREMONY_KEYS.indexOf(key))
       .reverse().map((previous) => CEREMONY_FIELDS[previous]);
-    for (const anchor of [...previousFields, "Change Control", "Review Override", "Test Strategy", "Scope"]) {
+    for (const anchor of [...previousFields, GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
       content = content.replace(
         new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
         `$1\n- **${field}**:`,
@@ -391,6 +419,14 @@ function intentSettingsFromFlags(flags: Record<string, string>): IntentSettingsR
   for (const key of CONFIG_KEYS) {
     if (flags[key] !== undefined) requested[key] = { value: flags[key], source: "you" };
   }
+  for (const [retired, current] of Object.entries(RETIRED_CONFIG_KEYS)) {
+    if (flags[retired] === undefined) continue;
+    if (flags[current] !== undefined && flags[current] !== flags[retired]) {
+      die(`--${retired} is the retired name of --${current}; pass one of them, not both.`);
+    }
+    noteGuardPolicyRename();
+    requested[current] ??= { value: flags[retired], source: "you" };
+  }
   return requested;
 }
 
@@ -401,7 +437,7 @@ function validateIntentSettingsArgs(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const allowed = new Set<string>([...CONFIG_KEYS, "intent", "space", "project-dir"]);
+  const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
   // Inspect option names before the parser's object assignment as well, so
   // even an unknown property-like name cannot disappear from validation.
@@ -417,7 +453,11 @@ function validateIntentSettingsArgs(
     }
   }
   if (positional.length !== 1) die(`${command} does not accept positional argument "${positional[1]}".`);
-  if (command === "config-change" && !CONFIG_KEYS.some((key) => flags[key] !== undefined)) {
+  if (
+    command === "config-change" &&
+    !CONFIG_KEYS.some((key) => flags[key] !== undefined) &&
+    !Object.keys(RETIRED_CONFIG_KEYS).some((key) => flags[key] !== undefined)
+  ) {
     die(`config-change requires at least one setting: ${CONFIG_KEYS.map((key) => `--${key}`).join(", ")}.`);
   }
 }
@@ -432,6 +472,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "depth",
   "test-strategy",
   "review",
+  "guard-policy",
   "change-control",
   "sensors",
   "learnings",
@@ -592,7 +633,7 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review, change-control, sensors, learnings, summary-confirmation)
+  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, guard.<fence>)
   config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
@@ -615,7 +656,8 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
-  --change-control <value>  Set what an input change after an approval does for this piece of work (strict, relaxed)
+  --guard-policy <value>  How far the guards stand aside for this piece of work (strict, relaxed, off); --change-control is its retired name
+  config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope, human-presence)
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
@@ -630,7 +672,7 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show all seven workflow settings
+  /aidlc config list                         Show every workflow setting and fence
   /aidlc plugin list                         Show installed plugin selection
   /aidlc plugin validate                     Validate the plugin in the current directory
   /aidlc plugin build claude                 Build its Claude projection
@@ -641,7 +683,8 @@ Examples:
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
-  /aidlc --change-control relaxed              Record and announce input changes after approval instead of re-approving`;
+  /aidlc --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
+  /aidlc config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -1714,14 +1757,21 @@ To get started:
   const nextStage = getField(content, "Next Stage") || "None";
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
-  let changeControlDisplay: string;
+  let guardPolicyDisplay: string;
+  let fencesDisplay: string;
   try {
-    const resolution = resolveChangeControl(projectDir, content, {
+    const resolution = resolveGuardPolicy(projectDir, content, {
       selection: { intent: selection.intent ?? undefined, space: selection.space },
     });
-    changeControlDisplay = formatChangeControl(resolution.value, resolution.source);
+    guardPolicyDisplay = formatGuardPolicy(resolution.value, resolution.source);
+    const fences = resolveFences(resolution, content);
+    fencesDisplay = GUARD_FENCES.map((fence) => {
+      const state = fences[fence];
+      return state.source === "default" ? `${fence} ${state.value}` : `${fence} ${formatFence(state)}`;
+    }).join(", ");
   } catch (error) {
-    changeControlDisplay = `unavailable (${errorMessage(error)})`;
+    guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
+    fencesDisplay = "unavailable";
   }
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     const resolution = resolveCeremony(key, scope, content);
@@ -1885,7 +1935,8 @@ Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
-Change Control: ${changeControlDisplay}
+Guard Policy:   ${guardPolicyDisplay}
+Fences:         ${fencesDisplay}
 ${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
@@ -6484,9 +6535,16 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
-  if (flags["change-control"] !== undefined && parseChangeControl(flags["change-control"]) === null) {
+  if (flags["change-control"] !== undefined) {
+    if (flags["guard-policy"] !== undefined && flags["guard-policy"] !== flags["change-control"]) {
+      die("--change-control is the retired name of --guard-policy; pass one of them, not both.");
+    }
+    noteGuardPolicyRename();
+    flags["guard-policy"] ??= flags["change-control"];
+  }
+  if (flags["guard-policy"] !== undefined && parseGuardPolicy(flags["guard-policy"]) === null) {
     die(
-      `Unknown Change Control value: "${flags["change-control"]}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
+      `Unknown Guard Policy value: "${flags["guard-policy"]}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`,
     );
   }
   const requestedCeremony = parseCeremonyOverrides(flags);
@@ -6512,17 +6570,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // state build re-reads it under the lock to write the state line; checking
   // here means a refused creation creates nothing: no record dir, no registry
   // row, no cursor move, no audit rows.
-  const requestedChangeControl = parseChangeControl(flags["change-control"]);
-  let preflightMemoryStrict: ChangeControlMemoryDeclaration | null;
+  const requestedChangeControl = parseGuardPolicy(flags["guard-policy"]);
+  let preflightMemoryStrict: GuardPolicyMemoryDeclaration | null;
   try {
     preflightMemoryStrict =
-      memoryChangeControlDeclarations(projectDir, { space: initialSelection.space })
+      memoryGuardPolicyDeclarations(projectDir, { space: initialSelection.space })
         .find((declaration) => declaration.value === "strict") ?? null;
   } catch (e) {
     die(errorMessage(e));
   }
-  if (preflightMemoryStrict !== null && requestedChangeControl === "relaxed") {
-    die(changeControlMemoryStrictRefusal(preflightMemoryStrict));
+  if (preflightMemoryStrict !== null && requestedChangeControl !== null && requestedChangeControl !== "strict") {
+    die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
@@ -6644,20 +6702,20 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // read is the creation's policy snapshot; state construction receives the
     // resulting value and cannot refuse after the mint because memory changed.
     const lockedMemoryStrict =
-      memoryChangeControlDeclarations(projectDir, { space })
+      memoryGuardPolicyDeclarations(projectDir, { space })
         .find((declaration) => declaration.value === "strict") ?? null;
-    if (lockedMemoryStrict !== null && requestedChangeControl === "relaxed") {
-      die(changeControlMemoryStrictRefusal(lockedMemoryStrict));
+    if (lockedMemoryStrict !== null && requestedChangeControl !== null && requestedChangeControl !== "strict") {
+      die(guardPolicyMemoryStrictRefusal(lockedMemoryStrict));
     }
     const lockedScopeDef = loadScopeMapping()[scope];
     if (!lockedScopeDef) die(`Unknown scope: ${scope}`);
     const effectiveChangeControl =
       lockedMemoryStrict !== null
-        ? formatChangeControl("strict", `${lockedMemoryStrict.layer}.md`)
+        ? formatGuardPolicy("strict", `${lockedMemoryStrict.layer}.md`)
         : requestedChangeControl !== null
-          ? formatChangeControl(requestedChangeControl, "you")
-          : formatChangeControl(
-              lockedScopeDef.changeControl ?? "strict",
+          ? formatGuardPolicy(requestedChangeControl, "you")
+          : formatGuardPolicy(
+              lockedScopeDef.guardPolicy ?? "strict",
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
@@ -7012,7 +7070,7 @@ function handleIntentCreateStateBuild(
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
-- **Change Control**: ${effectiveChangeControl}
+- **Guard Policy**: ${effectiveChangeControl}
 ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
 
 ## Workspace State
@@ -8389,9 +8447,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       requested["test-strategy"] ??= { value: newScopeDef.testStrategy ?? requested.depth.value, source };
       // Only scope-owned policy fields follow defaults. Human overrides and
       // absent legacy fields remain untouched unless explicitly requested.
-      const previousCC = parseChangeControlStateLine(getField(contentBefore, CHANGE_CONTROL_FIELD));
+      const previousField = guardPolicyStateField(contentBefore);
+      const previousCC = parseGuardPolicyStateLine(
+        previousField === null ? null : getField(contentBefore, previousField),
+      );
       if (previousCC?.source.startsWith("scope ")) {
-        requested["change-control"] ??= { value: newScopeDef.changeControl ?? "strict", source };
+        requested["guard-policy"] ??= { value: newScopeDef.guardPolicy ?? "strict", source };
       }
       for (const key of CEREMONY_KEYS) {
         const previous = parseCeremonyStateLine(getField(contentBefore, CEREMONY_FIELDS[key]));
@@ -8530,7 +8591,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     if (content !== contentBefore) {
       try {
-        if (auditEntries.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
+        if (auditEntries.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
         appendAuditEntries(auditEntries, projectDir, intent, space);
       } catch (error) {
         throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
@@ -8799,7 +8860,14 @@ function configFieldForKey(key: string): string | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
-  if (key === "change-control") return CHANGE_CONTROL_FIELD;
+  if (key === "guard-policy") return GUARD_POLICY_FIELD;
+  if (key in RETIRED_CONFIG_KEYS) {
+    noteGuardPolicyRename();
+    return configFieldForKey(RETIRED_CONFIG_KEYS[key]);
+  }
+  // A fence switch is read from the `Guards Off` line and the policy together;
+  // its "field" is the config key itself so readConfigField can tell them apart.
+  if (guardFenceFromConfigKey(key) !== null) return key;
   const ceremonyKey = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
   return ceremonyKey === undefined ? null : CEREMONY_FIELDS[ceremonyKey];
 }
@@ -8816,9 +8884,14 @@ function readConfigField(
   field: string,
   selection: { intent?: string; space?: string },
 ): string {
-  if (field === CHANGE_CONTROL_FIELD) {
-    const resolution = resolveChangeControl(projectDir, content, { selection });
-    return formatChangeControl(resolution.value, resolution.source);
+  if (field === GUARD_POLICY_FIELD) {
+    const resolution = resolveGuardPolicy(projectDir, content, { selection });
+    return formatGuardPolicy(resolution.value, resolution.source);
+  }
+  const fence = guardFenceFromConfigKey(field);
+  if (fence !== null) {
+    const resolution = resolveGuardPolicy(projectDir, content, { selection });
+    return formatFence(resolveFences(resolution, content)[fence]);
   }
   const ceremonyKey = CEREMONY_KEYS.find((key) => CEREMONY_FIELDS[key] === field);
   if (ceremonyKey !== undefined) {
@@ -8856,7 +8929,7 @@ function applyIntentSettings(
   const rawDepth = requested.depth?.value;
   const rawStrategy = requested["test-strategy"]?.value;
   const rawReview = requested.review?.value;
-  const rawChangeControl = requested["change-control"]?.value;
+  const rawChangeControl = requested["guard-policy"]?.value;
   let depth: string | undefined;
   if (rawDepth !== undefined) {
     const key = rawDepth.toLowerCase();
@@ -8873,9 +8946,19 @@ function applyIntentSettings(
   if (rawReview !== undefined && review === undefined) {
     die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
   }
-  const changeControl = parseChangeControl(rawChangeControl);
+  const changeControl = parseGuardPolicy(rawChangeControl);
   if (rawChangeControl !== undefined && changeControl === null) {
-    die(`Unknown Change Control value: "${rawChangeControl}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`);
+    die(`Unknown Guard Policy value: "${rawChangeControl}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`);
+  }
+  const fenceRequests: Array<{ fence: GuardFence; value: FenceSetting; source: string }> = [];
+  for (const fence of GUARD_FENCES) {
+    const request = requested[guardFenceConfigKey(fence) as ConfigKey];
+    if (request === undefined) continue;
+    const word = request.value.toLowerCase().trim();
+    if (word !== "on" && word !== "off") {
+      die(`--${guardFenceConfigKey(fence)} requires <on|off>; received "${request.value}".`);
+    }
+    fenceRequests.push({ fence, value: word, source: request.source });
   }
   const ceremonies: Partial<CeremonyPolicy> = {};
   for (const key of CEREMONY_KEYS) {
@@ -8889,13 +8972,13 @@ function applyIntentSettings(
   // Validate every requested value before policy can reject the transaction.
   // Explicit CC requests can repair a malformed saved line; other updates may
   // not quietly carry an invalid line into a new scope or configuration.
-  const ccRequest = requested["change-control"];
-  const cc = resolveChangeControl(projectDir, content, {
+  const ccRequest = requested["guard-policy"];
+  const cc = resolveGuardPolicy(projectDir, content, {
     tolerateInvalidState: ccRequest?.source === "you",
     selection,
   });
-  if (ccRequest?.source === "you" && changeControl === "relaxed" && cc.memoryStrict !== null) {
-    die(changeControlMemoryStrictRefusal(cc.memoryStrict));
+  if (ccRequest?.source === "you" && changeControl !== null && changeControl !== "strict" && cc.memoryStrict !== null) {
+    die(guardPolicyMemoryStrictRefusal(cc.memoryStrict));
   }
 
   const audit: AuditEntryInput[] = [];
@@ -8940,32 +9023,59 @@ function applyIntentSettings(
   // Persist scope-owned updates even while memory controls the effective value.
   // Explicit strict is also recordable; explicit relaxed was refused above.
   if (ccRequest !== undefined && changeControl !== null) {
-    const previous = getField(content, CHANGE_CONTROL_FIELD);
-    const line = formatChangeControl(changeControl, ccRequest.source);
-    if (previous === line) {
-      lines.push(`Change Control is already ${line}`);
+    const previous = cc.rawStateValue;
+    const line = formatGuardPolicy(changeControl, ccRequest.source);
+    if (previous === line && cc.stateField === GUARD_POLICY_FIELD) {
+      lines.push(`Guard Policy is already ${line}`);
     } else {
-      if (previous === null) {
-        const beforeInsert = content;
-        for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
-          content = content.replace(
-            new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
-            `$1\n- **${CHANGE_CONTROL_FIELD}**:`,
-          );
-          if (content !== beforeInsert) break;
-        }
-        if (content === beforeInsert) content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
+      // Writes the line under its new name; a retired `Change Control` line is
+      // renamed in place so the setting never appears twice.
+      content = setGuardPolicyLine(content, line);
+      if (previous !== line) {
+        const oldValue = cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
+        audit.push({
+          eventType: "GUARD_POLICY_SET",
+          fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
+        });
+        const oldDisplay = cc.intent === null && cc.rawStateValue !== null
+          ? cc.rawStateValue : formatGuardPolicy(cc.value, cc.source);
+        lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
+      } else {
+        lines.push(`Guard Policy is already ${line}`);
       }
-      content = setField(content, CHANGE_CONTROL_FIELD, line);
-      const oldValue = cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
-      audit.push({
-        eventType: "CHANGE_CONTROL_SET",
-        fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
-      });
-      const oldDisplay = cc.intent === null && cc.rawStateValue !== null
-        ? cc.rawStateValue : formatChangeControl(cc.value, cc.source);
-      lines.push(`Change Control changed: ${oldDisplay} to ${line}`);
     }
+  }
+  // Per-run fence switches: the `Guards Off` line names every fence lowered for
+  // this piece of work. Lowering is a GUARD_DISABLED row (the same event the
+  // environment kill switch writes); restoring is GUARD_RESTORED.
+  if (fenceRequests.length > 0) {
+    const scopeName = getField(content, "Scope") ?? "";
+    const lowered = parseGuardsOffLine(getField(content, GUARDS_OFF_FIELD));
+    const next = [...lowered];
+    for (const request of fenceRequests) {
+      const isOff = next.includes(request.fence);
+      if (request.value === "off" ? isOff : !isOff) {
+        lines.push(`Fence ${request.fence} is already ${request.value}`);
+        continue;
+      }
+      if (request.value === "off") next.push(request.fence);
+      else next.splice(next.indexOf(request.fence), 1);
+      // Each event named literally at its own call, not through a ternary on
+      // eventType: the emitter drift guard reads these call sites as text, and a
+      // computed event name is invisible to it.
+      const fenceFields = { Guard: request.fence, Scope: scopeName, Source: request.source };
+      audit.push(
+        request.value === "off"
+          ? { eventType: "GUARD_DISABLED", fields: fenceFields }
+          : { eventType: "GUARD_RESTORED", fields: fenceFields },
+      );
+      lines.push(
+        request.value === "off"
+          ? `Fence ${request.fence} is off for this piece of work (logged; back on for the next one)`
+          : `Fence ${request.fence} is back on for this piece of work`,
+      );
+    }
+    if (next.length !== lowered.length) content = setGuardsOffLine(content, next);
   }
   for (const key of CEREMONY_KEYS) {
     const value = ceremonies[key];
@@ -8997,7 +9107,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), { intent, space });
     if (update.content !== content) {
-      if (update.audit.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
+      if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
       appendAuditEntries(update.audit, projectDir, intent, space);
       writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }
@@ -9533,7 +9643,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );

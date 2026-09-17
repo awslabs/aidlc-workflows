@@ -83,11 +83,11 @@ function nextDirective(
   let directive = JSON.parse(result.stdout) as Record<string, unknown>;
   while (
     directive.kind === "load-steering" &&
-    typeof directive.continue_token === "string"
+    typeof directive.receipt === "string"
   ) {
     result = run(
       ORCH,
-      ["continue", directive.continue_token],
+      ["continue", directive.receipt],
       project,
       env,
     );

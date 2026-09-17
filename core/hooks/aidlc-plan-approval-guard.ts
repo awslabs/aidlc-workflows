@@ -68,11 +68,15 @@ import {
   auditBlockField,
   auditFilePath,
   type ClaudeCodeHookInput,
+  decideFence,
   docsRoot,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  guardStoodAsideLine,
   harnessDir,
+  lowerFenceSentence,
+  recordGuardStoodAside,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -1262,6 +1266,37 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (relaxed and off both lower this one) or by the human's
+  // own `guard.plan-approval off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. Standing aside costs
+  // one printed line and one audit row; the approval gate itself is untouched.
+  // Otherwise the refusal below carries the switch, so the way past is in hand.
+  {
+    let gate: ReturnType<typeof decideFence> | null = null;
+    try {
+      gate = decideFence(projectDir, "plan-approval", { hookInput: parsed });
+    } catch (e) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    }
+    if (gate?.decision === "stand-aside") {
+      const detail = guardedDispatch
+        ? `dispatch of ${subagentType}`
+        : blockedMutation?.target ?? toolName;
+      process.stdout.write(
+        `${guardStoodAsideLine("plan-approval", detail)}\n`,
+      );
+      recordGuardStoodAside(projectDir, {
+        fence: "plan-approval",
+        authority: gate.authority,
+        stage: GUARDED_STAGE,
+        tool: toolName,
+        details: detail,
+      });
+      return 0;
+    }
+  }
+
   // Audit the refusal so the run's record shows when the ordering bit.
   // Best-effort: an audit failure never changes the block decision. The lock
   // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
@@ -1312,7 +1347,9 @@ export async function run(input: string): Promise<number> {
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}\n`,
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))} ${
+      lowerFenceSentence("plan-approval")
+    }\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

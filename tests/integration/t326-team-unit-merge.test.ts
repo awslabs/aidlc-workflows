@@ -766,11 +766,11 @@ function nextDirective(projectDir: string): Record<string, unknown> {
   let directive = JSON.parse(first.stdout) as Record<string, unknown>;
   while (
     directive.kind === "load-steering" &&
-    typeof directive.continue_token === "string"
+    typeof directive.receipt === "string"
   ) {
     const continued = run(
       ORCH,
-      ["continue", directive.continue_token],
+      ["continue", directive.receipt],
       projectDir,
     );
     expect(continued.status, continued.out).toBe(0);
