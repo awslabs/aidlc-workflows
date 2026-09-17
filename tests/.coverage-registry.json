@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1005,
+    "total": 1006,
     "enumeratedByClass": {
-      "function": 691,
+      "function": 692,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 415,
+      "function": 416,
       "audit": 60,
       "scope": 11,
       "stage": 11,
@@ -2424,6 +2424,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t258-ars-subcommand.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionCheckpointGaps",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
