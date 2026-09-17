@@ -81,8 +81,10 @@ const manifest: HarnessManifest = {
 
   emit,
 
-  // plugin omitted → the packager derives the default `.aidlc-plugin` +
-  // kind:"store" projection, matching the other .aidlc harnesses.
+  // Devin Cloud has no host plugin wiring (no SessionStart transport) —
+  // plugins arrive by folder-drop and compose explicitly via
+  // `.aidlc/tools/aidlc-plugin.ts`, same shape as the Kiro CLI projection.
+  plugin: { manifestDir: ".aidlc-plugin", kind: "kiro" },
 };
 
 export default manifest;
