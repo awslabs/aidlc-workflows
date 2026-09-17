@@ -250,6 +250,26 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
+  // The question-rendering guide tells the conductor to append "(Recommended)"
+  // to the recommended option's label, and the picker returns that exact label.
+  // The decorator is presentation the framework asked for, so it must not turn
+  // a real approval into "did not match one of the offered choices".
+  test("B2: approve COMMITS when the reply carries the (Recommended) decorator", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", slug]);
+    const r = guarded(proj, [
+      "approve",
+      slug,
+      "--user-input",
+      "Approve (Recommended)",
+    ]);
+    expect(r.rc, r.out).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(field(proj, "Current Stage")).not.toBe(slug);
+  });
+
   // --- Scenario C: CASCADE (load-bearing) ------------------------------------
   //
   // One HUMAN_TURN, two sequential gates in the SAME human turn. The first
