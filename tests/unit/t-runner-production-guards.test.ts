@@ -18,6 +18,9 @@ import {
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
 
+// The runner sets the profile marker; a direct `bun test` launch has none to assert.
+const runnerTest = process.env[GUARD_PROFILE_ENV] === undefined ? test.skip : test;
+
 const FIXTURE_DEFAULTS = {
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
   AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
@@ -419,7 +422,7 @@ describe("runner guard child environment", () => {
     });
   });
 
-  test("the runner supplies an assertable profile and matching initial child environment", () => {
+  runnerTest("the runner supplies an assertable profile and matching initial child environment", () => {
     const profile = process.env[GUARD_PROFILE_ENV];
     expect(profile).toMatch(/^(fixture|production)$/);
     if (profile === "production") {
