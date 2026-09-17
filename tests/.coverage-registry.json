@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1006,
+    "total": 1012,
     "enumeratedByClass": {
-      "function": 692,
-      "audit": 99,
+      "function": 696,
+      "audit": 100,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 146,
+      "subcommand": 147,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 416,
-      "audit": 60,
+      "function": 418,
+      "audit": 61,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 133,
+      "subcommand": 134,
       "render-surface": 7
     }
   },
@@ -256,7 +256,7 @@
         },
         {
           "file": "tests/unit/t341-construction-checkpoints.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t343-swarm-checkpoints.test.ts",
@@ -280,7 +280,7 @@
         },
         {
           "file": "tests/unit/t341-construction-checkpoints.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t343-swarm-checkpoints.test.ts",
@@ -1039,6 +1039,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "VERIFICATION_COMMAND_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKFLOW_ARCHIVED",
       "minMechanism": "none",
       "coveredBy": [
@@ -1627,6 +1639,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t247-claim-sources-sensor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:authorizedVerificationCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7955,6 +7979,32 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:VERIFICATION_COMMAND_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:VERIFICATION_COMMAND_RECOVERY",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:verificationCommandDetails",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:visibleMarkdownLines",
       "minMechanism": "none",
       "coveredBy": [
@@ -11184,6 +11234,18 @@
         },
         {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-verification-command",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
