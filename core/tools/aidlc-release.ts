@@ -691,6 +691,7 @@ export async function fetchReleaseMetadata(options: {
   baseUrl?: string;
   caBundle?: string;
   metadataTimeoutMs?: number;
+  verifyProvenance?: boolean;
 } = {}): Promise<{
   directory: string;
   manifest: ReleaseManifest;
@@ -703,6 +704,10 @@ export async function fetchReleaseMetadata(options: {
   if (settings.offline) {
     throw new ReleaseUnavailableError("update metadata is unavailable while offline");
   }
+  // Version checks only need version.json authenticated by checksums.txt.
+  // gh attestation verify costs seconds and belongs to install paths;
+  // acquireRelease keeps provenance verification enabled by default.
+  const verifyProvenance = options.verifyProvenance ?? true;
   const version = options.version ? requireVersion(options.version) : undefined;
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
   const metadataTimeoutMs = options.metadataTimeoutMs ?? 15_000;
@@ -727,22 +732,26 @@ export async function fetchReleaseMetadata(options: {
       ["text/plain", "application/octet-stream", "binary/octet-stream"],
       metadataTimeoutMs,
     );
-    await download(
-      releaseUrl(baseUrl, version, PROVENANCE_BUNDLE),
-      join(temporary, PROVENANCE_BUNDLE),
-      remainingTimeout(metadataDeadline, "release provenance"),
-      settings.caBundle,
-      MAX_METADATA_BYTES,
-      ["application/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
-      metadataTimeoutMs,
-    );
+    if (verifyProvenance) {
+      await download(
+        releaseUrl(baseUrl, version, PROVENANCE_BUNDLE),
+        join(temporary, PROVENANCE_BUNDLE),
+        remainingTimeout(metadataDeadline, "release provenance"),
+        settings.caBundle,
+        MAX_METADATA_BYTES,
+        ["application/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
+        metadataTimeoutMs,
+      );
+    }
     const manifest = readReleaseManifest(temporary);
-    verifyReleaseProvenance(temporary, {
-      ...manifest,
-      sourceDigest: undefined,
-    });
+    if (verifyProvenance) {
+      verifyReleaseProvenance(temporary, {
+        ...manifest,
+        sourceDigest: undefined,
+      });
+    }
     verifiedChecksums(temporary);
-    if (manifest.sourceDigest) verifyReleaseProvenance(temporary, manifest);
+    if (verifyProvenance && manifest.sourceDigest) verifyReleaseProvenance(temporary, manifest);
     if (version && manifest.version !== version) {
       throw new Error(`release endpoint returned ${manifest.version}, not requested ${version}`);
     }

@@ -225,6 +225,7 @@ export async function refreshUpdateState(
       baseUrl: settings.baseUrl,
       caBundle: settings.caBundle,
       metadataTimeoutMs: timeoutMs,
+      verifyProvenance: false,
     });
     const cache: UpdateCache = validateCache({
       schemaVersion: 1,

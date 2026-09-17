@@ -979,6 +979,11 @@ doctor runs are cache-only unless `--check-updates` is explicit.
 budget. The cache expires after 24 hours; a failed or regressing refresh does
 not replace a valid cache. `update-check=off` disables even explicit refreshes
 but does not prevent an explicit `aidlc update`.
+Update checks (the doctor refresh and `aidlc update --check`) download
+`version.json` and `checksums.txt`, verify the manifest checksum, and neither
+download nor verify `aidlc-release.intoto.jsonl`. Provenance verification runs
+on every install path (`aidlc update`, `aidlc use`, `aidlc config --pin`, and
+`--from`) before a release is activated.
 
 ## Plugins
 
