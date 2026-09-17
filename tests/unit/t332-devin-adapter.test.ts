@@ -1416,4 +1416,66 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("31: denormalized updatedInput keeps the field shape the original tool_input used", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      writeStageRuleMemory(dir);
+      const cases: Array<{
+        label: string;
+        toolInput: Record<string, unknown>;
+        expectKey: string;
+        absentKeys: string[];
+      }> = [
+        {
+          // Native profile → the augmented input comes back under profile.
+          label: "profile",
+          toolInput: { profile: "aidlc-developer-agent", task: "do the stage work" },
+          expectKey: "profile",
+          absentKeys: ["subagent_type", "prompt"],
+        },
+        {
+          // Legacy `agent` (no profile) → back under `agent`, never a hybrid.
+          label: "agent",
+          toolInput: { agent: "aidlc-developer-agent", task: "do the stage work" },
+          expectKey: "agent",
+          absentKeys: ["subagent_type", "prompt", "profile"],
+        },
+        {
+          // Already-canonical input stays canonical.
+          label: "canonical",
+          toolInput: {
+            subagent_type: "aidlc-developer-agent",
+            prompt: "do the stage work",
+          },
+          expectKey: "subagent_type",
+          absentKeys: ["profile", "agent"],
+        },
+      ];
+      for (const c of cases) {
+        const r = runAdapter(
+          dir,
+          "deliver-stage-rules",
+          runSubagentPreToolUse(dir, c.toolInput),
+        );
+        expect(r.code, `${c.label}: ${r.stderr}`).toBe(0);
+        const out = JSON.parse(r.stdout) as {
+          hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
+        };
+        const updated = out.hookSpecificOutput?.updatedInput;
+        expect(updated, `${c.label} produced an updatedInput`).toBeDefined();
+        const textField = c.expectKey === "subagent_type" ? "prompt" : "task";
+        expect(String(updated![textField]), c.label).toContain(
+          "AIDLC_DISPATCH_RULES_BEGIN",
+        );
+        expect(updated![c.expectKey], c.label).toBe("aidlc-developer-agent");
+        for (const absent of c.absentKeys) {
+          expect(absent in updated!, `${c.label} leaks ${absent}`).toBe(false);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -511,9 +511,15 @@ function denormalizeSubagentInput(
   originalToolInput: Record<string, unknown>,
 ): Record<string, unknown> {
   const out = { ...updatedInput };
-  if ("profile" in originalToolInput && "subagent_type" in out) {
-    out.profile = out.subagent_type;
-    delete out.subagent_type;
+  if ("subagent_type" in out) {
+    if ("profile" in originalToolInput) {
+      out.profile = out.subagent_type;
+      delete out.subagent_type;
+    } else if ("agent" in originalToolInput) {
+      out.agent = out.subagent_type;
+      delete out.subagent_type;
+    }
+    // An already-canonical original keeps `subagent_type` in the output.
   }
   if ("task" in originalToolInput && "prompt" in out) {
     out.task = out.prompt;
