@@ -113,6 +113,9 @@ export type TierProjection = {
    *  harness inherits the session model and there is no pinnable value, so
    *  every tier ships null. */
   devin: { model: null };
+  /** Devin Cloud: no agent model/effort surface exists at all — the agent
+   *  inherits the session's configured model, so every tier ships null. */
+  "devin-cloud": { model: null };
 };
 
 export type Harness = keyof TierProjection;
@@ -130,6 +133,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     copilot: { model: null },
     cursor: { model: null },
     devin: { model: null },
+    "devin-cloud": { model: null },
   },
   balanced: {
     // Effort pinned to medium (was: inherit the session effort). Balanced is
@@ -144,6 +148,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
     copilot: { model: null },
     devin: { model: null },
+    "devin-cloud": { model: null },
   },
   templated: {
     // The tier remains a models-dial group for pattern-following work, but the
@@ -156,6 +161,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     copilot: { model: null },
     cursor: { model: null },
     devin: { model: null },
+    "devin-cloud": { model: null },
   },
 };
 
