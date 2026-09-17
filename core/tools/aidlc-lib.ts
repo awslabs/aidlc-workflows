@@ -7522,13 +7522,17 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 // themselves must be present; a paraphrase ("please change it") is not a
 // choice. Plan Approval keeps its exact-label rule because those labels are the
 // anti-forgery binding.
+// The decorator is removed after prefix, quotes, and punctuation so those
+// tolerances compose with it.
 export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  const normalized = stripRecommendedDecorator(text ?? "")
-    .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .replace(/[.!]+$/, "")
+  const normalized = stripRecommendedDecorator(
+    (text ?? "")
+      .trim()
+      .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .replace(/[.!]+$/, ""),
+  )
     .replace(/\s+/g, " ")
-    .trim()
     .toLowerCase();
   return normalized === "request changes";
 }

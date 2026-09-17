@@ -1661,6 +1661,18 @@ describe("AttemptView projections and refusal streaks", () => {
       // The picker returns the recommended choice's decorated label.
       "Request Changes (Recommended)",
       "request changes (recommended)",
+      // The decorator composes with surrounding double quotes.
+      '"Request Changes (Recommended)"',
+      // The decorator composes with surrounding single quotes.
+      "'Request Changes (Recommended)'",
+      // The decorator composes with a trailing period.
+      "Request Changes (Recommended).",
+      // The decorator composes with a trailing exclamation mark.
+      "Request Changes (Recommended)!",
+      // The decorator composes with an alphabetic option prefix.
+      "B. Request Changes (Recommended)",
+      // The decorator composes with a numeric prefix, case, and punctuation.
+      "2) request changes (recommended).",
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }
@@ -1670,6 +1682,8 @@ describe("AttemptView projections and refusal streaks", () => {
       "Request Changes to the plan",
       "(Recommended)",
       "Request Changes (Recommended) extra",
+      "Request Changes (Recommended) (Recommended)",
+      '"Approve (Recommended)"',
       "Changes",
       "",
       undefined,
