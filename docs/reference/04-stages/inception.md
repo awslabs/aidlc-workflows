@@ -1209,13 +1209,18 @@ All Inception phase artifacts:
    decision. Confirm the first integrated Unit when skeleton-on applies. For
    checkpoint-enabled work, propose a real project check from the scan and show
    **Use this command to verify each completed Unit?** with the exact command
-   and **Approve** / **Request Changes**. Record `log decision --checkpoint
-   verification-command --command` before asking, wait for the human, record
-   `log answer` with the same stage/checkpoint/command and actual answer, then
-   only for **Approve** run `state set-construction-verification-command`.
-   **Request Changes** means propose another command. The receipt must precede
-   the state field; never use generic `state set` or auto-approve. This command
-   is reused for all Unit/batch checkpoints and changes require a new receipt.
+   and **Approve** / **Request Changes**. Before presenting the command, use the
+   invoking SessionStart session ID: both `log decision` and `log answer` require
+   `--checkpoint verification-command --command "<cmd>" --session "<session ID>"`.
+   Record the decision before asking and wait for the human's exact **Approve** /
+   **Request Changes** reply in that session. Record the answer with the same
+   stage/checkpoint/command/session; only **Approve** authorizes the receipt.
+   An unrelated reply, **Request Changes**, or a reply from another session does
+   not. Never write `--details "Approve"` unless the human chose it; only then run
+   `state set-construction-verification-command`. **Request Changes** means
+   propose another command. The receipt must precede the state field; never use
+   generic `state set` or auto-approve. This command is reused for all Unit/batch
+   checkpoints and changes require a new receipt.
    If no runnable check exists yet (greenfield), the human may defer; the first
    checkpoint then asks before verification. See the
    [exact recording commands](../../guide/12-cli-commands.md#construction-verification-command-record-human-authorization).
@@ -1341,6 +1346,9 @@ produce a working integrated slice, pass the recorded, human-authorized
 end-to-end verification command, and receive human skeleton approval before
 later Units start, even with stage-major chosen.
 The legacy first-stage gate is a stage review, not proof of that result.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 Eligible skeleton-off flows offer **Continue automatically** / **Review each
 checkpoint** at Construction entry; skeleton-on offers after the real skeleton

@@ -499,9 +499,14 @@ is not evidence of a shipped skeleton.
 
 The intent's `Construction Verification Command` is recorded during Delivery
 Planning or, if the human defers because no runnable check exists, at the first
-checkpoint. `log decision`/`answer --checkpoint verification-command --command`
-bind the actual human approval to the canonical command digest, then
-`state set-construction-verification-command` writes the matching Runtime State
+checkpoint. Before presenting the command, use the invoking SessionStart session
+ID: both `log decision` and `log answer` require
+`--checkpoint verification-command --command "<cmd>" --session "<session ID>"`.
+The human's exact **Approve** / **Request Changes** reply in that session binds
+the answer to the canonical command digest. Only **Approve** authorizes the
+receipt; an unrelated reply, **Request Changes**, or a reply from another session
+does not. Never write `--details "Approve"` unless the human chose it; only then
+run `state set-construction-verification-command` to write the matching Runtime State
 field. The latest current-workflow `VERIFICATION_COMMAND_RECORDED` receipt is the
 authority, not the field alone. When `command_authorized: false`, route to that
 question before any `verify`, even under autonomy, then re-run `next`. Every
@@ -510,6 +515,9 @@ receipt and typed setter, never generic `state set`. The approval question shows
 "Verified with `<verification_command>` (exit 0)". Version-3 proofs store the
 command's SHA-256 and display label, not raw command text; older proofs require
 re-verification.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 **Route metadata before generic gates.** The conductor handles `unit_gate`
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`

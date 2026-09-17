@@ -61,6 +61,11 @@ greenfield project without a runnable check may defer to the first checkpoint.
 The same command is reused for all Unit/batch checkpoints; choosing or changing
 it requires the [recorded-command flow](../guide/12-cli-commands.md#construction-verification-command-record-human-authorization),
 never generic `state set` or an autonomy grant.
+Before presenting the command, use the invoking SessionStart session ID for both
+`log decision` and `log answer` via `--session "<session ID>"`. Record the human's
+exact **Approve** / **Request Changes** reply in that session; only **Approve**
+authorizes the receipt, not an unrelated reply, **Request Changes**, or a reply
+from another session. Never write `--details "Approve"` unless the human chose it.
 
 Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
 an included source-producing per-unit stage. Design-only and no-Unit work keep
@@ -130,6 +135,9 @@ the whole Code Generation stage for one Unit or batch.
 Version-3 checkpoint proofs store the command's SHA-256 and display label, not
 raw command text, alongside output byte counts and digests rather than raw
 output. Earlier proof versions require re-verification with the authorized command.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 A final stage directive carrying `construction_policy.completion_only: true`
 and `human_completion_required: false` only reconciles recorded approvals: skip

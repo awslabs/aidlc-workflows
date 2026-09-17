@@ -1279,32 +1279,41 @@ framework records or other files.
 For checkpoint-enabled work, Delivery Planning proposes a real project check from
 the project scan, such as `bun test`, `pytest`, or `make check`. Show the exact
 command with **Use this command to verify each completed Unit?** as a structured
-**Approve** / **Request Changes** question. Record the decision before asking:
+**Approve** / **Request Changes** question. Before presenting the command, use
+the invoking SessionStart session ID:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
-Wait for the human. Only after their actual **Approve** answer, run:
+Wait for the human's exact **Approve** / **Request Changes** reply in that
+session. Only **Approve** authorizes the receipt; an unrelated reply,
+**Request Changes**, or a reply from another session does not. Never write
+`--details "Approve"` unless the human chose it. Only then run:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --details "Approve"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve"
 {{INVOKE}} engine state set-construction-verification-command "<cmd>"
 ```
 
 These are the `aidlc-log` decision/answer checkpoint forms. Both require the same
-`--stage`, `--checkpoint verification-command`, and canonical `--command`.
+`--stage`, `--checkpoint verification-command`, canonical `--command`, and
+`--session "<session ID>"`.
 Leading/trailing whitespace is trimmed before recording, hashing, and execution.
 The resulting command must be nonblank, at most 8192 characters, and a single
 line with no control characters (including newline, CR, tab, or NUL). Put
 multiline checks in a script and record its invocation.
 `decision` records `DECISION_RECORDED` with `Checkpoint: Construction Verification
 Command` and `Command SHA-256`. `answer` requires a matching pending decision and,
-unless `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, a `HUMAN_TURN` after that decision.
+unless `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, the human-turn hook's response bound to
+that command and session's current challenge, with the exact choice matching
+`--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
+replaces the session's prior challenge and response; a successful answer consumes
+both, so stale, mismatched, and reused responses are refused.
 `--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
 `--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
 another command without setting state. Other answers are refused. The receipt
-carries the stage, checkpoint, SHA-256 of that canonical command, a
+carries the stage, checkpoint, session, SHA-256 of that canonical command, a
 control-character-free display label truncated to 120 characters, and the
 human's exact choice.
 `aidlc-audit append` cannot mint this reserved receipt.
@@ -1351,6 +1360,9 @@ A skeleton always requires the human. Missing or stale evidence is explained
 in `errors`: repair the named review/receipt or take human Request Changes,
 without inventing verification. Re-run `next` after each action, never report
 one Unit's checkpoint as approval of the whole Code Generation stage.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 The version-3 proof and CLI JSON retain `command_sha256` and `command_label`, not
 raw command text, plus exit status and captured stdout/stderr byte counts and

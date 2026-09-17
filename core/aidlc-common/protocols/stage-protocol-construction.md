@@ -111,10 +111,10 @@ check completed Units' working results. Use one nonblank line of at most 8192
 characters with no control characters (including newline, CR, tab, or NUL).
 The tools trim leading/trailing whitespace before recording, hashing, and
 executing the command. Put multiline checks in a script and record its invocation.
-Record the decision before presenting it:
+Before presenting the command, use the invoking SessionStart session ID:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
 Render this structured question through the harness's question binding, showing
@@ -131,10 +131,14 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-Only after the human chooses **Approve**, record their answer and then the state:
+The human-turn hook binds the exact **Approve** / **Request Changes** reply in
+that session to the pending command. Only **Approve** authorizes the receipt;
+an unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless the human chose it. Only then record
+their answer using the same session ID, and set the command:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --details "Approve"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve"
 {{INVOKE}} engine state set-construction-verification-command "<cmd>"
 ```
 
@@ -160,6 +164,9 @@ presence, a claimed demonstration, a placeholder command, or a previous pass is
 not verification. A failed check halts. Re-run `next` after each checkpoint action;
 the resulting directive is the next source of truth about readiness and
 verification.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 If `ready` is false or evidence became stale, explain `errors`. Repair the named
 missing review or receipt through its owning procedure, or let the human request

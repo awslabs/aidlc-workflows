@@ -55,9 +55,15 @@ it does not establish that an integrated skeleton has been built.
 
 All Unit/batch checkpoints reuse the intent's recorded, human-authorized
 `Construction Verification Command`. Delivery Planning proposes it from the
-project scan; `log decision`/`answer --checkpoint verification-command --command`
-record the human's **Approve** before `state set-construction-verification-command`
-writes the matching Runtime State field. A human may defer when no runnable
+project scan. Before presenting the command, use the invoking SessionStart
+session ID: both `log decision` and `log answer` require
+`--checkpoint verification-command --command "<cmd>" --session "<session ID>"`.
+The human's exact **Approve** / **Request Changes** reply in that session binds
+the answer to the pending command. Only **Approve** authorizes the receipt;
+an unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless the human chose it; only then run
+`state set-construction-verification-command` to write the matching Runtime
+State field. A human may defer when no runnable
 check exists yet; the first checkpoint then asks. The current approval receipt,
 not the field alone, authorizes execution. Changing it requires a new receipt
 and typed setter, never generic `state set` or an automatic choice.
@@ -106,6 +112,9 @@ retains raw check output. Diagnostics use the same authorized project check,
 not a newly chosen command. Legacy version-1 and version-2 proofs require
 re-verification before the Unit can be approved. `GATE_APPROVED` binds
 `Verification Command SHA-256` to the proof's digest.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,

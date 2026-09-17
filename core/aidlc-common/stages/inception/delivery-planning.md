@@ -203,10 +203,11 @@ invent a placeholder or treat deferral as approval.
 Use one nonblank line of at most 8192 characters with no control characters
 (including newline, CR, tab, or NUL). The tools trim leading/trailing whitespace
 before recording, hashing, and executing the command. Put multiline checks in a
-script and record its invocation. Before presenting a candidate, record:
+script and record its invocation. Before presenting the command, use the invoking
+SessionStart session ID:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
 Show the actual proposed command in the structured question and wait for the human:
@@ -222,11 +223,15 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-Only after the human chooses **Approve**, record their exact answer, then set the
-command using the matching tool-owned receipt:
+The human-turn hook binds the exact **Approve** / **Request Changes** reply in
+that session to the pending command. Only **Approve** authorizes the receipt;
+an unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless the human chose it. Only then record
+their answer using the same session ID, and set the command with the matching
+tool-owned receipt:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --details "Approve"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve"
 {{INVOKE}} engine state set-construction-verification-command "<cmd>"
 ```
 

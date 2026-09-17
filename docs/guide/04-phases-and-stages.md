@@ -236,12 +236,18 @@ stage-major order. A first design-stage review alone is not a working skeleton.
 
 The check is the intent's recorded, human-authorized `Construction Verification
 Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
-from the project scan and records your **Approve** answer before setting it. You
-may defer if no runnable check exists yet; the first checkpoint then asks before
+from the project scan and records your exact **Approve** / **Request Changes**
+reply in the invoking SessionStart session. Only **Approve** authorizes the
+receipt before the command is set; an unrelated reply, **Request Changes**, or
+a reply from another session does not. You may defer if no runnable check exists
+yet; the first checkpoint then asks before
 verification. A missing authorization or later command change always requires
 the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
 never a command chosen at verify time. The approval question shows **Verified
 with `<verification_command>` (exit 0)**.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
 The autonomy offer is **Continue automatically** / **Review each checkpoint**:
 for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
