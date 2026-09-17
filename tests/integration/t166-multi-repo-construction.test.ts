@@ -840,6 +840,9 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("source refusal wins, validity failure stays advisory, and green completion emits both receipts", () => {
       expect(sourceRefusal.approved.status).not.toBe(0);
+      expect(sourceRefusal.approved.out).toContain(
+        "project source changed after aidlc-architecture-reviewer-agent reviewed it",
+      );
       expect(completedBlock(sourceRefusal.audit)).toBeUndefined();
       expect(sourceRefusal.audit).not.toContain("**Validation Basis**:");
       expect(sourceRefusal.audit).not.toContain("**Validation Warning**:");
