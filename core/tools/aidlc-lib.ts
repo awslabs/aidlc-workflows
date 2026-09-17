@@ -20462,6 +20462,163 @@ export function recordDevinSubagentTerminal(
   return "recorded";
 }
 
+// --- Devin session-scoped reviewer registrations ------------------------------
+//
+// `<projectDir>/aidlc/.aidlc-sessions/devin-reviewers-<session>.json` — the
+// session-scoped registration the Devin adapter writes when a review-only
+// profile (aidlc-architecture-reviewer-agent / aidlc-product-lead-agent) is
+// dispatched through run_subagent. Devin child tool events carry no
+// agent_type/agent_id, so the registration — not the event payload — is the
+// identity channel for the per-unit reviewer read-scope bound, mirroring the
+// Kiro adapter's scoped-registration contract. Registrations never survive
+// their session: the session-end path unlinks the file.
+export interface DevinReviewerRegistration {
+  reviewer: string;
+  agentId: string | null;
+  launchedAt: string;
+  done: boolean;
+}
+
+interface DevinReviewerRegistrationFile {
+  version: 1;
+  entries: DevinReviewerRegistration[];
+}
+
+export const DEVIN_REVIEWER_PROFILE_RE =
+  /^aidlc-(architecture-reviewer|product-lead)-agent$/;
+
+function devinReviewerRegistrationsPath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(sessionsDir(projectDir), `devin-reviewers-${segment}.json`)
+    : "";
+}
+
+function readDevinReviewerFile(
+  projectDir: string,
+  session: string,
+): DevinReviewerRegistrationFile {
+  const path = devinReviewerRegistrationsPath(projectDir, session);
+  if (!path) return { version: 1, entries: [] };
+  try {
+    const parsed: unknown = JSON.parse(
+      readAtomicReplacedFileNoFollowOrThrow(
+        path,
+        "Devin reviewer registrations",
+      ).toString("utf-8"),
+    );
+    const candidate = parsed as Partial<DevinReviewerRegistrationFile>;
+    if (candidate?.version !== 1 || !Array.isArray(candidate.entries)) {
+      return { version: 1, entries: [] };
+    }
+    const entries: DevinReviewerRegistration[] = [];
+    for (const value of candidate.entries) {
+      const e = value as Partial<DevinReviewerRegistration>;
+      if (typeof e?.reviewer !== "string" || typeof e.launchedAt !== "string") {
+        continue;
+      }
+      entries.push({
+        reviewer: e.reviewer,
+        agentId: typeof e.agentId === "string" ? e.agentId : null,
+        launchedAt: e.launchedAt,
+        done: e.done === true,
+      });
+    }
+    return { version: 1, entries };
+  } catch {
+    return { version: 1, entries: [] };
+  }
+}
+
+function writeDevinReviewerFile(
+  projectDir: string,
+  session: string,
+  file: DevinReviewerRegistrationFile,
+): void {
+  const path = devinReviewerRegistrationsPath(projectDir, session);
+  if (!path) return;
+  const dir = sessionsDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
+}
+
+export function registerDevinReviewer(
+  projectDir: string,
+  session: string,
+  reviewer: string,
+): void {
+  if (!session || !reviewer) return;
+  const file = readDevinReviewerFile(projectDir, session);
+  file.entries.push({
+    reviewer,
+    agentId: null,
+    launchedAt: isoTimestamp(),
+    done: false,
+  });
+  writeDevinReviewerFile(projectDir, session, file);
+}
+
+// Attach the Devin agent id (learned from the run_subagent PostToolUse
+// response) to the newest unbound registration for this session.
+export function bindDevinReviewerAgent(
+  projectDir: string,
+  session: string,
+  agentId: string,
+): void {
+  if (!session || !agentId) return;
+  const file = readDevinReviewerFile(projectDir, session);
+  const entry = [...file.entries]
+    .reverse()
+    .find((e) => !e.done && e.agentId === null);
+  if (!entry) return;
+  entry.agentId = agentId;
+  writeDevinReviewerFile(projectDir, session, file);
+}
+
+export function liveDevinReviewerRegistrations(
+  projectDir: string,
+  session: string,
+): DevinReviewerRegistration[] {
+  if (!session) return [];
+  return readDevinReviewerFile(projectDir, session).entries.filter(
+    (e) => !e.done,
+  );
+}
+
+export function completeDevinReviewerRegistration(
+  projectDir: string,
+  session: string,
+  agentId: string,
+): void {
+  if (!session || !agentId) return;
+  const file = readDevinReviewerFile(projectDir, session);
+  let changed = false;
+  for (const entry of file.entries) {
+    if (!entry.done && entry.agentId === agentId) {
+      entry.done = true;
+      changed = true;
+    }
+  }
+  if (changed) writeDevinReviewerFile(projectDir, session, file);
+}
+
+export function clearDevinReviewerRegistrations(
+  projectDir: string,
+  session: string,
+): void {
+  const path = devinReviewerRegistrationsPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing registrations are already clear.
+  }
+}
+
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;
 // callers append a stage slug as needed. Before 2.6.94, type-check passed a

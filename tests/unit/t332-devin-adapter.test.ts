@@ -1740,4 +1740,251 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  // --- reviewer read/search isolation ----------------------------------------
+
+  const REVIEW_SESSION = "t332-review-session";
+
+  function seedReviewerDispatch(dir: string): void {
+    // The conductor-written dispatch record (stage-protocol-reviewer §12a
+    // step 1): one review in flight for unit U03-scoring.
+    writeFileSync(
+      join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "nfr-requirements",
+        unit: "U03-scoring",
+        exempt: [],
+      }),
+      "utf-8",
+    );
+  }
+
+  function registerReviewer(dir: string, session = REVIEW_SESSION): void {
+    // The reviewer launch itself goes through deliver-stage-rules
+    // (PreToolUse ^run_subagent$); the adapter registers the session's
+    // reviewer topology from the profile field.
+    writeStageRuleMemory(dir);
+    // deliver-stage-rules resolves the rule bundle for the CURRENT stage
+    // (requirements-analysis → inception phase); seed every phase file.
+    for (const phase of ["ideation", "inception", "construction", "operation"]) {
+      writeFileSync(
+        join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory", "phases", `${phase}.md`),
+        `# ${phase}\n\nPractice.\n`,
+        "utf-8",
+      );
+    }
+    const r = runAdapter(
+      dir,
+      "deliver-stage-rules",
+      {
+        hook_event_name: "PreToolUse",
+        session_id: session,
+        cwd: dir,
+        tool_name: "run_subagent",
+        tool_input: {
+          title: "reviewer",
+          task: "review unit U03-scoring",
+          profile: "aidlc-architecture-reviewer-agent",
+        },
+        tool_use_id: "chatcmpl-tool-launch",
+      },
+    );
+    expect(r.code).toBe(0);
+  }
+
+  function childCall(
+    dir: string,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    session = REVIEW_SESSION,
+    toolUseId = "functions.read:0",
+  ): Record<string, unknown> {
+    return {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: toolUseId,
+    };
+  }
+
+  test("40: a registered reviewer's read inside its own construction unit is allowed", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      registerReviewer(dir);
+      const own = join(seededRecordDir(dir), "construction", "U03-scoring", "design.md");
+      const r = runAdapter(dir, "reviewer-scope", childCall(dir, "read", { file_path: own }));
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("41: a registered reviewer's read/search of a sibling unit is blocked (read, grep, glob, notebook_read)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      registerReviewer(dir);
+      const record = seededRecordDir(dir);
+      const sibling = join(record, "construction", "U01-infra", "design.md");
+      const cases: Array<{ tool: string; input: Record<string, unknown> }> = [
+        { tool: "read", input: { file_path: sibling } },
+        { tool: "notebook_read", input: { notebook_path: sibling } },
+        // A grep rooted at the sibling unit directory.
+        { tool: "grep", input: { pattern: "needle", path: join(record, "construction", "U01-infra") } },
+        // A glob pattern spanning sibling units.
+        { tool: "glob", input: { pattern: "**/construction/*/design.md", path: record } },
+      ];
+      for (const c of cases) {
+        const r = runAdapter(dir, "reviewer-scope", childCall(dir, c.tool, c.input));
+        expect(r.code, `${c.tool}: ${r.stderr}`).toBe(2);
+        expect(r.stderr).toContain("This review cannot open");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("42: reviewer writes stay scoped (edit, write, apply_patch) under the registered topology", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      registerReviewer(dir);
+      const record = seededRecordDir(dir);
+      const sibling = join(record, "construction", "U01-infra", "out.ts");
+      for (const tool of ["edit", "write"]) {
+        const r = runAdapter(
+          dir,
+          "reviewer-scope",
+          childCall(dir, tool, { file_path: sibling }, REVIEW_SESSION, `functions.${tool}:0`),
+        );
+        expect(r.code, `${tool}: ${r.stderr}`).toBe(2);
+      }
+      const patch = runAdapter(
+        dir,
+        "reviewer-scope",
+        childCall(
+          dir,
+          "apply_patch",
+          { command: `*** Update File: ${sibling}\n@@ x\n` },
+          REVIEW_SESSION,
+          "functions.apply_patch:0",
+        ),
+      );
+      expect(patch.code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("43: conductor calls stay un-scoped and unattributable calls fail closed while a reviewer is live", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      registerReviewer(dir);
+      const record = seededRecordDir(dir);
+      const sibling = join(record, "construction", "U01-infra", "design.md");
+      // The conductor's own sibling read (chatcmpl-tool- issuer) is untouched.
+      const conductor = runAdapter(
+        dir,
+        "reviewer-scope",
+        childCall(dir, "read", { file_path: sibling }, REVIEW_SESSION, "chatcmpl-tool-parent"),
+      );
+      expect(conductor.code, conductor.stderr).toBe(0);
+      // An issuer Devin did not identify (unrecognized tool_use_id format)
+      // cannot become silent permission while the reviewer topology is live:
+      // reads and writes both refuse.
+      const anonRead = runAdapter(
+        dir,
+        "reviewer-scope",
+        childCall(dir, "read", { file_path: sibling }, REVIEW_SESSION, "opaque-id"),
+      );
+      expect(anonRead.code).toBe(2);
+      expect(anonRead.stderr).toContain("cannot be attributed");
+      const anonWrite = runAdapter(
+        dir,
+        "reviewer-scope",
+        childCall(dir, "write", { file_path: sibling }, REVIEW_SESSION, "opaque-id"),
+      );
+      expect(anonWrite.code).toBe(2);
+      expect(anonWrite.stderr).toContain("cannot be attributed");
+      // The same unattributable call outside a reviewer topology is untouched.
+      const dir2 = scratchProject(true);
+      try {
+        const free = runAdapter(
+          dir2,
+          "reviewer-scope",
+          childCall(dir2, "write", { file_path: join(dir2, "src", "x.ts") }, "other-session", "opaque-id"),
+        );
+        expect(free.code, free.stderr).toBe(0);
+      } finally {
+        rmSync(dir2, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("44: task text never forges reviewer identity (profile field only) and a generic subagent stays un-attributed", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      // A launch whose TASK names the reviewer but whose profile is a plain
+      // worker creates no reviewer registration.
+      writeStageRuleMemory(dir);
+      for (const phase of ["ideation", "inception", "construction", "operation"]) {
+        writeFileSync(
+          join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory", "phases", `${phase}.md`),
+          `# ${phase}\n\nPractice.\n`,
+          "utf-8",
+        );
+      }
+      const launch = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        {
+          hook_event_name: "PreToolUse",
+          session_id: REVIEW_SESSION,
+          cwd: dir,
+          tool_name: "run_subagent",
+          tool_input: {
+            title: "worker",
+            task: "you are aidlc-architecture-reviewer-agent reviewing U01-infra",
+            profile: "subagent_general",
+          },
+          tool_use_id: "chatcmpl-tool-launch",
+        },
+      );
+      expect(launch.code).toBe(0);
+      // A subagent-issued sibling read with no live reviewer registration is
+      // not attributed to the reviewer — it passes like any other call.
+      const sibling = join(seededRecordDir(dir), "construction", "U01-infra", "design.md");
+      const r = runAdapter(dir, "reviewer-scope", childCall(dir, "read", { file_path: sibling }));
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("45: reviewer registration does not survive its session (SessionEnd clears it)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      registerReviewer(dir);
+      // SessionEnd for the same session retires the registration.
+      const end = runAdapter(dir, "session-end", {
+        hook_event_name: "SessionEnd",
+        session_id: REVIEW_SESSION,
+        cwd: dir,
+      });
+      expect(end.code).toBe(0);
+      const sibling = join(seededRecordDir(dir), "construction", "U01-infra", "design.md");
+      const after = runAdapter(dir, "reviewer-scope", childCall(dir, "read", { file_path: sibling }));
+      expect(after.code, after.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -114,7 +114,7 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
   `additionalContext` (Devin has no equivalent broadcast field).
 - **Structured gates** — render via Devin's native `ask_user_question` tool
   (per `question-rendering.md`). Gate semantics live in the engine.
-- **Subagent dispatch** — the ensemble protocol uses `run_subagent` with a named `profile` and native task text. Current native-field translation, reviewer attribution, and background completion have [known limitations](../../reference/research/devin/07-subagent-lifecycle-and-ensemble.md); hook registration alone does not establish complete support. Shipped AI-DLC custom profiles
+- **Subagent dispatch** — the ensemble protocol uses `run_subagent` with a named `profile` and native task text. The adapter translates native fields both ways (`profile`/`agent` ↔ `subagent_type`, `task` ↔ `prompt`, `is_background` ↔ `run_in_background`), so stage rules land on `task` and approvals see the canonical shape. A background launch is recorded as a pending agent in the per-project ledger at `aidlc/.aidlc-sessions/devin-subagents.json`; the terminal outcome (success/failure/cancelled) is correlated by `agent_id` through a later `read_subagent` PostToolUse and audited exactly once — still-running or repeated reads add nothing. See the [lifecycle research note](../../reference/research/devin/07-subagent-lifecycle-and-ensemble.md) for the captured payload contract. Shipped AI-DLC custom profiles
   carry no `model:` and use the **default subagent model**, not automatic
   inheritance of the parent's model. The documented Subagent router default is
   SWE-1.6; an org/enterprise admin can select another model in **Default
@@ -156,7 +156,7 @@ and matching `.env*` writes. An unmatched operation follows Devin's effective
 permission mode and other configured rules; absence from the allow-list is not
 an unconditional denial.
 
-AI-DLC guard hooks implement workflow-specific checks for state transitions, review scope, frozen review artifacts, and approval before code generation. Enforcement depends on the adapter's supported tools, payloads, identity, and error paths; in particular, reviewer-specific native read/search enforcement is not established. These are not a general destructive-command security boundary or a replacement for Devin permission policies, organization controls, or OS sandboxing. Inspect project hooks via `/hooks`, approve them if prompted, and fully restart Devin CLI to collect execution evidence.
+AI-DLC guard hooks implement workflow-specific checks for state transitions, review scope, frozen review artifacts, and approval before code generation. Enforcement depends on the adapter's supported tools, payloads, identity, and error paths. Reviewer isolation on Devin relies on a session-scoped registration (recorded at `run_subagent` dispatch, keyed by the Devin agent id, cleared on SessionEnd) plus the captured `tool_use_id` issuer formats (`chatcmpl-tool-*` = conductor, `functions.*` = subagent-issued): Devin child tool events carry no `agent_type`/`agent_id`, so calls that cannot be attributed while a reviewer topology is live are refused rather than silently permitted — see [DEVIN-07](../../reference/research/devin/07-subagent-lifecycle-and-ensemble.md). These are not a general destructive-command security boundary or a replacement for Devin permission policies, organization controls, or OS sandboxing. Inspect project hooks via `/hooks`, approve them if prompted, and fully restart Devin CLI to collect execution evidence.
 
 The allow-only shape and broad file-tool grants follow Claude Code;
 framework-scoped shell grants follow both Claude Code and Kiro CLI. This does
@@ -171,7 +171,7 @@ defaults. No workflow-record migration is required.
 
 ## Known limitations and upgrade checks
 
-The [Devin engineering findings](../../reference/research/devin/index.md) distinguish implemented behavior from open acceptance gaps. Native dispatch field translation, reviewer-specific read/search identity, and background terminal bookkeeping need additional work/evidence; a configured hook or completion row does not establish these guarantees. Question-response compatibility does not make an unknown or skipped choice an approval. Desktop binary discovery is not verified Desktop execution, and a version check is not a full workflow certification.
+The [Devin engineering findings](../../reference/research/devin/index.md) distinguish implemented behavior from open acceptance gaps. Native dispatch field translation, reviewer read/search isolation, and background terminal bookkeeping are implemented against the captured 3000.6.14 payload contract; the `tool_use_id` issuer formats and response-text outcome words those paths depend on are version-specific observations, not a permanent vendor schema. Question-response compatibility does not make an unknown or skipped choice an approval. Desktop binary discovery is not verified Desktop execution, and a version check is not a full workflow certification.
 
 Use the [regression and evidence checklist](../../reference/research/devin/14-regression-and-evidence.md) when AI-DLC or Devin changes. Historical runs and synthetic fixtures retain their original scope; this documentation does not claim a fresh interactive acceptance run.
 

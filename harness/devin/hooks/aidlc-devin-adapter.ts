@@ -70,10 +70,16 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  bindDevinReviewerAgent,
+  clearDevinReviewerRegistrations,
+  completeDevinReviewerRegistration,
+  DEVIN_REVIEWER_PROFILE_RE,
   isNonAnswer,
+  liveDevinReviewerRegistrations,
   readDevinSubagentLedgerEntry,
   recordDevinSubagentLaunch,
   recordDevinSubagentTerminal,
+  registerDevinReviewer,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 
@@ -624,6 +630,72 @@ function emitSubagentCompleted(
   );
 }
 
+// --- reviewer identity attribution --------------------------------------------
+//
+// Devin child tool events carry the PARENT session_id and no
+// agent_type/agent_id (captured 3000.6.14, C09 established the negative). The
+// only per-event issuer signal is the tool_use_id format:
+// "chatcmpl-tool-<hex>" marks the parent/conductor, "functions.<tool>:<n>"
+// marks a subagent-issued call. Both formats are captured evidence, not a
+// permanent vendor schema — an unrecognized or absent tool_use_id classifies
+// as unknown, and an unknown caller during a live reviewer topology is
+// refused rather than silently permitted.
+type DevinIssuer = "conductor" | "subagent" | "unknown";
+
+function devinIssuer(toolUseId: unknown): DevinIssuer {
+  if (typeof toolUseId !== "string" || toolUseId.length === 0) return "unknown";
+  if (toolUseId.startsWith("chatcmpl-tool-")) return "conductor";
+  if (toolUseId.startsWith("functions.")) return "subagent";
+  return "unknown";
+}
+
+// Resolve the identity fields forwarded to the core reviewer-scope hook.
+// Direct payload agent_type/agent_id always win. A subagent-issued call while
+// a reviewer registration is live in this session is attributed to the
+// registered reviewer (the session-scoped registration IS the identity, the
+// Kiro scoped-registration contract); multiple live registrations assert only
+// scoped_registration so the core still enforces against the dispatch record.
+// The conductor and sessions without any reviewer topology forward nothing.
+// An unattributable caller during a live reviewer topology is refused —
+// missing identity must not become silent permission.
+function reviewerScopeIdentity(
+  session: string,
+): { fields: Record<string, unknown>; blockReason: string | null } {
+  const fields: Record<string, unknown> = {};
+  if (devin.agent_type) fields.agent_type = devin.agent_type;
+  if (devin.agent_id) fields.agent_id = devin.agent_id;
+  if (fields.agent_type) return { fields, blockReason: null };
+
+  const issuer = devinIssuer(devin.tool_use_id);
+  const live = session
+    ? liveDevinReviewerRegistrations(projectDir, session)
+    : [];
+
+  if (issuer === "conductor") return { fields, blockReason: null };
+  if (issuer === "subagent") {
+    if (live.length === 0) return { fields, blockReason: null };
+    const distinct = new Set(live.map((r) => r.reviewer));
+    if (distinct.size === 1) {
+      fields.agent_type = live[0].reviewer;
+    } else {
+      fields.scoped_registration = true;
+    }
+    return { fields, blockReason: null };
+  }
+  // Unknown issuer.
+  if (live.length > 0) {
+    return {
+      fields,
+      blockReason:
+        "AI-DLC reviewer isolation: this tool call cannot be attributed to a " +
+        "caller (no agent_type and an unrecognized tool_use_id format) while a " +
+        "reviewer is in flight for this session, so it is refused rather than " +
+        "silently permitted.",
+    };
+  }
+  return { fields, blockReason: null };
+}
+
 // --- apply_patch envelope parsing --------------------------------------------
 //
 // Same parser as the codex adapter: extracts *** Add|Update File: directives
@@ -718,8 +790,17 @@ export async function run(
 
     case "session-end": {
       // Devin HAS a SessionEnd event (unlike codex). Pipe stdin verbatim to
-      // the core session-end hook. Advisory.
+      // the core session-end hook, then retire this session's reviewer
+      // registrations — reviewer identity is session-scoped and must not
+      // outlive the session that minted it. Advisory.
       runCore("aidlc-session-end.ts", rawInput);
+      if (payloadSessionId) {
+        try {
+          clearDevinReviewerRegistrations(projectDir, payloadSessionId);
+        } catch {
+          // Session runtime cleanup is best-effort.
+        }
+      }
       return 0;
     }
 
@@ -775,33 +856,131 @@ export async function run(
     case "reviewer-scope": {
       // PreToolUse: the per-unit reviewer read-scope bound.
       // exec→Bash: pipe verbatim-with-rewrite (stderr variant; exit 2 + stderr).
-      // edit/write→ forward {PreToolUse, Edit|Write, {file_path}}.
+      // edit/write/notebook_edit→ forward {PreToolUse, Edit|Write|NotebookEdit,
+      //   {file_path|notebook_path}}.
+      // read/notebook_read→ forward {PreToolUse, Read|NotebookRead, {file_path|
+      //   notebook_path}} — the native read tools go through the same shared
+      //   matcher (they are how a reviewer actually sweeps sibling units).
+      // glob→ Glob {pattern, path}; grep→ Grep {path, glob: glob_pattern} —
+      //   the core matcher wants the search root (`path`) plus the FILE-name
+      //   glob under `glob` (Devin spells it `glob_pattern`); the content
+      //   `pattern` is deliberately not forwarded: matching file content is
+      //   not file access.
       // apply_patch→ fan out one Edit/Write per parsed file (Delete File /
-      //   Move to included as Edit). Forward agent_type/agent_id if present.
-      //   Block on first out-of-scope file.
-      // Everything else permits.
+      //   Move to included as Edit). Block on first out-of-scope file.
+      // Identity: agent_type/agent_id forward when present on every branch;
+      // otherwise reviewerScopeIdentity attributes a subagent-issued call to
+      // this session's live reviewer registration and refuses an
+      // unattributable call while that topology is in flight.
+      const scopedTools = [
+        "exec",
+        "edit",
+        "write",
+        "notebook_edit",
+        "apply_patch",
+        "read",
+        "notebook_read",
+        "glob",
+        "grep",
+        "ls",
+      ];
+      if (!scopedTools.includes(tool)) return 0;
+
+      const identity = reviewerScopeIdentity(payloadSessionId ?? "");
+      if (identity.blockReason !== null) {
+        process.stderr.write(`${identity.blockReason}\n`);
+        return 2;
+      }
+      const identityFields = identity.fields;
+
       if (tool === "exec") {
         const rewritten = rewriteStdinToolName(rawInput, devin);
-        const r = runCoreWithStderr("aidlc-reviewer-scope.ts", rewritten);
+        // The verbatim rewrite already carries agent_type/agent_id; merge the
+        // attributed identity only when the payload itself carried none.
+        let fwd = rewritten;
+        if (Object.keys(identityFields).length > 0 && !devin.agent_type) {
+          try {
+            const parsed = JSON.parse(rewritten) as Record<string, unknown>;
+            Object.assign(parsed, identityFields);
+            fwd = JSON.stringify(parsed);
+          } catch {
+            // Keep the verbatim payload.
+          }
+        }
+        const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
         if (r.code === 2) {
           process.stderr.write(r.stderr);
           return 2;
         }
         return 0;
       }
-      if (tool === "edit" || tool === "write") {
-        const filePath = devin.tool_input?.file_path as string | undefined;
+      if (tool === "edit" || tool === "write" || tool === "notebook_edit") {
+        const ti = devin.tool_input ?? {};
+        const filePath = (ti.file_path ?? ti.notebook_path ?? ti.path) as
+          | string
+          | undefined;
         if (typeof filePath === "string" && filePath) {
           const fwd = JSON.stringify({
             hook_event_name: "PreToolUse",
             tool_name: DEVIN_TO_CLAUDE_TOOL[tool],
             tool_input: { file_path: filePath },
+            ...(devin.session_id ? { session_id: devin.session_id } : {}),
+            ...(typeof devin.cwd === "string" ? { cwd: devin.cwd } : {}),
+            ...identityFields,
           });
           const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
           if (r.code === 2) {
             process.stderr.write(r.stderr);
             return 2;
           }
+        }
+        return 0;
+      }
+      if (tool === "read" || tool === "notebook_read") {
+        const ti = devin.tool_input ?? {};
+        const coreInput: Record<string, unknown> = {};
+        if (typeof ti.file_path === "string") coreInput.file_path = ti.file_path;
+        if (typeof ti.notebook_path === "string") {
+          coreInput.notebook_path = ti.notebook_path;
+        }
+        if (typeof ti.path === "string") coreInput.path = ti.path;
+        const fwd = JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: DEVIN_TO_CLAUDE_TOOL[tool],
+          tool_input: coreInput,
+          ...(devin.session_id ? { session_id: devin.session_id } : {}),
+          ...(typeof devin.cwd === "string" ? { cwd: devin.cwd } : {}),
+          ...identityFields,
+        });
+        const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+        if (r.code === 2) {
+          process.stderr.write(r.stderr);
+          return 2;
+        }
+        return 0;
+      }
+      if (tool === "glob" || tool === "grep" || tool === "ls") {
+        const ti = devin.tool_input ?? {};
+        const coreInput: Record<string, unknown> = {};
+        if (tool === "glob" && typeof ti.pattern === "string") {
+          coreInput.pattern = ti.pattern;
+        }
+        if (typeof ti.path === "string") coreInput.path = ti.path;
+        if (typeof ti.glob_pattern === "string") {
+          coreInput.glob = ti.glob_pattern;
+        }
+        const fwd = JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: DEVIN_TO_CLAUDE_TOOL[tool],
+          tool_input: coreInput,
+          ...(devin.session_id ? { session_id: devin.session_id } : {}),
+          ...(typeof devin.cwd === "string" ? { cwd: devin.cwd } : {}),
+          ...identityFields,
+        });
+        const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+        if (r.code === 2) {
+          process.stderr.write(r.stderr);
+          return 2;
         }
         return 0;
       }
@@ -817,8 +996,9 @@ export async function run(
             hook_event_name: "PreToolUse",
             tool_name: f.tool,
             tool_input: { file_path: f.path },
-            ...(devin.agent_type ? { agent_type: devin.agent_type } : {}),
-            ...(devin.agent_id ? { agent_id: devin.agent_id } : {}),
+            ...(devin.session_id ? { session_id: devin.session_id } : {}),
+            ...(typeof devin.cwd === "string" ? { cwd: devin.cwd } : {}),
+            ...identityFields,
           });
           const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
           if (r.code === 2) {
@@ -833,6 +1013,13 @@ export async function run(
 
     case "review-freeze": {
       // Same shape as reviewer-scope but piping to aidlc-review-freeze.ts.
+      // agent_type/agent_id forward on every branch when present (the
+      // write-freeze decision itself is caller-agnostic; the fields feed the
+      // core hook's audit context).
+      const freezeIdentity = {
+        ...(devin.agent_type ? { agent_type: devin.agent_type } : {}),
+        ...(devin.agent_id ? { agent_id: devin.agent_id } : {}),
+      };
       if (tool === "exec") {
         const rewritten = rewriteStdinToolName(rawInput, devin);
         const r = runCoreWithStderr("aidlc-review-freeze.ts", rewritten);
@@ -842,13 +1029,17 @@ export async function run(
         }
         return 0;
       }
-      if (tool === "edit" || tool === "write") {
-        const filePath = devin.tool_input?.file_path as string | undefined;
+      if (tool === "edit" || tool === "write" || tool === "notebook_edit") {
+        const ti = devin.tool_input ?? {};
+        const filePath = (ti.file_path ?? ti.notebook_path ?? ti.path) as
+          | string
+          | undefined;
         if (typeof filePath === "string" && filePath) {
           const fwd = JSON.stringify({
             hook_event_name: "PreToolUse",
             tool_name: DEVIN_TO_CLAUDE_TOOL[tool],
             tool_input: { file_path: filePath },
+            ...freezeIdentity,
           });
           const r = runCoreWithStderr("aidlc-review-freeze.ts", fwd);
           if (r.code === 2) {
@@ -870,6 +1061,7 @@ export async function run(
             hook_event_name: "PreToolUse",
             tool_name: f.tool,
             tool_input: { file_path: f.path },
+            ...freezeIdentity,
           });
           const r = runCoreWithStderr("aidlc-review-freeze.ts", fwd);
           if (r.code === 2) {
@@ -985,8 +1177,23 @@ export async function run(
       if (tool === "run_subagent" && originalToolInput) {
         try {
           const parsed = JSON.parse(rewritten) as Record<string, unknown>;
-          parsed.tool_input = normalizeSubagentInput(originalToolInput);
+          const normalized = normalizeSubagentInput(originalToolInput);
+          parsed.tool_input = normalized;
           rewritten = JSON.stringify(parsed);
+          // A review-only profile launch registers the session's reviewer
+          // topology HERE, at dispatch time — the reviewer's own tool calls
+          // (which carry no agent identity on Devin) run between this
+          // PreToolUse and the PostToolUse that learns the agent id, so
+          // registration cannot wait for the launch response. The task text
+          // is never consulted: only the profile field is identity.
+          const agentType = normalized.subagent_type;
+          if (
+            typeof agentType === "string" &&
+            DEVIN_REVIEWER_PROFILE_RE.test(agentType) &&
+            payloadSessionId
+          ) {
+            registerDevinReviewer(projectDir, payloadSessionId, agentType);
+          }
         } catch {
           // Rewriting is best-effort; the un-normalized payload still pipes.
         }
@@ -1122,6 +1329,9 @@ export async function run(
               session,
               agentType,
             });
+            if (session) {
+              bindDevinReviewerAgent(projectDir, session, agentId);
+            }
           }
           return 0;
         }
@@ -1135,6 +1345,9 @@ export async function run(
             outcome ?? "success",
             { session, agentType },
           );
+          if (session) {
+            completeDevinReviewerRegistration(projectDir, session, agentId);
+          }
           if (recorded === "already") return 0;
           emitSubagentCompleted(
             session,
@@ -1179,6 +1392,9 @@ export async function run(
           session: existing?.session ?? session,
           agentType: existing?.agentType ?? "unknown",
         });
+        if (session) {
+          completeDevinReviewerRegistration(projectDir, session, agentId);
+        }
         if (recorded === "already") return 0;
         emitSubagentCompleted(
           existing?.session ?? session,
@@ -1190,7 +1406,6 @@ export async function run(
       }
       return 0;
     }
-
 
     case "rebuild-stage-graph": {
       // exec PostToolUse → rewrite tool_name to Bash and pipe verbatim to
