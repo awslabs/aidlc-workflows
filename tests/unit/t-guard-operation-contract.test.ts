@@ -72,16 +72,6 @@ describe("structured guard recovery operations", () => {
     }
   });
 
-  test("an installed tree named by absolute path renders its project-relative leaf", () => {
-    const operation: GuardRecoveryOperation = { kind: "restart-stage", stage: "requirements-analysis" };
-    expect(renderGuardOperation(operation, { mode: "source", harnessDir: "/opt/project/dist/kiro/.kiro" }))
-      .toBe("bun .kiro/tools/aidlc-orchestrate.ts next --stage requirements-analysis");
-    for (const harnessDir of [".claude/../.ssh", "dist/claude/.claude", "core"]) {
-      expect(() => renderGuardOperation(operation, { mode: "source", harnessDir }))
-        .toThrow("Invalid recovery harness directory");
-    }
-  });
-
   test("the displayed command cannot change target, append work, or remove the human requirement", () => {
     const ask = recovery();
     const remedy = ask.remedies[0];

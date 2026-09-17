@@ -30,7 +30,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const POLICY_ENV = {
-  AIDLC_HARNESS_DIR: AIDLC_SRC,
+  AIDLC_HARNESS_DIR: ".claude",
   AIDLC_SCOPE_MAPPING: undefined,
   AIDLC_SCOPE_GRID: join(AIDLC_SRC, "tools", "data", "scope-grid.json"),
   AIDLC_STAGE_GRAPH: join(AIDLC_SRC, "tools", "data", "stage-graph.json"),
