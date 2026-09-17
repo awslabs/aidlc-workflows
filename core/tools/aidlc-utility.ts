@@ -219,6 +219,7 @@ import {
   hookLiveness,
   workspaceSourceState,
   type WorkspaceSourceState,
+  devinReviewerIsolationDegraded,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -3274,6 +3275,19 @@ export async function collectDoctorReport(
       fix: lastHookRun ? undefined
         : "inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions",
     });
+    // Reviewer isolation capability: Devin child tool events carry no agent
+    // identity, so the per-unit reviewer bound is only attributable when the
+    // reviewer is the sole subagent in flight. A degraded marker means a
+    // session already hit the unattributable-callers case.
+    if (devinReviewerIsolationDegraded(projectDir)) {
+      results.push({
+        pass: false,
+        severity: "warn",
+        label:
+          "Devin reviewer isolation degraded: a reviewer ran alongside other subagents, so subagent-issued writes could not be attributed and were refused",
+        fix: "dispatch reviewers serially (no other subagent in flight) for guaranteed reviewer read/write isolation; the marker clears on SessionEnd",
+      });
+    }
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({

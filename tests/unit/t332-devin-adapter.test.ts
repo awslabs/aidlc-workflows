@@ -2030,4 +2030,60 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("46: a reviewer alongside a concurrent subagent degrades isolation — unattributable writes refuse, reads pass, degradation is visible", () => {
+    const dir = scratchProject(true);
+    try {
+      seedReviewerDispatch(dir);
+      registerReviewer(dir);
+      // A non-reviewer background subagent launches in the SAME session — the
+      // ledger records it, so a `functions.*` caller can no longer be
+      // attributed to the reviewer alone.
+      runAdapter(
+        dir,
+        "log-subagent",
+        postToolUse(
+          dir,
+          "run_subagent",
+          { title: "worker", task: "build", profile: "aidlc-developer-agent", is_background: true },
+          {
+            success: true,
+            output: "Background subagent started with agent_id=agent-dev. You can wait for this agent to finish using the read_subagent tool.",
+            error: null,
+          },
+          REVIEW_SESSION,
+        ),
+      );
+      const record = seededRecordDir(dir);
+      const own = join(record, "construction", "U03-scoring", "design.md");
+      // Reads pass unattributed — even inside the reviewer's own unit they are
+      // no longer attributed to it, and sibling reads are not blocked either.
+      const read = runAdapter(dir, "reviewer-scope", childCall(dir, "read", { file_path: own }));
+      expect(read.code, read.stderr).toBe(0);
+      // Writes fail closed: the caller cannot be attributed while the
+      // reviewer shares the session with another live subagent.
+      const write = runAdapter(
+        dir,
+        "reviewer-scope",
+        childCall(dir, "write", { file_path: own }, REVIEW_SESSION, "functions.write:0"),
+      );
+      expect(write.code, write.stderr).toBe(2);
+      expect(write.stderr).toContain("isolation degraded");
+      // The degradation marker is persisted for the doctor to report.
+      const regFile = readFileSync(
+        join(dir, "aidlc", ".aidlc-sessions", `devin-reviewers-${REVIEW_SESSION}.json`),
+        "utf-8",
+      );
+      expect(regFile).toContain('"degradedAt"');
+      // The conductor remains unaffected.
+      const conductor = runAdapter(
+        dir,
+        "reviewer-scope",
+        childCall(dir, "write", { file_path: own }, REVIEW_SESSION, "chatcmpl-tool-parent"),
+      );
+      expect(conductor.code, conductor.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

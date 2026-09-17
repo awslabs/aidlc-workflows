@@ -76,6 +76,8 @@ import {
   DEVIN_REVIEWER_PROFILE_RE,
   isNonAnswer,
   liveDevinReviewerRegistrations,
+  liveDevinSubagents,
+  markDevinReviewerIsolationDegraded,
   readDevinSubagentLedgerEntry,
   recordDevinSubagentLaunch,
   recordDevinSubagentTerminal,
@@ -669,6 +671,7 @@ function devinIssuer(toolUseId: unknown): DevinIssuer {
 // missing identity must not become silent permission.
 function reviewerScopeIdentity(
   session: string,
+  isWrite: boolean,
 ): { fields: Record<string, unknown>; blockReason: string | null } {
   const fields: Record<string, unknown> = {};
   if (devin.agent_type) fields.agent_type = devin.agent_type;
@@ -683,6 +686,31 @@ function reviewerScopeIdentity(
   if (issuer === "conductor") return { fields, blockReason: null };
   if (issuer === "subagent") {
     if (live.length === 0) return { fields, blockReason: null };
+    // A `functions.*` call is attributable to the reviewer only when the
+    // reviewer is the ONLY subagent in flight for this session. Any other
+    // live subagent makes the caller unattributable: reads stay allowed
+    // (unattributed), writes refuse, and the session is marked degraded.
+    const boundIds = new Set(
+      live.map((r) => r.agentId).filter((id): id is string => !!id),
+    );
+    const concurrent = liveDevinSubagents(projectDir, session).filter(
+      (entry) => !boundIds.has(entry.agentId),
+    );
+    if (concurrent.length > 0) {
+      markDevinReviewerIsolationDegraded(projectDir, session);
+      if (isWrite) {
+        return {
+          fields: {},
+          blockReason:
+            "AI-DLC reviewer isolation degraded: a reviewer is in flight " +
+            "alongside other subagents in this session, so this " +
+            "subagent-issued write cannot be attributed and is refused " +
+            "rather than scoped. Dispatch reviewers serially (no other " +
+            "subagent in flight) for guaranteed isolation.",
+        };
+      }
+      return { fields, blockReason: null };
+    }
     const distinct = new Set(live.map((r) => r.reviewer));
     if (distinct.size === 1) {
       fields.agent_type = live[0].reviewer;
@@ -895,7 +923,10 @@ export async function run(
       ];
       if (!scopedTools.includes(tool)) return 0;
 
-      const identity = reviewerScopeIdentity(payloadSessionId ?? "");
+      const identity = reviewerScopeIdentity(
+        payloadSessionId ?? "",
+        ["exec", "edit", "write", "notebook_edit", "apply_patch"].includes(tool),
+      );
       if (identity.blockReason !== null) {
         process.stderr.write(`${identity.blockReason}\n`);
         return 2;
@@ -1338,7 +1369,10 @@ export async function run(
               session,
               agentType,
             });
-            if (session) {
+            // Only a reviewer-profile launch may bind a pending reviewer
+            // registration — otherwise the next non-reviewer subagent would
+            // claim the reviewer's identity slot.
+            if (session && DEVIN_REVIEWER_PROFILE_RE.test(agentType)) {
               bindDevinReviewerAgent(projectDir, session, agentId);
             }
           }

@@ -20462,6 +20462,19 @@ export function recordDevinSubagentTerminal(
   return "recorded";
 }
 
+// Live (launched, not yet terminal) ledger entries for one session. Used to
+// tell a lone reviewer in flight apart from a reviewer running alongside
+// unattributable siblings — the latter degrades reviewer isolation.
+export function liveDevinSubagents(
+  projectDir: string,
+  session: string,
+): DevinSubagentLedgerEntry[] {
+  if (!session) return [];
+  return readDevinSubagentLedger(projectDir).agents.filter(
+    (entry) => entry.session === session && entry.terminal === null,
+  );
+}
+
 // --- Devin session-scoped reviewer registrations ------------------------------
 //
 // `<projectDir>/aidlc/.aidlc-sessions/devin-reviewers-<session>.json` — the
@@ -20482,6 +20495,11 @@ export interface DevinReviewerRegistration {
 interface DevinReviewerRegistrationFile {
   version: 1;
   entries: DevinReviewerRegistration[];
+  // Set when reviewer isolation degraded: a reviewer was live alongside
+  // other unattributable subagents, so `functions.*` callers could not be
+  // attributed and write tools had to refuse rather than scope. Surfaced by
+  // the doctor; cleared with the session's registrations.
+  degradedAt?: string;
 }
 
 export const DEVIN_REVIEWER_PROFILE_RE =
@@ -20514,6 +20532,8 @@ function readDevinReviewerFile(
     if (candidate?.version !== 1 || !Array.isArray(candidate.entries)) {
       return { version: 1, entries: [] };
     }
+    const degradedAt =
+      typeof candidate.degradedAt === "string" ? candidate.degradedAt : undefined;
     const entries: DevinReviewerRegistration[] = [];
     for (const value of candidate.entries) {
       const e = value as Partial<DevinReviewerRegistration>;
@@ -20527,7 +20547,7 @@ function readDevinReviewerFile(
         done: e.done === true,
       });
     }
-    return { version: 1, entries };
+    return { version: 1, entries, ...(degradedAt ? { degradedAt } : {}) };
   } catch {
     return { version: 1, entries: [] };
   }
@@ -20604,6 +20624,47 @@ export function completeDevinReviewerRegistration(
     }
   }
   if (changed) writeDevinReviewerFile(projectDir, session, file);
+}
+
+// Mark the session's reviewer topology as degraded: a reviewer was live
+// alongside other unattributable in-flight subagents. Idempotent.
+export function markDevinReviewerIsolationDegraded(
+  projectDir: string,
+  session: string,
+): void {
+  if (!session) return;
+  const file = readDevinReviewerFile(projectDir, session);
+  if (file.degradedAt) return;
+  file.degradedAt = isoTimestamp();
+  writeDevinReviewerFile(projectDir, session, file);
+}
+
+// Whether ANY session in this project currently carries the degraded marker.
+// The doctor has no session id, so it scans the session-scoped files.
+export function devinReviewerIsolationDegraded(projectDir: string): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(sessionsDir(projectDir));
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (!name.startsWith("devin-reviewers-") || !name.endsWith(".json")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(
+        readAtomicReplacedFileNoFollowOrThrow(
+          join(sessionsDir(projectDir), name),
+          "Devin reviewer registrations",
+        ).toString("utf-8"),
+      ) as { degradedAt?: unknown };
+      if (typeof parsed?.degradedAt === "string") return true;
+    } catch {
+      // An unreadable file is not evidence of degradation.
+    }
+  }
+  return false;
 }
 
 export function clearDevinReviewerRegistrations(
