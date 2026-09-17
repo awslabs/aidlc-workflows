@@ -1089,14 +1089,10 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   }, 20000);
 
-  // #646 review P2 - the aidlc-workspace exclusion was top-level only. Before
-  // 2.6.94, type-check anchored `.aidlc-sensors/.tsbuildinfo` at the tsconfig
-  // dir, so a monorepo subpackage could retain an engine-written cache
-  // arbitrarily deep after upgrade. That legacy churn must not alter the
-  // fingerprint. The cache is matched by the path the engine wrote
-  // (sensorsDir -> docsRoot -> intentsDir -> workspaceRoot), not by its leaf
-  // name - see the sibling test below for why the leaf alone is unsafe.
-  test("excludes a nested .aidlc-sensors cache (any depth), but not real nested source", () => {
+  // Both old package-local caches and the new engine directory must stay out
+  // of source identity. Match their full record-tree shape, never the leaf
+  // name alone: unrelated application dot directories remain real source.
+  test.each([".aidlc-engine/sensors", ".aidlc-sensors"])("excludes a nested %s cache (any depth), but not real nested source", (sensorPath) => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
 
@@ -1104,7 +1100,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     // not at the workspace root. Before 2.6.94 the `services/backend` tsconfig
     // anchor gave the cache its own `aidlc/spaces/<space>/intents/` root.
     const cache = join(
-      dir, "services", "backend", "aidlc", "spaces", "default", "intents", ".aidlc-sensors",
+      dir, "services", "backend", "aidlc", "spaces", "default", "intents", sensorPath,
     );
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "tsbuildinfo"), "cache\n", "utf-8");
@@ -1114,7 +1110,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     // excluded by the same rule.
     const recordCache = join(
       dir, "services", "backend", "aidlc", "spaces", "default", "intents",
-      "add-login-ab12cd34", ".aidlc-sensors", "code-generation",
+      "add-login-ab12cd34", sensorPath, "code-generation",
     );
     mkdirSync(recordCache, { recursive: true });
     writeFileSync(join(recordCache, "required-sections-1.md"), "finding\n", "utf-8");
@@ -1131,15 +1127,12 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     expect(existsSync(src)).toBe(true);
   });
 
-  // #646 review - reproduction. Depth tolerance for the sensor cache was
-  // implemented as a bare `**/.aidlc-sensors/**` leaf match, which excludes ANY
-  // directory of that name - so an application tracking its own source under a
-  // dot-prefixed, framework-named directory could be edited or DELETED without
-  // moving the fingerprint, and a receipt bound to it stayed valid.
-  test("a .aidlc-sensors directory outside the engine's cache path is real source", () => {
+  // A bare leaf-name exclusion would hide real application source with the
+  // same directory name. Its edits and deletions must change the fingerprint.
+  test("a .aidlc-engine/sensors directory outside the engine's cache path is real source", () => {
     seedGitRepo(dir);
-    mkdirSync(join(dir, "src", ".aidlc-sensors"), { recursive: true });
-    const shipped = join(dir, "src", ".aidlc-sensors", "shipped.ts");
+    mkdirSync(join(dir, "src", ".aidlc-engine/sensors"), { recursive: true });
+    const shipped = join(dir, "src", ".aidlc-engine/sensors", "shipped.ts");
     writeFileSync(shipped, "export const rule = 1;\n", "utf-8");
 
     const fp1 = workspaceSourceFingerprint(dir);
@@ -1553,7 +1546,7 @@ process.stdin.on("data", (chunk) => {
     expect(workspaceSourceFingerprint(dir)).toBe(fp2); // and it is stable
   });
 
-  // #646 review - reproduction. Unlike .aidlc-sensors, `aidlc`/`.aidlc` are
+  // #646 review - reproduction. Unlike .aidlc-engine/sensors, `aidlc`/`.aidlc` are
   // anchored at the top level of the dir that CARRIES the workspace shell:
   // they never legitimately nest inside application source. An earlier fix
   // applied the any-depth glob to all four names alike, which silently
@@ -1758,7 +1751,7 @@ process.stdin.on("data", (chunk) => {
 
   // The depth-tolerant sensor-cache match is orthogonal to the shell split and
   // must survive it inside a registered repo, where no shell exclusion applies.
-  test("a nested .aidlc-sensors cache inside a registered sibling repo is still excluded", () => {
+  test("a nested .aidlc-engine/sensors cache inside a registered sibling repo is still excluded", () => {
     const repoA = join(dir, "repo-a");
     mkdirSync(repoA, { recursive: true });
     seedGitRepo(repoA);
@@ -1766,18 +1759,18 @@ process.stdin.on("data", (chunk) => {
 
     const fp1 = workspaceSourceFingerprint(dir);
     const cache = join(
-      repoA, "packages", "pkg", "aidlc", "spaces", "default", "intents", ".aidlc-sensors",
+      repoA, "packages", "pkg", "aidlc", "spaces", "default", "intents", ".aidlc-engine/sensors",
     );
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "tsbuildinfo"), "cache\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
-    // ...while a `.aidlc-sensors` directory that is NOT on the engine's cache
+    // ...while a `.aidlc-engine/sensors` directory that is NOT on the engine's cache
     // path stays real source inside a registered repo too - the sibling-repo
     // walk uses the same rule, so the leaf-name blind spot cannot survive here.
-    mkdirSync(join(repoA, "src", ".aidlc-sensors"), { recursive: true });
+    mkdirSync(join(repoA, "src", ".aidlc-engine/sensors"), { recursive: true });
     writeFileSync(
-      join(repoA, "src", ".aidlc-sensors", "shipped.ts"),
+      join(repoA, "src", ".aidlc-engine/sensors", "shipped.ts"),
       "export const rule = 1;\n",
       "utf-8",
     );

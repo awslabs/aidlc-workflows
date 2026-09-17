@@ -108,7 +108,7 @@ function project(harness: "claude" | "kiro-ide" = "claude"): {
   return {
     dir,
     tool: join(destination, "tools", "aidlc-orchestrate.ts"),
-    markerPath: join(seededRecordDir(dir), ".aidlc-active-directive.json"),
+    markerPath: join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"),
   };
 }
 

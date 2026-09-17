@@ -1053,7 +1053,8 @@ function realPluginSyncGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "plugin-compose-test-pro.drops",
     );
     let graphContainsPlugin = false;
@@ -1255,7 +1256,8 @@ function hookGate(artifact: string, hook: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       `${hook}.last`,
     );
     return commandGate(
@@ -1445,7 +1447,8 @@ function codexAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1489,7 +1492,8 @@ function cursorAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1532,7 +1536,8 @@ function copilotAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1584,7 +1589,8 @@ function copilotLegacyProjectGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1624,7 +1630,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     const cwdGenericHeartbeat = join(
@@ -1633,7 +1640,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
 
@@ -1685,7 +1693,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "default",
       "intents",
       activeIntent,
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     const adapter = run(

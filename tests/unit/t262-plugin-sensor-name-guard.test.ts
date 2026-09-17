@@ -136,7 +136,7 @@ function composePlugin(files: Record<string, string>): ComposeOutcome {
 
   // Drops files are per-plugin (`plugin-compose-<key>.drops`) - aggregate them.
   let drops = "";
-  const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+  const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine/hooks-health");
   if (existsSync(hd)) {
     for (const f of readdirSync(hd)) {
       if (f.startsWith("plugin-compose") && f.endsWith(".drops")) {

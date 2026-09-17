@@ -35,6 +35,8 @@ const manifest: HarnessManifest = {
           // The pre-v2-sync shipped variant (the reshape branch's .gitignore
           // before the 2.6.123 merge changed the shipped bytes).
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
         ],
       },
     },

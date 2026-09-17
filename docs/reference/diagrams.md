@@ -375,7 +375,7 @@ flowchart LR
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-engine/recovery.md` to detect possible state corruption from context compaction.
 
 ```mermaid
 flowchart TD
@@ -383,7 +383,7 @@ flowchart TD
     ARG_CHECK{"Arguments\nprovided?"}
     STATUS_CHECK{"Argument =\n--status?"}
     STATE_EXISTS{"Active intent\nexists?"}
-    RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
+    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
 

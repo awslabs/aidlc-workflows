@@ -261,18 +261,18 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         // subprocess; its own backstops error loud, so a hang surfaces as a nonzero
         // exit (a FINDING about reachability, not a thing to soften).
         //
-        // TERMINATOR = `Last Completed Stage` reaching `intent-capture` (a state
-        // field). The earlier intent-statement *file* lands mid-Step-5, BEFORE the
-        // stakeholder-map (rest of Step 5), the state update (Step 6), and the Step
-        // 7 approval gate — so terminating on it stopped the loop too early and the
-        // stage never completed (stakeholder-map absent, no STAGE_COMPLETED — the
-        // 2026-06-06 t73 red). The approve tool sets `Last Completed Stage =
-        // intent-capture` atomically with GATE_APPROVED + STAGE_COMPLETED, so this
-        // signal means "the WHOLE stage committed and the gate was approved" —
-        // exactly the post-condition every assertion below depends on. The loop
-        // checks disk first each iteration, so it terminates the instant the
-        // approval writes the field, before the auto-advanced market-research stage
-        // can raise its own gate.
+        // TERMINATOR = `Last Completed Stage` reaching `intent-capture` AND
+        // `Current Stage` moving on. The earlier intent-statement *file* lands
+        // mid-Step-5, BEFORE the stakeholder-map (rest of Step 5), the state update
+        // (Step 6), and the Step 7 approval gate — so terminating on it stopped the
+        // loop too early (stakeholder-map absent, no STAGE_COMPLETED — the
+        // 2026-06-06 t73 red). Verified 2026-09-13: handleApprove writes Last
+        // Completed Stage first (aidlc-state.ts:5719); only then does handleAdvance
+        // write Current Stage (aidlc-state.ts:4506). The loop polls disk first, and
+        // the test kills the session ~60 ms after termination: watching only Last
+        // Completed Stage killed approve between these writes (GATE_APPROVED
+        // present, no next-stage STAGE_STARTED). Waiting for BOTH keeps that kill
+        // from landing mid-approve.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -292,11 +292,13 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
               "Looks correct",
               "--assert-file-absent",
               "aidlc/spaces/default/intents/*/ideation/intent-capture/*intent*statement*",
-              // Terminate when the stage has completed + been approved: the approve
-              // tool writes `- **Last Completed Stage**: intent-capture` atomically
-              // with STAGE_COMPLETED. Anchored so only the literal stage matches.
+              // Wait for approval AND advancement (aidlc-state.ts:5719 and
+              // aidlc-state.ts:4506), not just the first write. Keep the completed
+              // stage anchored exactly so the kill cannot land mid-approve.
               "--until-state-field",
               "Last Completed Stage=^intent-capture$",
+              "--also-state-field",
+              "Current Stage=^(?!intent-capture$).+",
             ],
             { stdio: "inherit" },
           );

@@ -1,11 +1,12 @@
 // t332: the preview publication pipeline. The publisher stages the same draft
 // as a stable release, then binds it to an annotated preview tag whose message
 // records the source commit, and publishes it as a prerelease that never
-// becomes "latest". The planner skips a day with a published preview or an
-// unchanged main, allocates the day's build counter from occupied preview ids,
-// and renders notes from the CHANGELOG sections (or commit subjects) added
-// since the previous preview's source commit. The workflow contract pins the
-// schedule/manual trigger, CI gate ordering, and stamped build environment.
+// becomes "latest". The planner skips an unchanged main, permits multiple
+// changed sources on one UTC date, allocates the day's build counter from
+// occupied preview ids, and renders notes from the CHANGELOG sections (or
+// commit subjects) added since the previous preview's source commit. The
+// workflow contract pins the schedule/manual trigger, CI gate ordering, and
+// stamped build environment.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -36,9 +37,10 @@ const CI_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "ci.yml");
 
 const [MAJOR, MINOR, PATCH] = AIDLC_VERSION.split(".").map(Number);
 const NEXT_STABLE = `${MAJOR}.${MINOR}.${PATCH + 1}`;
+const FOLLOWING_STABLE = `${MAJOR}.${MINOR}.${PATCH + 2}`;
 const SOURCE_A = "a".repeat(40);
 const TARGET = "1".repeat(40);
-const PREVIEW_ID = `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.2`;
+const PREVIEW_ID = `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.2`;
 
 const roots: string[] = [];
 const servers: Bun.Server<undefined>[] = [];
@@ -220,7 +222,6 @@ function servePublishMock(
             }
             state.tag = body.tag_name;
             state.draft = false;
-            state.immutable = true;
             state.prerelease = body.prerelease === true;
             state.makeLatest = body.make_latest ?? null;
           }
@@ -405,7 +406,7 @@ describe("t332 preview publication pipeline", () => {
     expect(result.tag).toBe(`v${PREVIEW_ID}`);
     expect(result.assets).toEqual(["checksums.txt", "install.sh", "version.json"]);
     expect(state.draft).toBe(false);
-    expect(state.immutable).toBe(true);
+    expect(state.immutable).toBe(false);
     expect(state.prerelease).toBe(true);
     expect(state.makeLatest).toBe("false");
     expect(state.finalRef).toBe(`refs/tags/v${PREVIEW_ID}`);
@@ -416,14 +417,14 @@ describe("t332 preview publication pipeline", () => {
     });
   });
 
-  test("an already published same-day preview refuses publication before staging or uploading", async () => {
+  test("an already published same-day preview permits another publication", async () => {
     const { baseUrl, state } = servePublishMock([{
-      tag_name: `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.1`,
+      tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`,
       prerelease: true,
       draft: false,
       published_at: "2026-09-03T04:00:00Z",
     }]);
-    await expect(publishRelease({
+    const result = await publishRelease({
       directory: releaseDirectory(),
       tag: `v${PREVIEW_ID}`,
       stagingTag: "aidlc-staging-run-1",
@@ -437,24 +438,22 @@ describe("t332 preview publication pipeline", () => {
       channel: PREVIEW_CHANNEL,
       sourceRepository: "owner/source",
       sourceDigest: SOURCE_A,
-      now: () => new Date("2026-09-03T12:00:00Z"),
-    })).rejects.toThrow("a preview is already published for UTC date 20260903; daily limit reached");
-    expect(state.writes).toEqual([]);
-    expect(state.assets).toEqual([]);
-    expect(state.tag).toBe("aidlc-staging-run-1");
-    expect(state.finalTagObject).toBeNull();
-    expect(state.finalRef).toBeNull();
-    expect(state.draft).toBe(true);
+    });
+    expect(result.tag).toBe(`v${PREVIEW_ID}`);
+    expect(state.assets.map((asset) => asset.name).sort()).toEqual(["checksums.txt", "install.sh", "version.json"]);
+    expect(state.finalRef).toBe(`refs/tags/v${PREVIEW_ID}`);
+    expect(state.draft).toBe(false);
+    expect(state.prerelease).toBe(true);
   });
 
-  test("publication rechecks the UTC date after midnight and refuses before creating the final tag", async () => {
+  test("a preview published after midnight does not block the planned build", async () => {
     const { baseUrl, state } = servePublishMock([{
-      tag_name: `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`,
+      tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`,
       prerelease: true,
       draft: false,
       published_at: "2026-09-04T00:00:00Z",
     }]);
-    await expect(publishRelease({
+    const result = await publishRelease({
       directory: releaseDirectory(),
       tag: `v${PREVIEW_ID}`,
       stagingTag: "aidlc-staging-run-1",
@@ -468,19 +467,15 @@ describe("t332 preview publication pipeline", () => {
       channel: PREVIEW_CHANNEL,
       sourceRepository: "owner/source",
       sourceDigest: SOURCE_A,
-      // The upload and verification work crosses midnight.
-      now: () => new Date(state.assets.length === 0 ? "2026-09-03T23:59:59Z" : "2026-09-04T00:00:01Z"),
-    })).rejects.toThrow("a preview is already published for UTC date 20260904; daily limit reached");
+    });
+    expect(result.tag).toBe(`v${PREVIEW_ID}`);
     expect(state.assets.map((asset) => asset.name).sort()).toEqual(["checksums.txt", "install.sh", "version.json"]);
-    expect(state.tag).toBe("aidlc-staging-run-1");
-    expect(state.finalTagObject).toBeNull();
-    expect(state.finalRef).toBeNull();
-    expect(state.draft).toBe(true);
+    expect(state.finalRef).toBe(`refs/tags/v${PREVIEW_ID}`);
+    expect(state.draft).toBe(false);
     expect(state.immutable).toBe(false);
-    expect(state.prerelease).toBe(false);
+    expect(state.prerelease).toBe(true);
     expect(state.writes).toContain("POST /repos/owner/repo/releases");
-    expect(state.writes).toContain("DELETE /repos/owner/repo/releases/1");
-    expect(state.writes).not.toContain("PATCH /repos/owner/repo/releases/1");
+    expect(state.writes).toContain("PATCH /repos/owner/repo/releases/1");
   });
 
   test("channel and tag grammar are enforced before any remote write", async () => {
@@ -508,19 +503,19 @@ describe("t332 preview publication pipeline", () => {
 
   test("the planner skips an unchanged main, allocates the day's counter, and renders notes", async () => {
     const history = sourceHistory();
-    const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
+    const previous = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
     const baseUrl = servePlanMock({
       releases: [
         { tag_name: `v${AIDLC_VERSION}`, prerelease: false, draft: false },
         { tag_name: previous, prerelease: true, draft: false },
-        { tag_name: `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.9`, prerelease: true, draft: true },
+        { tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.9`, prerelease: true, draft: true },
       ],
       tags: [
         `v${AIDLC_VERSION}`,
         previous,
-        `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.1`,
-        `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.2`,
-        `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.9`,
+        `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`,
+        `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.2`,
+        `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.9`,
         "v9.9.9-rc.1",
       ],
       annotated: { [previous]: { source: history.first } },
@@ -554,7 +549,7 @@ describe("t332 preview publication pipeline", () => {
     expect(planned.skip).toBe(false);
     expect(planned).not.toHaveProperty("reason");
     // The counter skips every existing tag for the date, published or not.
-    expect(planned.version).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.10`);
+    expect(planned.version).toBe(`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.10`);
     expect(planned.plan?.previousSourceDigest).toBe(history.first);
     expect(planned.plan?.notes.name).toBe(`AI-DLC Workflow ${planned.version}`);
     expect(planned.plan?.notes.body).toContain(`## [${NEXT_STABLE}] - 2026-09-03`);
@@ -596,7 +591,7 @@ describe("t332 preview publication pipeline", () => {
     expect(initial.body).toContain(`Source commit: owner/source@${history.first}`);
   });
 
-  test("today's published preview skips an advanced source without reading annotated tags", async () => {
+  test("today's published preview advances the counter when the source changed", async () => {
     const history = sourceHistory();
     const today = `v${PREVIEW_ID}`;
     const requests: string[] = [];
@@ -606,7 +601,7 @@ describe("t332 preview publication pipeline", () => {
       annotated: { [today]: { source: history.first } },
       requests,
     });
-    const skipped = await planPreviewRelease({
+    const planned = await planPreviewRelease({
       client: githubApiClient(baseUrl, undefined),
       repository: "owner/repo",
       sourceRepository: "owner/source",
@@ -614,21 +609,26 @@ describe("t332 preview publication pipeline", () => {
       cwd: history.cwd,
       date: "20260903",
     });
-    expect(skipped).toEqual({
-      skip: true,
-      reason: "daily-limit",
-      version: null,
-      previousSourceDigest: null,
-      plan: null,
+    expect(planned).toMatchObject({
+      skip: false,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.3`,
+      previousSourceDigest: history.first,
+      plan: {
+        sourceDigest: history.second,
+        previousSourceDigest: history.first,
+      },
     });
     expect(requests.filter((path) =>
       path.includes("/git/ref/tags/") || path.includes("/git/tags/")
-    )).toEqual([]);
+    ).length).toBeGreaterThan(0);
   });
 
-  test("a published preview on a later releases page consumes today's daily slot", async () => {
+  test("a published preview on a later releases page seeds the next same-day build", async () => {
+    const history = sourceHistory();
     const firstPage = "repos/owner/repo/releases?per_page=100";
     const secondPage = "https://api.example.invalid/repos/owner/repo/releases?per_page=100&page=2";
+    const previous = `v${PREVIEW_ID}`;
+    const tagObject = "b".repeat(40);
     const requests: string[] = [];
     const client = {
       async json(path: string) {
@@ -641,29 +641,46 @@ describe("t332 preview publication pipeline", () => {
         }
         if (path === secondPage) {
           return {
-            value: [{ tag_name: `v${PREVIEW_ID}`, prerelease: true, draft: false }],
+            value: [{ tag_name: previous, prerelease: true, draft: false }],
             next: null,
           };
+        }
+        if (path === `repos/owner/repo/git/ref/tags/${previous}`) {
+          return { value: { object: { type: "tag", sha: tagObject } }, next: null };
+        }
+        if (path === `repos/owner/repo/git/tags/${tagObject}`) {
+          return {
+            value: {
+              message: previewTagMessage({
+                version: PREVIEW_ID,
+                sourceRepository: "owner/source",
+                sourceDigest: history.first,
+              }),
+            },
+            next: null,
+          };
+        }
+        if (path === "repos/owner/repo/git/matching-refs/tags/v?per_page=100") {
+          return { value: [{ ref: `refs/tags/${previous}` }], next: null };
         }
         throw new Error(`unexpected API request: ${path}`);
       },
     };
-    const skipped = await planPreviewRelease({
+    const planned = await planPreviewRelease({
       client,
       repository: "owner/repo",
       sourceRepository: "owner/source",
-      sourceDigest: SOURCE_A,
-      cwd: REPO_ROOT,
+      sourceDigest: history.second,
+      cwd: history.cwd,
       date: "20260903",
     });
-    expect(skipped).toEqual({
-      skip: true,
-      reason: "daily-limit",
-      version: null,
-      previousSourceDigest: null,
-      plan: null,
+    expect(planned).toMatchObject({
+      skip: false,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.3`,
+      previousSourceDigest: history.first,
+      plan: { sourceDigest: history.second },
     });
-    expect(requests).toEqual([firstPage, secondPage]);
+    expect(requests.slice(0, 2)).toEqual([firstPage, secondPage]);
   });
 
   test("the planner rejects an incomplete release list when page 50 still has a next link", async () => {
@@ -689,9 +706,9 @@ describe("t332 preview publication pipeline", () => {
     expect(requests.at(-1)).toBe(`${firstPage}&page=50`);
   });
 
-  test("a successful scheduled preview makes a later manual plan skip on the same UTC date", async () => {
+  test("a successful scheduled preview permits a later changed manual build on the same UTC date", async () => {
     const history = sourceHistory();
-    const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
+    const previous = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
     const state: PlanMockOptions = {
       releases: [{ tag_name: previous, prerelease: true, draft: false }],
       tags: [previous],
@@ -708,7 +725,7 @@ describe("t332 preview publication pipeline", () => {
     const scheduled = await planPreviewRelease({ ...common, sourceDigest: history.second });
     expect(scheduled).toMatchObject({
       skip: false,
-      version: `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.1`,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`,
       plan: { sourceDigest: history.second, previousSourceDigest: history.first },
     });
 
@@ -724,19 +741,21 @@ describe("t332 preview publication pipeline", () => {
     state.annotated[publishedTag] = { source: history.second };
 
     const manual = await planPreviewRelease({ ...common, sourceDigest: history.third });
-    expect(manual).toEqual({
-      skip: true,
-      reason: "daily-limit",
-      version: null,
-      previousSourceDigest: null,
-      plan: null,
+    expect(manual).toMatchObject({
+      skip: false,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.2`,
+      previousSourceDigest: history.second,
+      plan: {
+        sourceDigest: history.third,
+        previousSourceDigest: history.second,
+      },
     });
   });
 
   test("orphan tags and a draft-only preview permit retry while reserving their counters", async () => {
     const history = sourceHistory();
-    const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
-    const draftOnly = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.9`;
+    const previous = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
+    const draftOnly = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.9`;
     const baseUrl = servePlanMock({
       releases: [
         { tag_name: previous, prerelease: true, draft: false },
@@ -745,8 +764,8 @@ describe("t332 preview publication pipeline", () => {
       // The draft's .9 id has no tag yet; only the failed .1 and .4 attempts do.
       tags: [
         previous,
-        `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.1`,
-        `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.4`,
+        `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`,
+        `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.4`,
       ],
       annotated: { [previous]: { source: history.first } },
     });
@@ -760,10 +779,10 @@ describe("t332 preview publication pipeline", () => {
     });
     expect(planned).toMatchObject({
       skip: false,
-      version: `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.10`,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.10`,
       previousSourceDigest: history.first,
       plan: {
-        tag: `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.10`,
+        tag: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.10`,
         sourceDigest: history.second,
         previousSourceDigest: history.first,
       },
@@ -793,10 +812,10 @@ describe("t332 preview publication pipeline", () => {
     const planned = await planPreviewRelease({ ...common, sourceDigest: history.second });
     expect(planned).toMatchObject({
       skip: false,
-      version: `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.1`,
       previousSourceDigest: history.first,
       plan: {
-        tag: `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`,
+        tag: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.1`,
         sourceDigest: history.second,
         previousSourceDigest: history.first,
       },
@@ -813,9 +832,9 @@ describe("t332 preview publication pipeline", () => {
     });
   });
 
-  test("a higher-version older release does not hide a lower-version preview published today", async () => {
+  test("same-day planning keeps the highest-version preview as the notes baseline", async () => {
     const history = sourceHistory();
-    const older = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
+    const older = `v${FOLLOWING_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
     const today = `v${PREVIEW_ID}`;
     const baseUrl = servePlanMock({
       releases: [
@@ -828,7 +847,7 @@ describe("t332 preview publication pipeline", () => {
         [today]: { source: history.second },
       },
     });
-    const skipped = await planPreviewRelease({
+    const planned = await planPreviewRelease({
       client: githubApiClient(baseUrl, undefined),
       repository: "owner/repo",
       sourceRepository: "owner/source",
@@ -836,21 +855,23 @@ describe("t332 preview publication pipeline", () => {
       cwd: history.cwd,
       date: "20260903",
     });
-    expect(skipped).toEqual({
-      skip: true,
-      reason: "daily-limit",
-      version: null,
-      previousSourceDigest: null,
-      plan: null,
+    expect(planned).toMatchObject({
+      skip: false,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.3`,
+      previousSourceDigest: history.first,
+      plan: {
+        sourceDigest: history.third,
+        previousSourceDigest: history.first,
+      },
     });
   });
 
   test.each([
     "2026-09-03T00:05:00Z",
     "2026-09-02T20:05:00-04:00",
-  ])("a prior-day tag published at %s counts against its UTC publication day", async (publishedAt) => {
+  ])("a prior-day tag published at %s does not block a changed source", async (publishedAt) => {
     const history = sourceHistory();
-    const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
+    const previous = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
     const baseUrl = servePlanMock({
       releases: [{
         tag_name: previous,
@@ -861,7 +882,7 @@ describe("t332 preview publication pipeline", () => {
       tags: [previous],
       annotated: { [previous]: { source: history.first } },
     });
-    const skipped = await planPreviewRelease({
+    const planned = await planPreviewRelease({
       client: githubApiClient(baseUrl, undefined),
       repository: "owner/repo",
       sourceRepository: "owner/source",
@@ -869,12 +890,11 @@ describe("t332 preview publication pipeline", () => {
       cwd: history.cwd,
       date: "20260903",
     });
-    expect(skipped).toEqual({
-      skip: true,
-      reason: "daily-limit",
-      version: null,
-      previousSourceDigest: null,
-      plan: null,
+    expect(planned).toMatchObject({
+      skip: false,
+      version: `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`,
+      previousSourceDigest: history.first,
+      plan: { sourceDigest: history.second },
     });
   });
 
@@ -882,7 +902,7 @@ describe("t332 preview publication pipeline", () => {
     "a %s previous preview never triggers a skip",
     async (kind) => {
       const history = sourceHistory();
-      const previous = `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260902.1`;
+      const previous = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260902.1`;
       const baseUrl = servePlanMock({
         releases: [{ tag_name: previous, prerelease: true, draft: false }],
         tags: [previous],
@@ -901,20 +921,20 @@ describe("t332 preview publication pipeline", () => {
         date: "20260904",
       });
       expect(planned.skip).toBe(false);
-      expect(planned.version).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`);
+      expect(planned.version).toBe(`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.1`);
       expect(planned.plan?.previousSourceDigest).toBeNull();
-      expect(nextPreviewVersion([], AIDLC_VERSION, "20260904")).toBe(
-        `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.1`,
+      expect(nextPreviewVersion([], NEXT_STABLE, "20260904")).toBe(
+        `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.1`,
       );
       expect(nextPreviewVersion(
-        [`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.3`, `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.7`],
-        AIDLC_VERSION,
+        [`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.3`, `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.7`],
+        NEXT_STABLE,
         "20260904",
-      )).toBe(`${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260904.4`);
+      )).toBe(`${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260904.4`);
     },
   );
 
-  test("a queued older checkout can skip today's preview but cannot become a new publication candidate", async () => {
+  test("a queued older checkout can skip its already-published source but cannot become a new publication candidate", async () => {
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
     };
@@ -965,8 +985,19 @@ describe("t332 preview publication pipeline", () => {
     for (const alreadyPublished of [true, false]) {
       const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
       mock.releases = alreadyPublished
-        ? [{ tag_name: `v${AIDLC_VERSION}-${PREVIEW_CHANNEL}.${date}.1`, prerelease: true, draft: false }]
+        ? [{ tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`, prerelease: true, draft: false }]
         : [];
+      mock.tags = alreadyPublished
+        ? [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]
+        : [];
+      mock.annotated = alreadyPublished
+        ? {
+          [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]: {
+            source: history.first,
+            repository: "owner/repo",
+          },
+        }
+        : {};
       writeFileSync(planningOutput, "");
       rmSync(planPath, { force: true });
       const planned = await runWorkflowStep(planScript, history.cwd, {
@@ -1011,7 +1042,7 @@ describe("t332 preview publication pipeline", () => {
     type Workflow = {
       on: Record<string, unknown> & {
         push?: { tags: string[] };
-        schedule?: Array<{ cron: string }>;
+        schedule?: Array<{ cron: string; timezone?: string }>;
       };
       concurrency?: { group?: string; "cancel-in-progress"?: boolean };
       jobs: Record<string, WorkflowJob>;
@@ -1044,9 +1075,10 @@ describe("t332 preview publication pipeline", () => {
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
-    const cron = preview.on.schedule?.[0]?.cron ?? "";
-    expect(cron).toMatch(/^\d{1,2} \d{1,2} \* \* \*$/);
-    expect(cron.split(" ")[0]).not.toBe("0");
+    expect(preview.on.schedule).toEqual([{
+      cron: "0 22 * * *",
+      timezone: "Europe/Lisbon",
+    }]);
     expect(preview.concurrency).toEqual({
       group: "release-preview",
       "cancel-in-progress": false,
@@ -1112,11 +1144,7 @@ describe("t332 preview publication pipeline", () => {
     );
     expect(plan?.run).toContain("bun scripts/plan-preview-release.ts");
     expect(plan?.run).toContain("--source-digest \"$AUTHORIZED_SHA\"");
-    const immutable = preview.jobs.validate.steps?.find(
-      (step) => step.name === "Require immutable preview releases",
-    );
-    expect(immutable?.if).toContain("steps.plan.outputs.skip");
-    expect(immutable?.run).toContain("immutable-releases");
+    expect(previewText).not.toContain("immutable-releases");
 
     const stamp = `\${{ needs.validate.outputs.preview_version }}`;
     expect(preview.jobs.build.env?.AIDLC_BUILD_VERSION).toBe(stamp);
@@ -1135,7 +1163,7 @@ describe("t332 preview publication pipeline", () => {
     expect(publish?.run).toContain("bun scripts/publish-release.ts");
     expect(publish?.run).toContain("--channel preview");
     expect(publish?.run).toContain("--preview-plan \"$plan\"");
-    expect(publish?.run).toContain("--expected-assets 13");
+    expect(publish?.run).toContain("--expected-assets 15");
     expect(previewText).toContain(
       "awslabs/aidlc-workflows/.github/workflows/preview-release.yml",
     );

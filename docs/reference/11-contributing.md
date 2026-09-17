@@ -44,7 +44,7 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 1. **Fork and branch** from `main` (the integration branch and PR target), then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
-3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly five subcommands: `next`, `continue`, `report`, `park`, and `team-board`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
+3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly six subcommands: `next`, `continue`, `report`, `park`, `team-board`, and `wait`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query, and `wait` is the bounded read-only wait for dispatched work) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
 4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to materialize the ignored local `dist/` and `dist-release/` roots. Never hand-edit or commit either root. `package.ts --check` ignores those on-disk trees, builds the complete projection set twice in independent temporary roots, and byte-compares the results.
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
 6. **Submit** -- Open a PR against `main`
@@ -68,11 +68,13 @@ The staged `runtime/<harness>/` trees are read-only fallbacks; mutating commands
 must target an installed project harness. Any failed gate fails the build.
 
 After the target binaries are present, `bun scripts/package-release.ts`
-regenerates and verifies the local projections, packages `dist-release/` into
-the versioned `aidlc-runtime-X.Y.Z.tar.gz`, and emits `version.json`, `checksums.txt`,
-`install.sh`, and `install.ps1`. The per-target `runtime/` directories are
-smoke-gate staging; release data archives are rebuilt from the freshly
-generated native projections, not copied from those sidecars.
+regenerates and verifies the local projections, packages `dist/` into the
+out-of-band manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` plus its `.sha256`
+sidecar, packages `dist-release/` into the manifest-listed
+`aidlc-runtime-X.Y.Z.tar.gz`, and emits `version.json`, `checksums.txt`,
+`install.sh`, and `install.ps1`. The per-target `runtime/`
+directories are smoke-gate staging; release data archives are rebuilt from the
+freshly generated projections, not copied from those sidecars.
 `--require-release-matrix` requires all seven targets and a matching
 verification record for each binary. The generated flat directory is the
 contract consumed by the installer and `release packaging tooling`.
@@ -92,17 +94,17 @@ Stable releases start from pushed version tags in `.github/workflows/release.yml
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through callable CI,
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
-never "latest". Previews publish at most once per UTC day. Scheduled and manual
-runs share `release-preview` workflow concurrency; each later run re-reads
-releases and skips if that day already has a published preview, even if `main`
-advanced. Unchanged sources also skip. Drafts and orphan tags do not consume
-the daily allowance: the planner can retry with an unoccupied id, whose `.N`
-counter does not authorize extra public releases that day.
+never "latest". Scheduled and manual runs share `release-preview` workflow
+concurrency; each later run re-reads releases and skips when the newest
+published preview already uses the same source commit. When `main` advances
+again on the same UTC date, the planner allocates the next unoccupied `.N`
+counter. Drafts and orphan tags reserve their ids, so retries also advance past
+them.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
-how overnight publication timestamps count toward the daily cap, is
-[Supply-Chain Security](19-supply-chain-security.md).
+same-day counter allocation, is [Supply-Chain
+Security](19-supply-chain-security.md).
 
 ## Testing
 
@@ -181,10 +183,43 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 1. Add a subcommand to `core/tools/aidlc-utility.ts`
 2. Register a semantic dispatcher noun/verb and call it from SKILL.md through `aidlc engine <noun> <verb>` (or its public route)
 3. No task tracking needed -- the script runs in under a second
-4. Handle audit logging inside the script via `appendAuditEntry` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks)
+4. Handle audit logging inside the script via `appendAuditEntry` or `appendAuditEntries` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks). Multi-setting mutations use one caller-held lock and append the complete audit batch before the single state write.
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
+
+The intent-configuration handlers share a single mutation path:
+
+| Dispatcher route | Utility handler | Contract |
+|------------------|-----------------|----------|
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation` |
+| `aidlc engine config list [--json]` | `config-list` | Read all seven settings in that order; Change Control and ceremony values include effective sources |
+| `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
+| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same seven settings in the same transaction, including when the requested scope is already current |
+
+`config-change` accepts only the seven setting flags plus `--intent`, `--space`,
+and `--project-dir`, and requires at least one setting. Reject unknown flags by
+name and validate all values before any mutation. A shared utility applier
+returns candidate content, `AuditEntryInput[]`, and output lines in canonical
+key order; it does not write. Both mutation handlers hold one `withAuditLock`
+across state read, apply, `appendAuditEntries` in caller-held-lock mode, and a
+single state write. If Change Control changes, call
+`assertChangeControlLedgerWritable` before any write. A memory layer's
+`Mode: strict` refuses an explicit `--change-control relaxed` for the entire
+command, including companion settings and scope changes. Under that memory
+policy, an implicit scope change still updates the scope-owned Change Control
+line and records the change; memory continues to control the effective value.
+
+Preserve state and event contracts: `review adversarial` stores an empty
+`Review Override`; explicit Change Control and ceremony values use
+`(set by you)`, while inherited scope defaults retain scope provenance. A
+scope change preserves explicit human overrides and absent legacy Change
+Control/ceremony rows. Only real stored field or source changes produce setting
+events or update `Last Updated`. The utility applier builds `CHANGE_CONTROL_SET`
+and `CEREMONY_SET` entries directly; `aidlc-lib.ts` still uses
+`appendChangeControlSetRow` when a governed checkpoint observes an effective
+memory-policy change. Do not add separate setter wrappers or split a combined
+request into multiple dispatcher calls.
 
 The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `codekb-scope-diff` handlers are **direct utility verbs**: stage prose invokes
@@ -205,7 +240,7 @@ unmarked pre-2.6.115 record explicitly falls back to the legacy `Project` state
 field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
-`.aidlc-document-input-path` transport. Customer-chosen path bytes never enter
+`.aidlc-engine/document-input-path` transport. Customer-chosen path bytes never enter
 the shell command. The handler resolves one exact project-root path, records
 the contained file identity, and requires the opened descriptor to match it
 before reading; parent-directory replacement, redirects, and unsupported input
@@ -236,6 +271,11 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
    - `change_control` (optional): `strict` | `relaxed`. The Change Control default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once and continues). Absence means strict. Validated like `skeleton` (the loader names the file and the two values). A memory layer's `## Change Control` `Mode: strict` wins over any scope default.
+   - `sensors` (optional): `on` | `off`, absent means on. Controls sensor execution and sensor gate checks. Per-intent flag: `/aidlc --sensors on|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`.
+   - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
+   - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
+
+   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Classic enables sensors and learnings and disables summary confirmation; other shipped scopes inherit on. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 

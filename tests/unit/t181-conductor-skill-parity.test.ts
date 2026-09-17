@@ -30,7 +30,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -52,39 +52,6 @@ function harnessQuestionAnnexes(): string[] {
     .sort();
 }
 
-function stageDefinitionFiles(): string[] {
-  const coreRoot = join(REPO_ROOT, "core", "aidlc-common", "stages");
-  const core = readdirSync(coreRoot, { withFileTypes: true })
-    .filter((phase) => phase.isDirectory())
-    .flatMap((phase) =>
-      readdirSync(join(coreRoot, phase.name), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-        .map(
-          (entry) =>
-            `core/aidlc-common/stages/${phase.name}/${entry.name}`,
-        ),
-    );
-  const pluginsRoot = join(REPO_ROOT, "plugins");
-  const plugins = readdirSync(pluginsRoot, { withFileTypes: true })
-    .filter((plugin) => plugin.isDirectory())
-    .flatMap((plugin) => {
-      const stagesRoot = join(pluginsRoot, plugin.name, "stages");
-      if (!existsSync(stagesRoot)) return [];
-      return readdirSync(stagesRoot, { withFileTypes: true })
-        .filter((phase) => phase.isDirectory())
-        .flatMap((phase) =>
-          readdirSync(join(stagesRoot, phase.name), {
-            withFileTypes: true,
-          })
-            .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-            .map(
-              (entry) =>
-                `plugins/${plugin.name}/stages/${phase.name}/${entry.name}`,
-            ),
-        );
-    });
-  return [...core, ...plugins].sort();
-}
 
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
@@ -500,40 +467,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
   });
 
-  test("stage definitions preserve the centralized engine-owned diary boundary", () => {
-    const failures: string[] = [];
-    const protocol = readFileSync(
-      join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"),
-      "utf-8",
-    );
-    for (const required of [
-      "created by the engine from the shipped template",
-      "Treat this path as an output-only target",
-      "the orchestrator never reads, probes, creates, or initializes it",
-    ]) {
-      if (!protocol.includes(required)) {
-        failures.push(`stage-protocol.md §13 missing: ${required}`);
-      }
-    }
-
-    for (const rel of stageDefinitionFiles()) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes("memory.md")) continue;
-      if (
-        !body.includes("engine-created") &&
-        !body.includes("stage-protocol.md §13")
-      ) {
-        failures.push(`${rel} missing centralized diary contract reference`);
-      }
-      for (const retired of [
-        "create on stage start if absent",
-        "Before the approval gate, read memory.md",
-      ]) {
-        if (body.includes(retired)) failures.push(`${rel} retired: ${retired}`);
-      }
-    }
-    expect(failures).toEqual([]);
-  });
 
   test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
@@ -620,7 +553,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         expect(logging).toBeDefined();
         expect(logging).toContain("Once `decision` succeeds, render that question and END THE TURN");
         expect(logging).toContain("only the human's next interaction may be followed by `answer`");
-        expect(protocol).toContain("questions → artifact → reviewer (if declared) → learnings → gate");
+        expect(protocol).toContain("questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate");
         expect(body).not.toContain("[Answer]: Looks correct");
         expect(body).not.toContain("aidlc-log.ts decision");
         continue;

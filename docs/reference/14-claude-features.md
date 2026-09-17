@@ -191,7 +191,7 @@ Gitignore:
   - aidlc/active-space, aidlc/spaces/*/intents/active-intent  (per-user cursors)
   - aidlc/.aidlc-clone-id, aidlc/.aidlc-sessions/             (machine-local)
   - aidlc/spaces/*/intents/*/runtime-graph.json              (re-derivable)
-  - aidlc/spaces/*/intents/*/.aidlc-*                          (incl. .aidlc-recovery.md)
+  - aidlc/spaces/*/intents/*/.aidlc-*                          (incl. .aidlc-engine/recovery.md)
 ```
 
 The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`): each clone appends to its own shard, so concurrent appends never git-conflict. Per-user session cursors and machine-local derived state are ignored.
@@ -208,7 +208,8 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
 {
   "permissions": {
     "allow": [
-      "Read", "Edit", "Write", "Bash",
+      "Read", "Edit", "Write",
+      "Bash(bun .claude/tools/*)", "Bash(date -u *)",
       "Glob", "Grep", "Task", "WebSearch"
     ]
   }

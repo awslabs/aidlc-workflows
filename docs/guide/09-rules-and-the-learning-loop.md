@@ -50,11 +50,11 @@ The chain is resolved **once**, at workflow start, when the framework compiles y
 
 The learning loop is the mechanism that turns a one-time correction into a durable rule. Most stage runs add nothing — and that is healthy. The loop fires only when something surfaced during the stage that you decide is worth keeping.
 
-The loop has four user-visible moments: the agent keeps a diary while the stage runs, the gate surfaces candidates, you confirm what to keep, and the framework writes the kept items for next time.
+When the learnings ritual is on, the loop has four user-visible moments: the agent keeps a diary while the stage runs, the gate surfaces candidates, you confirm what to keep, and the framework writes the kept items for next time. When it is off, neither the diary nor the gate ritual runs.
 
 ### The memory.md diary
 
-While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. The engine creates it from the shipped template when it emits the run-stage directive, and the orchestrator maintains it for you — never hand-edited. Entries land under four standard headings:
+When the learnings ritual is on, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` while a stage runs — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. The engine creates it from the shipped template when it emits the run-stage directive, and the orchestrator maintains it for you — never hand-edited. Entries land under four standard headings:
 
 - **Interpretations** — choices the agent made where the stage prose was ambiguous
 - **Deviations** — places the agent intentionally departed from the stage prose, and why
@@ -141,7 +141,7 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
 
 ### What you see in the audit log
 
-Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
+Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-engine/sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap - the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
 
 ### The six framework sensors
 

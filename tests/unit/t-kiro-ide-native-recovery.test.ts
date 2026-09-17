@@ -12,7 +12,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   readPlanApprovalLegacyWindows,
   stateDigest,
@@ -90,11 +90,12 @@ function fixture(): string {
     stage: "requirements-analysis",
     state_sha256: stateDigest(previous),
   });
-  const markerFile = join(seededRecordDir(project), ".aidlc-active-directive.json");
+  const markerFile = join(seededRecordDir(project), ".aidlc-engine/active-directive.json");
   const marker = JSON.parse(readFileSync(markerFile, "utf-8"));
   marker.revision = 4;
   delete marker.code_generation_authority_revision;
   delete marker.code_generation_source_sha256;
+  mkdirSync(dirname(markerFile), { recursive: true });
   writeFileSync(markerFile, JSON.stringify(marker));
   writeFileSync(seededStateFile(project), previous.replace(
     "- **Current Stage**: requirements-analysis",
@@ -149,7 +150,7 @@ function guard(project: string, tool: string, input: object) {
 
 function marker(project: string) {
   return JSON.parse(readFileSync(
-    join(seededRecordDir(project), ".aidlc-active-directive.json"), "utf-8",
+    join(seededRecordDir(project), ".aidlc-engine/active-directive.json"), "utf-8",
   ));
 }
 

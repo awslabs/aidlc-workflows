@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { dirname, basename, join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import {
   _posixGateLibraryCandidatesForTests,
@@ -993,8 +993,8 @@ describe("t161 active-directive owner lock and doctor findings", () => {
     const fixture = markerProject();
     try {
       writeMarker(fixture.projectDir, fixture.state);
-      const markerPath = join(fixture.recordDir, ".aidlc-active-directive.json");
-      const lockDir = join(fixture.recordDir, ".aidlc-active-directive.lock");
+      const markerPath = join(fixture.recordDir, ".aidlc-engine/active-directive.json");
+      const lockDir = join(fixture.recordDir, ".aidlc-engine/active-directive.lock");
       const before = readFileSync(markerPath, "utf-8");
       const deadToken = randomUUID();
       mkdirSync(join(lockDir, deadToken), { recursive: true });
@@ -1026,12 +1026,14 @@ describe("t161 active-directive owner lock and doctor findings", () => {
 
   test("post-grace unstamped locks recover through one-generation tombstones while legacy debris stays manual", () => {
     const fixture = markerProject();
-    const lockDir = join(fixture.recordDir, ".aidlc-active-directive.lock");
+    const lockDir = join(fixture.recordDir, ".aidlc-engine/active-directive.lock");
+    // Debris from the pre-lock marker writer lives at the record root, not in the engine dir.
     const legacy = join(fixture.recordDir, ".aidlc-active-directive.json.transaction");
     process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS = "1";
     try {
-      mkdirSync(lockDir);
+      mkdirSync(lockDir, { recursive: true });
       utimesSync(lockDir, new Date(0), new Date(0));
+      mkdirSync(dirname(legacy), { recursive: true });
       writeFileSync(legacy, "{}\n");
       expect(detectLeakedLocks(fixture.projectDir, false)).toContainEqual(expect.objectContaining({
         kind: "active-directive",

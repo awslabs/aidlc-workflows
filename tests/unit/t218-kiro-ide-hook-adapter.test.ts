@@ -655,7 +655,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           join(
             intentsDirOf(dir, DEFAULT_SPACE),
             createdIntent.dirName,
-            ".aidlc-hooks-health",
+            ".aidlc-engine/hooks-health",
             "session-end.last",
           ),
         ),
@@ -1378,7 +1378,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
   test("13: hook-debug.log is OPT-IN — absent without AIDLC_HOOK_DEBUG, present with it", () => {
     const debugLogPath = (dir: string) =>
-      join(seededRecordDir(dir), ".aidlc-hooks-health", "hook-debug.log");
+      join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "hook-debug.log");
     const fire = (dir: string, withFlag: boolean) => {
       const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
       mkdirSync(dirname(file), { recursive: true });
@@ -1418,7 +1418,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
   test("13b: the filesystem marker aidlc/.aidlc-hook-debug enables logging (no env var)", () => {
     const debugLogPath = (dir: string) =>
-      join(seededRecordDir(dir), ".aidlc-hooks-health", "hook-debug.log");
+      join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "hook-debug.log");
     const dir = scratchProject(true);
     try {
       // touch the marker; do NOT set AIDLC_HOOK_DEBUG.
@@ -2655,10 +2655,11 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         ).toBe(0);
         const path = target.startsWith("state")
           ? seededStateFile(dir)
-          : join(seededRecordDir(dir), ".aidlc-active-directive.json");
+          : join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
         if (target.endsWith("delete")) {
           rmSync(path, { force: true });
         } else {
+          mkdirSync(dirname(path), { recursive: true });
           writeFileSync(path, "corrupted authority\n");
         }
         expect(
@@ -3242,7 +3243,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         });
         expect(`${target}:timedOut=${r.timedOut}`).toBe(`${target}:timedOut=false`);
         expect(`${target}:code=${r.code}`).toBe(`${target}:code=0`);
-        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
         expect(`${target}:drops=${existsSync(dropFile)}`).toBe(`${target}:drops=true`);
         expect(readFileSync(dropFile, "utf-8")).toContain(`${target}: empty hook context`);
       } finally {
@@ -3319,7 +3320,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         const r = scenario.invoke(dir);
         expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
         expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
-        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
         expect(`${scenario.label}:drops=${existsSync(dropFile)}`).toBe(
           `${scenario.label}:drops=true`,
         );
@@ -3486,7 +3487,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
       const r = runIde(dir, "audit-and-sensors", ctx("fs_write", "Wrote something somewhere"));
       expect(r.code).toBe(0);
       // No audit row, but a drop is recorded for --doctor to surface.
-      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(existsSync(dropFile)).toBe(true);
       expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
     } finally {
@@ -3526,7 +3527,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
         ctx1x("str_replace", failure),
       );
       expect(r.code).toBe(0); // still fail-open
-      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(existsSync(dropFile)).toBe(false); // NOT decay
       expect(readAudit(dir)).not.toContain("ARTIFACT_UPDATED"); // and never audited
     } finally {
@@ -3545,7 +3546,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
         ctx1x("str_replace", "Swapped the text over there"),
       );
       expect(r.code).toBe(0);
-      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(existsSync(dropFile)).toBe(true);
       expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
     } finally {
@@ -3565,7 +3566,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
         ctx("str_replace", "Failed to preserve file mode; requested text was replaced"),
       );
       expect(r.code).toBe(0);
-      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(existsSync(dropFile)).toBe(true);
       expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
     } finally {
@@ -3799,7 +3800,7 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
         const r = scenario.invoke(dir, file);
         expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
         expect(readAudit(dir)).not.toContain("ARTIFACT_");
-        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
         expect(`${scenario.label}:drops=${existsSync(dropFile)}`).toBe(
           `${scenario.label}:drops=true`,
         );

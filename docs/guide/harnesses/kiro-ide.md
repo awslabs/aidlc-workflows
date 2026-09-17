@@ -64,7 +64,7 @@ user-owned settings. Open `your-project/` in Kiro IDE and run
 
 ### Versioned manual-copy alternative
 
-Download and extract a specific release's `aidlc-runtime-X.Y.Z.tar.gz` as described in
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
 [Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
 then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
@@ -224,7 +224,7 @@ You will see a "Run Command Hook" line in chat each time one fires.
 
 If a hook isn't behaving as expected, turn on debug logging and each hook
 appends its decision path (which gate it took, the resolved paths, why it
-exited) to `<record>/.aidlc-hooks-health/hook-debug.log`. It is **off by
+exited) to `<record>/.aidlc-engine/hooks-health/hook-debug.log`. It is **off by
 default** — no log is written and there is no overhead on a normal run. Two
 ways to enable it, either works:
 

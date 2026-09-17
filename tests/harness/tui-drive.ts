@@ -76,6 +76,7 @@
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
+//          [--also-state-field <name=regex>]
 //          [--assert-file-absent-at-option <label>
 //           --assert-file-absent <relpath>]
 //          [--reject-first-gate] [--stop-at-approval-gate]
@@ -107,6 +108,13 @@
 //            --until-state-field <n=re>    STOP when aidlc-state.md's `- **<n>**:`
 //                                          line value matches /re/ — e.g.
 //                                          `Status=Completed`.
+//            --also-state-field <n=re>     With --until-state-field, STOP only
+//                                          when BOTH state fields match. Approve
+//                                          writes Last Completed Stage before
+//                                          handleAdvance writes Current Stage
+//                                          (aidlc-state.ts:5719 and :4506;
+//                                          verified 2026-09-13). Wait for both to
+//                                          avoid stopping in that two-write window.
 //            --assert-file-absent-at-option <label>
 //            --assert-file-absent <relpath>
 //                                          When the named option is first painted,
@@ -3300,7 +3308,14 @@ function affirmedOnDisk(projectDir: string): boolean {
 //                                   (a glob segment `*` matches within one dir level)
 //   --until-state-field <name=re>   terminate when aidlc-state.md's
 //                                   `- **<name>**:` line matches the regex <re>
+//   --also-state-field <name=re>    require BOTH this state field and
+//                                   --until-state-field to match; requires the latter
 //   (none)                          terminate on the practices-affirmation timestamp
+//
+// --also-state-field closes the approve tool's two-write window: handleApprove
+// writes Last Completed Stage (aidlc-state.ts:5719), then handleAdvance writes
+// Current Stage (aidlc-state.ts:4506; verified 2026-09-13). Wait for both before
+// returning, so a caller's session kill cannot land between those writes.
 type Terminator = { describe: string; done: () => boolean };
 
 export type PortablePathKind =
@@ -3518,6 +3533,11 @@ function stateFieldSignalMet(projectDir: string, name: string, re: RegExp): bool
 function makeTerminator(projectDir: string, a: Args): Terminator {
   const untilFile = a.flags["until-file"];
   const untilField = a.flags["until-state-field"];
+  const alsoField = a.flags["also-state-field"] ??
+    (a.bools["also-state-field"] ? "" : undefined);
+  if (alsoField !== undefined && !untilField) {
+    fail("--also-state-field requires --until-state-field", 2);
+  }
   if (untilFile) {
     return {
       describe: `file '${untilFile}' exists & non-empty`,
@@ -3532,6 +3552,21 @@ function makeTerminator(projectDir: string, a: Args): Terminator {
     const name = untilField.slice(0, eq);
     const reStr = untilField.slice(eq + 1);
     const re = new RegExp(reStr);
+    if (alsoField !== undefined) {
+      const alsoEq = alsoField.indexOf("=");
+      if (alsoEq <= 0) {
+        fail(`--also-state-field expects <name>=<regex>, got '${alsoField}'`, 2);
+      }
+      const alsoName = alsoField.slice(0, alsoEq);
+      const alsoReStr = alsoField.slice(alsoEq + 1);
+      const alsoRe = new RegExp(alsoReStr);
+      return {
+        describe: `state field '${name}' matches /${reStr}/ AND state field '${alsoName}' matches /${alsoReStr}/`,
+        done: () =>
+          stateFieldSignalMet(projectDir, name, re) &&
+          stateFieldSignalMet(projectDir, alsoName, alsoRe),
+      };
+    }
     return {
       describe: `state field '${name}' matches /${reStr}/`,
       done: () => stateFieldSignalMet(projectDir, name, re),
@@ -3840,6 +3875,24 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       backend,
       session,
       `--until-state-field expects <name>=<regex>, got '${untilField}'`,
+      2,
+    );
+  }
+  const alsoField = a.flags["also-state-field"] ??
+    (a.bools["also-state-field"] ? "" : undefined);
+  if (alsoField !== undefined && !untilField) {
+    failAnswerGate(
+      backend,
+      session,
+      "--also-state-field requires --until-state-field",
+      2,
+    );
+  }
+  if (alsoField !== undefined && alsoField.indexOf("=") <= 0) {
+    failAnswerGate(
+      backend,
+      session,
+      `--also-state-field expects <name>=<regex>, got '${alsoField}'`,
       2,
     );
   }

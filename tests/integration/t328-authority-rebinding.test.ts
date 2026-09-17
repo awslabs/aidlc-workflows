@@ -108,7 +108,7 @@ function snapshot(root: string, rel = ""): Record<string, string> {
 // pointers, turn-shape markers) is machine-local runtime state, not workflow
 // authority, so it is excluded when asking whether project bytes moved.
 const RUNTIME_NOISE =
-  /\.aidlc-hooks-health|\.aidlc-stop-hook|\.aidlc-sessions\/(?:usage|current)|\.transcript$|\.aidlc-human-turn|\.aidlc-engine-touch|\.aidlc-clone-id/;
+  /\.aidlc-engine\/hooks-health|\.aidlc-engine\/stop-hook|\.aidlc-sessions\/(?:usage|current)|\.transcript$|\.aidlc-engine\/human-turn|\.aidlc-engine\/engine-touch|\.aidlc-clone-id/;
 
 function bytesMoved(
   before: Record<string, string>,
@@ -192,7 +192,7 @@ async function project(
     { Source: "startup", Session: SESSION },
     dir,
   );
-  const markerPath = join(seededRecordDir(dir), ".aidlc-active-directive.json");
+  const markerPath = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
   const runtimeDir = join(sessionsDir(dir), "plan-approval");
   const runtimeFiles = () =>
     existsSync(runtimeDir) ? readdirSync(runtimeDir).sort() : [];
