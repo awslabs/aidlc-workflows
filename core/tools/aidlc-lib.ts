@@ -7587,26 +7587,23 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 // themselves must be present; a paraphrase ("please change it") is not a
 // choice. Plan Approval keeps its exact-label rule because those labels are the
 // anti-forgery binding.
+// Shape of an accepted reply: optional option prefix, then the words
+// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
+// most ONE "(recommended)" decorator, then wrapper noise again. Because the
+// noise is allowed on both sides of the decorator, the decorator composes with
+// quotes and punctuation whether it sits inside or outside them, and there is
+// no pass ordering that can silently drop one direction (PR #1133 review).
+const REQUEST_CHANGES_CHOICE_RE =
+  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
 export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  // The decorator strip is end-anchored, so it runs after the surrounding
-  // quotes and trailing punctuation are gone; otherwise either one hides it.
-  const normalized = stripRecommendedDecorator(
-    (text ?? "")
-      .trim()
-      .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
-      .replace(/^["'`]+|["'`]+$/g, "")
-      .replace(/[.!]+$/, ""),
-  )
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-  return normalized === "request changes";
+  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
-// The Codex question-rendering guide tells the conductor to append
-// "(Recommended)" to the recommended option's label, and request_user_input
-// returns the decorated label. Plan Approval matches offered labels exactly, so
-// the one trailing decorator is removed before that match (case-insensitive,
-// surrounding whitespace tolerated) and nothing else about the text changes.
+// Every harness question-rendering guide tells the conductor to append
+// "(Recommended)" to the recommended option's label, and the picker returns the
+// decorated label. Stage gates and Plan Approval remove the one trailing
+// decorator before matching offered labels (case-insensitive, surrounding
+// whitespace tolerated). Nothing else about the text changes.
 const RECOMMENDED_DECORATOR_RE = /\s*\(recommended\)\s*$/i;
 export function stripRecommendedDecorator(text: string): string {
   return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();

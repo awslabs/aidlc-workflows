@@ -1647,7 +1647,7 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("the gate's Request Changes choice tolerates case, prefix, and punctuation but not paraphrase", () => {
+  test("the gate's Request Changes choice tolerates case, prefix, punctuation, and a recommended decorator but not paraphrase", () => {
     for (const reply of [
       "Request Changes",
       "request changes",
@@ -1657,15 +1657,29 @@ describe("AttemptView projections and refusal streaks", () => {
       '"Request Changes"',
       "Request Changes.",
       "  Request   Changes  ",
-      // The question-rendering guide asks the conductor to append this to the
-      // recommended option's label, and the picker returns the decorated label.
+      // The picker returns the recommended choice's decorated label.
       "Request Changes (Recommended)",
       "request changes (recommended)",
-      // The decorator is stripped after the quote and punctuation tolerance
-      // above, so it still matches when either of those wraps it.
+      // The decorator composes with surrounding double quotes.
       '"Request Changes (Recommended)"',
+      // The decorator composes with surrounding single quotes.
+      "'Request Changes (Recommended)'",
+      // The decorator composes with a trailing period.
       "Request Changes (Recommended).",
+      // The decorator composes with a trailing exclamation mark.
+      "Request Changes (Recommended)!",
+      // The decorator composes with an alphabetic option prefix.
       "B. Request Changes (Recommended)",
+      // The decorator composes with a numeric prefix, case, and punctuation.
+      "2) request changes (recommended).",
+      // The decorator must compose both inside and outside the wrappers.
+      // These rows pin the direction a fixed-order normalization would drop.
+      // The decorator sits outside trailing punctuation.
+      "Request Changes. (Recommended)",
+      // The decorator sits outside surrounding quotes.
+      '"Request Changes" (Recommended)',
+      // Quotes sit inside and punctuation outside the decorator.
+      '"Request Changes (Recommended)".',
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }
@@ -1673,6 +1687,10 @@ describe("AttemptView projections and refusal streaks", () => {
       "Approve",
       "please change it",
       "Request Changes to the plan",
+      "(Recommended)",
+      "Request Changes (Recommended) extra",
+      "Request Changes (Recommended) (Recommended)",
+      '"Approve (Recommended)"',
       "Changes",
       "",
       undefined,
