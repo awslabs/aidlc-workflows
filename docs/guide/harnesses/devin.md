@@ -69,10 +69,10 @@ steps to run together. `/mcp` shows MCP status. After changing settings, restart
 the session if needed before verifying the selected server. Live MCP
 verification is optional and does not gate an AIDLC workflow.
 
-- **Context7** — the existing HTTP header uses the literal placeholder
-  `${CONTEXT7_API_KEY}`. When opting in, supply `CONTEXT7_API_KEY` securely
-  through the environment or private local configuration. Never commit a
-  literal key or put it in shell history. The shipped placeholder is a configuration string, not proof of interpolation; verify the current host's header substitution behavior when enabling the server.
+- **Context7** — the HTTP header uses Devin's documented environment
+  interpolation `${env:CONTEXT7_API_KEY}`. When opting in, export
+  `CONTEXT7_API_KEY` securely in the environment or use private local
+  configuration. Never commit a literal key or put it in shell history.
 - **AWS servers** — install `uvx` and the chosen package's supported Python
   runtime, and supply appropriate AWS credentials and permissions when enabled.
   The shipped AWS proxy endpoint and metadata retain `us-east-1`; review them

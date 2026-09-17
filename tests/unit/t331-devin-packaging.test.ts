@@ -268,9 +268,24 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     const context7 = authored.mcpServers.context7;
     expect(context7.url).toBe(kiro.mcpServers.context7.url);
     expect(context7.disabled).toBe(kiro.mcpServers.context7.disabled);
-    expect(context7.headers).toEqual({ CONTEXT7_API_KEY: `\${CONTEXT7_API_KEY}` });
+    expect(context7.headers).toEqual({ CONTEXT7_API_KEY: `\${env:CONTEXT7_API_KEY}` });
     expect("type" in context7).toBe(false);
     expect("command" in context7).toBe(false);
+  });
+
+  test("5c: the Context7 key uses the documented ${env:VAR} interpolation and resolves without a real credential", () => {
+    const mcp = JSON.parse(readFileSync(join(ENGINE, "mcp_config.json"), "utf-8")) as {
+      mcpServers: { context7: { headers: Record<string, string> } };
+    };
+    const header = mcp.mcpServers.context7.headers.CONTEXT7_API_KEY;
+    // Devin's documented interpolation form is ${env:VAR}; the bare ${VAR}
+    // form is not a substitution reference.
+    expect(header).toBe("${env:CONTEXT7_API_KEY}");
+    // Resolve it the way the documented contract describes: ${env:NAME}
+    // expands from the process environment. Injected map, never a real key.
+    const fakeEnv: Record<string, string> = { CONTEXT7_API_KEY: "test-sentinel-not-a-key" };
+    const resolved = header.replace(/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => fakeEnv[name] ?? "");
+    expect(resolved).toBe("test-sentinel-not-a-key");
   });
 
   test("6: rules/aidlc.md — no @-import, mentions the memory dir, has always_on trigger", () => {

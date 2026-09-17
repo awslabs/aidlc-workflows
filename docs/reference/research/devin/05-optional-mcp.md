@@ -14,7 +14,7 @@ The AWS launchers retain @latest in accordance with the selected Kiro-parity dec
 
 Enable only selected entries after supplying prerequisites, using disabled: false or native scoped MCP commands. Keep personal credentials in private local configuration. Doctor checks registry presence, not authenticated connectivity; a disabled registry is not a doctor failure.
 
-The authored Context7 header contains the literal placeholder ${CONTEXT7_API_KEY}. This audit verifies that configured string, not its interpolation or an authenticated request. Review the current host's header/secret substitution contract before relying on it; documentation of other substitution forms or OAuth fields alone does not prove this exact header works.
+The authored Context7 header uses the documented ${env:CONTEXT7_API_KEY} interpolation (docs.devin.ai MCP configuration: "Reference it from an environment variable (`${env:VAR}`)"). This audit verifies the configured string and its documented substitution form, not an authenticated request.
 
 ## Evidence and limits
 
