@@ -69,7 +69,9 @@ after the real skeleton checkpoint. The conductor follows `offer_autonomy`,
 records the human's choice through `bolt set-autonomy`, and asks no repeated
 ladder once a choice is known. On-demand grant/revoke requests remain available.
 Autonomy changes ordinary completion approvals; it never supplies a human Plan
-Approval or summary confirmation, or makes a failed check pass.
+Approval or an enabled summary confirmation, or makes a failed check pass.
+Summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`.
 
 To choose swarm execution, explicitly select stage-major and then
 `Construction Execution: swarm`. Guided (`gated`) and automatic (`autonomous`)
@@ -88,8 +90,9 @@ the actual grant. For example, a team can recommend:
 
 Until our integrated checks have proved reliable, recommend **Review each
 checkpoint**. Review the working first slice and each ordinary completed Unit
-or swarm batch before proceeding. Plan Approval and summary confirmation remain
-human decisions even when we later select **Continue automatically**.
+or swarm batch before proceeding. Plan Approval and any enabled summary
+confirmation remain human decisions even when we later select
+**Continue automatically**.
 ```
 
 For a trusted project, the same heading can recommend **Continue automatically**

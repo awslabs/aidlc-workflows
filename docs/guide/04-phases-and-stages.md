@@ -238,7 +238,9 @@ The autonomy offer is **Continue automatically** / **Review each checkpoint**:
 for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
 and skeleton-on offers it after the real skeleton checkpoint. An existing choice
 is not repeated; on-demand grant/revoke requests remain available. Plan Approval,
-summary confirmation, and failures still need human attention under either choice.
+enabled summary confirmation, and failures still need human attention under
+either choice. Summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`.
 
 The new default does not convert existing workflows, design-only work, or flows
 without Units. Their existing stage approvals remain. Team-owned Units keep their
@@ -253,12 +255,12 @@ source. Other workflows keep their recorded execution and approval policy.
 flowchart TD
     START(["Begin eligible solo Unit workflow"])
     STANCE{"Skeleton-on?"}
-    FIRST["First DAG Unit: applicable design and Code Generation<br/>Human summary confirmation and Plan Approval"]
+    FIRST["First DAG Unit: applicable design and Code Generation<br/>Human Plan Approval and enabled summary confirmation"]
     INTEGRATED["Real integrated project check passes"]
     SKELETON{{"Human approval of verified skeleton"}}
     OFFER["When offered and no choice is recorded:<br/>Continue automatically / Review each checkpoint"]
     MORE{"Another Unit owed?"}
-    UNIT["Next Unit: applicable design and Code Generation<br/>Human summary confirmation and Plan Approval"]
+    UNIT["Next Unit: applicable design and Code Generation<br/>Human Plan Approval and enabled summary confirmation"]
     VERIFY["Verify the completed Unit"]
     CHECKPOINT{{"Ordinary Unit checkpoint<br/>Human if gated; automatic under an explicit grant"}}
     BOOK["Settle completion-only stage bookkeeping"]
@@ -275,7 +277,7 @@ flowchart TD
     S36 -.->|CI skipped| VG3
 ```
 
-<!-- Text fallback: An eligible solo source-producing workflow completes and verifies the first integrated Unit with human skeleton approval when skeleton-on. When offered, choose Continue automatically or Review each checkpoint unless a choice already exists. Complete remaining Units serially with human Plan Approval and summary confirmation, verify each, and approve ordinary checkpoints according to the recorded policy. Completion-only stage gates are bookkeeping; Build and Test and optional CI Pipeline run once across the solution. -->
+<!-- Text fallback: An eligible solo source-producing workflow completes and verifies the first integrated Unit with human skeleton approval when skeleton-on. When offered, choose Continue automatically or Review each checkpoint unless a choice already exists. Complete remaining Units serially with human Plan Approval and any enabled summary confirmation, verify each, and approve ordinary checkpoints according to the recorded policy. Completion-only stage gates are bookkeeping; Build and Test and optional CI Pipeline run once across the solution. -->
 
 ### Parallel Unit batches
 
@@ -338,7 +340,7 @@ Failures always stop Construction, even in autonomous mode. The Build-and-Test l
 - The real skeleton is the first complete integrated Unit, verified and human-approved before later Units; a legacy first-stage gate is only a stage review.
 - Ordinary completion follows the recorded autonomy policy. `completion_only` stage directives settle existing approvals without repeating bodies, reviewers, or human completion questions.
 - An autonomy answer does not choose swarm or change iteration order. Explicit stage-major/swarm selection supports guided or automatic batch checkpoints.
-- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Summary confirmation and failures still require the human.
+- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Enabled summary confirmation and failures still require the human.
 
 ---
 

@@ -242,9 +242,10 @@ How should I continue building the remaining work?
 Skeleton-off offers this choice at Construction entry instead. Your answer is
 recorded as `Construction Autonomy Mode` and respected on resume; explicit
 on-demand requests can change it later. **Continue automatically** skips routine
-completion questions, while Plan Approval, summary confirmation, and failures
-still require your attention. **Review each checkpoint** waits for your approval
-at each completed Unit.
+completion questions, while Plan Approval, enabled summary confirmation, and
+failures still require your attention. Summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`. **Review each checkpoint**
+waits for your approval at each completed Unit.
 
 Execution is a separate choice. Unit-major stays serial. If you explicitly choose
 stage-major and swarm execution, eligible Code Generation Units may run in

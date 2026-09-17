@@ -348,16 +348,17 @@ continues serially; this approval choice does not enable swarm execution.
 
 **Remaining Units: notification-preferences, then notification-email**
 
-Each Unit goes through its own applicable design stages, summary confirmation,
-Plan Approval, code, checks, and reviews before the next begins:
+Each Unit goes through its own applicable design stages, any enabled summary
+confirmation, Plan Approval, code, checks, and reviews before the next begins:
 
 - **notification-preferences** — Preference entity, defaults, channel toggles, CRUD API, repository, and validation; 2 source files and 3 test files.
 - **notification-email** — Delivery rules, renderer, SQS consumer, and digest cron job using the approved preference-lookup contract; 4 source files and 5 test files.
 
 The conductor may automatically approve each verified ordinary Unit checkpoint
-under your recorded grant. Plan Approval and summary confirmation still wait
-for you. Once all Units are approved, completion-only stage directives reconcile
-bookkeeping without another round of stage-body or reviewer work.
+under your recorded grant. Plan Approval still waits for you, as does summary
+confirmation when `directive.ceremony.summary_confirmation === "on"`. Once all
+Units are approved, completion-only stage directives reconcile bookkeeping without
+another round of stage-body or reviewer work.
 
 **What a failure would look like.** If notification-email's check fails because
 its SES mock cannot be constructed, the workflow stops and explains the failure.

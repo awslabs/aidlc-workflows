@@ -112,7 +112,9 @@ swarm. On stage-major with explicit `Construction Execution: swarm`, skeleton-on
 approves the first Unit's real integrated checkpoint before eligible Code
 Generation batches fan out. Use exactly `directive.units`; inline Units already
 approved at their checkpoints are excluded from later swarm work. Planning,
-summary confirmation, and Plan Approval remain required for each emitted Unit.
+any enabled summary confirmation (the stage protocol's
+`directive.ceremony.summary_confirmation === "on"` rule), and Plan Approval remain
+required for each emitted Unit.
 The Construction module's **Grouped Plan Approval** may present the exact live
 batch together; unsupported or legacy mediation uses individual approvals.
 
@@ -135,11 +137,15 @@ invent verification or approval. When ready, guided/gated completion presents
 **Approve** / **Request Changes** and waits for the actual human. Automatic
 completion uses the recorded autonomous policy and omits `--user-input`:
 
-At a human batch checkpoint, retain the §13 learning-selection question for
-the batch before its separate approval question. Consolidate the relevant Unit
-diaries into that question and persist only explicit human selections.
+At a human batch checkpoint, run the §13 learning-selection question only when
+`directive.protocol_modules` lists `learnings`. With the module listed,
+consolidate the relevant Unit diaries into that question and persist only explicit
+human selections, then ask the batch approval as a separate question and turn.
 Automatic batches retain pending candidates for the next human checkpoint or
-final handoff; bookkeeping settlement never repeats an already handled ritual.
+final handoff only when `directive.protocol_modules` lists `learnings`. When the
+module is absent, keep no diary and ask no learning question; go straight to the
+batch approval question when a human is required. Bookkeeping settlement never
+repeats an already handled ritual.
 
 ```bash
 # Only after a real human Approve:

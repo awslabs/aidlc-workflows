@@ -57,8 +57,8 @@ Skeleton-off offers **Continue automatically** / **Review each checkpoint** at
 Construction entry; skeleton-on offers it after the real skeleton checkpoint.
 Only an emitted offer with no recorded choice prompts automatically. On-demand
 requests can change the choice during Construction. The answer controls ordinary
-completion questions; it never grants Plan Approval, summary confirmation, or
-successful verification of a failed check.
+completion questions; it never grants Plan Approval, an enabled summary
+confirmation, or successful verification of a failed check.
 
 ```text
 Eligible new source-producing solo Unit workflow:
@@ -87,8 +87,9 @@ path without policy retains its existing human-gate procedure.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
-but still records individual receipts. Pre-generation summary confirmation also
-remains required. See [Construction commands](../../guide/12-cli-commands.md#construction-order-and-execution)
+but still records individual receipts. Pre-generation summary confirmation is
+required only when `directive.ceremony.summary_confirmation === "on"`. See
+[Construction commands](../../guide/12-cli-commands.md#construction-order-and-execution)
 for the checkpoint and approval commands.
 
 **Iteration and execution are separate.** Unit-major is serial. To choose swarm

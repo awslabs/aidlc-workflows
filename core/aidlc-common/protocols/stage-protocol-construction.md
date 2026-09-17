@@ -42,12 +42,13 @@ load this module and apply these branches in order:
 6. **Other Construction work** first resolves `gate: "unresolved"` through the
    harness stance-classification binding, reports it, and obtains a new `next`
    before any body work. Otherwise it follows the emitted Unit, wave, or stage body
-   and its required questions, summary confirmation, Plan Approval, reviews,
-   verification, and receipts. At completion, the policy's
+   and its required questions, any enabled summary confirmation, Plan Approval,
+   reviews, verification, and receipts. Summary confirmation applies only when
+   `directive.ceremony.summary_confirmation === "on"`. At completion, the policy's
    `human_completion_required` selects whether the routine completion gate
    needs a human. When false, skip the learnings question and routine approval
    question, report `awaiting-approval` and `approved` without `--user-input`,
-   then `next`. This never waives a pre-generation summary or Plan Approval.
+   then `next`. This never waives an enabled summary stop or Plan Approval.
    An unfinished per-Unit iteration still completes its Unit receipt and calls
    `next`, without reporting the whole stage. When the policy is absent, use
    the legacy gate rules. All verification and tool failures stop the flow.
@@ -117,13 +118,17 @@ before claiming a pass.
 Only a verified checkpoint can be approved. A skeleton always needs a real
 human approval. An ordinary Unit needs one when `human_required` is true
 (`unset`/`gated`); under an explicit autonomous grant the conductor may approve
-the verified ordinary Unit automatically. At a human checkpoint, retain the §13
-learnings ritual for the represented stages, consolidating relevant candidates
-into one Unit learning question. Persist only the human's explicit selections
-through each owning stage's learning tools, then ask the checkpoint approval
-as a separate question and turn. During automatic execution retain candidates
-in the diaries for the next human checkpoint or final handoff; do not infer
-acceptance, persist unapproved rules, or fabricate a “nothing to add” answer.
+the verified ordinary Unit automatically. At a human checkpoint, run the §13
+learnings ritual for the represented stages only when
+`directive.protocol_modules` lists `learnings`. With the module listed,
+consolidate relevant candidates into one Unit learning question and persist only
+the human's explicit selections through each owning stage's learning tools, then
+ask the checkpoint approval as a separate question and turn. During automatic
+execution, retain candidates in the diaries for the next human checkpoint or
+final handoff only when `directive.protocol_modules` lists `learnings`; do not
+infer acceptance, persist unapproved rules, or fabricate a “nothing to add” answer.
+When the module is absent, keep no diary and ask no learning question; go straight
+to the checkpoint approval question when a human is required.
 Present **Approve** / **Request
 Changes** when a human is required, then use only their actual answer:
 
@@ -156,7 +161,7 @@ header: Autonomy
 multiSelect: false
 options:
   - label: Continue automatically
-    description: Continue through ordinary completion checkpoints; still ask for plans, summaries, and failures.
+    description: Continue through ordinary completion checkpoints; still ask for plans, enabled summaries, and failures.
   - label: Review each checkpoint
     description: Wait for your approval at each ordinary completion checkpoint.
 ```
@@ -171,7 +176,7 @@ Escalation requires a fresh human turn; revocation to `gated` does not.
 Explicit on-demand requests remain valid at any point during Construction.
 Never infer a grant from silence or repeat the offer after a choice is known.
 An autonomous grant waives ordinary completion questions consistently across
-iteration choices, while per-Unit Plan Approval, pre-generation summary
+iteration choices, while per-Unit Plan Approval, enabled pre-generation summary
 confirmation, skeleton approval, and failures still require the human. Grouped
 Plan Approval below changes the presentation only; every Unit still needs its
 own valid receipt.

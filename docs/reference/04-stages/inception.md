@@ -1331,9 +1331,11 @@ The legacy first-stage gate is a stage review, not proof of that result.
 
 Eligible skeleton-off flows offer **Continue automatically** / **Review each
 checkpoint** at Construction entry; skeleton-on offers after the real skeleton
-checkpoint. Known choices are not repeated. Plan Approval and summary confirmation
-remain human-required under either choice. Explicit stage-major/swarm selection
-controls parallel execution independently of completion approval.
+checkpoint. Known choices are not repeated. Plan Approval and enabled summary
+confirmation remain human-required under either choice; summary confirmation
+applies only when `directive.ceremony.summary_confirmation === "on"`. Explicit
+stage-major/swarm selection controls parallel execution independently of
+completion approval.
 
 Existing workflows without checkpoints, design-only work, no-Unit flows, and
 team-owned gates retain their existing behavior. Preserve explicit iteration

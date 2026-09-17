@@ -1208,8 +1208,9 @@ the first working integrated Unit has passed its skeleton checkpoint with
 skeleton-on. A known choice is not asked again; on-demand changes remain valid.
 
 Autonomy controls ordinary completion approvals. Every Unit still needs Plan
-Approval, pre-generation summary confirmation still needs the human, and a
-skeleton checkpoint always needs human approval. Failures halt. Existing
+Approval, and a skeleton checkpoint always needs human approval. Pre-generation
+summary confirmation needs the human only when
+`directive.ceremony.summary_confirmation === "on"`. Failures halt. Existing
 workflows without `Construction Checkpoints` retain their legacy first-stage
 and late stage approvals; team-owned Unit gates retain their own policy.
 

@@ -513,7 +513,9 @@ prompt; report `awaiting-approval` then `approved` without `--user-input`, then
 `next`. Otherwise run the emitted body and required reviews, and use
 `human_completion_required` for its routine completion question. An unfinished
 per-Unit iteration still writes its Unit receipt and calls `next`. Plan Approval
-and pre-generation summary confirmation remain human-required under every policy.
+remains human-required under every completion policy; pre-generation summary
+confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`.
 
 **Autonomy offer.** `offer_autonomy: true` offers **Continue automatically** /
 **Review each checkpoint**, mapped by `bolt set-autonomy` to `autonomous` /
@@ -521,7 +523,7 @@ and pre-generation summary confirmation remain human-required under every policy
 skeleton-on offers after the real skeleton checkpoint. A known choice is never
 prompted again. Explicit on-demand requests remain valid during Construction;
 escalation needs a fresh human turn. Autonomy waives ordinary completion questions,
-not skeleton approval, Plan Approval, summary confirmation, or failure stops.
+not skeleton approval, Plan Approval, enabled summary confirmation, or failure stops.
 
 **Execution choice.** Eligible new source-producing solo Unit workflows select
 serial execution independently of
@@ -570,8 +572,9 @@ Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Unit. Retry re-runs only the failed Unit; the batch siblings stay `[x]`.
 
 This example uses the source-producing solo Unit default (unit-major and serial),
-skeleton-on, and an
-explicit automatic-completion choice after the skeleton:
+skeleton-on, summary confirmation enabled
+(`directive.ceremony.summary_confirmation === "on"`), and an explicit
+automatic-completion choice after the skeleton:
 
 ```mermaid
 sequenceDiagram
@@ -597,7 +600,7 @@ sequenceDiagram
     C->>E: Report bookkeeping outcomes without user input
 ```
 
-<!-- Text fallback: Build the integrated first Unit through its applicable design and code stages, keeping human summary confirmation and Plan Approval. Verify and obtain human skeleton approval before offering the autonomy choice. Continue serially with each next Unit's human Plan Approval; automatic completion may approve verified ordinary Units. After all Unit approvals, completion-only stage directives are bookkeeping. -->
+<!-- Text fallback: With summary confirmation enabled, build the integrated first Unit through its applicable design and code stages, keeping human summary confirmation and Plan Approval. Verify and obtain human skeleton approval before offering the autonomy choice. Continue serially with each next Unit's human Plan Approval; automatic completion may approve verified ordinary Units. After all Unit approvals, completion-only stage directives are bookkeeping. -->
 
 State and audit safety under parallel dispatch: `aidlc-audit.ts` uses mkdir-based locking so concurrent appends are safe. Lifecycle writes happen only after all required Task results return and the conductor reports one outcome; the engine serialises the internal state transition. No state-race risk.
 

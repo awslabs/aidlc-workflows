@@ -114,7 +114,8 @@ checkpoint action always returns to `next`, never report-approves the whole Code
 Generation stage for one Unit. When `construction_policy.offer_autonomy` is
 true, present **Continue automatically** / **Review each checkpoint**, record the
 human's choice through `bolt set-autonomy`, and re-run `next` before proceeding.
-For remaining body work, preserve Plan Approval and summary-confirmation stops.
+For remaining body work, preserve Plan Approval and any summary-confirmation stop
+enabled by `directive.ceremony.summary_confirmation === "on"`.
 At completion, `human_completion_required: false` skips only the routine human
 completion/learnings questions; report the lifecycle outcomes without invented
 `--user-input`. An unfinished per-Unit body still completes its Unit receipt and
