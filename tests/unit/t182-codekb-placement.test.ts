@@ -31,7 +31,8 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
@@ -334,5 +335,65 @@ describe("t182 codekb repo name — project root inside a linked git worktree", 
     expect(relativeCodekbDir(linked, codekbRepoName(linked), DEFAULT_SPACE)).toBe(
       relativeCodekbDir(repo, codekbRepoName(repo), DEFAULT_SPACE),
     );
+  });
+
+  test("a SUBDIRECTORY of the linked worktree also resolves the repository name", () => {
+    const deep = join(linked, "pkg", "service");
+    mkdirSync(deep, { recursive: true });
+    expect(codekbRepoName(deep)).toBe(repoName);
+  });
+});
+
+// ============================================================================
+// 5. Topologies that must keep basename(projectDir) EXACTLY as before. The repo
+// name is read from `--git-common-dir`, which git answers RELATIVE TO THE
+// DIRECTORY IT WAS MEASURED IN. Resolving it against `--show-toplevel` instead
+// climbs above the repository whenever the project root sits below the toplevel,
+// and if a git dir happens to sit at that level the resolver would return a
+// DIFFERENT repository's name — silently, since the path exists so no fallback
+// fires. Both cases below are that shape; `--git-dir` === `--git-common-dir`
+// identifies them (only a linked worktree has those differ), so both keep today's
+// answer.
+// ============================================================================
+describe("t182 codekb repo name — project root below the git toplevel keeps basename", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+  });
+
+  const gitInitAt = (dir: string): void => {
+    mkdirSync(dir, { recursive: true });
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.email", "t@x"],
+      ["config", "user.name", "t"],
+    ]) {
+      const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
+    }
+  };
+
+  test("a subdirectory of a plain checkout resolves to the SUBDIRECTORY name", () => {
+    const root = mkdtempSync(join(tmpdir(), "t182-subdir-"));
+    roots.push(root);
+    gitInitAt(root);
+    const sub = join(root, "packages", "service");
+    mkdirSync(sub, { recursive: true });
+    // Unchanged behaviour: the project root names itself, not the repository.
+    expect(codekbRepoName(sub)).toBe("service");
+  });
+
+  test("a repository nested in another does NOT resolve to the OUTER repository", () => {
+    const base = mkdtempSync(join(tmpdir(), "t182-nested-"));
+    roots.push(base);
+    gitInitAt(join(base, "outer"));
+    gitInitAt(join(base, "outer", "inner"));
+    const projectRoot = join(base, "outer", "inner", "sub");
+    mkdirSync(projectRoot, { recursive: true });
+    // `--git-common-dir` from here is `../.git` — relative to THIS dir, i.e.
+    // inner/.git. Resolved against the toplevel it would become outer/.git, which
+    // exists, so a toplevel-relative resolver answers "outer".
+    expect(codekbRepoName(projectRoot)).not.toBe("outer");
+    expect(codekbRepoName(projectRoot)).toBe("sub");
   });
 });

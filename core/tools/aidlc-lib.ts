@@ -2083,39 +2083,61 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
-// The repository NAME for a checkout whose project root may be a LINKED GIT
-// WORKTREE. `--git-common-dir` names the shared git dir, which lives inside the
-// MAIN checkout, so its parent's basename is the repository name. For a normal
-// checkout that parent IS projectDir, which makes this a no-op everywhere except
-// a linked worktree — the one topology where basename(projectDir) is a branch
-// name rather than a repository name. Null whenever git cannot answer (no git,
-// not a repository), so the caller keeps today's basename behaviour.
+// The repository NAME for a checkout whose project root is a LINKED GIT
+// WORKTREE, else null so the caller keeps `basename(projectDir)`.
+//
+// `git worktree add` names its directory after a branch, so in a linked worktree
+// basename(projectDir) is a branch name rather than a repository name. The shared
+// git dir lives inside the MAIN checkout, so its parent's basename is the
+// repository name.
+//
+// TWO things make this safe, and both are load-bearing:
+//
+//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
+//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
+//     two coincide only when the project root IS the toplevel; resolving against
+//     the toplevel otherwise climbs too high, and if a git dir happens to sit
+//     there (a repository vendored in another, or a home directory that is itself
+//     a repository) it would silently return a DIFFERENT repository's name.
+//  2. A linked worktree is the only topology where those two paths differ
+//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
+//     a subdirectory of one, and for a repository nested inside another — all of
+//     which return null here and keep today's answer byte-for-byte. That is what
+//     makes this change worktree-only rather than a re-definition of identity for
+//     every project root below its repository root.
 //
 // Deliberately NOT the `origin` remote: that would also cover a clone whose
 // directory name differs from the repository, but remote names are mutable (a
 // rename or a re-point would move a workspace's store) and it would change
 // resolution for every checkout whose remote and directory names differ. A
 // location is stable; widening identity to the remote is a separate decision.
+function gitRevParseSingle(projectDir: string, flag: string): string | null {
+  const r = spawnSync("git", ["rev-parse", flag], {
+    cwd: projectDir,
+    encoding: "utf-8",
+  });
+  if (r.status !== 0) return null;
+  const out = r.stdout?.trim();
+  return out ? out : null;
+}
+
 function mainCheckoutRepoName(projectDir: string): string | null {
-  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], {
-    cwd: projectDir,
-    encoding: "utf-8",
-  });
-  if (top.status !== 0) return null;
-  const common = spawnSync("git", ["rev-parse", "--git-common-dir"], {
-    cwd: projectDir,
-    encoding: "utf-8",
-  });
-  if (common.status !== 0) return null;
-  const topPath = top.stdout?.trim();
-  const commonRaw = common.stdout?.trim();
-  if (!topPath || !commonRaw) return null;
+  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
+  if (gitDirRaw === null) return null; // not a git repository
+  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
+  if (commonRaw === null) return null;
+  let gitDirAbs: string;
+  let commonAbs: string;
   try {
-    const name = basename(dirname(realpathSync(resolvePath(topPath, commonRaw))));
-    return name.length > 0 ? name : null;
+    // Resolved against projectDir — the directory both were measured in.
+    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
+    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
   } catch {
     return null;
   }
+  if (gitDirAbs === commonAbs) return null; // not a linked worktree
+  const name = basename(dirname(commonAbs));
+  return name.length > 0 ? name : null;
 }
 
 // The deterministic repo NAME for codekb keying (NOT the intent slug):
