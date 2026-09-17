@@ -475,6 +475,57 @@ function rewriteStdinCwd(rawInput: string, devin: DevinHookInput): string {
   }
 }
 
+// --- run_subagent field normalization -----------------------------------------
+//
+// Devin's native run_subagent tool_input is {profile, task, is_background,
+// title}; the core hooks expect {subagent_type, prompt, run_in_background}.
+// normalizeSubagentInput produces the canonical shape while preserving every
+// native field; denormalizeSubagentInput maps a core-emitted updatedInput back
+// to the native shape so Devin receives the augmentation under the field it
+// understands (`task`, not `prompt`).
+//
+// Field map:                        canonical wins when already present;
+//   profile / agent → subagent_type   `profile` wins over `agent`
+//   task            → prompt
+//   is_background   → run_in_background
+
+function normalizeSubagentInput(
+  ti: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...ti };
+  if (out.subagent_type === undefined) {
+    const profile = out.profile ?? out.agent;
+    if (profile !== undefined) out.subagent_type = profile;
+  }
+  if (out.prompt === undefined && out.task !== undefined) {
+    out.prompt = out.task;
+  }
+  if (out.run_in_background === undefined && out.is_background !== undefined) {
+    out.run_in_background = out.is_background;
+  }
+  return out;
+}
+
+function denormalizeSubagentInput(
+  updatedInput: Record<string, unknown>,
+  originalToolInput: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...updatedInput };
+  if ("profile" in originalToolInput && "subagent_type" in out) {
+    out.profile = out.subagent_type;
+    delete out.subagent_type;
+  }
+  if ("task" in originalToolInput && "prompt" in out) {
+    out.task = out.prompt;
+    delete out.prompt;
+  }
+  if ("is_background" in originalToolInput && "run_in_background" in out) {
+    out.is_background = out.run_in_background;
+    delete out.run_in_background;
+  }
+  return out;
+}
+
 // --- apply_patch envelope parsing --------------------------------------------
 //
 // Same parser as the codex adapter: extracts *** Add|Update File: directives
@@ -795,16 +846,19 @@ export async function run(
       if (tool !== "run_subagent") {
         return 0;
       }
-      // Devin run_subagent tool_input has `prompt` and possibly `agent`/`profile`.
-      // Use `agent`/`profile` as subagent_type; only block for the developer agent.
-      const ti = devin.tool_input ?? {};
+      // Devin's native run_subagent carries the agent under `profile` (or the
+      // older `agent`) and the brief under `task`. Normalize before reading so
+      // the guard sees the canonical subagent_type/prompt.
+      const normalized = normalizeSubagentInput(devin.tool_input ?? {});
       const subagentType =
-        (typeof ti.agent === "string" ? ti.agent : "") ||
-        (typeof ti.profile === "string" ? ti.profile : "");
+        typeof normalized.subagent_type === "string"
+          ? normalized.subagent_type
+          : "";
       if (subagentType !== "aidlc-developer-agent") {
         return 0;
       }
-      const prompt = typeof ti.prompt === "string" ? ti.prompt : "";
+      const prompt =
+        typeof normalized.prompt === "string" ? normalized.prompt : "";
       const fwd = JSON.stringify({
         hook_event_name: "PreToolUse",
         tool_name: "Task",
@@ -823,11 +877,50 @@ export async function run(
 
     case "deliver-stage-rules": {
       // Pipe to aidlc-deliver-stage-rules.ts with tool_name rewritten
-      // (run_subagent→Task). Use the stderr variant; forward stdout, exit 2 +
-      // stderr on block.
-      const rewritten = rewriteStdinToolName(rawInput, devin);
+      // (run_subagent→Task) and the native run_subagent tool_input normalized
+      // to the canonical shape so the core hook sees subagent_type/prompt.
+      // When the core hook returns an updatedInput, translate it back to
+      // Devin-native fields before writing stdout (the active-stage rule
+      // bundle must land on `task`, not `prompt`).
+      let rewritten = rewriteStdinToolName(rawInput, devin);
+      const originalToolInput = devin.tool_input;
+      if (tool === "run_subagent" && originalToolInput) {
+        try {
+          const parsed = JSON.parse(rewritten) as Record<string, unknown>;
+          parsed.tool_input = normalizeSubagentInput(originalToolInput);
+          rewritten = JSON.stringify(parsed);
+        } catch {
+          // Rewriting is best-effort; the un-normalized payload still pipes.
+        }
+      }
       const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rewritten);
-      if (r.stdout) process.stdout.write(r.stdout);
+      if (r.stdout) {
+        let stdout = r.stdout;
+        if (tool === "run_subagent" && originalToolInput) {
+          try {
+            const out = JSON.parse(r.stdout) as Record<string, unknown>;
+            const specific = out.hookSpecificOutput as
+              | Record<string, unknown>
+              | undefined;
+            const updatedInput =
+              (specific?.updatedInput ?? out.updatedInput) as
+                | Record<string, unknown>
+                | undefined;
+            if (updatedInput && typeof updatedInput === "object") {
+              const native = denormalizeSubagentInput(
+                updatedInput,
+                originalToolInput,
+              );
+              if (specific?.updatedInput) specific.updatedInput = native;
+              else out.updatedInput = native;
+              stdout = `${JSON.stringify(out)}\n`;
+            }
+          } catch {
+            // Unparseable core output — pass through untouched.
+          }
+        }
+        process.stdout.write(stdout);
+      }
       if (r.code === 2) {
         process.stderr.write(r.stderr);
         return 2;

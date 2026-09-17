@@ -52,7 +52,20 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { writeActiveDirectiveMarker, writePlanApprovalChallenge } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
+import {
+  stateDigest,
+  workspaceSourceFingerprint,
+  writeActiveDirectiveMarker,
+  writePlanApprovalChallenge,
+} from "../../dist/devin/.devin/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/devin/.devin/tools/aidlc-testing-posture.ts";
+import { appendAuditEntry } from "../../dist/devin/.devin/tools/aidlc-audit.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEVIN_TREE = join(REPO_ROOT, "dist", "devin", ".devin");
@@ -1088,6 +1101,319 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     } finally {
       rmSync(projA, { recursive: true, force: true });
       rmSync(projB, { recursive: true, force: true });
+    }
+  });
+
+  // --- run_subagent field normalization (profile/task/is_background) ---------
+  //
+  // Devin's native run_subagent tool_input is {profile, task, is_background,
+  // title}; the core hooks read subagent_type/prompt/run_in_background. The
+  // adapter normalizes before piping and denormalizes a core-emitted
+  // updatedInput back so the augmented brief lands on `task` again.
+
+  const RULE_MARKER = "t332 construction rule bundle marker";
+
+  /** Seed every memory file code-generation's rules_in_context names, so the
+   *  deliver-stage-rules bundle resolves to non-empty content. One carries the
+   *  observable marker. */
+  function writeStageRuleMemory(dir: string): void {
+    const memory = join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory");
+    mkdirSync(join(memory, "phases"), { recursive: true });
+    for (const name of ["org.md", "team.md", "project.md"]) {
+      writeFileSync(join(memory, name), `# ${name}\n\nShared practice.\n`, "utf-8");
+    }
+    writeFileSync(
+      join(memory, "phases", "construction.md"),
+      `# Construction\n\n${RULE_MARKER}.\n`,
+      "utf-8",
+    );
+  }
+
+  /** A live v2 code-generation run-stage directive: what the plan-approval
+   *  guard enforces against. stateDigest (not raw sha256) is the comparison
+   *  the marker reader uses. */
+  function seedGuardedCodeGeneration(dir: string): void {
+    const state = readFileSync(seededStateFile(dir), "utf-8").replace(
+      /(- \*\*Current Stage\*\*:\s*)[^\n]+/,
+      `$1code-generation`,
+    );
+    writeFileSync(seededStateFile(dir), state, "utf-8");
+    writeActiveDirectiveMarker(dir, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(state),
+    });
+  }
+
+  function initGitBaseline(dir: string): void {
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.email", "tests@example.com"],
+      ["config", "user.name", "AI-DLC Tests"],
+      ["add", "-A"],
+      ["commit", "-qm", "baseline"],
+    ]) {
+      const result = Bun.spawnSync(["git", ...args], {
+        cwd: dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+    }
+  }
+
+  function runTool(
+    dir: string,
+    args: string[],
+  ): { stdout: string; stderr: string; code: number } {
+    const r = spawnSync(
+      "bun",
+      [join(dir, ".devin", "tools", "aidlc-log.ts"), ...args],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        timeout: 30_000,
+      },
+    );
+    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
+  }
+
+  /** Drive the real approval ceremony on the devin tree: plant the stage-level
+   *  plan + Testing Contract + questions file, mint the challenge with
+   *  `decision`, record the human's typed answer through the shipped
+   *  record-human-turn hook, fill in [Answer], and certify with `answer`.
+   *  Ends with evaluateCodeGenerationApproval().ok === true. */
+  function certifyStageLevelApproval(dir: string, session: string): void {
+    const authority = resolveCodeGenerationAuthority(dir, { unit: null });
+    const contract = resolveTestingPosture(dir);
+    mkdirSync(authority.stageDir, { recursive: true });
+    const plan =
+      `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Implement\n`;
+    const instructions =
+      "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n";
+    writeFileSync(join(authority.stageDir, "code-generation-plan.md"), plan);
+    writeFileSync(
+      join(authority.stageDir, "unit-test-instructions.md"),
+      instructions,
+    );
+    const fingerprint = approvalFingerprint(
+      plan,
+      instructions,
+      contract.contract_sha256,
+      authority,
+    );
+    const questionsPath = join(
+      authority.stageDir,
+      "code-generation-questions.md",
+    );
+    writeFileSync(
+      questionsPath,
+      [
+        "## Plan Approval",
+        `[Approval Fingerprint]: ${fingerprint}`,
+        `[Planned Source]: ${workspaceSourceFingerprint(dir) ?? "unbindable"}`,
+        "A. Approve Plan",
+        "B. Request Changes",
+        "[Answer]:",
+        "",
+      ].join("\n"),
+    );
+    appendAuditEntry(
+      "SESSION_STARTED",
+      { Source: "startup", Session: session },
+      dir,
+    );
+    const identity = [
+      "--stage",
+      "code-generation",
+      "--checkpoint",
+      "plan-approval",
+      "--questions-file",
+      questionsPath,
+      "--session",
+      session,
+      "--stage-level",
+    ];
+    expect(
+      runTool(dir, [
+        "decision",
+        ...identity,
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ]).code,
+    ).toBe(0);
+    const human = spawnSync(
+      "bun",
+      [join(dir, ".devin", "hooks", "aidlc-record-human-turn.ts")],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: session,
+          prompt: "Approve Plan",
+        }),
+        env: { ...process.env, AIDLC_PROJECT_DIR: dir } as NodeJS.ProcessEnv,
+        timeout: 30_000,
+      },
+    );
+    expect(human.status).toBe(0);
+    writeFileSync(
+      questionsPath,
+      readFileSync(questionsPath, "utf-8").replace(
+        /\[Answer\]:\s*$/,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    const answer = runTool(dir, [
+      "answer",
+      ...identity,
+      "--details",
+      "Approve Plan",
+    ]);
+    expect(answer.code, `${answer.stdout}\n${answer.stderr}`).toBe(0);
+    const approval = evaluateCodeGenerationApproval(dir, { unit: null });
+    expect(approval.ok, approval.reason).toBe(true);
+  }
+
+  function runSubagentPreToolUse(
+    dir: string,
+    toolInput: Record<string, unknown>,
+    session = "t332-native-dispatch",
+  ): Record<string, unknown> {
+    return {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "run_subagent",
+      tool_input: toolInput,
+      tool_use_id: "call_t332",
+    };
+  }
+
+  test("27: deliver-stage-rules injects the stage rule bundle into the native task field", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      writeStageRuleMemory(dir);
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        runSubagentPreToolUse(dir, {
+          title: "worker",
+          profile: "aidlc-developer-agent",
+          task: "Implement the approved work for stage code-generation.",
+          is_background: false,
+        }),
+      );
+      expect(r.code, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
+      };
+      const updated = out.hookSpecificOutput?.updatedInput;
+      expect(updated).toBeDefined();
+      // The bundle lands on the native `task` field — the field Devin actually
+      // sends to the subagent — not on a `prompt` key Devin would ignore.
+      expect(String(updated!.task)).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      expect(String(updated!.task)).toContain(RULE_MARKER);
+      expect("prompt" in updated!).toBe(false);
+      expect("subagent_type" in updated!).toBe(false);
+      expect("run_in_background" in updated!).toBe(false);
+      expect(updated!.profile).toBe("aidlc-developer-agent");
+      expect(updated!.title).toBe("worker");
+      expect(updated!.is_background).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("28: deliver-stage-rules leaves an unrelated native profile unmodified", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      writeStageRuleMemory(dir);
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        runSubagentPreToolUse(dir, {
+          title: "reviewer",
+          profile: "subagent_explore",
+          task: "review the code",
+        }),
+      );
+      // A non-AIDLC profile is not augmented: the core hook emits no
+      // updatedInput and the adapter forwards nothing.
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("29: plan-approval-guard passes an approved dispatch whose brief lives in `task`", () => {
+    const dir = scratchProject(true);
+    try {
+      seedGuardedCodeGeneration(dir);
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src", "base.ts"), "export const base = 1;\n");
+      initGitBaseline(dir);
+      const session = "t332-approved-dispatch";
+      certifyStageLevelApproval(dir, session);
+      const contractHash =
+        evaluateCodeGenerationApproval(dir, { unit: null }).contractHash;
+      const task = [
+        "Implement the approved work.",
+        "",
+        "AIDLC-STAGE: code-generation",
+        `AIDLC-TESTING-CONTRACT: ${contractHash}`,
+      ].join("\n");
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        runSubagentPreToolUse(
+          dir,
+          {
+            title: "worker",
+            profile: "aidlc-developer-agent",
+            task,
+            is_background: false,
+          },
+          session,
+        ),
+      );
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("30: plan-approval-guard still blocks an unapproved dispatch carried in `task`", () => {
+    const dir = scratchProject(true);
+    try {
+      seedGuardedCodeGeneration(dir);
+      const task = [
+        "Implement the work.",
+        "",
+        "AIDLC-STAGE: code-generation",
+        `AIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
+      ].join("\n");
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        runSubagentPreToolUse(dir, {
+          title: "worker",
+          profile: "aidlc-developer-agent",
+          task,
+          is_background: true,
+        }),
+      );
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("Code generation cannot start");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
