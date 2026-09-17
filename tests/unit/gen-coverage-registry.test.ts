@@ -798,6 +798,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // a new spawning test still cannot land without a human edit here.
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
+    "unit/t343-intent-create-positionals.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
@@ -947,6 +948,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t314-plugin-reinstall-doctor.test.ts",
+    // t341 is t314's composed-scope twin: it spawns the shipped graph/doctor
+    // tools to walk a reinstall, so its body is a deterministic spawner even
+    // though its filename segment carries no mechanism.
+    "integration/t341-composed-scope-durability.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t325-team-unit-claims.test.ts",

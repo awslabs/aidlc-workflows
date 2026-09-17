@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 987,
+    "total": 994,
     "enumeratedByClass": {
-      "function": 677,
+      "function": 684,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 406,
+      "function": 411,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -1600,6 +1600,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:backfillComposedScopeRecords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t341-composed-scope-durability.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:BLOCKING_SENSOR_OVERRIDE_CHOICE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2337,6 +2349,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:composedFoldBack",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4128,6 +4152,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:loadComposedScopeRecords",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:loadGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -4317,6 +4348,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:materializeComposedScopeIdentities",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t341-composed-scope-durability.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4647,6 +4690,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseComposedScopeRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseFieldArgs",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4746,6 +4801,10 @@
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-refusal-valid-values.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -5696,6 +5755,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:renderComposedScopeRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:renderSourcePathKeys",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6010,6 +6081,13 @@
     {
       "unitClass": "function",
       "unitId": "function:REVIEW_CLASSES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:REVIEW_FINDING_STATUS_VALUES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -7709,6 +7787,10 @@
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-refusal-valid-values.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -9657,6 +9739,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t341-composed-scope-durability.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t99-learnings-gate-flow.test.ts",
           "mechanism": "cli"
         },
@@ -11292,6 +11378,10 @@
         },
         {
           "file": "tests/integration/t314-plugin-reinstall-doctor.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t341-composed-scope-durability.test.ts",
           "mechanism": "cli"
         },
         {
