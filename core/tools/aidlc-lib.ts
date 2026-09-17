@@ -3149,6 +3149,21 @@ export interface KiroIdeLegacyPlanApprovalHost {
   ipc: string;
 }
 
+// When the caller cannot name the answering session (the orchestrator passes
+// the intent UUID as --session), the challenge mints this binding under the
+// intent's token so the record/answer path can still find the session the
+// challenge was actually written under. A binding only resolves while the
+// exact challenge it names still stands; it is never an authority channel of
+// its own.
+export interface PlanApprovalSessionBinding {
+  version: 1;
+  token: string;
+  session: string;
+  challengeId: string;
+  intentId: string;
+  boundAt: string;
+}
+
 function planApprovalRuntimeDir(projectDir: string): string {
   return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
 }
@@ -3242,6 +3257,16 @@ function planApprovalLegacyRecoveryResponsePath(
     : "";
 }
 
+function planApprovalSessionBindingPath(
+  projectDir: string,
+  token: string,
+): string {
+  const segment = runtimeSessionSegment(token);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `binding-${segment}.json`)
+    : "";
+}
+
 function ensurePlanApprovalRuntimeDir(projectDir: string): string {
   const dir = planApprovalRuntimeDir(projectDir);
   assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
@@ -3268,6 +3293,14 @@ export function writePlanApprovalChallenge(
   const path = planApprovalChallengePath(projectDir, challenge.session);
   if (!path) throw new Error("Plan Approval challenge requires a nonblank session");
   writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  writePlanApprovalSessionBinding(projectDir, {
+    version: 1,
+    token: challenge.intentId,
+    session: challenge.session,
+    challengeId: challenge.challengeId,
+    intentId: challenge.intentId,
+    boundAt: isoTimestamp(),
+  });
   try {
     unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
   } catch {
@@ -3307,10 +3340,88 @@ export function readPlanApprovalResponse(
   return value?.version === 1 && value.session === session ? value : null;
 }
 
+export function writePlanApprovalSessionBinding(
+  projectDir: string,
+  binding: PlanApprovalSessionBinding,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalSessionBindingPath(projectDir, binding.token);
+  if (!path) {
+    throw new Error("Plan Approval session binding requires a nonblank token");
+  }
+  writeFileAtomic(path, `${JSON.stringify(binding, null, 2)}\n`);
+}
+
+export function readPlanApprovalSessionBinding(
+  projectDir: string,
+  token: string,
+): PlanApprovalSessionBinding | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalSessionBinding>(
+    planApprovalSessionBindingPath(projectDir, token),
+    "Plan Approval session binding",
+  );
+  return value?.version === 1 && value.token === token ? value : null;
+}
+
+// Bindings key on the intent token, not the session, so clearing the session's
+// runtime state scans for and drops every binding that points at it.
+export function clearPlanApprovalSessionBinding(
+  projectDir: string,
+  session: string,
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith("binding-") || !name.endsWith(".json")) continue;
+    const path = join(planApprovalRuntimeDir(projectDir), name);
+    const binding = readPlanApprovalRuntimeJson<PlanApprovalSessionBinding>(
+      path,
+      "Plan Approval session binding",
+    );
+    if (binding?.session !== session) continue;
+    try {
+      unlinkSync(path);
+    } catch {
+      // Missing runtime state is already clear.
+    }
+  }
+}
+
+// Resolve the session that actually owns the pending Plan Approval challenge.
+// A challenge written under the given session wins; otherwise the session
+// binding minted beside the challenge (token = the intent id the orchestrator
+// passes as --session) resolves ONLY while the challenge it names still
+// stands — a replaced or cleared challenge stales the binding. This function
+// never reads .current-session: human authority must not cross sessions.
+export function resolvePlanApprovalSession(
+  projectDir: string,
+  session: string,
+): { session: string; via: "session" | "binding" } | null {
+  if (readPlanApprovalChallenge(projectDir, session)) {
+    return { session, via: "session" };
+  }
+  const binding = readPlanApprovalSessionBinding(projectDir, session);
+  if (!binding) return null;
+  const challenge = readPlanApprovalChallenge(projectDir, binding.session);
+  if (
+    challenge &&
+    challenge.challengeId === binding.challengeId &&
+    challenge.intentId === binding.intentId
+  ) {
+    return { session: binding.session, via: "binding" };
+  }
+  return null;
+}
+
 export function clearPlanApprovalChallenge(
   projectDir: string,
   session: string,
 ): void {
+  clearPlanApprovalSessionBinding(projectDir, session);
   for (const path of [
     planApprovalChallengePath(projectDir, session),
     planApprovalResponsePath(projectDir, session),

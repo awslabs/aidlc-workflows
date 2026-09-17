@@ -16,7 +16,6 @@ import {
   auditBlockField,
   collectStalePlanApprovalReceipts,
   contentBeforeTerminalReviewAppendix,
-  readCurrentSessionId,
   docsRoot,
   getField,
   isReadOnlyEngineProbe,
@@ -42,6 +41,7 @@ import {
   governedChangeControl,
   resolveBoltDag,
   resolveChangeControl,
+  resolvePlanApprovalSession,
   resolveProjectDir,
   stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
@@ -1942,23 +1942,15 @@ export function recordPlanApprovalHumanResponse(
   session: string,
   responseText: string,
 ): PlanApprovalHumanResponseResult {
-  // The orchestrator may pass the intent UUID as --session (reading the binding
-  // file instead of .current-session), while the record-human-turn hook
-  // receives the Devin session name. Fall back to .current-session when the
-  // challenge isn't found under the given session, so the response is written
-  // under the same key the orchestrator's answer command will look up.
-  let challenge = readPlanApprovalChallenge(projectDir, session);
-  let effectiveSession = session;
-  if (!challenge) {
-    const currentSession = readCurrentSessionId(projectDir);
-    if (currentSession && currentSession !== session) {
-      const fallback = readPlanApprovalChallenge(projectDir, currentSession);
-      if (fallback) {
-        challenge = fallback;
-        effectiveSession = currentSession;
-      }
-    }
-  }
+  // The orchestrator may pass the intent UUID as --session; resolve the
+  // answering session through the binding minted beside the challenge (never
+  // .current-session), so the response is written under the same key the
+  // orchestrator's answer command will look up.
+  const resolved = resolvePlanApprovalSession(projectDir, session);
+  const effectiveSession = resolved?.session ?? session;
+  const challenge = resolved
+    ? readPlanApprovalChallenge(projectDir, effectiveSession)
+    : null;
   if (challenge) {
     const choice = offeredPlanApprovalChoice(challenge, responseText);
     if (choice) {
@@ -2060,24 +2052,22 @@ function certifyPlanApprovalReceipt(
 ): PlanApprovalReceiptResult {
   const identity = runtimeIdentity(evidence);
   const provenance = runtimeProvenance(evidence);
-  let challenge = readPlanApprovalChallenge(projectDir, session);
-  let response = readPlanApprovalResponse(projectDir, session);
-  // Fall back to .current-session when the challenge/response isn't found
-  // under the given session (orchestrator may pass intent UUID as --session).
-  if (!challenge || !response) {
-    const currentSession = readCurrentSessionId(projectDir);
-    if (currentSession && currentSession !== session) {
-      const fallbackChallenge = readPlanApprovalChallenge(projectDir, currentSession);
-      const fallbackResponse = readPlanApprovalResponse(projectDir, currentSession);
-      if (fallbackChallenge && fallbackResponse) {
-        challenge = fallbackChallenge;
-        response = fallbackResponse;
-      }
-    }
-  }
+  // The challenge/response pair must live under the session that actually
+  // answered: the given session, or the session bound to the intent token the
+  // orchestrator passes as --session. Never .current-session.
+  const resolved = resolvePlanApprovalSession(projectDir, session);
+  const effectiveSession = resolved?.session ?? session;
+  const challenge = resolved
+    ? readPlanApprovalChallenge(projectDir, effectiveSession)
+    : null;
+  const response = resolved
+    ? readPlanApprovalResponse(projectDir, effectiveSession)
+    : null;
   if (
     !challenge ||
     !response ||
+    challenge.session !== effectiveSession ||
+    response.session !== effectiveSession ||
     challenge.challengeId !== response.challengeId ||
     response.choice !== choice ||
     !runtimeIdentityMatches(challenge, identity)
@@ -2105,9 +2095,9 @@ function certifyPlanApprovalReceipt(
     // clear, identical content could be re-approved by rewriting the answer tag,
     // because nothing else about the identity had moved. A typed break-glass
     // request is withdrawn with it.
-    clearPlanApprovalChallenge(projectDir, session);
+    clearPlanApprovalChallenge(projectDir, effectiveSession);
     clearPlanApprovalReceipt(projectDir, identity);
-    clearPlanApprovalOverrideRequest(projectDir, session);
+    clearPlanApprovalOverrideRequest(projectDir, effectiveSession);
     return { receipt: null, changeNotices: [] };
   }
   // Certify the source twice, then write. The answer path never unlinks a
@@ -2145,7 +2135,7 @@ function certifyPlanApprovalReceipt(
     version: 1,
     ...identity,
     ...provenance,
-    session,
+    session: effectiveSession,
     challengeId: challenge.challengeId,
     choice: "Approve Plan",
     questionsSha256: evidence.questionsSha256,
@@ -2154,10 +2144,10 @@ function certifyPlanApprovalReceipt(
   };
   writePlanApprovalReceipt(projectDir, receipt);
   keepWorkspaceSourceSnapshot(projectDir, stateBefore);
-  clearPlanApprovalChallenge(projectDir, session);
+  clearPlanApprovalChallenge(projectDir, effectiveSession);
   // A normal receipt spends any typed break-glass request too: the phrase
   // authorized at most one run, and that run needed no override.
-  clearPlanApprovalOverrideRequest(projectDir, session);
+  clearPlanApprovalOverrideRequest(projectDir, effectiveSession);
   // Sweep this target's receipts from attempts that have ended. Nothing deletes a
   // receipt to invalidate it any more, so the store is tidied here instead.
   collectStalePlanApprovalReceipts(
