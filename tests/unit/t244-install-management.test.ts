@@ -484,6 +484,8 @@ describe("t244 machine configuration and update discovery", () => {
         .toHaveLength(1);
       expect(server.requests.filter((path) => path.endsWith("/checksums.txt")))
         .toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl")))
+        .toHaveLength(0);
 
       server.clearRequests();
       const routed = await runAsync(DISPATCHER, [
@@ -509,6 +511,8 @@ describe("t244 machine configuration and update discovery", () => {
         .toHaveLength(1);
       expect(server.requests.filter((path) => path.endsWith("/checksums.txt")))
         .toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl")))
+        .toHaveLength(0);
 
       rmSync(join(machine, "update-check.json"), { force: true });
       server.clearRequests();
@@ -612,6 +616,55 @@ describe("t244 machine configuration and update discovery", () => {
     } finally {
       await server.stop();
       for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }, process.platform === "win32" ? 120_000 : 45_000);
+
+  test("update check reports behind without downloading or verifying provenance", async () => {
+    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    writeFileSync(join(release, "aidlc-release.intoto.jsonl"), "tampered\n");
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-check-no-provenance-");
+    const keys = [
+      "AIDLC_INSTALL_ROOT",
+      "AIDLC_BIN_DIR",
+      "AIDLC_RELEASE_BASE_URL",
+      "AIDLC_OFFLINE",
+      "NO_PROXY",
+    ] as const;
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    Object.assign(process.env, {
+      ...envFor(machine),
+      AIDLC_RELEASE_BASE_URL: server.baseUrl,
+      AIDLC_OFFLINE: "0",
+      NO_PROXY: "127.0.0.1",
+    });
+    try {
+      const state = await refreshUpdateState(15_000);
+      expect(state.state).toBe("behind");
+      expect(state.latestVersion).toBe(NEXT_VERSION);
+      expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl")))
+        .toHaveLength(0);
+      const check = await runAsync(DISPATCHER, [
+        "update",
+        "--check",
+        "--release-base-url",
+        server.baseUrl,
+        "--json",
+      ], REPO_ROOT, {
+        ...envFor(machine),
+        AIDLC_OFFLINE: "0",
+        NO_PROXY: "127.0.0.1",
+      });
+      expect(check.status, check.stdout + check.stderr).toBe(5);
+      expect(JSON.parse(check.stdout).data.latestVersion).toBe(NEXT_VERSION);
+    } finally {
+      await server.stop();
+      for (const key of keys) {
+        const value = saved[key];
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
@@ -1392,6 +1445,13 @@ describe("t244 Windows and completion release surfaces", () => {
   );
 
   test("malformed Windows uninstall journals are reported", () => {
+    const machine = temp("aidlc-t244-uninstall-malformed-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
     const malformed = join(tmpdir(), `aidlc-uninstall-${randomUUID()}.json`);
     const missingRoot = join(tmpdir(), `aidlc-uninstall-${randomUUID()}.json`);
     try {
@@ -1404,6 +1464,10 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(scan.invalid).toContain(malformed);
       expect(scan.invalid).toContain(missingRoot);
     } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
       rmSync(malformed, { force: true });
       rmSync(missingRoot, { force: true });
     }

@@ -731,10 +731,21 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // inherit this absent, runner-owned path, so a policy on the developer or CI
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
+  //
+  // Isolate the native machine root too. Install-management tests that forget
+  // AIDLC_INSTALL_ROOT / AIDLC_BIN_DIR would otherwise read the developer's real
+  // ~/.local/share/aidlc (update cache, channel, versions) or write ~/.local/bin.
+  // Each test file gets its own root so parallel files never share one, with bin
+  // under that root so machineTransactionRoot() has its required shared parent.
+  // Focused tests keep overriding both variables per spawn.
+  const machineRoot = join(logDir, "machine", name);
+  mkdirSync(machineRoot, { recursive: true });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,
     AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
+    AIDLC_INSTALL_ROOT: machineRoot,
+    AIDLC_BIN_DIR: join(machineRoot, "bin"),
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
