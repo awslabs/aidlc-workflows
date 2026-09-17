@@ -11141,6 +11141,10 @@
         {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -11176,6 +11180,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t209-unit-major-iteration.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
