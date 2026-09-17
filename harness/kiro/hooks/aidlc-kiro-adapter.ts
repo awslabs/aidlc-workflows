@@ -161,6 +161,19 @@ interface IdeHookContext {
 // case worth surfacing rather than silently reading as empty.
 const TOOL_RESULT_TEXT_KEYS = ["Text", "text", "content", "items", "output", "result"];
 
+/** The transport's success flag when it sits INSIDE the result envelope rather than
+ *  beside it: `tool_response: { success: false, result: [''] }`. The text collector
+ *  below walks only the text keys, so this boolean was dropped - and a refused
+ *  write then carried neither a flag nor recognisable error prose, which put it on
+ *  the success path. Feeding it into the SAME `toolSuccess` the top-level flag fills
+ *  keeps one predicate: nothing new decides anything, the existing
+ *  `toolSuccess === false` branch just stops being blind to this shape. */
+function nestedResultSuccess(value: unknown): boolean | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const flag = (value as Record<string, unknown>).success;
+  return typeof flag === "boolean" ? flag : undefined;
+}
+
 function collectToolResultText(value: unknown, out: string[]): void {
   if (typeof value === "string") {
     if (value !== "") out.push(value);
@@ -312,6 +325,12 @@ const INPUT_TARGETS = new Set([
   "reviewer-scope",
   "guard-tool-call",
   "deliver-stage-rules",
+  // Needs the tool name for ONE reason: to recognise a dispatch and stand down,
+  // because the log-subagent edge decides dispatch admission and this guard
+  // refusing one afterwards would strand the window that edge already opened. Its
+  // manifest carries no matcher, so without the payload it cannot tell a dispatch
+  // from anything else.
+  "enforce-approval-gate",
   // Not in PAYLOAD_TARGETS on purpose: a malformed payload here must fall back to
   // the audit-tail reconciliation, not drop the event.
   "sync-workflow-state",
@@ -786,7 +805,8 @@ if (INPUT_TARGETS.has(target)) {
           const rawName = parsed.toolName ?? parsed.tool_name;
           const rawArgs = parsed.toolArgs ?? parsed.tool_input;
           const rawResult = parsed.toolResult ?? parsed.tool_response;
-          const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
+          const rawSuccess = parsed.toolSuccess ?? parsed.tool_success ??
+            nestedResultSuccess(parsed.toolResult ?? parsed.tool_response);
           const rawSessionId = parsed.session_id ?? parsed.sessionId;
           // Needed to tell a dispatch window's opening edge from its closing
           // one; nothing else in this adapter branched on the event name,
@@ -1364,8 +1384,8 @@ if (target === "terminal-command-guard") {
 // --- mint: record a HUMAN_TURN event on prompt submit ---
 //
 // Wired by aidlc-record-human-turn.json (UserPromptSubmit). Payload-independent (never
-// reads stdin — a mint must never wait on it), so resolve the project dir
-// from process.cwd() — appendAuditEntry then resolves the
+// reads stdin — a mint must never wait on it), so the project dir is the one
+// resolveProjectDirFromHook returns rather than the payload's — appendAuditEntry then resolves the
 // active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
 // using only that dir, so the event lands in the correct per-intent shard with
 // no payload. One ledger event per human turn; no marker file, no turn counter.
@@ -1397,25 +1417,20 @@ if (target === "terminal-command-guard") {
 // floor answer differently for the same payload depending on the launch directory.
 // All read from disk. Fail-open on any read/parse error (advisory).
 if (target === "enforce-approval-gate") {
-  try {
-    const pd = projectDir;
-    const sp = stateFilePath(pd);
-    const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
-    // Carve-outs first: autonomous Construction, the deterministic off-switch,
-    // and no-open-gate (nothing awaits approval, so nothing to floor).
-    if (isAutonomousMode(content)) return 0;
-    if (humanPresenceGuardDisabled()) return 0;
-    if (!hasOpenGate(content)) return 0;
-    if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
+  // A dispatch is decided by the log-subagent edge, which asks this same floor
+  // BEFORE opening the window. Refusing one here as well would be a second verdict
+  // on a decision already made - and if this guard runs after that edge, the
+  // refusal strands the open it created, which is the wedge this row shipped with.
+  if (isDispatchToolName(ide.toolName ?? "")) return 0;
+  if (approvalFloorRefuses(projectDir)) {
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
         "gate as a human, then continue.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  } catch {
-    return 0; // advisory - any read/parse failure fails open
   }
+  return 0;
 }
 
 // Maintain the delegation latch before any target runs, so a guard registered on
@@ -1442,6 +1457,34 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
       tool_input: ide.toolArgs ?? {},
     };
     if (ide.event === "PreToolUse") {
+      // ADMISSION BEFORE OPEN. This edge owns whether a dispatch may start,
+      // because it is the only target whose manifest matches exactly the dispatch
+      // tools and which sees both edges. The first cut opened the window here and
+      // tried to cancel it wherever a refusal was turned into Kiro's reject
+      // contract; that was wrong twice over. It missed a refuser (the matcherless
+      // human-presence gate returns 2 far upstream of those sites), and writing a
+      // close for a refusal made a refusal look like a completion - which needs an
+      // event identity the payload does not carry, so the credit for one refusal
+      // could be spent cancelling a later byte-identical dispatch.
+      //
+      // A refusal is therefore NOT a ledger fact. Nothing is appended, and the two
+      // matcherless gates no-op on dispatch shapes so they cannot refuse one after
+      // this edge has admitted it.
+      if (approvalFloorRefuses(projectDir)) {
+        process.stderr.write(
+          "An approval gate is open and no human has acted since it opened. The gate " +
+            "requires a typed human turn before any tool call proceeds. Acknowledge the " +
+            "gate as a human, then continue.\n",
+        );
+        return 2;
+      }
+      if (planApprovalRefusesDispatch(dispatchTool, ide.toolArgs ?? {}, projectDir)) {
+        process.stderr.write(
+          "Plan Approval has not admitted this dispatch yet: the delegate cannot start " +
+            "until the gate for this stage is approved.\n",
+        );
+        return 2;
+      }
       openDelegation(latchSession, payload, kiroDispatch(payload)?.agents ?? []);
     } else if (ide.event === "PostToolUse") {
       closeDelegation(latchSession, payload);
@@ -1450,10 +1493,13 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
 }
 
 
-// ── Targets the CLI row carried before the merge ───────────────────────────
-// These are engine- and shell-invoked rather than manifest-invoked, so the
-// manifest walk cannot see them; t331 names them so a later edit cannot drop
-// one silently.
+// ── Tool-name canonicalization for the targets merged in from the CLI row ──
+// The banner here used to say these targets are "engine- and shell-invoked rather
+// than manifest-invoked, so the manifest walk cannot see them; t331 names them".
+// Both halves were wrong by the time it was read: the list it introduced is not
+// here (it sits with INPUT_TARGETS), `guard-tool-call` had no registration at all
+// until one was added, and `t331` named neither it nor `deliver-stage-rules`.
+// What follows is just the canonicalizer those targets share.
 
 function canonicalTool(
   name: string,
@@ -1610,7 +1656,12 @@ if (target === "guard-tool-call") {
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
               `Run exactly: {{INVOKE}} engine orchestrate next ${forwarding.raw ?? ""}\n`,
           );
-          process.exit(2);
+          // `return`, not process.exit: an exit here leaves the function through a
+          // door no caller can see, which is exactly how a refusal escaped the
+          // accounting that used to hang off the exit paths. The dispatcher awaits
+          // this value (core/tools/aidlc.ts) and the file's own entry point exits
+          // on it, so the observable code is unchanged.
+          return 2;
         }
         rmSync(forwardingPath, { force: true });
       }
@@ -2302,28 +2353,78 @@ function isDispatchToolName(name: string): boolean {
   );
 }
 
-/** A refused dispatch NEVER RUNS, so the window the log-subagent PreToolUse edge
- *  opened for it must not outlive the refusal. Kiro blocks the tool on exit 2 and
- *  sends no PostToolUse, so the only close that dispatch will ever get is this
- *  one - without it the open lived until DELEGATION_TTL_MS and every consumer of
- *  the ledger (state-transition-guard, reviewer-scope) then read a delegate that
- *  was never running, refusing the MAIN session's own verbs. Called from the two
- *  places this adapter turns a refusal into Kiro's reject contract, so a guard
- *  added later inherits it. Ordering is not a concern: liveDelegationOpens counts
- *  a close whose open has not been appended yet. */
-function cancelRefusedDispatchWindow(
-  event: string | undefined,
-  toolName: string | undefined,
-  toolArgs: Record<string, unknown> | undefined,
-  sessionId: string | undefined,
-): void {
-  if (event !== "PreToolUse") return;
-  const dispatchTool = toolName ?? "";
-  if (!isDispatchToolName(dispatchTool)) return;
-  closeDelegation(sessionId?.trim() || rememberedKiroIdeSessionId(), {
-    tool_name: dispatchTool,
-    tool_input: toolArgs ?? {},
-  });
+/** The human-presence floor's verdict, without the exit-code plumbing. Extracted
+ *  so the dispatch admission below can ask the same question the
+ *  `enforce-approval-gate` target answers - one predicate, two callers, rather
+ *  than a second implementation that can drift from it. */
+function approvalFloorRefuses(pd: string): boolean {
+  try {
+    const sp = stateFilePath(pd);
+    const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
+    if (isAutonomousMode(content)) return false;
+    if (humanPresenceGuardDisabled()) return false;
+    if (!hasOpenGate(content)) return false;
+    if (humanActedSinceGate(pd)) return false;
+    return true;
+  } catch {
+    return false; // advisory - any read/parse failure fails open
+  }
+}
+
+/** Ask the core Plan Approval guard whether THIS dispatch may start.
+ *
+ *  The payload shape mirrors the dispatch arms of `buildForward` (crew via
+ *  `kiroDispatch`, then the direct spellings): core matches on `Task` plus
+ *  `subagent_type`, and a raw `subagent` name reaches it as an unknown
+ *  mutation-capable tool instead of the Code Generation refusal. It is spelled
+ *  again here rather than shared, because `buildForward` is one closure over the
+ *  whole target switch and threading a second entry point through it would touch
+ *  the write and shell arms as well.
+ *
+ *  Advisory on anything but a clean refusal: this runs BEFORE the window opens, so
+ *  failing open here costs a refusal the sibling guard will still make - it cannot
+ *  admit work the core guard would have refused. */
+function planApprovalRefusesDispatch(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  pd: string,
+): boolean {
+  const crew = CREW_DISPATCH_TOOLS.has(toolName)
+    ? kiroDispatch({ tool_name: toolName, tool_input: toolArgs })
+    : null;
+  let agent = "";
+  let prompt = "";
+  if (crew?.agents.includes("aidlc-developer-agent")) {
+    agent = "aidlc-developer-agent";
+    prompt = crew.prompt;
+  } else {
+    agent =
+      [toolArgs.name, toolArgs.subagent_type, toolArgs.agent, toolArgs.agent_name, toolArgs.role]
+        .find((value): value is string => typeof value === "string" && value.trim().length > 0)
+        ?.trim() ??
+      (toolName.startsWith("subagent_") && toolName !== "subagent_response"
+        ? toolName.slice("subagent_".length).trim()
+        : "");
+    if (toolName === "invoke_sub_agent" && agent === "") agent = "aidlc-developer-agent";
+    prompt =
+      [toolArgs.prompt, toolArgs.task, toolArgs.description]
+        .find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
+  }
+  if (agent === "") return false; // nothing this guard is about
+  try {
+    return runCoreHook(
+      "plan-approval-guard",
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: { subagent_type: agent, prompt },
+        cwd: pd,
+      },
+      pd,
+    ).code === 2;
+  } catch {
+    return false;
+  }
 }
 
 /** Opens that no close has cancelled and that have not expired. */
@@ -2332,28 +2433,18 @@ function liveDelegationOpens(
 ): Array<{ agent: string; key: string; group: string; ts: number }> {
   const now = Date.now();
   const opens: Array<{ agent: string; key: string; group: string; ts: number }> = [];
-  // A close whose open is not on the ledger YET. Hook order across sibling
-  // registrations is not guaranteed, so a refusal that cancels the window can be
-  // appended before the log-subagent edge that opens it; dropping such a close
-  // (the previous behaviour) left the window inflight until its TTL. Counting it
-  // instead makes the replay order-independent, which is what append-only
-  // accounting has to be when two hooks write the same ledger in one event.
-  const pendingCloses = new Map<string, number>();
-  // Groups an out-of-order close already cancelled. One dispatch names several
-  // personas in ONE group, so the pending close must consume the group, not the
-  // first persona of it - otherwise the remaining personas stayed live and the
-  // wedge survived in a crew dispatch.
-  const cancelledGroups = new Set<string>();
+  // NO out-of-order accounting, deliberately. A close now means exactly one thing -
+  // the dispatch it names reported - because a refusal never appends anything (see
+  // the admission comment on the log-subagent edge). The version that credited an
+  // unmatched close was reachable in the other direction: an expired open is
+  // skipped below, so ITS close became a standing credit, and the next
+  // byte-identical dispatch's open was consumed by it and never went live, hiding a
+  // running delegate from every consumer. Distinguishing "the same event twice"
+  // from "two identical events" needs an id this payload does not carry, so the
+  // accounting must not depend on one.
   for (const record of readDelegationLedger(sessionId)) {
     if (record.op === "open") {
       if (now - record.ts > DELEGATION_TTL_MS) continue;
-      if (cancelledGroups.has(record.group)) continue;
-      const pending = pendingCloses.get(record.key) ?? 0;
-      if (pending > 0) {
-        pendingCloses.set(record.key, pending - 1);
-        cancelledGroups.add(record.group);
-        continue;
-      }
       opens.push({ agent: record.agent, key: record.key, group: record.group, ts: record.ts });
       continue;
     }
@@ -2367,10 +2458,10 @@ function liveDelegationOpens(
         break;
       }
     }
-    if (group === null) {
-      pendingCloses.set(record.key, (pendingCloses.get(record.key) ?? 0) + 1);
-      continue;
-    }
+    // No open left for this key: the dispatch already reported, or its open aged
+    // out. Either way there is nothing live to cancel and nothing to remember -
+    // carrying the close forward is what let one close swallow a later window.
+    if (group === null) continue;
     for (let i = opens.length - 1; i >= 0; i--) {
       if (opens[i].group === group) opens.splice(i, 1);
     }
@@ -2537,6 +2628,12 @@ function buildForward(): Forward {
       // nothing. Excluding it from mutationCapableTool is not enough - that only
       // keeps it out of the legacy machinery below.
       if (DISPATCH_AUXILIARY_TOOLS.has(toolName)) return null;
+      // A DISPATCH is decided once, on the log-subagent edge, which asks this same
+      // core guard before it opens the delegation window. Answering again here
+      // would let this guard refuse a dispatch that edge already admitted, and the
+      // refusal would strand the open - the wedge this row shipped with. Every
+      // other tool this matcherless guard sees is still judged below.
+      if (ide.event === "PreToolUse" && isDispatchToolName(toolName)) return null;
       if (ide.channel === "legacy") {
         try {
           markKiroIdeLegacyPlanApprovalHost(
@@ -3347,7 +3444,6 @@ if (fwd === null) {
   return 0;
 }
 if (fwd.hook === "__legacy_plan_approval_block__") {
-  cancelRefusedDispatchWindow(ide.event, ide.toolName, ide.toolArgs, ide.sessionId);
   process.stderr.write(`${String(fwd.input.reason ?? "Plan Approval blocked this tool.")}\n`);
   return 2;
 }
@@ -3445,13 +3541,7 @@ if (target === "session-start" || target === "record-human-turn") {
 // Kiro IDE 1.x the host discards Stop-hook output, so this relay does not imply
 // a shared `{"decision":"block","reason"}` contract.
 if (result.stdout) process.stdout.write(result.stdout);
-if (result.code === 2) {
-  // Any guard that refuses a dispatch cancels its window here, not just the
-  // legacy branch above: the refusal is the only signal that the PostToolUse
-  // close will never arrive.
-  cancelRefusedDispatchWindow(ide.event, ide.toolName, ide.toolArgs, ide.sessionId);
-  if (result.stderr) process.stderr.write(result.stderr);
-}
+if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
 return result.code;
 }
 

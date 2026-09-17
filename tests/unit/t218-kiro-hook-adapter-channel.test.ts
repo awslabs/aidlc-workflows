@@ -1563,21 +1563,26 @@ describe("t218 Kiro legacy plan-approval enforcement", () => {
       );
       expect(write.code).toBe(2);
 
-      const dispatch = runIdeStdin(
-        dir,
-        "plan-approval-guard",
-        JSON.stringify({
-          hook_event_name: "PreToolUse",
-          cwd: dir,
-          tool_name: "subagent_aidlc-developer-agent",
-          tool_input: {
-            prompt:
-              "AIDLC-STAGE: code-generation\n" +
-              `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
-          },
-        }),
-      );
-      expect(dispatch.code).toBe(2);
+      // The DISPATCH half moved targets, and the contract it protects did not: a
+      // dispatch is still refused before approval, but by the edge that owns
+      // admission. It has to be that edge, because whoever refuses a dispatch must
+      // also be whoever decides to open its delegation window - refusing it from a
+      // second target strands the window the first one opened, which is the wedge
+      // this row shipped with. `aidlc-log-subagent.json`'s matcher covers every
+      // spelling `isDispatchToolName` accepts, so nothing reaches only the guard.
+      const dispatchPayload = JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-developer-agent",
+        tool_input: {
+          prompt:
+            "AIDLC-STAGE: code-generation\n" +
+            `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+        },
+      });
+      expect(runIdeStdin(dir, "log-subagent", dispatchPayload).code).toBe(2);
+      // And the guard deliberately stands down on it, so the refusal is made once.
+      expect(runIdeStdin(dir, "plan-approval-guard", dispatchPayload).code).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3609,6 +3614,36 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
       const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(existsSync(dropFile)).toBe(true);
       expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F4h: a NESTED success:false with a populated path is not audited either", () => {
+    // The CLI channel puts the transport's own flag inside the result envelope
+    // (`tool_response: {success:false, result:['']}`), and the text collector walked
+    // only the text keys - so this shape carried neither a top-level flag nor any
+    // recognisable error prose, and once the path came from the input it reached the
+    // success path and wrote ARTIFACT_UPDATED for bytes that never changed. The
+    // nested flag now fills the SAME `toolSuccess` the top-level one does, so the
+    // existing explicit-false branch decides it; no new policy is introduced.
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      const r = runIdeStdin(
+        dir,
+        "audit-and-sensors",
+        JSON.stringify({
+          session_id: "sess_t218_f4h",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "str_replace",
+          tool_input: { path: file },
+          tool_response: { success: false, result: [""] },
+        }),
+      );
+      expect(r.code).toBe(0); // still fail-open
+      expect(readAudit(dir)).not.toContain("ARTIFACT_UPDATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

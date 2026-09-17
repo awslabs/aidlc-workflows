@@ -224,6 +224,15 @@ function runAdapter(
 // event Kiro sends when the conductor delegates: the dispatch tool's PreToolUse.
 // Both calls must resolve the same session identity, which they do - neither
 // payload carries session_id, so both fall back to the remembered one.
+/** The delegation ledger the adapter wrote for this project. Its directory is keyed
+ *  by a hash of the session id, so it is found rather than constructed. */
+function findDelegationLedger(projectDir: string): string {
+  const root = join(projectDir, "aidlc", ".aidlc-sessions", "kiro-delegation");
+  const buckets = readdirSync(root);
+  expect(buckets.length, `exactly one delegation bucket under ${root}`).toBe(1);
+  return join(root, buckets[0], "windows.ndjson");
+}
+
 function openDelegationWindow(projectDir: string, agent: string): void {
   const r = runAdapter(projectDir, "log-subagent", {
     hook_event_name: "PreToolUse",
@@ -1214,14 +1223,15 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("5d5: a REFUSED dispatch leaves no window, so the main session keeps its verbs", () => {
-    // Measured on this head before the fix: the log-subagent PreToolUse edge opens
-    // the window before any sibling guard has decided, and a refusal makes Kiro
-    // block the tool WITHOUT sending PostToolUse - so the only close that dispatch
-    // would ever get never arrived and the open lived for DELEGATION_TTL_MS. Every
-    // ledger consumer then read a delegate that was never running: the main
-    // session's own `next` was refused with the delegate named as the caller, and a
-    // later human turn did not clear it.
+  test("5d5: the opening edge REFUSES an unadmitted dispatch and opens no window", () => {
+    // ADMISSION BEFORE OPEN. The first cut of this opened the window on the
+    // log-subagent edge and tried to cancel it wherever a refusal became Kiro's
+    // reject contract. That was wrong twice: it missed the matcherless
+    // human-presence gate, which returns 2 far upstream of those sites, and writing
+    // a close for a refusal made a refusal indistinguishable from a completion -
+    // which needs an event id the payload does not carry, so one refusal's credit
+    // could cancel a LATER byte-identical dispatch. Now this edge decides, and a
+    // refusal appends nothing at all.
     const dir = scratchProject(true);
     try {
       seedUnapprovedCodeGeneration(dir, "todo-core");
@@ -1234,9 +1244,20 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
         },
       };
-      expect(runAdapter(dir, "log-subagent", dispatch).code, "the opening edge").toBe(0);
-      const refused = runAdapter(dir, "plan-approval-guard", dispatch);
-      expect(refused.code, "the dispatch must be refused: that is this guard's job").toBe(2);
+      expect(
+        runAdapter(dir, "log-subagent", dispatch).code,
+        "the edge that owns admission must be the one that refuses",
+      ).toBe(2);
+      // The sibling guards stand down on a dispatch, so they cannot strand a window
+      // this edge opened - and they still refuse everything else.
+      expect(
+        runAdapter(dir, "plan-approval-guard", dispatch).code,
+        "the dispatch is decided once, on the opening edge",
+      ).toBe(0);
+      expect(
+        runAdapter(dir, "enforce-approval-gate", dispatch).code,
+        "the matcherless gate must not answer a second time either",
+      ).toBe(0);
       expect(
         runAdapter(dir, "state-transition-guard", {
           hook_event_name: "PreToolUse",
@@ -1246,6 +1267,63 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         }).code,
         "a refused dispatch never ran, so it cannot own the main session's verbs",
       ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d6: an aged-out open's close cannot swallow a later identical dispatch", () => {
+    // The credit accounting this replaces failed OPEN in the other direction: an
+    // expired open is skipped at replay, so ITS close matched nothing and was
+    // remembered as a credit for that key - and the next byte-identical dispatch's
+    // open was consumed by it, hiding a delegate that really was running from
+    // state-transition-guard and reviewer-scope. A crew dispatch repeated in a long
+    // session is the shape that gets there.
+    const dir = scratchProject(true);
+    try {
+      const agent = "aidlc-developer-agent";
+      const payload = {
+        tool_name: "subagent_aidlc-developer-agent",
+        tool_input: { subagent_type: agent, prompt: "same bytes every time" },
+      };
+      // Let the adapter write the ledger (its path is keyed by a session hash the
+      // test has no business reconstructing), then AGE what it wrote and close it.
+      expect(
+        runAdapter(dir, "log-subagent", { hook_event_name: "PreToolUse", cwd: dir, ...payload }).code,
+      ).toBe(0);
+      const ledger = findDelegationLedger(dir);
+      const aged = Date.now() - 7 * 60 * 60 * 1000; // older than DELEGATION_TTL_MS
+      const rows = readFileSync(ledger, "utf-8")
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .map((row): Record<string, unknown> => ({ ...row, ts: aged }));
+      const key = String(rows[0]?.key ?? "");
+      expect(key, "the opening edge must have written a keyed open").not.toBe("");
+      writeFileSync(
+        ledger,
+        `${rows.map((row) => JSON.stringify(row)).join("\n")}\n` +
+          `${JSON.stringify({ op: "close", key, ts: aged + 1000 })}\n`,
+        "utf-8",
+      );
+      // A fresh, admitted dispatch with the SAME bytes.
+      expect(
+        runAdapter(dir, "log-subagent", {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          ...payload,
+        }).code,
+      ).toBe(0);
+      // The delegate is live, so a lifecycle verb from inside the window is refused.
+      expect(
+        runAdapter(dir, "state-transition-guard", {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next" },
+        }).code,
+        "the new window must be attributed, not consumed by the aged close",
+      ).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

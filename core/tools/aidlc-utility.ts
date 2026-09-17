@@ -248,6 +248,7 @@ import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
   compiledExecutable,
+  currentDistribution,
   discoverProjectHarnesses,
   isCompiledExecutable,
   resolveHarnessPath,
@@ -3607,7 +3608,11 @@ export async function collectDoctorReport(
     fix: (() => {
       let selected: string | undefined;
       try {
-        selected = discoverProjectHarnesses(projectDir)[0]?.distribution;
+        const stamped = discoverProjectHarnesses(projectDir)[0]?.distribution;
+        // Through the successor resolver: a project a previous release stamped still
+        // carries the retired id, and prescribing it verbatim produced a fix line
+        // that exits 4, because `--harness kiro-ide` is not a harness any more.
+        selected = stamped === undefined ? undefined : currentDistribution(stamped);
       } catch {
         // An unreadable projection is reported by its own checks, not here.
       }

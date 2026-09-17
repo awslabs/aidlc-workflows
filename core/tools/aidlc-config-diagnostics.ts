@@ -1897,7 +1897,10 @@ export function trustFilesForHarness(
       );
     }
   }
-  if (harness === "kiro") {
+  // Same channel test the trust check uses: `trust --show` listed this file for a
+  // source projection that never ships it, so the surface named a trust file the
+  // install does not own.
+  if (harness === "kiro" && shipsNativeTrustFile(projectDir, harnessDir) === true) {
     files.push(join(projectDir, ".vscode", "settings.json"));
   }
   if (harness === "cursor") {
@@ -1911,12 +1914,18 @@ export function trustFilesForHarness(
   return [...new Set(files)];
 }
 
-/** True when THIS projection is the channel that ships `.vscode/settings.json`.
- *  Read from the descriptor rather than inferred from the running invocation, so a
+/** Whether THIS projection is the channel that ships `.vscode/settings.json`, read
+ *  from the descriptor rather than inferred from the running invocation - so a
  *  diagnostic on a project reports on that project rather than on whichever binary
- *  happens to be asking. Unreadable or malformed: treat as not shipped, because a
- *  file the descriptor cannot vouch for is not a trust contract this row owns. */
-function shipsNativeTrustFile(projectDir: string, harnessDir: string): boolean {
+ *  happens to be asking.
+ *
+ *  `null` means the descriptor could not be read. That is NOT the same as "this
+ *  channel does not ship the file", and collapsing the two let a native install with
+ *  `.vscode/settings.json` deleted report `trust configuration is clean`: the
+ *  descriptor was the only thing that knew the file was owed, so losing it silenced
+ *  the check that would have missed it. The caller reports the unreadable descriptor
+ *  instead of guessing. */
+function shipsNativeTrustFile(projectDir: string, harnessDir: string): boolean | null {
   try {
     const descriptor = JSON.parse(
       readFileSync(
@@ -1928,7 +1937,7 @@ function shipsNativeTrustFile(projectDir: string, harnessDir: string): boolean {
       (item) => item.path === ".vscode/settings.json",
     );
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -1951,7 +1960,20 @@ export function trustStatus(
   // executes. Requiring it of every `kiro` install made an untouched source
   // projection fail `config trust --check` with exit 1 while `doctor` on that same
   // tree reported zero problems: two diagnostics disagreeing about one workspace.
-  if (harness === "kiro" && shipsNativeTrustFile(projectDir, harnessDir)) {
+  const shipsTrustFile = harness === "kiro"
+    ? shipsNativeTrustFile(projectDir, harnessDir)
+    : false;
+  if (shipsTrustFile === null) {
+    issues.push({
+      id: "kiro-projection-descriptor-unreadable",
+      message:
+        `${join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json")} is missing or malformed, ` +
+        "so whether this install owes .vscode/settings.json cannot be determined",
+      remediation:
+        "Refresh the projection (aidlc config --harness kiro) to restore the descriptor, then re-run this check.",
+    });
+  }
+  if (shipsTrustFile === true) {
     const path = join(projectDir, ".vscode", "settings.json");
     try {
       const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
