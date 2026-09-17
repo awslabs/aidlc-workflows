@@ -11,11 +11,13 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   approveConstructionCheckpoint,
   checkpointPolicyEnabled,
+  loadConstructionEvidence,
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
 } from "../../dist/claude/.claude/tools/aidlc-construction-checkpoints.ts";
 import {
+  approvedConstructionUnits,
   artifactFilename,
   auditBlockField,
   findStageBySlug,
@@ -167,6 +169,25 @@ function approvals(project: string) {
 }
 
 describe("t341 Construction checkpoint verification and evidence", () => {
+  test("routing evidence cannot carry approval across a different state or intent record", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    human(dir);
+    expect(approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve").approved).toBe(true);
+    const evidence = loadConstructionEvidence(dir);
+    expect(approvedConstructionUnits(dir, evidence.state, evidence).has("alpha")).toBe(true);
+
+    const other = project();
+    expect(resolveConstructionCheckpoint(other, "alpha", "skeleton", evidence.state, evidence).approved).toBe(false);
+    expect(approvedConstructionUnits(other, evidence.state, evidence).has("alpha")).toBe(false);
+
+    writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 2;\n");
+    const changedState = setField(evidence.state, "Current Stage", "code-generation");
+    writeFileSync(seededStateFile(dir), changedState);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "skeleton", undefined, evidence).approved).toBe(false);
+    expect(approvedConstructionUnits(dir, changedState, evidence).has("alpha")).toBe(false);
+  }, 30_000);
+
   test("refreshing unchanged completion evidence or rerunning the same check preserves approval", () => {
     const dir = project();
     const checked = pass(dir);

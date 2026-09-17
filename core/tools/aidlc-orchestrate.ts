@@ -254,8 +254,10 @@ import {
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
   checkpointPolicyEnabled,
+  loadConstructionEvidence,
   resolveConstructionCheckpoint,
   type ConstructionCheckpointKind,
+  type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
@@ -2435,8 +2437,8 @@ function readUnitOwnership(stateContent: string | null): "team" | null {
 // rebuild-stage-graph hook repairs the cache on the next transition.
 type BoltBatchesResolution = BoltDagResolution;
 
-function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
-  const resolution = resolveBoltDag(projectDir);
+function resolveBoltBatches(projectDir: string, evidence?: ConstructionEvidence): BoltBatchesResolution {
+  const resolution = evidence?.dag ?? resolveBoltDag(projectDir);
   if (resolution.state === "ok" && resolution.healed) {
     process.stderr.write(
       `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)\n`,
@@ -3441,9 +3443,10 @@ function buildRunStageDirective(
     checkpointPolicyEnabled(stateContent) &&
     !usesStageLevelPerUnitArtifacts(scope, stateContent)
   ) {
-    const dag = resolveBoltBatches(codekbCtx.projectDir);
+    const evidence = routingEvidenceFor(codekbCtx.projectDir, stateContent);
+    const dag = resolveBoltBatches(codekbCtx.projectDir, evidence);
     if (dag.state === "ok" && dag.units.length > 0) {
-      const approved = approvedConstructionUnits(codekbCtx.projectDir, stateContent);
+      const approved = approvedConstructionUnits(codekbCtx.projectDir, stateContent, evidence);
       const mode = getField(stateContent, AUTONOMY_MODE_FIELD)?.trim();
       const skeletonApproved = !constructionSkeletonOn(stateContent) ||
         approved.has(dag.batches.flat()[0]);
@@ -3455,7 +3458,7 @@ function buildRunStageDirective(
         offer_autonomy: mode !== "autonomous" && mode !== "gated" &&
           skeletonApproved && readSkeletonStance(stateContent) !== null,
         human_completion_required:
-          !isAutonomousConstructionGate(stateContent, node, codekbCtx.projectDir),
+          !isAutonomousConstructionGate(stateContent, node, codekbCtx.projectDir, evidence),
         completion_only: unitMajor && isPerUnit(node) &&
           dag.units.every((name) => approved.has(name)),
       };
@@ -4117,6 +4120,31 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
+// A read-only routing pass shares checkpoint evidence; mutation tools always
+// load fresh. Never retain this snapshot for report or steering continuation.
+let routingEvidence: ConstructionEvidence | null = null;
+let routingPassActive = false;
+
+function routingEvidenceFor(projectDir: string, stateContent: string | null): ConstructionEvidence | undefined {
+  if (!routingPassActive || stateContent === null || !checkpointPolicyEnabled(stateContent)) return undefined;
+  const path = engineStateFilePath(projectDir);
+  if (!existsSync(path)) return undefined;
+  if (routingEvidence?.state !== stateContent || routingEvidence.root !== dirname(path)) {
+    routingEvidence = loadConstructionEvidence(projectDir, stateContent);
+  }
+  return routingEvidence;
+}
+
+function handleNext(args: string[], projectDir: string | undefined): void {
+  routingPassActive = true;
+  try {
+    routeNext(args, projectDir);
+  } finally {
+    routingEvidence = null;
+    routingPassActive = false;
+  }
+}
+
 // The `next` handler reads workflow state and emits exactly one directive. A
 // normal rule-transport request may lazily mint its machine-local MAC key.
 // Internal observer modes are strictly read-only: route checks bypass transport,
@@ -4124,7 +4152,7 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 // prepared directive. Ordinary routing never mutates shared workflow state;
 // `--single` adds only its synthetic audit start and cannot move the main
 // workflow pointer.
-function handleNext(args: string[], projectDir: string | undefined): void {
+function routeNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   const flags = parseNextFlags(args);
 
@@ -5165,7 +5193,7 @@ function eligibleAutonomousSwarmBatches(
   // authority remain the routing signal even though reviewed record artifacts
   // are copied back), even if the knob was flipped afterwards.
   if (readConstructionIteration(stateContent) === "unit-major") return null;
-  const r = resolveBoltBatches(projectDir);
+  const r = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
   if (r.state !== "ok" || r.batches.length === 0) return null;
   return r.batches;
 }
@@ -5219,7 +5247,7 @@ function isSettledAutonomousSwarm(
   const units =
     obligations.state === "ready" ? [...obligations.units] : liveUnits;
   if (units.length === 0) return false;
-  const converged = swarmConvergedUnits(projectDir, node.slug);
+  const converged = swarmConvergedUnits(projectDir, node.slug, routingEvidenceFor(projectDir, stateContent));
   return units.every((unit) => converged.has(unit));
 }
 
@@ -5397,10 +5425,10 @@ function tryEmitSwarm(
     stateContent && checkpointPolicyEnabled(stateContent) &&
     constructionSkeletonOn(stateContent)
   ) {
-    const dag = resolveBoltBatches(projectDir);
+    const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
     if (
       dag.state === "ok" && dag.units.length > 0 &&
-      !approvedConstructionUnits(projectDir, stateContent).has(dag.batches.flat()[0])
+      !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(dag.batches.flat()[0])
     ) return false;
   }
   const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
@@ -5410,11 +5438,12 @@ function tryEmitSwarm(
   // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
   // floored at this stage's latest STAGE_STARTED so a jump-driven re-run never
   // reads a prior run's rows as coverage.
-  const converged = swarmConvergedUnits(projectDir, slug);
+  const evidence = routingEvidenceFor(projectDir, stateContent);
+  const converged = swarmConvergedUnits(projectDir, slug, evidence);
   let pendingUnits: string[] | null = null;
   let pendingBatch = 0;
   const inlineApproved = stateContent
-    ? approvedConstructionUnits(projectDir, stateContent)
+    ? approvedConstructionUnits(projectDir, stateContent, evidence)
     : new Set<string>();
   for (const [index, batch] of batches.entries()) {
     if (!Array.isArray(batch) || batch.length === 0) continue;
@@ -5427,7 +5456,7 @@ function tryEmitSwarm(
     const builtBySwarm = batch.filter((unit) => !inlineApproved.has(unit));
     if (stateContent && checkpointPolicyEnabled(stateContent) && builtBySwarm.length > 0) {
       const checkpoint = resolveSwarmCheckpoint(
-        projectDir, index + 1, builtBySwarm, stateContent,
+        projectDir, index + 1, builtBySwarm, stateContent, evidence,
       );
       if (!checkpoint.approved) {
         const directive = buildRunStageDirective(
@@ -7055,7 +7084,7 @@ function emitUnitMajorRunStage(
   }
 
   const teamOwnership = readUnitOwnership(stateContent) === "team";
-  const resolution = resolveBoltBatches(projectDir);
+  const resolution = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
   if (
     teamOwnership &&
     (resolution.state !== "ok" || resolution.batches.flat().length === 0)
@@ -7210,7 +7239,7 @@ function emitUnitMajorRunStage(
         constructionSkeletonOn(stateContent) && u === allUnits[0]
           ? "skeleton"
           : "unit";
-      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent);
+      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) {
         const gateStage = block[block.length - 1];
         const directive = buildRunStageDirective(
@@ -7264,10 +7293,10 @@ function emitForSlug(
       !isTeamUnitOwnership(stateContent) && constructionSkeletonOn(stateContent) &&
       !usesStageLevelPerUnitArtifacts(scope, stateContent)
     ) {
-      const dag = resolveBoltBatches(projectDir);
+      const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
       if (
         dag.state === "ok" && dag.units.length > 0 &&
-        !approvedConstructionUnits(projectDir, stateContent).has(dag.batches.flat()[0])
+        !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(dag.batches.flat()[0])
       ) {
         emitUnitMajorRunStage(
           node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir, true,
@@ -7349,7 +7378,7 @@ function ensureSingleStageStarted(
   // A query never appends a lifecycle event: an observer that opened a
   // single-stage attempt would move the run floor it came to read.
   if (isReadOnlyEngineProbe()) return null;
-  return appendSingleStageAuditEvents(projectDir, [{
+  const error = appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
       Stage: node.slug,
@@ -7358,6 +7387,8 @@ function ensureSingleStageStarted(
       Scope: scope,
     },
   }]);
+  routingEvidence = null;
+  return error;
 }
 
 function emitSingleRunStage(

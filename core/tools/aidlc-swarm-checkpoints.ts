@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 import {
   activeIntentUuid,
   approvedConstructionUnits,
@@ -72,7 +73,7 @@ function locked<T>(
   }, intent, space);
 }
 
-function snapshot(pd: string, batch: number, requested: string[], stateContent?: string) {
+function snapshot(pd: string, batch: number, requested: string[], stateContent?: string, sharedEvidence?: ConstructionEvidence) {
   if (!Number.isSafeInteger(batch) || batch < 1) throw new Error("Swarm batch must be a positive integer.");
   if (!Array.isArray(requested) || requested.length === 0 ||
     requested.some((unit) => typeof unit !== "string" || validateUnitName(unit) !== null) ||
@@ -80,9 +81,13 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     throw new Error("Swarm checkpoint requires a nonempty, duplicate-free unit set.");
   }
   const state = stateContent ?? readStateFile(pd);
-  const dag = resolveBoltDag(pd);
+  const shared = sharedEvidence
+    ? sharedEvidence.state === state && sharedEvidence.root === recordDir(pd)
+      ? sharedEvidence : loadConstructionEvidence(pd, state)
+    : undefined;
+  const dag = shared?.dag ?? resolveBoltDag(pd);
   if (dag.state !== "ok" || !dag.batches[batch - 1]) throw new Error("Swarm batch is not in the authoritative Unit DAG.");
-  const inlineApproved = approvedConstructionUnits(pd, state);
+  const inlineApproved = approvedConstructionUnits(pd, state, shared);
   const units = dag.batches[batch - 1].filter((unit) => !inlineApproved.has(unit));
   if (!units.length || units.length !== requested.length || !units.every((unit) => requested.includes(unit))) {
     throw new Error("Swarm checkpoint must name exactly the DAG batch minus approved inline Construction units.");
@@ -98,20 +103,20 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     errors.push("Swarm checkpoints require enabled Construction Checkpoints, stage-major iteration, and swarm execution.");
   }
   const unreadable: string[] = [];
-  const rows = sortAttemptEvents(readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+  const rows = shared?.rows ?? sortAttemptEvents(readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
   ));
   if (unreadable.length) throw new Error("Swarm checkpoint audit evidence is unreadable.");
-  const workflow = latest(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  const workflow = shared ? shared.workflow : latest(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");
   const floor = latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, undefined, rows);
   if (floor === "unstarted#0" || floor.startsWith("AMBIGUOUS:")) errors.push("Code Generation attempt is missing or ambiguous.");
-  const grant = latest(rows.filter((row) => ["WORKFLOW_STARTED", "AUTONOMY_MODE_SET"].includes(row.event)));
+  const grant = shared ? shared.grant : latest(rows.filter((row) => ["WORKFLOW_STARTED", "AUTONOMY_MODE_SET"].includes(row.event)));
   const humanRequired = !(isAutonomousMode(state) && grant?.event === "AUTONOMY_MODE_SET" &&
     auditBlockField(grant.block, "Mode") === "autonomous");
-  const chain = currentSwarmSourceMergeChain(pd, STAGE);
+  const chain = currentSwarmSourceMergeChain(pd, STAGE, undefined, undefined, shared?.allRows);
   if (chain.state !== "ready") errors.push(`Native swarm source-merge chain is unavailable${chain.state === "invalid" ? `: ${chain.reason}` : "."}`);
-  const listing = workspaceSourceListing(pd);
+  const listing = shared ? shared.listing : workspaceSourceListing(pd);
   if (listing === null) errors.push("Current claimed source cannot be fingerprinted.");
   const definition = findStageBySlug(STAGE);
   if (!definition) throw new Error("Code Generation stage definition is unavailable.");
@@ -227,8 +232,9 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
 
 export function resolveSwarmCheckpoint(
   pd: string, batch: number, units: string[], stateContent?: string,
+  evidence?: ConstructionEvidence,
 ): SwarmCheckpoint {
-  return locked(pd, () => snapshot(pd, batch, units, stateContent).result);
+  return locked(pd, () => snapshot(pd, batch, units, stateContent, evidence).result);
 }
 
 function human(pd: string, rows: readonly AuditShardEvent[]): void {

@@ -38,6 +38,7 @@ export {
 // imports are erased at runtime so they don't create the cycle.
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
+import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
@@ -7955,6 +7956,7 @@ export function isAutonomousConstructionGate(
   stateContent: string | null,
   stage: { slug: string; phase: string; for_each?: string },
   projectDir?: string,
+  evidence?: ConstructionEvidence,
 ): boolean {
   const checkpoints = stateContent !== null && constructionCheckpointsApply(stateContent);
   if (checkpoints && stage.phase === "construction" && projectDir) {
@@ -7965,12 +7967,12 @@ export function isAutonomousConstructionGate(
       (stage.for_each === "unit-of-work" &&
         getField(stateContent!, "Construction Iteration") === "unit-major")
     ) {
-      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage);
+      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage, evidence);
       return gaps !== null && gaps.length === 0;
     }
     if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
     if (constructionSkeletonOn(stateContent!)) {
-      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage);
+      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage, evidence);
       return gaps !== null && gaps.length === 0;
     }
     // The grant governs ordinary completion gates; Plan Approval retains its
@@ -8011,6 +8013,7 @@ export function constructionCheckpointGaps(
   projectDir: string,
   stateContent: string,
   stage: { slug: string; phase: string; for_each?: string },
+  evidence?: ConstructionEvidence,
 ): string[] | null {
   const scope = getField(stateContent, "Scope") ?? "";
   if (
@@ -8018,9 +8021,14 @@ export function constructionCheckpointGaps(
     !constructionCheckpointsApply(stateContent) ||
     usesStageLevelPerUnitArtifacts(scope, stateContent)
   ) return null;
-  const dag = resolveBoltDag(projectDir);
+  // A routing snapshot's DAG is reused only when it was loaded for this exact
+  // state and record; anything else resolves fresh.
+  const shared = evidence?.state === stateContent && evidence.root === recordDir(projectDir)
+    ? evidence
+    : undefined;
+  const dag = shared?.dag ?? resolveBoltDag(projectDir);
   if (dag.state !== "ok" || dag.units.length === 0) return null;
-  const approved = approvedConstructionUnits(projectDir, stateContent);
+  const approved = approvedConstructionUnits(projectDir, stateContent, shared);
   const iteration = getField(stateContent, "Construction Iteration");
   if (
     stage.slug === "code-generation" &&
@@ -8034,7 +8042,7 @@ export function constructionCheckpointGaps(
       const units = batch.filter((unit) => !approved.has(unit));
       if (units.length === 0) continue;
       try {
-        if (resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent).approved) continue;
+        if (resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent, shared).approved) continue;
       } catch {
         // Missing, stale or malformed evidence cannot approve a batch.
       }
@@ -8065,25 +8073,36 @@ export function isConstructionSwarmEnabled(stateContent: string | null): boolean
 export function approvedConstructionUnits(
   projectDir: string,
   stateContent: string,
+  evidence?: ConstructionEvidence,
 ): Set<string> {
   const approved = new Set<string>();
   if (!constructionCheckpointsApply(stateContent)) return approved;
-  const dag = resolveBoltDag(projectDir);
-  if (dag.state !== "ok") return approved;
-  const { resolveConstructionCheckpoint } = require("./aidlc-construction-checkpoints.ts") as
+  const { loadConstructionEvidence, resolveConstructionCheckpoint } = require("./aidlc-construction-checkpoints.ts") as
     typeof import("./aidlc-construction-checkpoints.ts");
+  try {
+    if (evidence?.state !== stateContent || evidence.root !== recordDir(projectDir)) {
+      evidence = loadConstructionEvidence(projectDir, stateContent);
+    }
+  } catch {
+    return approved;
+  }
+  if (evidence.approvedUnits) return evidence.approvedUnits;
+  const dag = evidence.dag;
+  if (dag.state !== "ok") return approved;
+  const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
   for (const unit of dag.units) {
-    const kind = constructionSkeletonOn(stateContent) && unit === dag.batches.flat()[0]
+    const kind = unit === skeleton
       ? "skeleton"
       : "unit";
     try {
-      if (resolveConstructionCheckpoint(projectDir, unit, kind, stateContent).approved) {
+      if (resolveConstructionCheckpoint(projectDir, unit, kind, stateContent, evidence).approved) {
         approved.add(unit);
       }
     } catch {
       // Missing, stale or malformed evidence is unfinished work.
     }
   }
+  evidence.approvedUnits = approved;
   return approved;
 }
 
@@ -12505,8 +12524,9 @@ export function reviewAttemptWindow(
   projectDir: string,
   stateContent: string,
   stage: { slug: string; for_each?: string },
+  auditRows?: AuditShardEvent[],
 ): AttemptView {
-  const allEvents = readAuditShardEvents(projectDir);
+  const allEvents = auditRows ?? readAuditShardEvents(projectDir);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event)),
   );
@@ -13507,6 +13527,7 @@ export function freshReviewReceipts(
     reviewClass?: ReviewClass;
     attemptWindow?: ReviewAttemptWindow;
     selection?: WorkflowSelectionOptions;
+    sourceState?: WorkspaceSourceState | null;
   } = {},
 ): FreshReviewReceipts {
   const empty: FreshReviewReceipts = {
@@ -14077,7 +14098,7 @@ export function freshReviewReceipts(
   // One shared temp-index pass supplies BOTH global reconciliation and every
   // per-unit comparison. Never recompute inside the unit loop.
   const currentSourceState = needsCurrentSource
-    ? workspaceSourceState(projectDir)
+    ? options.sourceState !== undefined ? options.sourceState : workspaceSourceState(projectDir)
     : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
@@ -18744,8 +18765,9 @@ export function currentStageSourceBaseline(
   unitMajor: boolean,
   intent?: string,
   space?: string,
+  auditRows?: readonly AuditShardEvent[],
 ): SourceBaselineResult {
-  const allEvents = readAuditShardEvents(projectDir, intent, space);
+  const allEvents = auditRows ?? readAuditShardEvents(projectDir, intent, space);
   const modernSourceBindingEvidence =
     hasModernSourceBindingEvidence(projectDir, allEvents, intent, space);
   const events = allEvents
@@ -21320,6 +21342,7 @@ export function isAutonomousSwarmStage(
     for_each?: string;
     mode?: string;
   },
+  evidence?: ConstructionEvidence,
 ): boolean {
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
@@ -21334,7 +21357,7 @@ export function isAutonomousSwarmStage(
     const dag = resolveBoltDag(projectDir);
     if (
       dag.state !== "ok" || dag.units.length === 0 ||
-      !approvedConstructionUnits(projectDir, stateContent!).has(dag.batches.flat()[0])
+      !approvedConstructionUnits(projectDir, stateContent!, evidence).has(dag.batches.flat()[0])
     ) return false;
   }
   const resolution = resolveBoltDag(projectDir);
@@ -25605,9 +25628,13 @@ function latestMainWorkflowStageRunFloorFromRows(
 export function swarmConvergedUnits(
   projectDir: string,
   slug: string,
+  evidence?: ConstructionEvidence,
 ): Set<string> {
+  if (evidence && (evidence.state !== readStateFile(projectDir) || evidence.root !== recordDir(projectDir))) {
+    evidence = undefined;
+  }
   const unreadableShards: string[] = [];
-  const auditRows = readAuditShardEvents(
+  const auditRows = evidence?.allRows ?? readAuditShardEvents(
     projectDir,
     undefined,
     undefined,
@@ -25628,7 +25655,7 @@ export function swarmConvergedUnits(
     });
   const startedAt = stageStarts.at(-1)?.timestamp ?? null;
   const floor = latestMainWorkflowStageRunFloorFromRows(auditRows, slug);
-  const sourceChain = currentSwarmSourceMergeChain(projectDir, slug);
+  const sourceChain = currentSwarmSourceMergeChain(projectDir, slug, undefined, undefined, evidence?.allRows);
   const rowsByUnit = new Map<string, AuditShardEvent[]>();
   for (const row of auditRows) {
     if (row.event !== "SWARM_UNIT_CONVERGED") continue;
@@ -25686,8 +25713,8 @@ export function swarmConvergedUnits(
   }
   if (slug === "code-generation") {
     try {
-      const state = readStateFile(projectDir);
-      for (const unit of approvedConstructionUnits(projectDir, state)) {
+      const state = evidence?.state ?? readStateFile(projectDir);
+      for (const unit of approvedConstructionUnits(projectDir, state, evidence)) {
         converged.add(unit);
       }
     } catch {
@@ -25847,13 +25874,14 @@ export function currentSwarmSourceOpeningFingerprint(
   slug: string,
   intent?: string,
   space?: string,
+  auditRows?: readonly AuditShardEvent[],
 ): SwarmSourceOpeningFingerprint {
   const floor = latestMainWorkflowStageRunFloorForProject(
     projectDir,
     slug,
     false,
     undefined,
-    undefined,
+    auditRows,
     intent,
     space,
   );
@@ -25866,7 +25894,7 @@ export function currentSwarmSourceOpeningFingerprint(
   const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
   if (rejected !== null) {
     const ordinal = Number(rejected[2]);
-    const rows = readAuditShardEvents(projectDir, intent, space)
+    const rows = (auditRows ?? readAuditShardEvents(projectDir, intent, space))
       .filter(
         (row) =>
           row.event === "GATE_REJECTED" &&
@@ -25919,6 +25947,7 @@ export function currentSwarmSourceOpeningFingerprint(
       getField(stateContent, "Construction Checkpoints") === "enabled",
     intent,
     space,
+    auditRows,
   );
   if (baseline.state !== "ready") {
     return {
@@ -25945,18 +25974,19 @@ export function currentSwarmSourceMergeChain(
   slug: string,
   intent?: string,
   space?: string,
+  auditRows?: readonly AuditShardEvent[],
 ): SwarmSourceMergeChain {
   const floor = latestMainWorkflowStageRunFloorForProject(
     projectDir,
     slug,
     false,
     undefined,
-    undefined,
+    auditRows,
     intent,
     space,
   );
   const unreadable: string[] = [];
-  const allRows = readAuditShardEvents(projectDir, intent, space, unreadable);
+  const allRows = auditRows ?? readAuditShardEvents(projectDir, intent, space, unreadable);
   if (unreadable.length || floor.startsWith("AMBIGUOUS:")) {
     return { state: "invalid", reason: "source-merge attempt evidence is unreadable or ambiguous" };
   }
@@ -26106,6 +26136,7 @@ export function currentSwarmSourceMergeChain(
     slug,
     intent,
     space,
+    allRows,
   );
   if (opening.state === "invalid") {
     return opening;

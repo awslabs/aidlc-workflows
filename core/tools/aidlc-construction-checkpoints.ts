@@ -35,6 +35,7 @@ import {
   resolveReviewClass,
   resolveWorkflowSelection,
   reviewArtifactFingerprint,
+  reviewAttemptWindow,
   reviewRequestBindingFromBlock,
   selfAttributedDecisionMarker,
   setField,
@@ -44,9 +45,14 @@ import {
   unitSourceFingerprint,
   validateUnitName,
   withAuditLock,
-  workspaceSourceListing,
+  workspaceSourceState,
   writeRecordFileNoFollow,
   type AuditShardEvent,
+  type BoltDagResolution,
+  type FreshReviewReceipts,
+  type UnitLifecycleSnapshot,
+  type WorkspaceSourceListing,
+  type WorkspaceSourceState,
 } from "./aidlc-lib.ts";
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
@@ -124,9 +130,50 @@ function readRows(projectDir: string): AuditShardEvent[] {
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
   if (unreadable.length) throw new Error("Construction checkpoint audit evidence is unreadable.");
-  return sortAttemptEvents(rows.filter(
+  return rows;
+}
+
+/** Read-only evidence owned by one routing pass, never shared across mutations. */
+export interface ConstructionEvidence {
+  state: string;
+  root: string;
+  intent: string;
+  dag: BoltDagResolution;
+  rows: AuditShardEvent[];
+  allRows: AuditShardEvent[];
+  source: WorkspaceSourceState | null;
+  listing: WorkspaceSourceListing | null;
+  scope: string;
+  stages: string[];
+  workflow: AuditShardEvent | null;
+  grant: AuditShardEvent | null;
+  evidenceState: string;
+  lifecycle: Map<string, UnitLifecycleSnapshot>;
+  receipts: Map<string, FreshReviewReceipts>;
+  approvedUnits?: Set<string>;
+}
+
+export function loadConstructionEvidence(projectDir: string, stateContent?: string): ConstructionEvidence {
+  const root = recordDir(projectDir);
+  const intent = activeIntentUuid(projectDir);
+  if (!root || !intent) throw new Error("Construction checkpoint requires an active intent record.");
+  const state = stateContent ?? readStateFile(projectDir);
+  const allRows = readRows(projectDir);
+  const rows = sortAttemptEvents(allRows.filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
   ));
+  const scope = getField(state, "Scope") ?? "";
+  const source = workspaceSourceState(projectDir);
+  return {
+    state, root, intent, allRows, rows, scope, source, listing: source?.listing ?? null,
+    dag: resolveBoltDag(projectDir),
+    stages: unitMajorConstructionStageSlugs(scope, state, true),
+    workflow: onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED")),
+    grant: onlyLatest(rows.filter((row) => row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED")),
+    // A skeleton has unit-major evidence windows even under a stage-major cursor.
+    evidenceState: setField(state, "Construction Iteration", "unit-major"),
+    lifecycle: new Map(), receipts: new Map(),
+  };
 }
 
 function readProof(root: string, path: string): ConstructionCheckpointProof | null {
@@ -176,41 +223,29 @@ function snapshot(
   unit: string,
   kind: ConstructionCheckpointKind,
   stateContent?: string,
+  sharedEvidence?: ConstructionEvidence,
 ): Snapshot {
   const unitError = validateUnitName(unit);
   if (unitError) throw new Error(unitError);
   if (kind !== "unit" && kind !== "skeleton") throw new Error("Unknown Construction checkpoint kind.");
-  const dag = resolveBoltDag(projectDir);
+  const state = stateContent ?? readStateFile(projectDir);
+  const shared = sharedEvidence?.state === state && sharedEvidence.root === recordDir(projectDir)
+    ? sharedEvidence : loadConstructionEvidence(projectDir, state);
+  const { dag, root, intent, rows, scope, stages, workflow, grant, evidenceState, listing } = shared;
   if (dag.state !== "ok" || !dag.units.includes(unit)) {
     throw new Error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
-  const root = recordDir(projectDir);
-  const intent = activeIntentUuid(projectDir);
-  if (!root || !intent) throw new Error("Construction checkpoint requires an active intent record.");
-  const state = stateContent ?? readStateFile(projectDir);
-  const rows = readRows(projectDir);
-  const scope = getField(state, "Scope") ?? "";
-  const stages = unitMajorConstructionStageSlugs(scope, state, true);
   const errors: string[] = [];
   const enabled = checkpointPolicyEnabled(state);
   if (!enabled) errors.push("Construction Checkpoints: enabled requires solo Units with an in-scope source-producing stage.");
   if (stages.length === 0) errors.push("No applicable per-unit Construction stages.");
-  const workflow = onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");
-  const grant = onlyLatest(rows.filter((row) =>
-    row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED",
-  ));
   const autonomous = isAutonomousMode(state) &&
     grant?.event === "AUTONOMY_MODE_SET" &&
     auditBlockField(grant.block, "Mode") === "autonomous";
   const humanRequired = kind === "skeleton" || !autonomous;
-  // Skeleton bootstrapping completes the whole first Unit even when the
-  // surrounding cursor stays stage-major. Its evidence window has the same
-  // start-insensitive semantics as a unit-major block; never mutate state.
-  const evidenceState = setField(state, "Construction Iteration", "unit-major");
   const floors: Record<string, string> = {};
   const evidence: unknown[] = [];
-  const listing = workspaceSourceListing(projectDir);
   if (listing === null) errors.push("The Unit's source boundary cannot be fingerprinted.");
   let sourceStages = 0;
 
@@ -234,7 +269,15 @@ function snapshot(
       auditBlockField(row.block, "Unit") === unit &&
       eventMatchesClaimAttempt(projectDir, row.block, unit),
     ));
-    const lifecycle = unitLifecycleSnapshot(projectDir, slug, rows, evidenceState);
+    let lifecycle = shared.lifecycle.get(slug);
+    if (!lifecycle) {
+      lifecycle = unitLifecycleSnapshot(projectDir, slug, rows, evidenceState, {
+        artifactFingerprint: (definition, name) => reviewArtifactFingerprint(projectDir, definition, name, {
+          boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
+        }),
+      });
+      shared.lifecycle.set(slug, lifecycle);
+    }
     const completionFingerprint = completion && auditBlockField(completion.block, "Artifact Fingerprint");
     if (
       !lifecycle.receipts.has(unit) ||
@@ -269,7 +312,15 @@ function snapshot(
       : "none";
     let review: AuditShardEvent | null = null;
     if (reviewClass !== "none") {
-      const receipts = freshReviewReceipts(projectDir, evidenceState, stage, { boltDag: dag, reviewClass });
+      let receipts = shared.receipts.get(slug);
+      if (!receipts) {
+        receipts = freshReviewReceipts(projectDir, evidenceState, stage, {
+          boltDag: dag, reviewClass,
+          attemptWindow: reviewAttemptWindow(projectDir, evidenceState, stage, shared.allRows),
+          sourceState: shared.source,
+        });
+        shared.receipts.set(slug, receipts);
+      }
       review = onlyLatest(rows.filter((row) =>
         row.event === "REVIEW_COMPLETED" &&
         auditBlockField(row.block, "Stage") === slug &&
@@ -366,8 +417,9 @@ export function resolveConstructionCheckpoint(
   unit: string,
   kind: ConstructionCheckpointKind,
   stateContent?: string,
+  evidence?: ConstructionEvidence,
 ): ConstructionCheckpoint {
-  return snapshot(projectDir, unit, kind, stateContent).result;
+  return snapshot(projectDir, unit, kind, stateContent, evidence).result;
 }
 
 function requireReady(result: ConstructionCheckpoint): void {
