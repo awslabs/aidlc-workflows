@@ -212,6 +212,29 @@ function gates(pd: string, event = "GATE_APPROVED") {
 }
 
 describe("t343 completed swarm batch checkpoints", () => {
+  test("stage approval requires each converged batch checkpoint to be approved", () => {
+    const pd = fixture(true);
+    converge(pd);
+    converge(pd, 2, ["gamma"]);
+    const report = () => spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+      "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", pd,
+    ], { encoding: "utf-8" });
+    const refused = report();
+    expect(JSON.parse(refused.stdout).kind, refused.stderr).toBe("error");
+    expect(JSON.parse(refused.stdout).message).toContain("batch 1 (alpha, beta)");
+    expect(JSON.parse(refused.stdout).message).toContain("batch 2 (gamma)");
+    expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+    const remaining = report();
+    expect(JSON.parse(remaining.stdout).kind, remaining.stderr).toBe("error");
+    expect(JSON.parse(remaining.stdout).message).not.toContain("batch 1");
+    expect(JSON.parse(remaining.stdout).message).toContain("batch 2 (gamma)");
+    expect(approveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
+    const admitted = report();
+    expect(admitted.status, `${admitted.stdout}${admitted.stderr}`).toBe(0);
+    expect(JSON.parse(admitted.stdout).kind).not.toBe("error");
+  }, 60_000);
+
   test("re-recording unchanged native evidence preserves the completed batch approval", () => {
     const pd = fixture();
     converge(pd);
@@ -516,7 +539,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     })));
     for (const result of results) expect(result.code, `${result.out}\n${result.err}`).toBe(0);
     expect(readFileSync(sentinel, "utf-8")).toBe("existing shared temporary entry\n");
-    expect(readdirSync(scratch)).toEqual(["cat-file.batch"]);
+    expect(readdirSync(scratch).filter((entry) => entry.startsWith("aidlc-commit-manifest-"))).toEqual([]);
   }, 30_000);
 
   test.each(["wrong-repo", "source-binding"])("%s cannot certify transported child source", (kind) => {

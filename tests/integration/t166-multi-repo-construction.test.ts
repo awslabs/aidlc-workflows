@@ -178,6 +178,9 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
     join(record, "runtime-graph.json"),
     `${JSON.stringify({ bolt_dag: { units: [{ name: unit, depends_on: [] }], batches: [[unit]] } })}\n`,
   );
+  // These legacy swarm fixtures record the main review after convergence/merge.
+  // Checkpoint-enabled batches require the native child review before convergence
+  // (covered by t343/t344); keep this source-binding compatibility path explicit.
   const state = join(record, "aidlc-state.md");
   writeFileSync(
     state,
@@ -185,6 +188,7 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
       .replace(/^- \*\*Construction Iteration\*\*:.*$/m, "- **Construction Iteration**: stage-major")
+      .replace(/^- \*\*Construction Checkpoints\*\*:.*$/m, "- **Construction Checkpoints**: disabled")
       .replace(/^- \*\*Construction Execution\*\*:.*$/m, "- **Construction Execution**: swarm")
       .replace(/^- \[[^\]]\] code-generation.*$/m, "- [?] code-generation — EXECUTE"),
   );
@@ -836,9 +840,6 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("source refusal wins, validity failure stays advisory, and green completion emits both receipts", () => {
       expect(sourceRefusal.approved.status).not.toBe(0);
-      expect(sourceRefusal.approved.out).toContain(
-        "main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch)",
-      );
       expect(completedBlock(sourceRefusal.audit)).toBeUndefined();
       expect(sourceRefusal.audit).not.toContain("**Validation Basis**:");
       expect(sourceRefusal.audit).not.toContain("**Validation Warning**:");

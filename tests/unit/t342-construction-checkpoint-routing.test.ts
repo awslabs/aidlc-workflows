@@ -1,7 +1,8 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-state:set-construction-checkpoints, subcommand:aidlc-state:set-construction-execution, function:isAutonomousConstructionGate, function:isConstructionSwarmEnabled
+// covers: function:constructionCheckpointGaps
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -209,6 +210,53 @@ describe("t342 Construction checkpoint routing", () => {
     expect(next(chosen).construction_policy?.offer_autonomy).toBe(false);
   });
 
+  test("stage reports and direct transitions cannot bypass unapproved Unit checkpoints", () => {
+    const p = fixture({ current: "code-generation" });
+    for (const unit of ["alpha", "beta"]) cover(p, unit);
+    const file = seededStateFile(p);
+    const initial = readFileSync(file, "utf-8");
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const run = (tool: string, args: string[]) => spawnSync(process.execPath, [
+      join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p,
+    ], { encoding: "utf-8", env });
+    const assertRefused = (tool: string, args: string[], marker: string) => {
+      // Already-open and revising gates can survive an upgrade from the old engine.
+      const before = initial.replace("[-] code-generation", `[${marker}] code-generation`);
+      writeFileSync(file, before);
+      const result = run(tool, args);
+      const output = `${result.stdout}${result.stderr}`;
+      if (tool === "orchestrate") expect(JSON.parse(result.stdout).kind, output).toBe("error");
+      else expect(result.status, output).not.toBe(0);
+      expect(output).toContain("Construction checkpoints");
+      expect(output).toContain("alpha");
+      expect(output).toContain("beta");
+      expect(readFileSync(file, "utf-8")).toBe(before);
+    };
+    for (const [result, marker] of [["awaiting-approval", "-"], ["revised", "R"], ["approved", "?"]]) {
+      assertRefused("orchestrate", [
+        "report", "--stage", "code-generation", "--result", result, "--user-input", "Approve",
+      ], marker);
+    }
+    for (const [action, marker] of [
+      ["gate-start", "-"], ["revise", "R"], ["approve", "?"],
+      ["advance", "-"], ["finalize", "-"], ["complete-workflow", "-"],
+    ]) {
+      assertRefused("state", [
+        action, "code-generation", ...(action === "approve" ? ["--user-input", "Approve"] : []),
+      ], marker);
+    }
+    writeFileSync(file, initial);
+    for (const unit of ["alpha", "beta"]) approve(p, unit);
+    for (const result of ["awaiting-approval", "approved"]) {
+      const report = run("orchestrate", [
+        "report", "--stage", "code-generation", "--result", result, "--user-input", "Approve",
+      ]);
+      expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+      expect(JSON.parse(report.stdout).kind).not.toBe("error");
+    }
+  }, 60_000);
+
   test("completed Unit approvals make the later stage transition bookkeeping only", () => {
     const p = fixture();
     for (const unit of ["alpha", "beta"]) {
@@ -244,6 +292,21 @@ describe("t342 Construction checkpoint routing", () => {
     expect(next(p).construction_checkpoint).toBeUndefined();
     expect(next(p).unit).toBe("beta");
   });
+
+  test("legacy stage approval does not require Construction checkpoints", () => {
+    const p = fixture({ legacy: true, current: "code-generation" });
+    for (const unit of ["alpha", "beta"]) cover(p, unit);
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    for (const result of ["awaiting-approval", "approved"]) {
+      const report = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+        "--stage", "code-generation", "--result", result, "--user-input", "Approve", "--project-dir", p,
+      ], { encoding: "utf-8", env });
+      expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+      expect(JSON.parse(report.stdout).kind).not.toBe("error");
+    }
+  }, 30_000);
 
   test("autonomy preserves an explicitly selected serial execution", () => {
     const p = fixture({ iteration: "stage-major", autonomy: "autonomous", current: "code-generation" });

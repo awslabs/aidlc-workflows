@@ -37,6 +37,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
+import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
@@ -7958,35 +7959,19 @@ export function isAutonomousConstructionGate(
   const checkpoints = stateContent !== null && constructionCheckpointsApply(stateContent);
   if (checkpoints && stage.phase === "construction" && projectDir) {
     if (
-      stage.slug === "code-generation" &&
-      isConstructionSwarmEnabled(stateContent) &&
-      getField(stateContent!, "Construction Iteration") !== "unit-major"
+      (stage.slug === "code-generation" &&
+        isConstructionSwarmEnabled(stateContent) &&
+        getField(stateContent!, "Construction Iteration") !== "unit-major") ||
+      (stage.for_each === "unit-of-work" &&
+        getField(stateContent!, "Construction Iteration") === "unit-major")
     ) {
-      const dag = resolveBoltDag(projectDir);
-      if (dag.state !== "ok" || dag.units.length === 0) return false;
-      const inline = approvedConstructionUnits(projectDir, stateContent!);
-      const { resolveSwarmCheckpoint } = require("./aidlc-swarm-checkpoints.ts") as
-        typeof import("./aidlc-swarm-checkpoints.ts");
-      return dag.batches.every((batch, index) => {
-        const units = batch.filter((unit) => !inline.has(unit));
-        return units.length === 0 ||
-          resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent!).approved;
-      });
-    }
-    if (
-      stage.for_each === "unit-of-work" &&
-      getField(stateContent!, "Construction Iteration") === "unit-major"
-    ) {
-      const dag = resolveBoltDag(projectDir);
-      const approved = approvedConstructionUnits(projectDir, stateContent!);
-      return dag.state === "ok" && dag.units.length > 0 &&
-        dag.units.every((unit) => approved.has(unit));
+      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage);
+      return gaps !== null && gaps.length === 0;
     }
     if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
     if (constructionSkeletonOn(stateContent!)) {
-      const dag = resolveBoltDag(projectDir);
-      return dag.state === "ok" && dag.units.length > 0 &&
-        approvedConstructionUnits(projectDir, stateContent!).has(dag.batches.flat()[0]);
+      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage);
+      return gaps !== null && gaps.length === 0;
     }
     // The grant governs ordinary completion gates; Plan Approval retains its
     // own authority and is never inferred from this setting.
@@ -8018,6 +8003,53 @@ export function constructionCheckpointsApply(stateContent: string): boolean {
   const scope = getField(stateContent, "Scope") ?? "";
   return unitMajorConstructionStageSlugs(scope, stateContent, true)
     .some((slug) => findStageBySlug(slug)?.workspace_requires === true);
+}
+
+// Completion authority is shared by routing, report, and direct state mutation.
+// Ordinary artifacts and lifecycle receipts do not replace checkpoint approval.
+export function constructionCheckpointGaps(
+  projectDir: string,
+  stateContent: string,
+  stage: { slug: string; phase: string; for_each?: string },
+): string[] | null {
+  const scope = getField(stateContent, "Scope") ?? "";
+  if (
+    stage.phase !== "construction" ||
+    !constructionCheckpointsApply(stateContent) ||
+    usesStageLevelPerUnitArtifacts(scope, stateContent)
+  ) return null;
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok" || dag.units.length === 0) return null;
+  const approved = approvedConstructionUnits(projectDir, stateContent);
+  const iteration = getField(stateContent, "Construction Iteration");
+  if (
+    stage.slug === "code-generation" &&
+    isConstructionSwarmEnabled(stateContent) &&
+    iteration !== "unit-major"
+  ) {
+    const { resolveSwarmCheckpoint } = require("./aidlc-swarm-checkpoints.ts") as
+      typeof SwarmCheckpoints;
+    const gaps: string[] = [];
+    for (const [index, batch] of dag.batches.entries()) {
+      const units = batch.filter((unit) => !approved.has(unit));
+      if (units.length === 0) continue;
+      try {
+        if (resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent).approved) continue;
+      } catch {
+        // Missing, stale or malformed evidence cannot approve a batch.
+      }
+      gaps.push(`batch ${index + 1} (${units.join(", ")})`);
+    }
+    return gaps;
+  }
+  if (stage.for_each === "unit-of-work" && iteration === "unit-major") {
+    return dag.units.filter((unit) => !approved.has(unit)).map((unit) => `Unit "${unit}"`);
+  }
+  if (constructionSkeletonOn(stateContent)) {
+    const first = dag.batches.flat()[0];
+    return approved.has(first) ? [] : [`skeleton Unit "${first}"`];
+  }
+  return [];
 }
 
 export function isConstructionSwarmEnabled(stateContent: string | null): boolean {

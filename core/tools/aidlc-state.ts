@@ -83,6 +83,7 @@ import {
   intentRepos,
   isAutonomousConstructionGate,
   approvedConstructionUnits,
+  constructionCheckpointGaps,
   constructionSkeletonOn,
   isConstructionSwarmEnabled,
   isAutonomousMode,
@@ -165,7 +166,7 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -5142,6 +5143,29 @@ export type StageAdmissionOptions = {
   entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
 };
 
+function verifyConstructionCheckpointPrecondition(
+  pd: string,
+  stateContent: string,
+  stage: StageEntry,
+  action: StageAdmissionOptions["action"],
+): void {
+  if (artifactGuardDisabled()) return;
+  const gaps = constructionCheckpointGaps(pd, stateContent, stage);
+  if (gaps === null || gaps.length === 0) return;
+  refuseStateGuard(pd, stateContent, stage, {
+    code: "CONSTRUCTION_CHECKPOINTS_MISSING",
+    blockedAction: action,
+    invariant: "Every applicable Construction checkpoint is approved before stage certification.",
+    userMessage:
+      `${reviewerPreconditionPrefix(stage.slug, action === "complete" ? "complete" : "present-approval-gate")} ` +
+      `because these Construction checkpoints are not approved: ${gaps.join(", ")}. ` +
+      `Run \`${aidlcToolInvocation("orchestrate")} next\` and complete each Unit/batch checkpoint ` +
+      `through its directive (\`${aidlcToolInvocation("bolt")} checkpoint --action verify\` then ` +
+      `\`checkpoint --action approve\`, or \`${aidlcToolInvocation("bolt")} swarm-checkpoint\`); ` +
+      "do not report or approve the stage directly.",
+  });
+}
+
 // THE guard chain for a lifecycle action, listed once. The enforcing handlers
 // call it before they change state; the router calls it (through
 // guardPreflight) before it spawns the handler. Both see the same immutable
@@ -5178,6 +5202,7 @@ function admitStageAction(
 
   if (options.action !== "complete") {
     verifyGateOpeningGuards(pd, stateContent, stage);
+    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
     return;
   }
 
@@ -5189,6 +5214,9 @@ function admitStageAction(
     verifySummaryConfirmationPrecondition(pd, stateContent, stage);
     verifyPipelineLinkPrecondition(pd, stage);
     verifyReviewerPrecondition(pd, stateContent, stage);
+    if (!alreadyCompleted) {
+      verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
+    }
     return;
   }
   // A true replay is already fully applied and stays idempotent. A crash-window
@@ -5205,6 +5233,7 @@ function admitStageAction(
     verifyStageArtifacts(pd, stage);
     verifySummaryConfirmationPrecondition(pd, stateContent, stage);
     verifyPipelineLinkPrecondition(pd, stage);
+    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
   }
 }
 

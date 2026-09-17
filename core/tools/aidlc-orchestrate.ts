@@ -133,6 +133,7 @@ import {
   codekbRepoName,
   currentUnitLifecycleMode,
   constructionSkeletonOn,
+  constructionCheckpointGaps,
   effectivePlanAction,
   errorMessage,
   evaluateGuardRefusal,
@@ -8355,6 +8356,17 @@ function checkStageCompletionEvidence(
         };
       }
     }
+  }
+
+  const gaps = constructionCheckpointGaps(pd, stateContent, node);
+  if (gaps !== null && gaps.length > 0) {
+    return {
+      ok: false,
+      message:
+        `Cannot present "${slug}" for approval because these Construction checkpoints are not approved: ` +
+        `${gaps.join(", ")}. Run \`${aidlcToolInvocation("orchestrate")} next\` and complete each checkpoint ` +
+        "through its directive; do not report the stage directly.",
+    };
   }
 
   return checkEnsembleEvidence(
