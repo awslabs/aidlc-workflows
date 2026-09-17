@@ -3032,7 +3032,23 @@ export async function collectDoctorReport(
       // flavor. Copilot: a hooks/ shim inside the engine dir (wired by
       // .github/hooks/aidlc.json). opencode: a plugin in the .opencode shell.
       const copilotAdapter = join(projectDir, harness, "hooks", "aidlc-copilot-adapter.ts");
-      if (isCopilot) {
+      if (harnessName === "devin-cloud") {
+        // devin-cloud has NO adapter: the host supplies no hook transport, so
+        // the projected hooks/ are engine scripts invoked explicitly by the
+        // conductor, not a wired roster. Probe the session-mint entry point
+        // only; the roster above already covers the shared hook bodies.
+        results.push({
+          pass: existsSync(
+            join(projectDir, harness, "hooks", "aidlc-session-start.ts"),
+          ),
+          label:
+            "hooks/aidlc-session-start.ts present (session-mint entry, invoked explicitly)",
+          fix: projectedFileRepair(
+            "devin-cloud",
+            ".aidlc/hooks/aidlc-session-start.ts",
+          ),
+        });
+      } else if (isCopilot) {
         results.push({
           pass: existsSync(copilotAdapter),
           label: "hooks/aidlc-copilot-adapter.ts present (hook shim)",
@@ -3183,6 +3199,123 @@ export async function collectDoctorReport(
         pass: existsSync(join(projectDir, harness, file)),
         label: `${file} present (${what})`,
         fix: projectedFileRepair("cursor", `.cursor/${file}`),
+      });
+    }
+  } else if (harness === ".aidlc" && harnessName === "devin-cloud") {
+    // devin-cloud: a COOPERATIVE harness. Devin Cloud sessions have no
+    // repo-local hook transport, so there is no wiring file and no devin
+    // binary to check — the enforcement surface is the engine calls
+    // themselves plus the audit trail the doctor can re-check after the fact.
+    for (const [file, what, from] of [
+      [".agents/skills/aidlc/SKILL.md", "orchestrator skill (Cloud discovery path)", "dist/devin-cloud/.agents/skills/aidlc/SKILL.md"],
+      ["config.json", "harness descriptor (cooperative enforcement declaration)", "dist/devin-cloud/.aidlc/config.json"],
+      ["mcp_config.json", "optional MCP template (all servers disabled by default)", "dist/devin-cloud/.aidlc/mcp_config.json"],
+      ["hooks/aidlc-session-start.ts", "session-mint script (conductor invokes it once per session)", "dist/devin-cloud/.aidlc/hooks/aidlc-session-start.ts"],
+    ] as const) {
+      const target = file.startsWith(".agents/")
+        ? join(projectDir, file)
+        : join(projectDir, harness, file);
+      results.push({
+        pass: existsSync(target),
+        label: `${file} present (${what})`,
+        fix: `copy from \`${from}\``,
+      });
+    }
+    results.push({
+      pass: existsSync(join(projectDir, "AGENTS.md")),
+      label: "AGENTS.md present (ambient onboarding channel)",
+      fix: "copy from `dist/devin-cloud/AGENTS.md`",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, "blueprint.aidlc.yaml")) &&
+        existsSync(join(projectDir, "aidlc.devin.md")),
+      label: "blueprint.aidlc.yaml + aidlc.devin.md present (Cloud environment/entry templates)",
+      fix: "copy from `dist/devin-cloud/`",
+    });
+    // Session mint evidence: the conductor mints one AIDLC session id per
+    // session by invoking aidlc-session-start.ts directly (there is no host
+    // SessionStart event). The marker is historical evidence only.
+    let lastSessionMint: string | undefined;
+    try {
+      const marker = JSON.parse(readFileSync(
+        join(projectDir, harness, ".aidlc-session-start.local.json"),
+        "utf-8",
+      )) as { lastRun?: unknown } | null;
+      if (
+        typeof marker?.lastRun === "string" &&
+        new Date(marker.lastRun).toISOString() === marker.lastRun
+      ) {
+        lastSessionMint = marker.lastRun;
+      }
+    } catch {}
+    results.push({
+      pass: true,
+      severity: "warn",
+      label: lastSessionMint
+        ? `Session mint evidence: aidlc-session-start last ran ${lastSessionMint} (historical evidence only)`
+        : "Session mint evidence: no session-start marker yet — the conductor mints one session id per Cloud session by running aidlc-session-start.ts once on first use",
+    });
+    // Capability language, stated plainly: which guarantees this harness gives
+    // and which it cannot. These are informational rows, not failures.
+    results.push({
+      pass: true,
+      label:
+        "Enforcement model: cooperative — engine calls verify state at every transition; no tool call is intercepted on Devin Cloud",
+    });
+    results.push({
+      pass: true,
+      severity: "warn",
+      label:
+        "Reviewer isolation and plan-approval binding are verified at the gate, not intercepted: a stray write between engine calls is detectable after the fact (audit trail), not blocked",
+    });
+    // Gate-checkpoint scan — the post-hoc detection that replaces
+    // interception. Every stage marked [x] in the active intent's state file
+    // must have a matching STAGE_COMPLETED audit row since the latest
+    // WORKFLOW_STARTED; a missing row means the transition bypassed the
+    // engine (a hand-edited state file or an out-of-band write).
+    const cloudStatePath = stateFilePath(projectDir);
+    if (existsSync(cloudStatePath)) {
+      const cloudState = readFileSync(cloudStatePath, "utf-8");
+      const completedSlugs = [...cloudState.matchAll(/^- \[x\] (\S+) —/gm)].map(
+        (m) => m[1],
+      );
+      const audit = readAllAuditShards(projectDir);
+      const workflowStarts = findAllEvents(audit, "WORKFLOW_STARTED");
+      const since =
+        workflowStarts.length > 0
+          ? workflowStarts[workflowStarts.length - 1].timestamp
+          : "";
+      const audited = new Set(
+        findAllEvents(audit, "STAGE_COMPLETED")
+          .filter((ev) => {
+            if (since && ev.timestamp < since) return false;
+            // Rows from a --single stage-runner carry a synthetic Workflow id
+            // and cannot satisfy a main-workflow checkpoint.
+            const wf = ev.block
+              .split("\n")
+              .find((l) => l.startsWith("**Workflow**:"));
+            if (wf?.includes("single-stage:")) return false;
+            return true;
+          })
+          .map((ev) => {
+            const line = ev.block
+              .split("\n")
+              .find((l) => l.startsWith("**Stage**:"));
+            return line ? line.slice("**Stage**:".length).trim() : "";
+          }),
+      );
+      const missing = completedSlugs.filter((slug) => !audited.has(slug));
+      results.push({
+        pass: missing.length === 0,
+        severity: "warn",
+        label:
+          missing.length === 0
+            ? `Gate checkpoints: all ${completedSlugs.length} completed stage(s) have a matching STAGE_COMPLETED audit row`
+            : `Gate checkpoints missing: ${missing.length} stage(s) marked [x] have no STAGE_COMPLETED audit row (${missing.join(", ")}) — the transition bypassed an engine gate`,
+        fix:
+          missing.length === 0
+            ? undefined
+            : "audit rows are emitted by the engine at transition time; a state file edited by hand is not repairable by the doctor — review the audit trail and re-run the transition through `aidlc next`",
       });
     }
   } else if (harness === ".aidlc") {
