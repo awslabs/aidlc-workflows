@@ -796,10 +796,12 @@ Ownership: team and the stage alone under solo ownership (where `--unit` is
 refused). The binding follows
 that same rule: team compares stage and Unit, solo compares the stage. The
 gate's "Request Changes" choice is matched tolerant of case, an option prefix,
-quotes, and trailing punctuation. Stage gate choices also accept one
-`(Recommended)` label decorator, case-insensitively, whether it sits inside or
-outside those quotes and punctuation. The Plan Approval runtime
-challenge removes that same decorator before matching its bound option labels.
+quotes, and trailing punctuation, and one `(Recommended)` label decorator is
+accepted inside or outside those quotes and punctuation. Every stage gate
+choice accepts one trailing `(Recommended)` decorator, case-insensitively;
+Approve and Accept as-is are otherwise matched exactly. The Plan Approval
+runtime challenge removes that same decorator before matching its bound option
+labels.
 The log tool's `answer --checkpoint plan-approval --details` still requires
 `Approve Plan` or `Request Changes`.
 
