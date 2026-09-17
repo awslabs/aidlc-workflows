@@ -201,7 +201,18 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     ] as const) {
       const config = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
       expect(config.permissions, path).toEqual({ allow: expectedAllow });
-      expect(config.read_config_from, path).toEqual({ cursor: false, windsurf: false, claude: false });
+      // Every documented import source is pinned explicitly so a new vendor
+      // default cannot slip in silently. agents_standard stays on: AGENTS.md
+      // is our own intentional rules surface.
+      expect(config.read_config_from, path).toEqual({
+        agents_standard: true,
+        cursor: false,
+        windsurf: false,
+        claude: false,
+        copilot: false,
+        opencode: false,
+        zed: false,
+      });
       // No inference/config keys at the top level.
       for (const key of ["model", "env", "effort", "agent", "statusLine", "theme_mode"]) {
         expect(key in config, `${path}: config.json must not carry top-level "${key}"`).toBe(false);

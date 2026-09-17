@@ -161,8 +161,12 @@ AI-DLC guard hooks implement workflow-specific checks for state transitions, rev
 The allow-only shape and broad file-tool grants follow Claude Code;
 framework-scoped shell grants follow both Claude Code and Kiro CLI. This does
 not copy Kiro's explicit recursive-`rm` and `git push` denials. The
-`read_config_from` settings for Cursor, Windsurf, and Claude remain `false`
-intentionally.
+The `read_config_from` block decides every documented import source explicitly —
+`agents_standard` stays `true` (the project `AGENTS.md` is our own
+intentional rules surface) while `cursor`, `windsurf`, `claude`, `copilot`,
+`opencode`, and `zed` are all `false` — no third-party harness configuration
+is imported. A new vendor import source does not silently default to on
+without a deliberate decision.
 
 For existing installs, review the generated configuration before applying or
 merging it. Preserve deliberate local/team policy; local or user-level grants

@@ -16,8 +16,12 @@
     ]
   },
   "read_config_from": {
+    "agents_standard": true,
     "cursor": false,
     "windsurf": false,
-    "claude": false
+    "claude": false,
+    "copilot": false,
+    "opencode": false,
+    "zed": false
   }
 }
