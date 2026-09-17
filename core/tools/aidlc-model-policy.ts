@@ -47,7 +47,8 @@ export type ModelHarness =
   | "kiro"
   | "kiro-ide"
   | "opencode"
-  | "devin";
+  | "devin"
+  | "devin-cloud";
 export type ModelPolicyLayer =
   | "agent-exception"
   | "group-dial"
@@ -164,6 +165,13 @@ export const HARNESS_HONESTY = Object.freeze({
     groupEffort: false,
     message:
       "AI-DLC does not project Devin model or effort overrides; shipped custom profiles use the default subagent model, not automatic parent-model inheritance. Ask an admin to review the organization's Default subagent model setting.",
+  }),
+  "devin-cloud": Object.freeze({
+    model: false,
+    effort: false,
+    groupEffort: false,
+    message:
+      "Devin Cloud sessions have no agent-model or effort surface AI-DLC can set; the agent inherits the session's configured model.",
   }),
 });
 

@@ -654,6 +654,13 @@ const HARNESS_CLI: Record<
     minimumVersion: DEVIN_MIN_VERSION_STRING,
     install: `Install Devin CLI ${DEVIN_MIN_VERSION_STRING} or later and ensure \`devin --version\` works.`,
   },
+  "devin-cloud": {
+    // No CLI binary: Devin Cloud sessions run in Cognition's environment and
+    // there is nothing on PATH to probe. The doctor reports it not-applicable.
+    required: false,
+    install:
+      "Devin Cloud has no local CLI prerequisite — sessions run on Cognition's infrastructure.",
+  },
 };
 
 function versionTuple(value: string): [number, number, number] | null {
