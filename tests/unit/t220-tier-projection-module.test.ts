@@ -78,11 +78,11 @@ const EXPECTED: Record<
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
   templated: {
-    claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    claude: { model: "inherit", effort: null },
+    codex: { model: null, effort: null },
     cursor: { model: null },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: null },
   },
 };
 
@@ -283,7 +283,7 @@ describe("t220 tier projection module", () => {
 // SHIPPED-BYTES pins for the non-Claude projection writers. t216 pins the
 // dist/claude .md output; package --check pins dist-vs-source parity but says
 // nothing about whether the projection itself is RIGHT. These read the
-// committed dist trees for one representative agent per tier and assert the
+// generated dist trees for one representative agent per tier and assert the
 // projected keys - so a writer bug (e.g. the Codex TOML emitting an effort
 // for a judgment agent) fails here even when the dist was faithfully
 // regenerated from the broken writer.
@@ -291,7 +291,7 @@ describe("t220 tier projection module", () => {
 describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   const dist = (...p: string[]): string => join(REPO_ROOT, "dist", ...p);
 
-  test("codex TOMLs: judgment omits model+effort, balanced and templated pin both", () => {
+  test("codex TOMLs: judgment and templated omit model+effort; balanced pins both", () => {
     const arch = readFileSync(dist("codex", ".codex", "agents", "aidlc-architect-agent.toml"), "utf-8");
     expect(/^model\s*=/m.test(arch), "judgment TOML must omit model").toBe(false);
     expect(/^model_reasoning_effort\s*=/m.test(arch), "judgment TOML must omit effort").toBe(false);
@@ -299,8 +299,11 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     expect(lead).toContain('model = "openai.gpt-5.6-terra"');
     expect(lead).toContain('model_reasoning_effort = "medium"');
     const delivery = readFileSync(dist("codex", ".codex", "agents", "aidlc-delivery-agent.toml"), "utf-8");
-    expect(delivery).toContain('model = "openai.gpt-5.6-terra"');
-    expect(delivery).toContain('model_reasoning_effort = "medium"');
+    expect(/^model\s*=/m.test(delivery), "templated TOML must omit model").toBe(false);
+    expect(
+      /^model_reasoning_effort\s*=/m.test(delivery),
+      "templated TOML must omit effort",
+    ).toBe(false);
   });
 
   const kiroHarnesses = HARNESS_MATRIX.filter(
@@ -408,10 +411,10 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("AIDLC_TIER_CAP is IGNORED under --check (drift guard is env-independent)", () => {
+  test("AIDLC_TIER_CAP is IGNORED under --check (determinism guard is env-independent)", () => {
     // A stray env cap in a CI or test runner's environment must neither fail
-    // nor mask drift: --check compares what the committed dist was built
-    // from. The packager prints an ignore notice instead. (~10s: a real
+    // nor alter the clean builds. The packager prints an ignore notice instead.
+    // (~10s: a real
     // single-harness check run - the pin is the exit code, not the notice.)
     const r = Bun.spawnSync(
       ["bun", join(REPO_ROOT, "scripts", "package.ts"), "claude", "--check"],

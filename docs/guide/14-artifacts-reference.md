@@ -15,12 +15,35 @@ looks like. Intent creation makes one folder per phase your scope runs (plus
 `verification/`); the rest appear as work happens, and a per-stage folder is
 created the first time that stage writes.
 
+Framework files share one `.aidlc-engine/` directory beside the human artifacts.
+After an upgrade, existing audit rows still verify reviews at their recorded
+paths. Sensor findings and summary authorizations use their older directories
+only while the corresponding new directory is absent. New writes use
+`.aidlc-engine/`; other transient or derived files are recreated there.
+
 ```
 aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   aidlc-state.md                    # Workflow state (commit)
   audit/                            # Audit trail — per-clone shards (commit)
     <host>-<clone>.md               # this clone's shard; readers glob + merge by timestamp
-  .aidlc-recovery.md                # Recovery breadcrumb (gitignore)
+  .aidlc-engine/                    # Framework state (gitignore)
+    sensors/                       # Advisory findings and type-check cache
+    reviews/                       # Digest-bound review records and drafts
+    summary-authorization/         # Active summary confirmations
+    source-review/                 # Local reviewed-source snapshots
+    hooks-health/                  # Hook heartbeats and drop counters
+    plan.json                      # Derived scope plan
+    recovery.md                    # Compaction recovery breadcrumb
+    stop-hook/                     # No-progress guard counters
+    human-turn                     # Last human prompt marker
+    engine-touch                   # Last engine advance marker
+    reviewer-dispatch.json         # Active per-unit reviewer scope
+    document-input-path            # Document input handoff
+    active-directive.json           # Transient execution cursor
+    active-directive.lock/          # Cursor coordination
+    guard-refusals/                 # Repeated refusal counters
+    steering-token-key             # Local continuation signing key
+    codekb-stage-<repo>/            # Temporary CodeKB candidates
   runtime-graph.json                # Execution telemetry view (gitignore)
 
   verification/                     # Phase boundary checks (commit)
@@ -93,9 +116,9 @@ it covered). Pre-scan source/store generations and a locked all-artifact
 publication prevent a source change from being mislabeled current and prevent
 concurrent focused scans from silently replacing each other. Intents therefore
 read the newest scan of the repo, not the one
-taken when their own record dir was created. What the record dir does get is
-the stage's own `memory.md` diary — created by the engine when it emits the
-run-stage directive (see **Per-stage memory diary** below) — so an
+taken when their own record dir was created. When the learnings ritual is on,
+the record dir gets the stage's own `memory.md` diary — created by the engine
+when it emits the run-stage directive (see **Per-stage memory diary** below) — so an
 `inception/reverse-engineering/`
 directory can appear there, holding the diary and nothing else. Codekb writes
 are audit-logged with a `codekb > <repo> > <name>` breadcrumb, so the
@@ -108,8 +131,8 @@ intent's record. The engine creates it empty; the team adds free-form files
 under an optional `aidlc-shared/` and per-agent subdirectories. See
 [Knowledge](08-knowledge.md).
 
-**Per-stage memory diary.** Each executed stage also keeps a committed
-`memory.md` alongside its artifacts (e.g.
+**Per-stage memory diary.** When the learnings ritual is on, each executed stage
+also keeps a committed `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
 stage's observation diary — created by the engine from a template when it emits
 the run-stage directive, maintained by the orchestrator during the stage, and
@@ -186,7 +209,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/` — one shared store per repo, reused when verified current, replaced by a full rescan, or cumulatively extended by a focused scan; only the stage's `memory.md` diary lands in the intent record) | Brownfield only |
+| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/` — one shared store per repo, reused when verified current, replaced by a full rescan, or cumulatively extended by a focused scan; only the stage's `memory.md` diary lands in the intent record, when the learnings ritual is on) | Brownfield only |
 | 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md`, plus quality/developer/devsecops contribution files (promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` after approval) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |
@@ -253,11 +276,11 @@ cursors and machine-local derived state are ignored.
 | Commit | Gitignore |
 |--------|-----------|
 | `aidlc-state.md` | `aidlc/active-space`, `intents/active-intent` (per-user cursors) |
-| `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
+| `audit/*.md` (per-clone shards) | `.aidlc-engine/` (framework state, including recovery breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
 | Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
-| Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
+| Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-engine/hooks-health/`, `.aidlc-engine/sensors/` (heartbeats, advisory findings) |
 
 ---
 

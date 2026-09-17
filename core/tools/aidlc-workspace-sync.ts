@@ -753,6 +753,7 @@ function parseFlags(argv: string[]): { force: boolean; projectDir?: string } {
   let projectDir: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === "--") break;
     if (arg === "--force") {
       force = true;
     } else if (arg === "--project-dir") {

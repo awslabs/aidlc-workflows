@@ -36,7 +36,6 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   mkdirSync,
@@ -62,6 +61,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename,
   latestMainWorkflowStageRunFloorForProject,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
@@ -230,7 +230,7 @@ function runNext(proj: string): Directive {
 function activeDirectiveMarker(proj: string): Record<string, unknown> {
   return JSON.parse(
     readFileSync(
-      join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+      join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
       "utf-8",
     ),
   ) as Record<string, unknown>;
@@ -477,7 +477,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
       kind: "run-stage",
       stage: "code-generation",
       unit: "alpha",
-      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      state_sha256: stateDigest(state),
       delivery: "issued",
       needs_rehydrate: false,
       context_epoch: 0,

@@ -31,10 +31,14 @@ export type EmitContext = {
   coreRoot: string;
   /** Absolute path to harness/<name>/ (this harness's authored surfaces). */
   harnessRoot: string;
+  /** Manifest harness name used by native adapter routes. */
+  harnessName: string;
   /** Absolute path to the dist tree root for this harness (e.g. <repo>/dist/codex). */
   distRoot: string;
   /** The harness directory name (".claude" | ".kiro" | ".codex"). */
   harnessDir: string;
+  /** Route-table-derived namespace trusted by native host permission surfaces. */
+  trustedRouteNamespace: string;
   /** Substitute {{HARNESS_DIR}} → this harness's dir in a prose string. */
   substituteToken: (s: string) => string;
   /**
@@ -64,11 +68,55 @@ export type OnboardingSpec = {
   fills: OnboardingFills;
 };
 
+export type RootIntegration = {
+  /** Project-root path emitted by this distribution. */
+  path: string;
+  /** Merge policy used by `aidlc config`; never inferred from the filename. */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /** Stable marker identity for managed-block integrations. */
+  marker?: string;
+  /** Top-level object key merged for json-map integrations. */
+  jsonKey?: string;
+  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  optional?: boolean;
+  /**
+   * Exact historical signatures that `aidlc config` may adopt as framework-owned.
+   * Unknown or locally modified legacy content remains project-owned or conflicts.
+   */
+  legacySignatures?: {
+    /** SHA-256 hashes of exact unmarked files safe to wrap or replace. */
+    wholeFileHashes?: string[];
+    /** Canonical JSON value hashes, keyed by entry below jsonKey. */
+    jsonEntryHashes?: Record<string, string[]>;
+  };
+};
+
+export type NativeRootIntegration = RootIntegration & (
+  | {
+      /** Authored file below harness/<name>/ copied into each native projection. */
+      src: string;
+      content?: never;
+    }
+  | {
+      /** Harness-formatted generated content supplied directly to the native projection. */
+      content: string;
+      src?: never;
+    }
+);
+
 export type HarnessManifest = {
   /** Harness name; matches the dist/<name>/ and harness/<name>/ dir. */
   name: string;
+  /** User-facing product name used by lifecycle output. */
+  productName: string;
+  /** Exact host action printed after `aidlc config` completes. */
+  configNextStep: string;
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
+  /** Explicit project-root reconciliation policies consumed by `aidlc config`. */
+  rootIntegrations: RootIntegration[];
+  /** Native-invocation-only project-root integrations such as host trust seeds. */
+  nativeRootIntegrations?: NativeRootIntegration[];
   /**
    * Project-root-relative path to the emitted orchestrator SKILL.md. Defaults
    * to <harnessDir>/skills/aidlc/SKILL.md; emit-owned harnesses that place
@@ -121,11 +169,10 @@ export type HarnessManifest = {
    * `extractor_unavailable`, so this is an override, never a requirement.
    *
    * It has to be PACKAGER-owned rather than hand-edited: writeHarnessData()
-   * builds a FRESH object, and harness.json is committed and byte-diffed by
-   * `--check`, so a hand-added field both fails the drift guard and is erased on
-   * the next build. And a team needs its extractor choice COMMITTED so it travels
-   * to every clone, which rules out the runtime-written path too — that one
-   * targets a different, install-local file.
+   * builds a FRESH object, so a hand-added field is erased on the next build.
+   * A team needs its extractor choice authored in the repository so it reaches
+   * every generated release, which rules out the runtime-written path too —
+   * that one targets a different, install-local file.
    *
    * `argv` is an array, never a shell string: the value becomes a process
    * invocation, and `$IN` is the only substitution.
@@ -142,8 +189,8 @@ export type HarnessManifest = {
   skipRunnerGen?: boolean;
   /**
    * Optional per-shell emission plugin (codex only today). It always writes
-   * into ctx.distRoot; under --check the packager supplies a temporary root and
-   * compares the complete generated tree with the committed distribution.
+   * into ctx.distRoot; under --check the packager invokes it in two independent
+   * temporary roots and compares the complete generated trees.
    */
   emit: ((ctx: EmitContext) => void) | null;
   /**

@@ -80,7 +80,7 @@ outputs: requirements.md, requirements-analysis-questions.md (under this stage's
   the first basename match. If the request gives no path or more than one
   plausible path, stop, ask the user which exact path to use, and end the turn.
 - Write the selected path, with no quotes or surrounding prose, as the only line
-  of `<record>/.aidlc-document-input-path` using the harness's native file-write
+  of `<record>/.aidlc-engine/document-input-path` using the harness's native file-write
   tool. Never interpolate a customer-chosen path into a shell command.
 - Read the selected file only through the fixed command
   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input`.
@@ -161,7 +161,9 @@ If ANY ambiguity, vagueness, or contradictions found in Step 7:
 
 ### Step 9: Confirm the Consolidated Summary
 
-MANDATORY PRE-GENERATION STOP: After every original and follow-up answer is
+This step applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, proceed directly to Step 10 with no summary-confirmation prompt, entry, or receipt.
+
+MANDATORY PRE-GENERATION STOP when enabled: After every original and follow-up answer is
 filled, append or update a `## Consolidated Summary Confirmation` entry in
 `<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
 The entry MUST contain:
@@ -201,7 +203,7 @@ them exactly rather than renumbering or replacing them with prose references.
 ### Step 11: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage requirements-analysis --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 12: Present Completion & Request Approval
@@ -226,7 +228,7 @@ Render `[next stage]` verbatim from the run-stage directive's `next_stage`
 field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
 when it is null. Never guess the next stage name.
 If "Add User Stories" is selected, run
-`bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add user-stories`
+`{{INVOKE}} engine recompose --add user-stories`
 before re-entering the approval flow.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).
@@ -241,9 +243,8 @@ Upstream targets: `intent-statement`, `scope-document`, `business-overview`, `ar
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

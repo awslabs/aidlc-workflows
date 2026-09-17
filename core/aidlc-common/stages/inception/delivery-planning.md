@@ -158,7 +158,7 @@ stage before Construction begins.
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage delivery-planning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 **Construction iteration.** Classify how the approved `bolt-plan.md` wants the
@@ -169,7 +169,7 @@ building one unit completely before the next unit begins — the first working
 code lands after one unit's design, honoring a skeleton-first sequence; a plan
 that reasons stage-by-stage across all units does not. Only when the plan calls
 for the unit-first order, record it:
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`.
+`{{INVOKE}} engine state set-construction-iteration unit-major`.
 The default is `stage-major` (each design stage runs for every unit, then the
 next stage, with code-generation last), needs no write, and is byte-identical
 to prior behaviour. Under `unit-major` the same per-stage gates still fire, but
@@ -225,9 +225,8 @@ Upstream targets: `requirements`, `stories`, `mockups`, `components`, `unit-of-w
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

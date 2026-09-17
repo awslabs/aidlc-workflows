@@ -21,7 +21,7 @@ after the baked-in `--scope` flag.
 2. Run:
 
    ```bash
-   bun .cursor/tools/aidlc-orchestrate.ts next --scope $ARGUMENTS
+   {{INVOKE}} engine orchestrate next --scope $ARGUMENTS
    ```
 
 3. Act on the directive exactly as the `aidlc` skill's forwarding loop

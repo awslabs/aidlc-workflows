@@ -206,7 +206,7 @@ const sessionIdOf = (stderr: string): string | undefined =>
 function intentRecords(proj: string): string[] {
   const dir = join(proj, "aidlc", "spaces", "default", "intents");
   if (!existsSync(dir)) return [];
-  // Dot-dirs are hook plumbing (the Stop hook's .aidlc-hooks-health
+  // Dot-dirs are hook plumbing (the Stop hook's .aidlc-engine/hooks-health
   // heartbeat lands here on every turn), not intent records.
   return readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && !e.name.startsWith("."))
@@ -246,16 +246,21 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         // If the verb was dropped and the engine asked the compose OFFER
         // instead of the proposal gate, answer "compose" in-session; the
         // next turn must land on the gate. Still: nothing written yet.
+        // Gate detection: the reply is already the approval gate offering
+        // choices when it speaks of approving OR of choosing among the plan
+        // options (a third live phrasing observed on this head: "Please
+        // choose one of the plan options above to continue.").
         let gateOut = b1.stdout;
-        if (!/approve/i.test(gateOut)) {
+        if (!/approv|choose/i.test(gateOut)) {
           expect(gateOut).toMatch(/compose/i);
           const offerTurn = codexTurn(proj, home, "compose", { resume: true });
           expect(offerTurn.rc).toBe(0);
           expect(sessionIdOf(offerTurn.stderr)).toBe(b1Session);
           gateOut = offerTurn.stdout;
         }
-        // The approve/edit/reject gate reached the final message.
-        expect(gateOut).toMatch(/approve/i);
+        // The approve/edit/reject gate reached the final message (same
+        // phrasing family as the detection probe above).
+        expect(gateOut).toMatch(/approv|choose/i);
         expect(gateOut).toMatch(/reject/i);
         // Nothing written before approval: no state file, no intent record.
         expect(intentRecords(proj)).toEqual([]);

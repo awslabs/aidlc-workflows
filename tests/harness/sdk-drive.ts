@@ -57,6 +57,7 @@ const SHIPPED_SETTINGS = join(
   ".claude",
   "settings.json",
 );
+const HARNESS_DEFAULT_MODEL = "opus[1m]";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -281,6 +282,12 @@ export interface DriveOptions {
    * (sdk.d.ts:1802)
    */
   settingSources?: Array<"user" | "project" | "local">;
+  /**
+   * Persist the per-drive transcript so hooks can inspect the completed turn.
+   * Required when testing natural Stop-hook completion; defaults to false for
+   * drives that intentionally abort at a tool or question boundary.
+   */
+  persistSession?: boolean;
   /** Extra env to layer onto the SDK subprocess (e.g. Bedrock overrides). */
   env?: Record<string, string>;
   /**
@@ -308,7 +315,11 @@ export interface DriveOptions {
    * is the tool output itself and continuing would spend tokens on an unrelated
    * live workflow.
    */
-  stopAfterToolResult?: { toolName?: string; resultIncludes: string };
+  stopAfterToolResult?: {
+    toolName?: string;
+    resultIncludes: string;
+    inputExcludes?: string;
+  };
 }
 
 interface ClaudeSettings {
@@ -354,11 +365,11 @@ function processEnv(): Record<string, string> {
 }
 
 /**
- * Resolve the SDK model/env the harness should pass explicitly. The shipped
- * dist settings are the default authority so tests exercise what users copy
- * from dist/claude/.claude; project settings are only a fallback for non-repo
- * harness reuse, and per-call options remain the escape hatch for adversarial
- * calibration.
+ * Resolve the SDK model/env the harness should pass explicitly. Per-call
+ * options remain the escape hatch for adversarial calibration; shipped dist
+ * settings retain authority when they carry a model; project settings are the
+ * next fallback for non-repo harness reuse; the test-only harness default is
+ * last so live coverage remains deterministic when shipped settings inherit.
  */
 export function resolveDriveSdkSettings(
   projectDir: string,
@@ -373,14 +384,14 @@ export function resolveDriveSdkSettings(
   const explicitModel = opts.model?.trim();
   const shippedModel = settingsModel(shipped);
   const projectModel = settingsModel(project);
-  const model = explicitModel || shippedModel || projectModel;
+  const model = explicitModel || shippedModel || projectModel || HARNESS_DEFAULT_MODEL;
   const modelSource = explicitModel
     ? "option"
     : shippedModel
       ? SHIPPED_SETTINGS
       : projectModel
         ? projectSettingsPath
-        : undefined;
+        : "harness-default";
 
   return {
     model,
@@ -423,7 +434,7 @@ function writeSdkTrace(
  * @example
  *   const r = await driveAidlc("/aidlc --doctor", { projectDir: proj });
  *   assertResultOk(r);
- *   assertToolResultContains(r, "Bash", "AI-DLC Health Check");
+ *   assertToolResultContains(r, "Bash", "AI-DLC doctor");
  *
  * @example  scripted gates
  *   const r = await driveAidlc("/aidlc --scope classic Build a todo app", {
@@ -481,6 +492,7 @@ export async function driveAidlc(
     projectDir,
     permissionMode,
     settingSources,
+    persistSession: opts.persistSession ?? false,
     model: sdkSettings.model,
     modelSource: sdkSettings.modelSource,
     timeoutMs: opts.timeoutMs,
@@ -508,8 +520,9 @@ export async function driveAidlc(
         permissionMode,
         settingSources,
         abortController,
-        // Each drive is independent; avoid transcript writes racing cleanup.
-        persistSession: false,
+        // Each drive has its own config directory. Natural-completion tests
+        // need the transcript that Stop hooks inspect before accepting a stop.
+        persistSession: opts.persistSession ?? false,
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         canUseTool: async (toolName, input, permissionOptions) => {
@@ -651,6 +664,12 @@ export async function driveAidlc(
                 opts.stopAfterToolResult &&
                 (opts.stopAfterToolResult.toolName === undefined ||
                   pending?.toolName === opts.stopAfterToolResult.toolName) &&
+                (
+                  opts.stopAfterToolResult.inputExcludes === undefined ||
+                  !JSON.stringify(pending?.input ?? {}).includes(
+                    opts.stopAfterToolResult.inputExcludes,
+                  )
+                ) &&
                 resultText.includes(opts.stopAfterToolResult.resultIncludes)
               ) {
                 stoppedAfterToolResult = true;

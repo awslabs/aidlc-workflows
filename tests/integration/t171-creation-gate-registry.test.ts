@@ -15,7 +15,7 @@
 // that lists them and asks the human to pick one via `/aidlc intent <name>`,
 // instead of the creation `print`. The zero-intent case STILL creates unchanged.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -30,6 +30,11 @@ import {
 import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
+// Every case here spawns several dist tools in sequence; under a parallel tier
+// run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
+// the way t188/t224 do.
+const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
@@ -108,7 +113,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       // NOT a creation print: the gate must not name intent-create here.
       expect(d.kind).not.toBe("print");
       expect(d.kind).toBe("ask");
-      expect(d.message ?? "").not.toContain("intent-create");
+      expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
       expect(d.question).toContain("/aidlc intent <name>");
@@ -127,7 +132,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]); // positional valid-scope name, no --scope flag
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
-      expect(d.message ?? "").not.toContain("intent-create");
+      expect(d.message ?? "").not.toContain("intent create");
       expect(d.question).toContain("/aidlc intent <name>");
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
@@ -265,7 +270,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["--scope", "poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-create --scope poc");
+      expect(d.message).toContain("intent create --scope poc");
       // Read-only: next did not create anything itself.
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
@@ -274,7 +279,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-create --scope poc");
+      expect(d.message).toContain("intent create --scope poc");
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
   });
@@ -292,9 +297,46 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     // The lone created intent has a live cursor + state → the engine reads its
     // position and advances; it must NOT re-name intent-create nor prompt to pick.
     expect(d.kind).not.toBe("ask");
-    if (d.kind === "print") expect(d.message).not.toContain("intent-create");
+    if (d.kind === "print") expect(d.message).not.toContain("intent create");
     // The cursor was never disturbed.
     const cursor = readFileSync(cursorPath(proj), "utf-8").trim();
     expect(recordDirs(proj)).toContain(cursor);
+  });
+});
+
+// ----------------------------------------------------------------
+// (4) Archived intents (issue #980) are retired work: the gate never offers
+//     them as a pick and never lets them block creation.
+// ----------------------------------------------------------------
+describe("t171 archived intents never block or appear in the creation gate (issue #980)", () => {
+  test("the pick prompt lists only in-flight records; an all-archived space creates", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "alpha work"]).status).toBe(0);
+    expect(util(["intent-create", "--scope", "poc", "--label", "beta work"]).status).toBe(0);
+    expect(util(["intent-create", "--scope", "poc", "--label", "gamma work"]).status).toBe(0);
+    const dirs = recordDirs(proj);
+    expect(dirs.length).toBe(3);
+    const gamma = dirs.find((d) => d.endsWith("-gamma-work")) as string;
+    const inFlight = dirs.filter((d) => d !== gamma);
+    expect(util(["intent", "archive", gamma, "--reason", "went nowhere"]).status).toBe(0);
+    // A fresh clone: records on disk, no per-user cursor.
+    rmSync(cursorPath(proj), { force: true });
+    const r = next(["--scope", "poc"]);
+    const d = JSON.parse(r.stdout.trim());
+    expect(d.kind).toBe("ask");
+    for (const name of inFlight) expect(d.question).toContain(name);
+    expect(d.question).not.toContain(gamma);
+    expect(d.question).toContain("2 pieces of work in progress");
+    // Retire the rest: the gate now sees zero intents and names the create
+    // move instead of offering retired records.
+    for (const name of inFlight) {
+      expect(util(["intent", "archive", name]).status).toBe(0);
+    }
+    const created = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+    expect(created.kind).toBe("print");
+    expect(created.message).toContain("intent create --scope poc");
+    // Read-only throughout: three records remain, all archived, no cursor.
+    expect(recordDirs(proj).length).toBe(3);
+    expect(readIntentRegistry(proj).every((entry) => entry.status === "archived")).toBe(true);
+    expect(existsSync(cursorPath(proj))).toBe(false);
   });
 });

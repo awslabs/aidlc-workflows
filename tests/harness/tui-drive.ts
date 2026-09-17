@@ -76,6 +76,7 @@
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
+//          [--also-state-field <name=regex>]
 //          [--assert-file-absent-at-option <label>
 //           --assert-file-absent <relpath>]
 //          [--reject-first-gate] [--stop-at-approval-gate]
@@ -107,6 +108,13 @@
 //            --until-state-field <n=re>    STOP when aidlc-state.md's `- **<n>**:`
 //                                          line value matches /re/ — e.g.
 //                                          `Status=Completed`.
+//            --also-state-field <n=re>     With --until-state-field, STOP only
+//                                          when BOTH state fields match. Approve
+//                                          writes Last Completed Stage before
+//                                          handleAdvance writes Current Stage
+//                                          (aidlc-state.ts:5719 and :4506;
+//                                          verified 2026-09-13). Wait for both to
+//                                          avoid stopping in that two-write window.
 //            --assert-file-absent-at-option <label>
 //            --assert-file-absent <relpath>
 //                                          When the named option is first painted,
@@ -130,16 +138,18 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { dirname, join, posix, win32 } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
 
 const POLL_INTERVAL_MS = 150;
@@ -363,6 +373,54 @@ function commandBasename(file: string): string {
 // settings leak into a supposedly isolated live TUI run.
 const CLAUDE_BASENAMES = new Set(["claude", "claude.exe", "claude.cmd", "claude.ps1"]);
 
+export const TUI_TEST_FIXTURE_MARKER = ".aidlc-tui-fixture.json";
+
+/** Only setupTuiProject's disposable directory, while its owning test is alive. */
+export function isOwnedTuiFixture(cwd: string): boolean {
+  try {
+    const canonical = realpathSync(cwd);
+    if (
+      dirname(canonical) !== realpathSync(tmpdir()) ||
+      !basename(canonical).startsWith("aidlc-tui-")
+    ) return false;
+    const markerPath = join(canonical, TUI_TEST_FIXTURE_MARKER);
+    if (!lstatSync(markerPath).isFile() || lstatSync(markerPath).isSymbolicLink()) {
+      return false;
+    }
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    if (
+      marker.cwd !== canonical ||
+      !Number.isSafeInteger(marker.ownerPid) ||
+      marker.ownerPid <= 0
+    ) return false;
+    process.kill(marker.ownerPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Recognize only direct Claude or env's structured, cwd-preserving -u form. */
+function claudeCommandIndex(command: string[]): number | null {
+  let index = 0;
+  if (commandBasename(command[0] ?? "") === "env") {
+    index = 1;
+    while (command[index] === "-u") {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(command[index + 1] ?? "")) return null;
+      index += 2;
+    }
+    // No assignments, -C/--chdir, split strings, nested or unknown wrappers.
+    if (index === 1) return null;
+  }
+  return CLAUDE_BASENAMES.has(commandBasename(command[index] ?? "")) ? index : null;
+}
+
+export function claudeFixtureCwd(cwd: string, command: string[]): string | null {
+  return claudeCommandIndex(command) !== null && isOwnedTuiFixture(cwd)
+    ? realpathSync(cwd)
+    : null;
+}
+
 function hasSettingSourcesArg(command: string[]): boolean {
   return command.some((arg) => arg === "--setting-sources" || arg.startsWith("--setting-sources="));
 }
@@ -387,14 +445,18 @@ export function normalizeTuiCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (command.length === 0) return command;
-  const exe = commandBasename(command[0]);
-  if (!CLAUDE_BASENAMES.has(exe)) return command;
+  const index = claudeCommandIndex(command);
+  if (index === null) return command;
   if (hasSettingSourcesArg(command)) return command;
 
   const settingSources = tuiSettingSources(env);
   if (!settingSources) return command;
 
-  return [command[0], "--setting-sources", settingSources, ...command.slice(1)];
+  return [
+    ...command.slice(0, index + 1),
+    "--setting-sources", settingSources,
+    ...command.slice(index + 1),
+  ];
 }
 
 function answerGateTracePollMs(): number {
@@ -1168,6 +1230,8 @@ interface Backend {
   kill(session: string): void;
   /** Labels for live backend processes or cleanup-verification blockers. */
   liveProcesses(session: string): string[];
+  /** Disposable fixture recorded when this session launched Claude. */
+  fixtureCwd(session: string): string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,7 +1284,17 @@ const tmuxBackend: Backend = {
       shellCmd,
     ]);
     if (r.code !== 0) fail(`new-session failed: ${r.stderr.trim()}`);
+    const fixture = claudeFixtureCwd(cwd, cmd);
+    if (fixture) {
+      const recorded = tmux(["set-option", "-t", session, "@aidlc-tui-fixture", fixture]);
+      if (recorded.code !== 0) fail(`cannot record fixture session: ${recorded.stderr.trim()}`);
+    }
     process.stdout.write(`started session '${session}' (${width}x${height})\n`);
+  },
+
+  fixtureCwd(session) {
+    const result = tmux(["show-options", "-v", "-t", session, "@aidlc-tui-fixture"]);
+    return result.code === 0 ? result.stdout.trim() || null : null;
   },
 
   send(session, keys, literal, noEnter) {
@@ -1379,6 +1453,12 @@ function killLegacyWindowsSession(session: string, dir: string): void {
 }
 
 const win32Backend: Backend = {
+  fixtureCwd(session) {
+    return readJsonFile<WindowsSessionMeta & { fixtureCwd?: string }>(
+      join(winSessionDir(session), "meta.json"),
+    )?.fixtureCwd ?? null;
+  },
+
   async start(session, cwd, width, height, cmd) {
     if (cmd.length === 0) fail("no command after `--` to run in the session");
 
@@ -1404,7 +1484,10 @@ const win32Backend: Backend = {
     const ownerToken = randomUUID();
     writeFileSync(
       join(dir, "meta.json"),
-      JSON.stringify({ cols: width, rows: height, session, ownerToken, cwd }),
+      JSON.stringify({
+        cols: width, rows: height, session, ownerToken, cwd,
+        fixtureCwd: claudeFixtureCwd(cwd, cmd),
+      }),
     );
 
     // Fork the daemon UNDER NODE (never bun — node-pty input wedges under bun,
@@ -2841,9 +2924,16 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
   await backend.start(session, cwd, width, height, command);
 }
 
-function cmdSend(backend: Backend, a: Args): void {
+async function cmdSend(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const keys = requireFlag(a, "keys");
+  // Existing journeys request the old numbered trust choice. Adapt that request
+  // only while the known fixture's actual trust menu is visible.
+  if (
+    keys === "1" && !a.bools.literal && !a.bools["no-enter"] &&
+    backend.fixtureCwd(session) &&
+    await acceptTuiFixtureTrust(backend, session, backend.capture(session, false))
+  ) return;
   writeTuiTrace(session, "send", {
     keys,
     literal: a.bools.literal === true,
@@ -2923,6 +3013,87 @@ export function initialTuiStartupState(): TuiStartupState {
 const CLAUDE_TRUST_MODAL_RE =
   /(?:Do you trust (?:the files in )?this folder|Yes, I trust this folder)/i;
 const CLAUDE_BYPASS_MODAL_RE = /Bypass Permissions mode/i;
+
+/** Use the painted selection, not a version-dependent option number. */
+export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (!/(?:Accessing workspace:|Do you trust (?:the files in )?this folder)/i.test(screen)) {
+    return null;
+  }
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I trust this folder" }] : [];
+  });
+  if (
+    options.length !== 2 ||
+    options.filter((option) => option.yes).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const yes = options.findIndex((option) => option.yes);
+  return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
+}
+
+export async function acceptTuiFixtureTrust(
+  backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
+  session: string,
+  screen: string,
+  timing: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<boolean> {
+  const cwd = backend.fixtureCwd(session);
+  if (!cwd || !isOwnedTuiFixture(cwd)) return false;
+  if (!CLAUDE_TRUST_MODAL_RE.test(screen)) return false;
+  const now = timing.now ?? Date.now;
+  const pause = timing.sleep ?? sleep;
+  const startedAt = now();
+  const readyDeadline = startedAt + 5_000;
+  let previous = "";
+  let stableSince = startedAt;
+  let navigation: ReturnType<typeof claudeTrustNavigation> = null;
+  // First paint can precede Claude's input handler. Require the complete menu
+  // to remain byte-stable, as legacy `wait --stable-ms 600` callers do, before
+  // sending even one navigation key. Partial/repainting grids reset the wait.
+  while (now() < readyDeadline) {
+    screen = backend.capture(session, false);
+    navigation = claudeTrustNavigation(screen);
+    if (!navigation || screen !== previous) stableSince = now();
+    previous = screen;
+    if (navigation && now() - stableSince >= DEFAULT_STABLE_MS) break;
+    navigation = null;
+    await pause(POLL_INTERVAL_MS);
+  }
+  if (!navigation) {
+    throw new Error("fixture trust menu never became stable; refusing navigation");
+  }
+  if (backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) {
+    throw new Error("fixture trust context changed; refusing navigation");
+  }
+  writeTuiTrace(session, "fixture_trust_action", {
+    cwd, navigation, screen, readyAfterMs: now() - startedAt, stableMs: DEFAULT_STABLE_MS,
+  });
+  if (navigation !== "Enter") {
+    backend.send(session, navigation, false, true);
+    const deadline = now() + 5_000;
+    do {
+      await pause(POLL_INTERVAL_MS);
+      screen = backend.capture(session, false);
+      if (claudeTrustNavigation(screen) === "Enter") break;
+    } while (now() < deadline);
+    if (claudeTrustNavigation(screen) !== "Enter") {
+      throw new Error("fixture trust selection never moved to Yes; refusing Enter");
+    }
+  }
+  // Revalidate both the fixture and visible selection immediately before Enter.
+  screen = backend.capture(session, false);
+  if (
+    backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd) ||
+    claudeTrustNavigation(screen) !== "Enter"
+  ) {
+    throw new Error("fixture trust context changed; refusing Enter");
+  }
+  backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, "fixture_trust_accepted", { cwd, screen });
+  return true;
+}
 
 function regexMatches(re: RegExp, text: string): boolean {
   re.lastIndex = 0;
@@ -3005,7 +3176,9 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      backend.send(session, "1", false, false);
+      if (!await acceptTuiFixtureTrust(backend, session, screen)) {
+        throw new Error("refusing automatic trust outside a known disposable TUI fixture");
+      }
     } else if (step.action === "dismiss-bypass") {
       writeTuiTrace(session, "startup_action", {
         action: step.action,
@@ -3135,7 +3308,14 @@ function affirmedOnDisk(projectDir: string): boolean {
 //                                   (a glob segment `*` matches within one dir level)
 //   --until-state-field <name=re>   terminate when aidlc-state.md's
 //                                   `- **<name>**:` line matches the regex <re>
+//   --also-state-field <name=re>    require BOTH this state field and
+//                                   --until-state-field to match; requires the latter
 //   (none)                          terminate on the practices-affirmation timestamp
+//
+// --also-state-field closes the approve tool's two-write window: handleApprove
+// writes Last Completed Stage (aidlc-state.ts:5719), then handleAdvance writes
+// Current Stage (aidlc-state.ts:4506; verified 2026-09-13). Wait for both before
+// returning, so a caller's session kill cannot land between those writes.
 type Terminator = { describe: string; done: () => boolean };
 
 export type PortablePathKind =
@@ -3353,6 +3533,11 @@ function stateFieldSignalMet(projectDir: string, name: string, re: RegExp): bool
 function makeTerminator(projectDir: string, a: Args): Terminator {
   const untilFile = a.flags["until-file"];
   const untilField = a.flags["until-state-field"];
+  const alsoField = a.flags["also-state-field"] ??
+    (a.bools["also-state-field"] ? "" : undefined);
+  if (alsoField !== undefined && !untilField) {
+    fail("--also-state-field requires --until-state-field", 2);
+  }
   if (untilFile) {
     return {
       describe: `file '${untilFile}' exists & non-empty`,
@@ -3367,6 +3552,21 @@ function makeTerminator(projectDir: string, a: Args): Terminator {
     const name = untilField.slice(0, eq);
     const reStr = untilField.slice(eq + 1);
     const re = new RegExp(reStr);
+    if (alsoField !== undefined) {
+      const alsoEq = alsoField.indexOf("=");
+      if (alsoEq <= 0) {
+        fail(`--also-state-field expects <name>=<regex>, got '${alsoField}'`, 2);
+      }
+      const alsoName = alsoField.slice(0, alsoEq);
+      const alsoReStr = alsoField.slice(alsoEq + 1);
+      const alsoRe = new RegExp(alsoReStr);
+      return {
+        describe: `state field '${name}' matches /${reStr}/ AND state field '${alsoName}' matches /${alsoReStr}/`,
+        done: () =>
+          stateFieldSignalMet(projectDir, name, re) &&
+          stateFieldSignalMet(projectDir, alsoName, alsoRe),
+      };
+    }
     return {
       describe: `state field '${name}' matches /${reStr}/`,
       done: () => stateFieldSignalMet(projectDir, name, re),
@@ -3675,6 +3875,24 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       backend,
       session,
       `--until-state-field expects <name>=<regex>, got '${untilField}'`,
+      2,
+    );
+  }
+  const alsoField = a.flags["also-state-field"] ??
+    (a.bools["also-state-field"] ? "" : undefined);
+  if (alsoField !== undefined && !untilField) {
+    failAnswerGate(
+      backend,
+      session,
+      "--also-state-field requires --until-state-field",
+      2,
+    );
+  }
+  if (alsoField !== undefined && alsoField.indexOf("=") <= 0) {
+    failAnswerGate(
+      backend,
+      session,
+      `--also-state-field expects <name>=<regex>, got '${alsoField}'`,
       2,
     );
   }

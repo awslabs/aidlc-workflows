@@ -76,15 +76,15 @@ describe("t153 engine directive harness seam — no hardcoded .claude/tools in c
     expect(stray).toEqual([]);
   });
 
-  test("harnessDir() IS the idiom the engine's directive strings use (seam in active use)", () => {
-    // Positive control: the engine MUST build at least some directive through
-    // harnessDir() — if this drops to zero, a refactor has bypassed the seam and
-    // the negative test above would be vacuously green.
+  test("aidlcToolInvocation() is the active directive invocation seam", () => {
+    // Positive control: engine directives MUST call the channel-aware helper.
+    // Exclude its declaration so this proves call sites remain in active use.
     let seamUses = 0;
     for (const scanDir of SCAN_DIRS) {
       for (const file of walkTs(scanDir)) {
+        if (file.endsWith("aidlc-runtime-paths.ts")) continue;
         const src = readFileSync(file, "utf-8");
-        const m = src.match(/bun \$\{harnessDir\(\)\}\/tools\//g);
+        const m = src.match(/aidlcToolInvocation\(/g);
         if (m) seamUses += m.length;
       }
     }

@@ -45,6 +45,8 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  currentUnitLifecycleMode,
+  latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
   unitCompletedReceipts,
@@ -69,6 +71,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Scope**: feature
 - **State Version**: 8
 - **Skeleton Stance**: on
+- **Construction Iteration**: unit-major
 
 ## Runtime State
 - **Revision Count**: 0
@@ -143,9 +146,21 @@ function writeUnitArtifacts(proj: string, unit: string): void {
 }
 
 let proj = "";
-function constructionProject(): string {
+function constructionProject(
+  iteration: "unit-major" | "stage-major" = "unit-major",
+): string {
   proj = createOrchestrationTestProject();
-  writeFileSync(seededStateFile(proj), CONSTRUCTION_STATE, "utf-8");
+  // Exercise the serial lifecycle explicitly. Keep only functional-design in
+  // the unit-major plan so it routes the next unit after each completion.
+  const state = CONSTRUCTION_STATE.replace(
+    "- **Construction Iteration**: unit-major",
+    `- **Construction Iteration**: ${iteration}`,
+  );
+  writeFileSync(
+    seededStateFile(proj),
+    iteration === "unit-major" ? state.replaceAll("- [ ]", "- [S]") : state,
+    "utf-8",
+  );
   seedBoltDag(proj, ["unit-a", "unit-b"]);
   return proj;
 }
@@ -269,7 +284,7 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
   });
 
   test("autonomous swarm stages still refuse interactive lifecycle receipts", () => {
-    constructionProject();
+    constructionProject("stage-major");
     enableAutonomy();
 
     const result = run(
@@ -339,18 +354,49 @@ describe("t260 single active unit", () => {
 
   test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
     constructionProject();
-    const dispatcher = join(proj, "aidlc-compiled-shim");
-    writeFileSync(
-      dispatcher,
-      [
-        "#!/usr/bin/env bun",
-        `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
-        "await main(process.argv.slice(2));",
-        "",
-      ].join("\n"),
-      "utf-8",
+    const dispatcherSource = join(proj, "aidlc-compiled-shim.ts");
+    const dispatcher = join(
+      proj,
+      process.platform === "win32" ? "aidlc-compiled-shim.exe" : "aidlc-compiled-shim",
     );
-    chmodSync(dispatcher, 0o755);
+    if (process.platform === "win32") {
+      writeFileSync(
+        dispatcherSource,
+        [
+          'import { spawnSync } from "node:child_process";',
+          `const result = spawnSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc.ts"))}, ...process.argv.slice(2)], {`,
+          '  stdio: "inherit",',
+          "  env: process.env,",
+          "});",
+          "process.exit(result.status ?? 1);",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const built = Bun.spawnSync([
+        process.execPath,
+        "build",
+        "--compile",
+        dispatcherSource,
+        "--outfile",
+        dispatcher,
+      ]);
+      if (built.exitCode !== 0) {
+        throw new Error(`fake compiled dispatcher build failed: ${built.stderr.toString()}`);
+      }
+    } else {
+      writeFileSync(
+        dispatcher,
+        [
+          "#!/usr/bin/env bun",
+          `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
+          "await main(process.argv.slice(2));",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      chmodSync(dispatcher, 0o755);
+    }
 
     const started = unitVerb(proj, "start", "unit-a", [], {
       AIDLC_COMPILED_EXECUTABLE: dispatcher,
@@ -606,7 +652,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
 
 describe("t260 receipts bind to an exact stage attempt", () => {
   test("a same-second receipt from the prior attempt does not settle the new attempt", () => {
-    constructionProject();
+    constructionProject("stage-major");
     const ts = "2026-07-30T10:00:00Z";
     const block = (event: string, fields: string) =>
       `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
@@ -642,7 +688,7 @@ describe("t260 receipts bind to an exact stage attempt", () => {
   });
 
   test("same-second boundaries in different shards fail closed independent of filename order", () => {
-    constructionProject();
+    constructionProject("stage-major");
     const ts = "2026-08-05T00:00:00Z";
     const block = (event: string, fields: string) =>
       `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
@@ -669,9 +715,24 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     );
 
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+    const floor = latestMainWorkflowStageRunFloorForProject(proj, SLUG);
+    expect(floor).toMatch(/^AMBIGUOUS:2026-08-05T00:00:00Z#[0-9a-f]{12}$/);
+    // The old receipt was invalidated by the ambiguous boundary. A sibling's
+    // current serial receipt keeps this a serial-stage fixture while unit-a's
+    // new start must bind to the same ambiguity token.
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" + block(
+        "UNIT_COMPLETED",
+        `**Stage**: ${SLUG}\n**Unit**: unit-b\n**Run floor**: ${floor}\n`,
+      ),
+      "utf-8",
+    );
+    expect(currentUnitLifecycleMode(proj, SLUG)).toBe("serial");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
-    expect(readAllAuditShards(proj)).toMatch(
-      /\*\*Run floor\*\*: AMBIGUOUS:2026-08-05T00:00:00Z#[0-9a-f]{12}/,
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).toContain(
+      `**Event**: UNIT_STARTED\n**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${floor}`,
     );
   });
 });

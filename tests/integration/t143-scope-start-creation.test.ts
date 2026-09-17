@@ -6,10 +6,10 @@
 // creation seam end-to-end:
 //
 //   engine: `next --scope bugfix` over no state emits the run-then-continue
-//           workflow creation `print` naming `intent-create --scope bugfix` (the
+//           workflow creation `print` naming `intent create --scope bugfix` (the
 //           explicit-scope arm of the no-state split — the engine names the
 //           mutating move, never performs it);
-//   conductor: ACTS on the print — runs `aidlc-utility.ts intent-create --scope bugfix`
+//   conductor: ACTS on the print — runs `aidlc.ts engine intent create --scope bugfix`
 //           and re-enters the loop;
 //   disk:   the created intent's aidlc-state.md (under aidlc/spaces/<space>/intents/
 //           <slug>-<id8>/, resolved by sdk-drive's per-intent readers) lands with
@@ -24,7 +24,7 @@
 //
 // Known-answer literals (read from the SHIPPED tools, not guessed):
 //   - creation print:  aidlc-orchestrate.ts:302/311 — names
-//                   `intent-create --scope <scope>` and ends "re-run `next` to continue"
+//                   `intent create --scope <scope>` and ends "re-run `next` to continue"
 //                   (P4: the retired `init` alias is gone)
 //   - creation summary: `State initialized:` (aidlc-utility.ts handleIntentCreate stdout, :2395)
 //   - state fields: State-Version-7 template (aidlc-utility.ts handleIntentCreate)
@@ -75,9 +75,9 @@ describe("t143 explicit-scope workflow creation (/aidlc --scope bugfix, sdk live
         // tool-result carries the engine's JSON directive naming the creation move
         // for the explicitly named scope. (The directive JSON is the engine's
         // verbatim stdout — deterministic, never the LLM's rewording.) P4: the
-        // engine NAMES `intent-create --scope <scope>` (the deterministic creation
+        // engine NAMES `intent create --scope <scope>` (the deterministic creation
         // handler) — the retired `init` alias is gone (aidlc-orchestrate.ts:302).
-        assertToolResultContains(r, "Bash", `intent-create --scope ${SCOPE}`);
+        assertToolResultContains(r, "Bash", `intent create --scope ${SCOPE}`);
 
         // (a, cont.) ... and ACTED on it: the named intent-create tool ran and its
         // summary landed as a tool-result.

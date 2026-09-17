@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   currentStageSourceBaseline,
   currentSwarmAttemptObligations,
   currentSwarmSourceMergeChain,
@@ -36,6 +37,8 @@ import {
   readUnitSourceManifest,
   readUnitSourceSnapshot,
   recordDir,
+  reviewRecordDigest,
+  type ReviewRecord,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   serializeSourceListing,
@@ -361,6 +364,49 @@ describe("t305 strict source-manifest validation", () => {
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
   });
 
+  test("rechecks mixed ignore matches and negations on each read of the same manifest", () => {
+    const { project, record } = fixture();
+    for (const name of ["allowed.tmp", "blocked.tmp"]) {
+      writeFileSync(join(project, name), "source\n");
+    }
+    manifest(record, "alpha", {
+      stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "app.ts" }, { path: "allowed.tmp" }, { path: "blocked.tmp" }],
+    });
+    const ignore = join(project, ".gitignore");
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n");
+    const first = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.reason).toContain("writes[2].path");
+      expect(first.reason).toContain("blocked.tmp");
+    }
+
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n!blocked.tmp\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
+  test("rechecks HEAD membership on each read of the same ignored claim", () => {
+    const { project, record } = fixture();
+    writeFileSync(join(project, ".gitignore"), "new.ts\n");
+    writeFileSync(join(project, "new.ts"), "source\n");
+    manifest(record, "alpha", {
+      stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "new.ts" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+
+    git(project, ["add", "-f", "--", "new.ts"]);
+    git(project, ["commit", "-qm", "track ignored source"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+
+    git(project, ["rm", "--cached", "--", "new.ts"]);
+    git(project, ["commit", "-qm", "stop tracking ignored source"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
   test("rejects a prefix containing a force-added ignored descendant", () => {
     const { project, record } = fixture();
     writeFileSync(join(project, ".gitignore"), "force-dir/*.secret\n");
@@ -642,7 +688,7 @@ describe("t305 content-addressed source review evidence", () => {
     if (!claims.ok) return;
     const unit = writeUnitSourceSnapshot(project, "code-generation", "alpha", listing, claims, claims.rawBytesSha256);
     expect(readUnitSourceSnapshot(project, "code-generation", "alpha", unit)?.manifestSha256).toBe(claims.rawBytesSha256);
-    const unitPath = join(record, ".aidlc-source-review", "code-generation", `unit-alpha-${unit.slice(7, 19)}.tsv`);
+    const unitPath = join(record, ".aidlc-engine/source-review", "code-generation", `unit-alpha-${unit.slice(7, 19)}.tsv`);
     writeFileSync(unitPath, "tampered\n");
     expect(readUnitSourceSnapshot(project, "code-generation", "alpha", unit)).toBeNull();
   });
@@ -987,10 +1033,33 @@ function approve(project: string, env: Record<string, string> = {}): { rc: numbe
 function stripUnitBindings(project: string): void {
   const root = join(project, "aidlc", "spaces", "default", "intents");
   for (const rec of readdirSync(root)) {
-    const audit = join(root, rec, "audit"); if (!existsSync(audit)) continue;
+    const recordRoot = join(root, rec);
+    const audit = join(recordRoot, "audit");
+    if (!existsSync(audit)) continue;
     for (const file of readdirSync(audit)) {
-      const path = join(audit, file); let body = readFileSync(path, "utf-8");
-      body = body.replace(/^\*\*(?:Unit Source Fingerprint|Unit Source Binding Bypass)\*\*: .*\r?\n/gm, "");
+      const path = join(audit, file);
+      let body = readFileSync(path, "utf-8");
+      for (const block of body.split("\n---\n")) {
+        if (auditBlockField(block, "Event") !== "REVIEW_COMPLETED") continue;
+        const relativeRecord = auditBlockField(block, "Review Record");
+        if (relativeRecord === null) continue;
+        const recordPath = join(recordRoot, relativeRecord);
+        const record = JSON.parse(readFileSync(recordPath, "utf-8")) as ReviewRecord;
+        record.unit_source_fingerprint = null;
+        const bytes = `${JSON.stringify(record, null, 2)}\n`;
+        writeFileSync(recordPath, bytes, "utf-8");
+        const previousDigest = auditBlockField(block, "Review Record Digest");
+        if (previousDigest !== null) {
+          body = body.replace(
+            `**Review Record Digest**: ${previousDigest}`,
+            `**Review Record Digest**: ${reviewRecordDigest(bytes)}`,
+          );
+        }
+      }
+      body = body.replace(
+        /^\*\*(?:Unit Source Fingerprint|Unit Source Binding Bypass)\*\*: .*\r?\n/gm,
+        "",
+      );
       writeFileSync(path, body);
     }
   }
@@ -1378,7 +1447,7 @@ describe("t305 real receipt and guard flows", () => {
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
     review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
-    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
+    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
   }, 30000);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
@@ -1440,7 +1509,7 @@ describe("t305 real receipt and guard flows", () => {
     stripAuditFields(legacy.project, "STAGE_STARTED", ["Source Baseline"]);
     stripUnitBindings(legacy.project);
     rmSync(
-      join(legacy.record, ".aidlc-source-review"),
+      join(legacy.record, ".aidlc-engine/source-review"),
       { recursive: true, force: true },
     );
     for (const unit of ["alpha", "beta"]) {
@@ -1507,13 +1576,13 @@ describe("t305 real receipt and guard flows", () => {
       "other-intent",
     );
     mkdirSync(
-      join(other, ".aidlc-source-review", "code-generation"),
+      join(other, ".aidlc-engine/source-review", "code-generation"),
       { recursive: true },
     );
     writeFileSync(
       join(
         other,
-        ".aidlc-source-review",
+        ".aidlc-engine/source-review",
         "code-generation",
         "baseline-deadbeef.tsv",
       ),

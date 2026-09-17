@@ -31,9 +31,37 @@ import emit from "./emit.ts";
 
 const manifest: HarnessManifest = {
   name: "opencode",
+  productName: "opencode",
+  configNextStep: "run `opencode`, then `/aidlc --doctor`",
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
+  rootIntegrations: [
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
+          "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
+        ],
+      },
+    },
+    { path: "opencode.json", policy: "whole-file" },
+  ],
 
   // Same core projection as claude, into .aidlc/. The persona .md files ARE
   // core (the conductor adopts them inline from .aidlc/agents/); the
@@ -59,7 +87,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     // Project config at the dist ROOT (opencode reads ./opencode.json):
     // skills.paths (skill discovery), instructions glob (the method include),
-    // and the bun tool-command permissions.
+    // and the native aidlc command permissions.
     { src: "opencode.json", dst: "opencode.json", projectRoot: true },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],

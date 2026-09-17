@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "plugins": {
+    "aidlc-test-pro@fixture-marketplace": [
+      {
+        "scope": "user",
+        "installPath": "{{PLUGIN_ROOT}}",
+        "version": "0.1.0",
+        "installedAt": "2026-07-19T00:00:00.000Z",
+        "lastUpdated": "2026-07-19T00:00:00.000Z"
+      }
+    ]
+  }
+}

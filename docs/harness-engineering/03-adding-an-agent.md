@@ -90,20 +90,23 @@ drop-logged during plugin compose.
 
 **`tier` names the kind of work; the packager projects it into per-harness
 model/effort keys.** You never author raw `model:` or `effort:` in core agent
-frontmatter -- those are projection OUTPUTS in `dist/<harness>/`, derived from
+frontmatter -- those are projection OUTPUTS in the ignored local
+`dist/<harness>/` tree and versioned release runtime, derived from
 the tier table in `core/tools/aidlc-tiers.ts`. Pick `judgment` for any persona
 whose work is multi-constraint reasoning that cascades downstream --
 interpreting ambiguous intent, weighing architectural trade-offs under dense
-context; a judgment agent inherits the session's model AND effort, so it is
-never silently downgraded. Pick `balanced` for reviewer-shaped personas that
+context; a judgment agent inherits the session's model AND effort unless an
+explicit model policy overrides it. Pick `balanced` for reviewer-shaped personas that
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding. `balanced` and `templated` both step effort down to
-`medium` (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all
-tiers inherit the session model and effort, so the tier changes nothing there),
-and they currently project identically -- only `judgment` inherits the session
-effort. When
+runbook scaffolding. With no recorded policy, only the `balanced` reviewer tier
+pins a mid-size model at `medium` effort on Claude Code, Codex, and opencode;
+`judgment` and `templated` inherit session model and effort. The wizard-default
+`balanced` preset is separate from the reviewer tier: it explicitly sets medium
+effort for Deciding, Reviewing, and Writing up without changing their models.
+Kiro CLI/IDE, Cursor, and Copilot inherit the session and report group effort
+dials as unexpressed. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the
@@ -174,7 +177,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
    `support_agents` frontmatter of each stage file (`core/aidlc-common/stages/<phase>/<slug>.md`)
-   where it leads or supports, then recompile (`bun .claude/tools/aidlc-graph.ts compile`)
+   where it leads or supports, then recompile (`aidlc engine graph compile`)
    so `stage-graph.json` regenerates. Never hand-edit `stage-graph.json` — it is
    a build artifact, and the next compile overwrites a manual change (see
    [Adding a Stage](02-adding-a-stage.md#4-regenerate-the-harnesses-so-stage-graphjson-recompiles)).

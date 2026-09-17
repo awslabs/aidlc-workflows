@@ -109,6 +109,13 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     expect(HELP.status).toBe(0);
   });
 
+  test("S5: human help uses plain ASCII separators", () => {
+    expect(HELP.stdout).toStartWith("AI-DLC - AI-Driven Development Life Cycle");
+    expect(HELP.stdout).toContain("Describe what to build - scope is auto-detected");
+    expect(HELP.stdout).not.toContain("\u2014");
+    expect(HELP.stdout).not.toContain("\u2192");
+  });
+
   // --- All scope names appear (compiled from scope-mapping.json). ---
   // Keep the compiled help surface pinned to every shipped scope.
   const SCOPES = [

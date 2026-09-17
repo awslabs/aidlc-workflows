@@ -1,6 +1,74 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.0] - 2026-09-15
+
+AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
+
+* `aidlc version` reports `2.9.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* New Classic intents use the 18-stage v1 flow through Build and Test, with one approval per stage, one advisory review pass where configured, sensors and learnings enabled, and summary confirmation disabled. Existing Classic intents keep their recorded graph; use the `workshop` scope when the previous Classic graph with CI Pipeline and Operation stages is required.
+* Ceremony is scope-owned and can be changed per intent with `--sensors`, `--learnings`, and `--summary-confirmation`. `aidlc engine config set` applies depth, testing, review, change-control, and ceremony settings as one transaction. Breaking for scripts: the standalone `aidlc-utility.ts change-control` route is removed, and unknown `config-change` flags now fail instead of being ignored.
+* `aidlc config` now resolves provider choices per harness. Kiro CLI and Kiro IDE need no provider answer: model access comes with Kiro, so the first-run wizard and `aidlc config providers` state that and ask nothing, provider flags are refused there, and a provider record left by an earlier build is ignored (`aidlc config providers --reset --yes` clears it). The `aws-mcp` region in `.kiro/settings/mcp.json` is kept as the project has it across refreshes. Other harnesses offer Amazon Bedrock or `unchanged`, which keeps the current provider. The `balanced` preset now records medium deciding, reviewing, and writing-up effort.
+* `aidlc engine orchestrate wait` provides a bounded read-only wait for collaborators, artifacts, or reviews. Record-level engine files now live under `<record>/.aidlc-engine/`; existing records remain readable through legacy-path fallbacks.
+* `/aidlc intent archive <name>` retires an unfinished intent without deleting its record or audit trail. `/aidlc intent unarchive <name>` restores it, and `intent list --all` includes archived intents.
+* `aidlc attest resolve` maps a commit or diff range to reviewed Units and reports `verified`, `drifted`, `unattested`, `unverifiable`, `indeterminate`, or `excluded`. `aidlc attest anchor` records commit pointers in the audit trail. Reviews created before 2.9.0 have no committed source evidence and report `unverifiable` until the next per-Unit review.
+* Construction autonomy can be granted or revoked on demand. The choice persists in older records that did not already contain the state field, while the first Construction approval, Code Generation Plan Approval, and failure stops remain human-owned.
+* Advisory review retries now use the engine's current ordinal after a rejected gate, avoiding false `REVIEW_BUDGET_EXHAUSTED` dead ends. Review bookkeeping stays in review records and audit data instead of becoming artifact content or new reviewer findings.
+* Kiro IDE read tools remain available during Code Generation Plan Approval recovery while write, shell, MCP, and delegated mutation paths stay guarded.
+* Stable and preview release packaging now separates the native `aidlc-runtime-2.9.0.tar.gz` asset from the Bun-based `aidlc-copy-runtime-2.9.0.tar.gz` manual-copy asset. Versioned installers install the release that carries them, including previews, and multiple changed `main` commits can publish previews on the same UTC date.
+* Repository maintainers can run the adversarial AI pull-request review workflow for same-repository PRs, with prompt-injection, security, and project-aligned review passes plus deterministic publication validation.
+
+## [2.8.2] - 2026-09-10
+
+Preserve summary confirmations when an Assumption Confirmation section is appended with a decorative divider, and improve review-findings table diagnostics so malformed rows report their cell count and expected column order without guessing which column was omitted. The intended development release version is 2.8.2. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`. A summary receipt recorded before this fix over a body that already contained the newly excluded divider may need one fresh confirmation after upgrading; no other migration is required.
+
+* Short review-findings rows show the expected columns and, when applicable, suggest checking earlier cells for a missing value or `|` separator. Review completion remains refused until the row is corrected. Closes #1076.
+* Review-findings rows with surplus cells report the extra count. Well-formed rows, including escaped pipes and explicit blank cells, retain their existing behavior.
+* `aidlc version` reports `2.8.2`; the unpublished `2.8.6` development version is superseded.
+* Appending `## Assumption Confirmation` after a confirmed summary with an adjacent, blank-delimited `---`, `***`, or `___` no longer causes `SUMMARY_CONTENT_STALE` during stage completion. Code examples before the assumption heading and follow-up answers remain covered by the receipt, so substantive edits still require confirmation. Closes #1074.
+* Content appended under a `## ` heading is separated from the following `## ` heading by a blank line, keeping method files well-formed. Closes #1075.
+
+* `aidlc-state.ts unit start|pause|resume` refuses while the engine routes the stage as a wave, leaves state and audit unchanged, and directs callers to `unit complete --wave`. Closes #1071.
+* `aidlc-state.ts set-construction-iteration unit-major` leaves the remaining units completable through the serial lifecycle even when a revised stage already has wave completion receipts.
+
+## [2.8.6] - 2026-09-09
+
+**Superseded development entry:** No 2.8.6 release was published. The intended release version is 2.8.2, documented above; this entry is retained as development history.
+
+Fix a markdown-hygiene defect in the shared section writer: `appendUnderHeading` inserted new content flush against the following `## ` heading, so a bullet written under a section (for example a self-learning entry under `## Decided` in `project.md`) abutted the next heading with no separating blank line. The engine re-reads `project.md` every stage and the file is human-editable, so the malformed markdown could misgroup for a re-reading model or a stricter markdown tool. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.6` / `install.ps1 -Version 2.8.6`. No migration is required; existing files are corrected the next time content is appended to an affected section.
+
+* Content appended under a `## ` heading is now separated from the following `## ` heading by exactly one blank line, keeping method files (`memory/project.md`, `project-guardrails.md`) well-formed. The terminal end-of-file append is unchanged — no spurious trailing blank line is added. Closes #1075.
+
+## [2.8.1] - 2026-09-08
+
+Fix defects found while exercising the 2.8.0 native install: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, `aidlc update` on an already-current install failed its integrity check under a normal shell umask, and every native GitHub Copilot and Cursor hook was dead because the 2.8.0 packager projected those adapters onto the one-argument core-hook route. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`. Copilot and Cursor projects configured by 2.8.0 work as soon as the binary is updated: their existing `aidlc engine hook <harness>-adapter ...` wiring is accepted, and the 2.8.0 Copilot adapter still installed in the project (whose core-hook calls are the bare `aidlc hook <name>`) is accepted too. `aidlc config` in the project then rewrites the wiring to the canonical `aidlc engine adapter <harness> ...` spelling and installs the current adapter — Cursor's merged `.cursor/hooks.json` collapses every earlier AI-DLC spelling of an entry (bun-era and 2.8.0) into the one shipped entry instead of leaving duplicates that keep executing, and Copilot's `.github/hooks/aidlc.json` is regenerated.
+
+* Pressing Enter at a bracketed default in the first-run `aidlc config` wizard (harness picker, provider, region, preset, plugins, MCP, record layer, and the final `Apply? [Y/n]` gate) now accepts the default as advertised instead of printing `Nothing written.` and exiting 2. Closing stdin (Ctrl-D) still cancels.
+* `aidlc update` on an install that is already at the latest release now reports `You're on the latest version of aidlc (X.Y.Z).` regardless of the caller's umask; previously it failed with `existing X.Y.Z runtime does not match the verified release` (exit 4) unless the shell umask was `077`. Same-release identity is now decided by path set and content; the installed tree's modes are still enforced against its own recorded integrity baseline, so trees installed by 2.8.0 under any umask keep working. `aidlc update --dry-run` on a current install says so instead of `Would update aidlc from X to X.`
+* `aidlc doctor` no longer tells you to copy the workspace shell from `dist/<harness>/`; the remediation is `aidlc config`.
+* README: removed the pre-2.8.0 note that told users to install from a source checkout until native assets shipped.
+* GitHub Copilot hooks no longer fail on every event with `aidlc: undefined is not an object (evaluating 'input.length')`; the adapter's delegated audit, sensor, guard, state, and Stop hooks now run through `aidlc engine hook <name>` under the native binary.
+* Cursor IDE `failClosed` `preToolUse` hooks now emit `{"permission":"allow"}` on allowed tools instead of returning no output (`Hook ... returned no output`) and blocking every tool call; deny decisions continue to emit Cursor permission-deny JSON.
+* Native hook wiring dispatches through `aidlc engine adapter copilot <target>` and `aidlc engine adapter cursor <target>`, preserving each adapter's target and stdin payload. Closes #1061 and #1058.
+
+## [2.8.0] - 2026-09-08
+
+AI-DLC 2.8.0 consolidates the 2.7.x release cycle into a new minor baseline without changing runtime behavior from 2.7.2. **Upgrade:** use `install.sh --version 2.8.0`, `install.ps1 -Version 2.8.0`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.8.0.tar.gz`. Existing 2.7.2 workflow records require no migration. Upgrades from earlier releases must still apply every intervening **Upgrade**, **Breaking**, and migration note below.
+
+* `aidlc version` now reports `2.8.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* Solo Code Generation includes the 2.7.1 Plan Approval deadlock fix, so the Stop hook no longer invalidates approval authority at turn boundaries.
+* Native installers and release archives include the 2.7.2 tag-bound provenance and verification flow; release assets use the `aidlc-runtime-X.Y.Z.tar.gz` naming contract.
+* Breaking changes for CI/scripts: none beyond selecting the new `2.8.0` version and asset name.
+
+## [2.7.2] - 2026-09-07
+
+Bind native releases to the version tag that triggered them and include that version in the runtime archive name. **Upgrade:** use `install.sh --version 2.7.2`, `install.ps1 -Version 2.7.2`, or replace a manual copy with `runtime/<harness>/` from `aidlc-runtime-2.7.2.tar.gz`.
+
+* Pushing a `vX.Y.Z` tag now starts the release workflow. The workflow rejects a tag that does not match `AIDLC_VERSION`, does not point to its checked-out commit, or does not belong to `main`.
+* Release manifests and provenance now bind to `refs/tags/vX.Y.Z` instead of `refs/heads/main`.
+* The runtime asset is now named `aidlc-runtime-X.Y.Z.tar.gz`, and the README documents how to use it as the release equivalent of a generated `dist/<harness>/` directory.
+* GitHub CLI is optional for native installs. Compatible versions verify the signed release attestation; missing or older versions continue with source identity checks and SHA-256 verification, while online downloads remain HTTPS-only.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

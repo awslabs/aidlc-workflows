@@ -24,8 +24,8 @@ import {
   readStateFile,
   resolveProjectDirFromHook,
   stateFilePath,
-  harnessDir,
 } from "../tools/aidlc-lib.ts";
+import { setStatus } from "../tools/aidlc-utility.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -105,17 +105,15 @@ const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "sync-workflow-state.last"), isoTimestamp(), "utf-8");
 
-// Update state file via set-status (call the utility tool directly)
-const toolPath = join(projectDir, harnessDir(), "tools", "aidlc-utility.ts");
+// Update state through the shared implementation; the hook owns this mutation.
 hookDebug(projectDir, "sync-workflow-state", "set-status", { slug });
-Bun.spawnSync(["bun", toolPath, "set-status", "--stage", slug, "--project-dir", projectDir], {
-  env: {
-    ...process.env,
-    AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
-  },
-  stdout: "ignore",
-  stderr: "ignore",
-});
+try {
+  setStatus(projectDir, { stage: slug });
+} catch (error) {
+  hookDebug(projectDir, "sync-workflow-state", "set-status failed", {
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
 return 0;
 }
 

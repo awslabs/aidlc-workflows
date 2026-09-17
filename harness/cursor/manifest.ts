@@ -37,9 +37,37 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "cursor",
+  productName: "Cursor",
+  configNextStep: "open this project in Cursor, then run `/aidlc --doctor`",
   harnessDir: ".cursor",
   orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",
+  rootIntegrations: [
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:b4bf7694361e76aae9feabc5d985d09afb7863cf8458b0c9aaa73f20a589582f",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
+          "sha256:2907b5293bfd8bd9d5f8b7a8025bfe23edd0ffcd31f925761916088517880936",
+        ],
+      },
+    },
+    { path: "install.ts", policy: "whole-file" },
+  ],
 
   // Same core projection as claude, into .cursor/.
   coreDirs: [

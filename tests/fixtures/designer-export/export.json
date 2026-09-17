@@ -2591,7 +2591,6 @@
         "feature",
         "mvp",
         "infra",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -2699,7 +2698,6 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "classic",
         "workshop",
         "express"
       ],
@@ -2783,7 +2781,6 @@
         "enterprise",
         "feature",
         "infra",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -2877,7 +2874,6 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "classic",
         "workshop",
         "express"
       ],
@@ -2975,7 +2971,6 @@
         "enterprise",
         "feature",
         "infra",
-        "classic",
         "workshop",
         "express"
       ],
@@ -3067,7 +3062,6 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3160,7 +3154,6 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3261,7 +3254,6 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic",
         "workshop"
       ],
       "summary_confirmation": "required",
@@ -3350,7 +3342,8 @@
       ],
       "description": "Fix a specific bug",
       "runner": true,
-      "skeleton": false
+      "skeleton": false,
+      "changeControl": "relaxed"
     },
     "classic": {
       "depth": "Standard",
@@ -3380,18 +3373,24 @@
         "infrastructure-design": "EXECUTE",
         "code-generation": "EXECUTE",
         "build-and-test": "EXECUTE",
-        "ci-pipeline": "EXECUTE",
-        "deployment-pipeline": "EXECUTE",
-        "environment-provisioning": "EXECUTE",
-        "deployment-execution": "EXECUTE",
-        "observability-setup": "EXECUTE",
-        "incident-response": "EXECUTE",
-        "performance-validation": "EXECUTE",
-        "feedback-optimization": "EXECUTE"
+        "ci-pipeline": "SKIP",
+        "deployment-pipeline": "SKIP",
+        "environment-provisioning": "SKIP",
+        "deployment-execution": "SKIP",
+        "observability-setup": "SKIP",
+        "incident-response": "SKIP",
+        "performance-validation": "SKIP",
+        "feedback-optimization": "SKIP"
       },
       "keywords": [],
-      "description": "V1-style lifecycle without ideation ceremony — the implicit default",
-      "skeleton": true
+      "description": "V1-style ceremony through Inception and Construction - the implicit default",
+      "skeleton": false,
+      "changeControl": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "off"
+      }
     },
     "enterprise": {
       "depth": "Comprehensive",
@@ -3432,7 +3431,8 @@
       },
       "keywords": [],
       "description": "Regulated enterprise feature, full audit trail",
-      "skeleton": true
+      "skeleton": true,
+      "changeControl": "strict"
     },
     "express": {
       "depth": "Minimal",
@@ -3477,7 +3477,8 @@
       ],
       "description": "Lightest run: requirements to deploy, no design pass, no reviewers",
       "runner": true,
-      "skeleton": false
+      "skeleton": false,
+      "changeControl": "relaxed"
     },
     "feature": {
       "depth": "Standard",
@@ -3519,7 +3520,8 @@
       "keywords": [],
       "description": "Full lifecycle for new features, practical depth",
       "runner": true,
-      "skeleton": true
+      "skeleton": true,
+      "changeControl": "relaxed"
     },
     "infra": {
       "depth": "Standard",
@@ -3564,7 +3566,8 @@
         "infra"
       ],
       "description": "Infrastructure changes",
-      "skeleton": true
+      "skeleton": true,
+      "changeControl": "strict"
     },
     "mvp": {
       "depth": "Standard",
@@ -3609,7 +3612,8 @@
       ],
       "description": "Skip operations, ship the core",
       "runner": true,
-      "skeleton": true
+      "skeleton": true,
+      "changeControl": "relaxed"
     },
     "poc": {
       "depth": "Minimal",
@@ -3655,7 +3659,8 @@
         "spike"
       ],
       "description": "Prove feasibility fast",
-      "skeleton": true
+      "skeleton": true,
+      "changeControl": "relaxed"
     },
     "refactor": {
       "depth": "Minimal",
@@ -3700,7 +3705,8 @@
         "simplify"
       ],
       "description": "Clean up existing code",
-      "skeleton": false
+      "skeleton": false,
+      "changeControl": "relaxed"
     },
     "security-patch": {
       "depth": "Minimal",
@@ -3747,7 +3753,8 @@
       ],
       "description": "CVE response",
       "runner": true,
-      "skeleton": false
+      "skeleton": false,
+      "changeControl": "strict"
     },
     "workshop": {
       "depth": "Standard",
@@ -3793,7 +3800,8 @@
       ],
       "description": "Facilitated group session with mandatory gates",
       "testStrategy": "Minimal",
-      "skeleton": true
+      "skeleton": true,
+      "changeControl": "relaxed"
     }
   },
   "artifacts": [

@@ -19,7 +19,7 @@ flowchart TD
     START(["/aidlc invoked"])
     MODE{"Invocation"}
     STATE_EXISTS{"aidlc-state.md\nexists?"}
-    RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
+    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn about possible\nstate corruption"]
     RESUME_MENU["Resume Options"]
@@ -87,13 +87,13 @@ not repeat completed spokes.
 
 ## Recovery Breadcrumb
 
-Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-recovery.md` in the active intent's record dir. This file contains:
+Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-engine/recovery.md` in the active intent's record dir. This file contains:
 
 - Timestamp of the last validation
 - Current stage name (extracted from `aidlc-state.md`)
 - State file validity status
 
-On the next `/aidlc` invocation, AI-DLC compares `.aidlc-recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
+On the next `/aidlc` invocation, AI-DLC compares `.aidlc-engine/recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
 
 ---
 
@@ -108,7 +108,7 @@ Claude Code automatically summarizes earlier conversation context when the conte
 | All record-dir artifacts (files on disk) | In-memory conversation context (prior discussion) |
 | `aidlc-state.md` (stage progress, scope, project info) | Partial in-progress work not yet written to files |
 | `audit/` shards (full history of decisions and actions) | Task IDs (rebuilt from state file on resume) |
-| `.aidlc-recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
+| `.aidlc-engine/recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
 
 ### How to recover after compaction
 
@@ -172,7 +172,7 @@ Three read-only skills report on the current workflow without changing it. Each 
 
 **They are read-only.** None advances the workflow stage pointer, and none emits an audit event, so they are safe to run at any point — including mid-stage. `/aidlc-session-cost` and `/aidlc-replay` print to the terminal and write nothing; `/aidlc-outcomes-pack` is the only one that writes a file (`OUTCOMES.md` at the workspace root).
 
-**Every number they report comes straight from the data plane.** Each skill reads its figures from `bun .claude/tools/aidlc-runtime.ts summary --json` — the materialised view over `runtime-graph.json`. The skills never estimate or recount; the prose around the numbers (the narrative, the decision rationale) is the only part synthesised from the audit trail and artefacts. There is deliberately no token estimate — the old file-size-to-token heuristic was guesswork and has been removed.
+**Every number they report comes straight from the data plane.** Each skill reads its figures from `aidlc engine runtime summary --json` — the materialised view over `runtime-graph.json`. The skills never estimate or recount; the prose around the numbers (the narrative, the decision rationale) is the only part synthesised from the audit trail and artefacts. There is deliberately no token estimate — the old file-size-to-token heuristic was guesswork and has been removed.
 
 ```
 /aidlc-session-cost      # quick "where are we" snapshot, any time

@@ -215,7 +215,7 @@ describe("t223 naming enforcement", () => {
     const scopes = tempDir("aidlc-t223-doctor-scopes-");
     writeScope(scopes, "wrong-scope.md", "right-scope");
 
-    const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", project], {
+    const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", project], {
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -227,7 +227,7 @@ describe("t223 naming enforcement", () => {
     });
     const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
 
-    expect(out).toContain("✓  Scope filename/name consistency");
+    expect(out).toContain("ok    Scope filename/name consistency");
     expect(out).toContain("Scope filename/name consistency: 1 mismatch(es) (advisory)");
     expect(out).toContain(join(scopes, "wrong-scope.md"));
     expect(out).toContain('stem "wrong-scope"');

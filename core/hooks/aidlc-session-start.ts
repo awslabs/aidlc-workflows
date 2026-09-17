@@ -21,11 +21,16 @@
 //   clear   → SESSION_STARTED
 //   compact → no emission (PreCompact already fired)
 //
+// After the session event, an OPT-IN bounded best-effort commit-provenance sweep
+// (runAnchor in reconcile mode, AIDLC_SESSION_ANCHOR=1) anchors recent manual
+// commits that landed reviewed claims. See docs/reference/20-commit-provenance.md.
+//
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
@@ -37,8 +42,8 @@ import {
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
-  getField,
   harnessDir,
+  getField,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -60,6 +65,7 @@ import {
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -220,6 +226,33 @@ if (eventType) {
   }
 }
 
+// --- Commit-provenance anchor sweep (OPT-IN) ----------------------------------
+//
+// OFF by default, and deliberately so. Anchors are enrichment: `attest resolve`
+// recomputes attribution from committed receipts + evidence and never reads a
+// SOURCE_COMMITTED row, so nothing in the resolver degrades when the sweep never
+// runs. That makes an implicit audit-record write on every session start pure
+// cost — startup work plus a mutation of the append-only trail that the user did
+// not ask for. Writing to the audit trail is an explicit act; `aidlc attest
+// anchor --reconcile` is that act.
+//
+// Set AIDLC_SESSION_ANCHOR=1 to opt in. Humans commit manually, mostly between
+// sessions, so a session start is the only automatic observation point that
+// exists; a team that wants the audit trail to name landed commits without
+// remembering a command can turn this on. Dedupe against prior anchors and
+// SWARM_SOURCE_MERGED receipts lives inside runAnchor, so re-running every
+// session is idempotent, and the eventType gate keeps it off compact resumes
+// and rebind probes. See docs/reference/20-commit-provenance.md §7.
+if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
+  try {
+    runAnchor(projectDir, { reconcile: true, maxCommits: 25 });
+  } catch {
+    // Best-effort: a project dir that is not a git repository (and has no
+    // sole recorded repo to auto-select) or a transient git failure must
+    // never break session startup.
+  }
+}
+
 // --- Resume rebind (P8) -------------------------------------------------------
 //
 // A conversation works ONE intent; the active-intent cursor is durable + shared
@@ -340,7 +373,7 @@ const recoveryFile = recoveryFilePath(
   selection.space,
 );
 const recovery = existsSync(recoveryFile)
-  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md — check if state was preserved correctly.\n"
+  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md - check if state was preserved correctly.\n"
   : "";
 
 // Stage-graph drift advisory (issue #364). The runtime resolves stages from
@@ -355,7 +388,7 @@ try {
   if (uncompiledStages.length > 0) {
     driftNote =
       `NOTE: ${uncompiledStages.length} stage file(s) on disk are not in the compiled stage graph and will NOT execute: ${uncompiledStages.join(", ")}. ` +
-      `Run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
+      `Run \`${aidlcToolInvocation("graph")} compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
   }
 } catch {
   // Drift check failed, never block startup over an advisory.
@@ -373,9 +406,9 @@ Next Action: ${next}
 ${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
-- The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.
+- The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.
 - STEP 1 — YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` → you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` → \`next --stage X\`. \`/aidlc\` alone → \`next\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command — a bare \`next\` when the user gave arguments is a bug.
-- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc-jump.ts execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.`;
+- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.`;
 
 // Output additionalContext as JSON
 const output = JSON.stringify({ additionalContext: context });

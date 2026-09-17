@@ -1,7 +1,7 @@
 ---
 id: traceability
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-traceability.ts
+command: {{INVOKE}} engine sensor-traceability
 default_severity: advisory
 description: Verifies element-level upstream coverage, downstream targets, and derived orphans in traceability.json
 category: document-traceability

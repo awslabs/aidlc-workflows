@@ -178,7 +178,7 @@ Functional Design):
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage domain-design --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage domain-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 8: Present Completion & Request Approval
@@ -193,7 +193,7 @@ Use stage-protocol.md completion template with completion emoji: :building_const
   - Add Units Generation (if it was skipped in execution plan)
 
 If "Add Units Generation" is selected, run
-`bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add units-generation`
+`{{INVOKE}} engine recompose --add units-generation`
 before re-entering the approval flow.
 
 ## Sensors
@@ -209,9 +209,8 @@ fallback functional requirement, is declared and covered.
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

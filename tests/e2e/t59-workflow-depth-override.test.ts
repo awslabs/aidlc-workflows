@@ -2,10 +2,19 @@
 //
 // t59-workflow-depth-override.test.ts — SDK-harness port of
 // tests/e2e/t59-workflow-depth-override.sh (plan 6). Drives the real
-// `/aidlc --init --scope bugfix --depth comprehensive` through the Claude Agent SDK on
+// `/aidlc --scope bugfix --depth comprehensive` through the Claude Agent SDK on
 // a fresh brownfield project and asserts ONLY on deterministic surfaces — the
 // init tool's verbatim stdout, the on-disk state fields, and the parsed audit
 // events — NEVER on assistantText.
+//
+// DIVERGENCE from the pre-main-transition copy: t59 still drove the RETIRED
+// `--init` flag (`/aidlc --init --scope bugfix ...`). Since #847
+// (2d9b23899, lossless task text: unknown flag-looking tokens are kept as
+// intent words), parseNextFlags no longer silently drops `--init`, so it
+// leaks into the creation directive as `--arguments=--init` — a garbage
+// intent description that live conductors reasonably stop and ask about
+// instead of running intent create. This copy drives the SUPPORTED surface;
+// the depth-override-at-creation subject is unchanged.
 //
 // ⛔ TRAP 2 (no headless auto-approve). The .sh drove `/aidlc bugfix --depth
 // comprehensive` to completion and asserted on the FINAL state under a headless
@@ -27,7 +36,7 @@
 // surface is THIS file's: `--depth comprehensive` overriding the bugfix scope's
 // Minimal default at init, asserted on the Depth state field the init tool writes.
 //
-// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --init --scope bugfix
+// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --scope bugfix
 // --depth comprehensive` on a fresh `--no-aidlc-docs` brownfield project routes
 // through `aidlc-utility.ts init --scope bugfix --depth comprehensive` (SKILL.md).
 // handleInit
@@ -99,7 +108,7 @@ const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
-describe("t59 /aidlc --init --scope bugfix --depth comprehensive depth override (sdk)", () => {
+describe("t59 /aidlc --scope bugfix --depth comprehensive depth override (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh brownfield project: the depth override lands at explicit init. We assert
   // the Depth state field is Comprehensive (overriding bugfix's Minimal default),
@@ -115,7 +124,7 @@ describe("t59 /aidlc --init --scope bugfix --depth comprehensive depth override 
       });
       try {
         const r = await driveAidlc(
-          `/aidlc --init --scope ${SCOPE} --depth comprehensive`,
+          `/aidlc --scope ${SCOPE} --depth comprehensive`,
           {
             projectDir: proj,
             answerScript: "default",

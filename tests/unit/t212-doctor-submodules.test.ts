@@ -36,7 +36,7 @@ function proj(): string {
 
 /** `bun UTIL doctor --project-dir <proj>` captured 2>&1, exit code swallowed. */
 function runDoctor(proj: string): string {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -64,8 +64,8 @@ describe("t212 aidlc-utility doctor — Submodules advisory row", () => {
     expect(out).toContain("Submodules: 2 declared, 2 uninitialized (advisory)");
     expect(out).toContain("services/api, services/web");
     expect(out).toContain("git submodule update --init --recursive");
-    // Advisory renders as a passing row (✓), never a failed (✗) one.
-    expect(out).toContain("✓  Submodules: 2 declared, 2 uninitialized");
+    // Advisory renders as an ok row, never a fail row.
+    expect(out).toContain("ok    Submodules: 2 declared, 2 uninitialized");
   }, 30000);
 
   test("3: all initialized -> 'all initialized' row", () => {

@@ -46,6 +46,7 @@ import { join } from "node:path";
 const REAL_RUNNER = join(import.meta.dir, "..", "run-tests.sh");
 const REAL_RUNNER_TS = join(import.meta.dir, "..", "run-tests.ts");
 const REAL_GLUE = join(import.meta.dir, "..", "lib", "bun-junit-to-meta.ts");
+const REAL_SHARDING = join(import.meta.dir, "..", "lib", "test-sharding.ts");
 
 const scratchRoots: string[] = [];
 
@@ -87,6 +88,7 @@ function driveRunner(nFail: number, nPass: number): { code: number; stdout: stri
   copyFileSync(REAL_RUNNER, join(testsDir, "run-tests.sh"));
   copyFileSync(REAL_RUNNER_TS, join(testsDir, "run-tests.ts"));
   copyFileSync(REAL_GLUE, join(libDir, "bun-junit-to-meta.ts"));
+  copyFileSync(REAL_SHARDING, join(libDir, "test-sharding.ts"));
 
   // Distinct numeric stems keep glob ordering deterministic and avoid collisions
   // between the fail/pass families.

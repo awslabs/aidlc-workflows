@@ -25,7 +25,12 @@ import {
   absorbReviewerKnowledge,
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
-import { projectTier } from "../../core/tools/aidlc-tiers.ts";
+import type { Tier } from "../../core/tools/aidlc-tiers.ts";
+import {
+  modelAgentName,
+  resolveModelPolicy,
+  writeMarkdownAgentSurface,
+} from "../../core/tools/aidlc-model-policy.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
 // frontmatter tier becomes model/variant plus mode, the core Task denial
@@ -49,30 +54,28 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
       `${srcPath}: opencode emission cannot project disallowedTools: ${disallowedMatch[1]}.`,
     );
   }
-  const proj = projectTier(tierMatch[1], "opencode", tierCap); // throws on unknown tier
-  const lines: string[] = [];
-  if (proj.model !== null) lines.push(`model: ${proj.model}`);
-  if (proj.variant !== null) lines.push(`variant: ${proj.variant}`);
-  lines.push("mode: subagent");
-  if (disallowedMatch) lines.push("permission:", "  task: deny");
-  const newFm = fm
-    .split(/\r?\n/)
-    .flatMap((line) => {
-      if (/^disallowedTools:/.test(line)) return [];
-      // Core's harness-neutral turn cap -> opencode's native per-agent key.
-      const maxTurns = line.match(/^maxTurns:\s*(\d+)\s*$/);
-      if (maxTurns) return [`steps: ${maxTurns[1]}`];
-      return /^tier:/.test(line) ? lines : [line];
-    })
-    .join("\n");
-  return (
-    raw
-      .replace(m[0], () => `---\n${newFm}\n---\n`)
-      // Keep persona prose consistent with the renamed frontmatter key: the
-      // harness-neutral body cites its own cap as `maxTurns: <n>`; on this
-      // roster that key is `steps: <n>`.
-      .replace(/`maxTurns: (\d+)`/g, "`steps: $1`")
+  const effective = resolveModelPolicy(
+    null,
+    modelAgentName(srcPath),
+    tierMatch[1] as Tier,
+    "opencode",
+    tierCap,
   );
+  // Core's harness-neutral turn cap -> opencode's native per-agent key.
+  const maxTurns = raw.match(/^maxTurns:\s*(\d+)\s*$/m);
+  return writeMarkdownAgentSurface(raw, effective, {
+    effortKey: "variant",
+    removeKeys: ["disallowedTools", "maxTurns"],
+    afterProjectionLines: [
+      "mode: subagent",
+      ...(maxTurns ? [`steps: ${maxTurns[1]}`] : []),
+      ...(disallowedMatch ? ["permission:", "  task: deny"] : []),
+    ],
+  })
+    // Keep persona prose consistent with the renamed frontmatter key: the
+    // harness-neutral body cites its own cap as `maxTurns: <n>`; on this
+    // roster that key is `steps: <n>`.
+    .replace(/`maxTurns: (\d+)`/g, "`steps: $1`");
 }
 
 function projectActiveMemoryReferences(raw: string): string {
@@ -86,22 +89,21 @@ function projectActiveMemoryReferences(raw: string): string {
 
 function embedShippedEntrypoints(raw: string, distRoot: string): string {
   const marker = "/* @aidlc-shipped-entrypoints@ */ []";
-  const entries = ["hooks", "tools"].flatMap((dir) =>
-    readdirSync(join(distRoot, ".aidlc", dir), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-      .map((entry) => `${dir}/${entry.name}`)
-  ).sort();
+  const entries = ["hooks", "tools"]
+    .flatMap((dir) =>
+      readdirSync(join(distRoot, ".aidlc", dir), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+        .map((entry) => `${dir}/${entry.name}`),
+    )
+    .sort();
   if (!raw.includes(marker)) {
     throw new Error("opencode adapter is missing its shipped-entrypoint emission marker.");
   }
   const rendered = JSON.stringify(entries, null, 2)
     .split("\n")
-    .map((line, index) => index === 0 ? line : `  ${line}`)
+    .map((line, index) => (index === 0 ? line : `  ${line}`))
     .join("\n");
-  return raw.replace(
-    marker,
-    `/* @aidlc-shipped-entrypoints@ */ ${rendered}`,
-  );
+  return raw.replace(marker, `/* @aidlc-shipped-entrypoints@ */ ${rendered}`);
 }
 
 export default function emit(ctx: EmitContext): void {
@@ -157,15 +159,17 @@ export default function emit(ctx: EmitContext): void {
   emissions.push({
     path: join(SHELL, "plugin", "aidlc-opencode-adapter.ts"),
     content: () =>
-      embedShippedEntrypoints(
-        readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
-        distRoot,
+      substituteToken(
+        embedShippedEntrypoints(
+          readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+          distRoot,
+        ),
       ),
   });
 
   // Clean-sweep the shell so a removed persona/command cannot linger. In
   // --check mode the packager supplies an isolated distRoot, then compares the
-  // complete generated tree with the committed distribution.
+  // complete generated tree with the independently generated counterpart.
   rmSync(SHELL, { recursive: true, force: true });
   for (const { path, content } of emissions) {
     mkdirSync(dirname(path), { recursive: true });

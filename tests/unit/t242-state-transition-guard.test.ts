@@ -111,6 +111,9 @@ describe("t242 state-transition ownership guard", () => {
           `cd /tmp && env AIDLC_TEST=1 bun run ".claude/tools/aidlc-state.ts" ${verb} fixture`,
         ),
       ).toBe(verb);
+      expect(directStateTransition(`aidlc state ${verb} fixture`)).toBeNull();
+      expect(directStateTransition(`/opt/aidlc/bin/aidlc engine state ${verb} fixture`))
+        .toBe(verb);
     }
   });
 
@@ -146,6 +149,9 @@ describe("t242 state-transition ownership guard", () => {
       "payload='first line\nbun .claude/tools/aidlc-state.ts reject feasibility\nlast line'",
       "run_transition() {\n  bun .claude/tools/aidlc-state.ts advance feasibility\n}",
       "function run_transition {\n  bun .claude/tools/aidlc-state.ts skip feasibility\n}",
+      "echo aidlc state approve feasibility",
+      "printf '%s' 'aidlc engine state reject feasibility'",
+      "cat <<'EOF'\naidlc state advance feasibility\nEOF",
     ]) {
       expect(directStateTransition(command), command).toBeNull();
     }
@@ -162,6 +168,15 @@ describe("t242 state-transition ownership guard", () => {
         `result="$(bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result completed)"`,
       ),
     ).toBe(true);
+    for (const command of [
+      "aidlc engine orchestrate report --stage feasibility --result completed",
+      "aidlc engine state approve feasibility",
+      "aidlc engine jump execute --target application-design",
+      "/opt/aidlc/bin/aidlc engine orchestrate park",
+    ]) {
+      expect(isLifecycleBoundaryCommand(command), command).toBe(true);
+    }
+    expect(isLifecycleBoundaryCommand("echo aidlc report --result completed")).toBe(false);
   });
 
   test("delegated agents cannot invoke workflow lifecycle or routing entrypoints", () => {
@@ -266,6 +281,15 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["bun .claude/tools/aidlc.ts intent create", "aidlc.ts intent create"],
       [
+        "bun .claude/tools/aidlc.ts intent archive other-intent --reason done",
+        "aidlc.ts intent archive",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent unarchive other-intent",
+        "aidlc-utility.ts intent unarchive",
+      ],
+      ["aidlc intent archive other-intent", "aidlc intent archive"],
+      [
         "bun .claude/tools/aidlc.ts space create other-space",
         "aidlc.ts space create",
       ],
@@ -282,8 +306,8 @@ describe("t242 state-transition ownership guard", () => {
         "aidlc-utility.ts space-create",
       ],
       [
-        "bun .claude/tools/aidlc-utility.ts intent-create --scope feature",
-        "aidlc-utility.ts intent-create",
+        "bun .claude/tools/aidlc.ts engine intent create --scope feature",
+        "aidlc.ts engine intent create",
       ],
       ["aidlc next --resume", "aidlc next"],
       ["aidlc continue steering-token", "aidlc continue"],
@@ -674,7 +698,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stdout.trim()).toBe("feasibility");
   });
 
-  test("non-initialization stages delegate lifecycle transitions and Learn writes through §13", () => {
+  test("non-initialization stages delegate lifecycle transitions and Learn writes through the conditional module", () => {
     expect(NON_INITIALIZATION_STAGES).toHaveLength(30);
     for (const path of NON_INITIALIZATION_STAGES) {
       const body = readFileSync(path, "utf-8");
@@ -683,7 +707,7 @@ describe("t242 state-transition ownership guard", () => {
 
       expect(body, label).toMatch(
         new RegExp(
-          String.raw`aidlc-orchestrate\.ts report\s+--stage\s+${slug}\b`,
+          String.raw`(?:aidlc-orchestrate\.ts|engine orchestrate) report\s+--stage\s+${slug}\b`,
         ),
       );
       expect(body, label).not.toMatch(DIRECT_LIFECYCLE_VERB);
@@ -691,11 +715,11 @@ describe("t242 state-transition ownership guard", () => {
       expect(body, label).not.toMatch(DIRECT_STATE_HEADING);
       expect(body, label).not.toMatch(DIRECT_PHASE_BOOKKEEPING);
 
-      // Stage files carry only the compact pointer; §13 owns routing and the
-      // aidlc-learnings.ts tool owns writes. No retired direct-write target may
-      // return to a stage body.
-      expect(body, label).toContain("stage-protocol.md §13");
-      expect(body, label).toContain("aidlc-learnings.ts");
+      // Stage files carry only the conditional module pointer; that module owns
+      // routing and the learnings tool owns writes. No retired direct-write
+      // target may return to a stage body.
+      expect(body, label).toContain("stage-protocol-learnings.md");
+      expect(body, label).toMatch(/`directive\.protocol_modules`\s+lists\s+`learnings`/);
       expect(body, label).not.toContain("memory/phases/<phase>.md");
       expect(body, label).not.toContain("memory/<org|team|project>.md");
       expect(body, label).not.toContain(
@@ -713,16 +737,16 @@ describe("t242 state-transition ownership guard", () => {
       readFileSync(join(STAGES_ROOT, phase, `${slug}.md`), "utf-8");
 
     expect(stage("inception", "reverse-engineering")).toContain(
-      'bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "<reason>"',
+      '{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason "<reason>"',
     );
     expect(stage("inception", "user-stories")).toContain(
-      'bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage user-stories --result skipped --reason "<reason>"',
+      '{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason "<reason>"',
     );
     expect(stage("inception", "requirements-analysis")).toContain(
-      "bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add user-stories",
+      "{{INVOKE}} engine recompose --add user-stories",
     );
     expect(stage("inception", "domain-design")).toContain(
-      "bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add units-generation",
+      "{{INVOKE}} engine recompose --add units-generation",
     );
   });
 });

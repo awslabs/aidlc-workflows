@@ -1,7 +1,7 @@
 ---
 id: type-check
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-type-check.ts
+command: {{INVOKE}} engine sensor-type-check
 default_severity: advisory
 description: Wraps the project's configured type-checker (tsc by default for v0.5.0); fires on TS/TSX code outputs
 category: code-quality
@@ -29,7 +29,7 @@ Echoes Fowler's "type checkers" example from the harness-engineering article.
 ## Failure mode
 
 Emits `SENSOR_FAILED` and writes detail to
-`aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-sensors/<stage-slug>/type-check-<fire-id>.md`,
+`aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-engine/sensors/<stage-slug>/type-check-<fire-id>.md`,
 where the space and intent come from the active cursors. The fire id is the
 8-hex correlator from the `SENSOR_FIRED` row in the active record's
 `audit/<host>-<clone-id>.md` shard. The detail contains the type-checker's

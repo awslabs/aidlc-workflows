@@ -134,7 +134,7 @@ interface CliResult {
  */
 function runDoctor(rulesDirPath: string, stageGraph: string = SEED_GRAPH): CliResult {
   const proj = projDir();
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: {
       ...process.env,

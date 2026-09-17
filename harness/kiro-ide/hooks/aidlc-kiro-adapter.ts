@@ -55,7 +55,8 @@
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
 //     fingerprint/decision/answer ownership after canonical record writes,
-//     and bind approval to the directive-issued workspace source floor.
+//     and bind approval to the planned workspace source the questions file
+//     records.
 //   - session-start: retain the modern session_id or derive a legacy identity
 //     from the measured IDE host-instance environment.
 //   - stop: prefer the event-local modern session_id; use retained identity for
@@ -103,6 +104,9 @@ import {
   sessionsDir,
   splitKiroCommandArgs,
   stateFilePath,
+  UNBINDABLE_FINGERPRINT,
+  workspaceSourceState,
+  writeWorkspaceSourceSnapshot,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -165,12 +169,38 @@ const LEGACY_PLANNING_WRITE_TOOLS = new Set([
   "str_replace",
 ]);
 const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
+  "read",
   "fs_read",
+  "read_file",
+  "read_files",
+  "read_code",
+  "list_directory",
   "file_search",
+  "glob",
   "grep_search",
+  "grep",
+  "web_fetch",
+  "web_search",
+  // `disclose_context` activates skills or steering files into context. Kiro
+  // documents it under Context tools beside `introspect` and `knowledge` and
+  // gives it no write surface; anything an activated skill then asks for is
+  // still gated by its own PreToolUse call, and approval authority comes from
+  // the active directive and disk receipts, never from activated context. So it
+  // cannot mutate the workspace during a Plan Approval window, while denying it
+  // stopped a Windows customer mid-workflow (#1039).
+  "disclose_context",
   "thinking",
   "todo_list",
 ]);
+
+// Kiro IDE names its shell tool `execute_bash` on POSIX hosts, `execute_pwsh`
+// on Windows, and `shell` in some IDE generations. Every shell decision in this
+// adapter (terminal guard, Plan Approval recovery routing, the forward to the
+// core guard as `Bash`) goes through this one predicate so the three names
+// cannot drift apart again.
+function isKiroShellTool(toolName: string): boolean {
+  return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
+}
 
 function upsertTestingContract(plan: string, rendered: string): string {
   const section = /(^|\n)## Testing Contract[^\n]*\n[\s\S]*?(?=\n## |\s*$)/m;
@@ -182,13 +212,23 @@ function upsertTestingContract(plan: string, rendered: string): string {
   return `${plan.trimEnd()}\n\n${rendered}`;
 }
 
+function legacyToolCommand(
+  tool: "aidlc-log.ts" | "aidlc-orchestrate.ts",
+  args: string[],
+): string[] {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  return executable
+    ? [executable, "engine", tool.replace(/^aidlc-|\.ts$/g, ""), ...args]
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args];
+}
+
 function runLegacyPlanTool(
   projectDir: string,
   tool: "aidlc-log.ts",
   args: string[],
 ): { code: number; stdout: string; stderr: string } {
   const result = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args],
+    legacyToolCommand(tool, args),
     {
       cwd: projectDir,
       stdout: "pipe",
@@ -210,6 +250,11 @@ function legacyPlanApprovalSessionId(): string {
     "legacy Plan Approval requires the Kiro IDE host identity (VSCODE_IPC_HOOK or VSCODE_PID)",
   );
 }
+
+// Thrown only once Plan Approval mediation is engaged for a canonical planning
+// write (the Testing Contract, decision, or answer step failed). Environment
+// preconditions that fail before any mediation is in play are plain errors.
+class LegacyPlanApprovalMediationError extends Error {}
 
 function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
   if (ide.sessionId?.trim()) return ide.sessionId.trim();
@@ -255,11 +300,7 @@ function runLegacyRecoveryNext(
   let args = ["next", "--project-dir", projectDir];
   for (let step = 0; step < 64; step++) {
     const result = Bun.spawnSync(
-      [
-        process.execPath,
-        join(HOOKS_DIR, "..", "tools", "aidlc-orchestrate.ts"),
-        ...args,
-      ],
+      legacyToolCommand("aidlc-orchestrate.ts", args),
       {
         cwd: projectDir,
         stdout: "pipe",
@@ -421,7 +462,7 @@ function processLegacyPlanApprovalWrite(
     const instructions = readFileSync(instructionsPath, "utf-8");
     const contract = resolveTestingPosture(projectDir);
     if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
-      throw new Error(
+      throw new LegacyPlanApprovalMediationError(
         "legacy Plan Approval mediation requires the current Testing Contract in code-generation-plan.md",
       );
     }
@@ -440,7 +481,28 @@ function processLegacyPlanApprovalWrite(
           /^(\[Answer\]:)/m,
           `[Approval Fingerprint]: ${fingerprint}\n$1`,
         );
-    writeFileSync(questionsPath, withFingerprint, "utf-8");
+    // Core refuses a decision whose Plan Approval section lacks the planned
+    // source. The legacy channel cannot run the fingerprint command itself, so
+    // the adapter records the live workspace source here, falling back to the
+    // unbindable marker when the workspace has no source fingerprint rather
+    // than refusing the whole mediation. The listing behind the source is kept
+    // exactly as the fingerprint command keeps it, so a later drift can be told
+    // to the human as the files that changed.
+    const plannedState = workspaceSourceState(projectDir);
+    if (plannedState !== null) {
+      writeWorkspaceSourceSnapshot(projectDir, "code-generation", plannedState);
+    }
+    const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    const withPlannedSource = /^\[Planned Source\]:.*$/m.test(withFingerprint)
+      ? withFingerprint.replace(
+          /^\[Planned Source\]:.*$/m,
+          `[Planned Source]: ${plannedSource}`,
+        )
+      : withFingerprint.replace(
+          /^(\[Answer\]:)/m,
+          `[Planned Source]: ${plannedSource}\n$1`,
+        );
+    writeFileSync(questionsPath, withPlannedSource, "utf-8");
     const decision = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
       "decision",
       "--stage",
@@ -462,7 +524,7 @@ function processLegacyPlanApprovalWrite(
       ...targetArgs,
     ]);
     if (decision.code !== 0) {
-      throw new Error(
+      throw new LegacyPlanApprovalMediationError(
         `legacy Plan Approval decision mediation failed: ${decision.stderr.trim() || decision.stdout.trim()}`,
       );
     }
@@ -495,7 +557,7 @@ function processLegacyPlanApprovalWrite(
     ...targetArgs,
   ]);
   if (recorded.code !== 0) {
-    throw new Error(
+    throw new LegacyPlanApprovalMediationError(
       `legacy Plan Approval answer mediation failed: ${recorded.stderr.trim() || recorded.stdout.trim()}`,
     );
   }
@@ -920,7 +982,7 @@ if (target === "verb-intercept") {
 if (target === "terminal-command-guard") {
   if ((ide.malformedFields?.length ?? 0) > 0) return 0;
   const tool = ide.toolName ?? "";
-  if (tool !== "execute_bash" && tool !== "execute_pwsh" && tool !== "shell") {
+  if (!isKiroShellTool(tool)) {
     return 0;
   }
   const rawCommand = typeof ide.toolArgs?.command === "string"
@@ -963,10 +1025,10 @@ if (target === "terminal-command-guard") {
 // shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
 // human's turn.
 //
-// The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
 // what makes the Stop hook's conversational carve-out work on this harness. The
 // IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine-touch instead.
+// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
 // Both writes ride this one seam so the ledger and the marker can never
 // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 // --- block: the preToolUse human-presence floor ---
@@ -1262,7 +1324,7 @@ function buildForward(): Forward {
         } catch {
           // Missing host identity remains fail closed below.
         }
-        if (toolName === "execute_bash") {
+        if (isKiroShellTool(toolName)) {
           const recovery = runLegacyRecoveryNext(
             projectDir,
             recoverySession,
@@ -1287,7 +1349,7 @@ function buildForward(): Forward {
           (
             Object.keys(toolArgs).length === 0 ||
             (
-              toolName !== "execute_bash" &&
+              !isKiroShellTool(toolName) &&
               paths.length === 0
             )
           )
@@ -1300,7 +1362,7 @@ function buildForward(): Forward {
           (!state.active || state.target === null) &&
           writeWindows.length > 0
         ) {
-          if (toolName === "execute_bash") {
+          if (isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1334,7 +1396,7 @@ function buildForward(): Forward {
           }
         }
         if (interruptedWrite && !state.approved) {
-          if (toolName === "execute_bash") {
+          if (isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1359,7 +1421,7 @@ function buildForward(): Forward {
               ?.trim()
               .toLowerCase()
               .replace(/\s+/g, "-") === "code-generation";
-          if (durableCodeGeneration && toolName === "execute_bash") {
+          if (durableCodeGeneration && isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1379,7 +1441,7 @@ function buildForward(): Forward {
           }
         }
         if (state.active && state.violated) {
-          if (toolName === "execute_bash") {
+          if (isKiroShellTool(toolName)) {
             const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
             return {
               hook: "__legacy_plan_approval_block__",
@@ -1396,12 +1458,20 @@ function buildForward(): Forward {
             },
           };
         }
-        if (state.active && !state.approved && !state.sourceFloorValid) {
+        if (
+          state.active &&
+          !state.approved &&
+          !state.sourceFloorValid &&
+          !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+        ) {
+          // The canonical planning writes stay open: re-presenting the plan is
+          // the remedy, and it is a questions-file write. Blocking it here made
+          // source drift before approval a dead end on this harness.
           return {
             hook: "__legacy_plan_approval_block__",
             input: {
               reason:
-                "Plan Approval fallback blocked this tool because workspace source changed after the Code Generation directive. Revert pre-approval source changes before continuing.",
+                "Plan Approval fallback blocked this tool because workspace source changed after the plan's source was recorded. Re-present the plan: write the Plan Approval section again with a blank [Answer]: so the write hook refreshes [Planned Source] and re-issues the decision, then approve.",
             },
           };
         }
@@ -1444,7 +1514,7 @@ function buildForward(): Forward {
           !state.approved &&
           (
             toolName === "" ||
-            toolName === "execute_bash" ||
+            isKiroShellTool(toolName) ||
             toolName === "fs_append"
           )
         ) {
@@ -1502,7 +1572,11 @@ function buildForward(): Forward {
               };
             }
           }
-          if (Object.keys(toolArgs).length > 0 && toolName !== "execute_bash") {
+          // Only an active Code Generation window can refuse an unattributable
+          // mutation. With no workflow this adapter has nothing to protect, and
+          // denying here is what kept a Windows shell (`execute_pwsh`) from ever
+          // running `aidlc-orchestrate.ts next` to start one.
+          if (state.active && Object.keys(toolArgs).length > 0 && !isKiroShellTool(toolName)) {
             return {
               hook: "__legacy_plan_approval_block__",
               input: {
@@ -1512,8 +1586,9 @@ function buildForward(): Forward {
             };
           }
           // Legacy planning and post-human answer recording remain usable. The
-          // directive-issued source floor prevents any workspace mutation in
-          // this opaque window from being authorized by the later receipt.
+          // planned-source binding prevents any workspace mutation in this
+          // opaque window from being authorized by the later receipt: the
+          // answer refuses when live source differs from the recorded tag.
           return null;
         }
       }
@@ -1533,7 +1608,7 @@ function buildForward(): Forward {
           },
         };
       }
-      if (toolName === "execute_bash") {
+      if (isKiroShellTool(toolName)) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
           input: {
@@ -1836,7 +1911,7 @@ function buildForward(): Forward {
       //
       // So the core hook still runs and its side effects are what matter here:
       // the `continue-workflow.drops` carve-out record and the no-progress
-      // counter under `.aidlc-stop-hook/`. Its `{"decision":"block"}` stdout is
+      // counter under `.aidlc-engine/stop-hook/`. Its `{"decision":"block"}` stdout is
       // produced and then discarded by the host. Forwarding-loop enforcement on
       // the IDE therefore rests on the conductor's own Stop protocol, NOT on
       // this hook. (An earlier revision of this comment claimed the block
@@ -1851,7 +1926,7 @@ function buildForward(): Forward {
       // AUTONOMOUS_BLOCK_CAP=8), not the fixed 8 a still earlier revision promised.
       //
       // The absent transcript no longer leaves the conversational carve-out inert:
-      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // the core hook falls back to the `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch`
       // mtime comparison, and the `record-human-turn` target above writes the
       // former. On this harness that changes which record
       // `continue-workflow.drops` gets and whether the counter advances — not
@@ -1892,7 +1967,7 @@ function runCore(
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
     : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
@@ -1931,6 +2006,7 @@ if (fwd.hook === "__audit_and_sensors__") {
     filePath &&
     Object.keys(ide.toolArgs ?? {}).length === 0
   ) {
+    let mediationFailure: string | null = null;
     try {
       processLegacyPlanApprovalWrite(
         projectDir,
@@ -1938,13 +2014,31 @@ if (fwd.hook === "__audit_and_sensors__") {
         ide.sessionId?.trim() || legacyPlanApprovalSessionId(),
       );
     } catch (error) {
-      recordHookDrop(
-        projectDir,
-        "kiro-adapter",
-        `legacy Plan Approval mediation: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+      if (error instanceof LegacyPlanApprovalMediationError) {
+        mediationFailure = error.message;
+      } else {
+        // An environment precondition (no host identity) failed before any
+        // mediation was in play; the write is not a Plan Approval write.
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `legacy Plan Approval mediation: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    if (mediationFailure !== null) {
+      // The write already happened; the two advisory hooks below still ride the
+      // event. The mediation failure itself is surfaced as a visible block
+      // reason rather than a silent drop, because the legacy write window stays
+      // latched until the human recovers and a silent exit 0 hid why.
+      runCore("aidlc-write-audit-log.ts", fwd.input);
+      runCore("aidlc-run-sensors.ts", fwd.input);
+      process.stderr.write(
+        `Legacy Plan Approval mediation did not complete for this write: ${mediationFailure}\n`,
       );
+      return 2;
     }
   }
   // Two core hooks ride the same write event, in audit-then-sensors order

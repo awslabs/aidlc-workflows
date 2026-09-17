@@ -88,10 +88,17 @@ interface RunResult {
   out: string;
 }
 
-function runNext(proj: string, args: string[]): RunResult {
+function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
   const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     cwd: proj,
+    env: {
+      ...process.env,
+      AIDLC_DISABLE_SENSORS: "0",
+      AIDLC_DISABLE_LEARNINGS: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+      ...env,
+    },
   });
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -173,10 +180,37 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
-    expect(m).toContain("intent-create --scope bugfix");
+    expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
     expect(m).toContain(`(${costClause(bf)})`);
     expect(m).not.toContain("per unit of work");
+  });
+
+  test("classic creation preview omits the off clause when summary confirmation is enabled", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const result = runNext(proj, [
+      "--scope", "classic", "--summary-confirmation", "on", "add login support",
+    ]);
+    expect(result.rc, result.out).toBe(0);
+    const d = directiveOf(result.out);
+    expect(d.kind).toBe("print");
+    const message = String(d.message);
+    expect(message).toContain("--summary-confirmation on");
+    // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
+    expect(message).not.toContain("; no ");
+  });
+
+  test("feature creation preview discloses the environment sensor kill switch", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const result = runNext(proj, ["--scope", "feature", "--sensors", "on"], {
+      AIDLC_DISABLE_SENSORS: "1",
+    });
+    expect(result.rc, result.out).toBe(0);
+    const d = directiveOf(result.out);
+    expect(d.kind).toBe("print");
+    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors");
   });
 
   for (const scope of ["classic", "feature"]) {
@@ -189,12 +223,19 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(expected.perUnitStages).toBeGreaterThan(0);
       expect(String(d.message)).toContain(costClause(expected));
       expect(String(d.message)).toContain("per unit of work");
+      if (scope === "classic") {
+        expect(String(d.message)).toContain(
+          "; no summary confirmation",
+        );
+      } else {
+        expect(String(d.message)).not.toContain("; no ");
+      }
     });
   }
 });
 
 describe("t214 scope-change stdout carries the Approval gates line", () => {
-  test("scope-change --scope mvp prints Stages in scope AND Approval gates", () => {
+  test("scope change --scope mvp prints Stages in scope AND Approval gates", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);

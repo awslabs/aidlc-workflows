@@ -186,7 +186,7 @@ file. The lead alone updates the four declared artifacts:
 After integration, emit `PRACTICES_DISCOVERED`:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-state.ts practices-event \
+{{INVOKE}} engine state practices-event \
   --type discovered \
   --field "Sources Scanned: <list>" \
   --field "Drafts: team-practices.md, discovered-rules.md"
@@ -194,10 +194,10 @@ bun {{HARNESS_DIR}}/tools/aidlc-state.ts practices-event \
 
 ### Step 6: Learnings + Affirmation Gate
 
-Run the section 13 learnings ritual, then:
+Run the section 13 learnings ritual only when `directive.protocol_modules` lists `learnings`, then follow the affirmation gate below. When the module is absent, go directly to that gate:
 
 1. Open the gate before the question:
-   `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage
+   `{{INVOKE}} engine orchestrate report --stage
    practices-discovery --result awaiting-approval`.
 2. Do not log the affirmation gate with `aidlc-log.ts decision` or
    `aidlc-log.ts answer`; the lifecycle `report` calls own its audit events.
@@ -224,7 +224,7 @@ Run the section 13 learnings ritual, then:
 The orchestrator does not edit active-space memory directly. Run:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-state.ts practices-promote \
+{{INVOKE}} engine state practices-promote \
   --team-practices <record>/inception/practices-discovery/team-practices.md \
   --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
   --affirming-user "<user>"
@@ -252,7 +252,7 @@ After Step 7 prints `{"emitted":"PRACTICES_AFFIRMED",...}` and exits 0:
 
 1. Do not emit `PRACTICES_AFFIRMED` again.
 2. Commit the held approval:
-   `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage
+   `{{INVOKE}} engine orchestrate report --stage
    practices-discovery --result approved --user-input "Approve"`.
 
 Use the stage-protocol.md completion template:
@@ -276,9 +276,8 @@ workspace do not count as missing coverage.
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

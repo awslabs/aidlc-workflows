@@ -60,6 +60,7 @@ import {
   checkSummaryConfirmationEvidence,
   findStageBySlug,
   readAllAuditShards,
+  readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
@@ -249,6 +250,107 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     // Auto-advanced off feasibility.
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
+
+  // The picker returns the "(Recommended)" decorator added to the choice label.
+  // Matching may remove it, but the approval receipt must retain the human's reply.
+  test("B2: approve COMMITS when the reply carries the (Recommended) decorator", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", slug]);
+    const r = guarded(proj, [
+      "approve",
+      slug,
+      "--user-input",
+      "Approve (Recommended)",
+    ]);
+    expect(r.rc, r.out).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(
+      readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
+    ).toContain("**User Input**: Approve (Recommended)");
+    expect(field(proj, "Current Stage")).not.toBe(slug);
+  });
+
+  test.each([2, 3])(
+    "decorated Accept as-is respects the revision limit at count %i",
+    (revisionCount) => {
+      const slug = field(proj, "Current Stage");
+      const reply = "Accept as-is (Recommended)";
+      expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+
+      if (revisionCount < 3) {
+        const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
+        expect(direct.rc, direct.out).not.toBe(0);
+        const refusal = JSON.parse(direct.out);
+        expect(refusal.error).toContain("did not match one of the offered choices");
+        expect(refusal.error).toContain(`the reply ${JSON.stringify(reply)}`);
+      }
+
+      const report = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        reply,
+      ]);
+      expect(report.rc, report.out).toBe(0);
+      if (revisionCount < 3) {
+        const directive = JSON.parse(report.out);
+        expect(directive.kind).toBe("error");
+        expect(directive.message).toContain("did not match an offered choice");
+        expect(directive.message).toContain(`received reply ${JSON.stringify(reply)}`);
+        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+        expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+      } else {
+        expect(report.out).toContain('"kind":"done"');
+        expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+        expect(
+          readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
+        ).toContain(`**User Input**: ${reply}`);
+        expect(field(proj, "Current Stage")).not.toBe(slug);
+      }
+    },
+  );
+
+  test.each(["(Recommended)", "Approve (Recommended) extra", undefined])(
+    "state and report refuse an unoffered approval reply: %s",
+    (reply) => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      const inputArgs = reply === undefined ? [] : ["--user-input", reply];
+      const displayedReply = JSON.stringify(reply ?? "(empty)");
+
+      const direct = guarded(proj, ["approve", slug, ...inputArgs]);
+      expect(direct.rc, direct.out).not.toBe(0);
+      const refusal = JSON.parse(direct.out);
+      expect(refusal.error).toContain("did not match one of the offered choices");
+      expect(refusal.error).toContain(`the reply ${displayedReply}`);
+
+      const report = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        ...inputArgs,
+      ]);
+      expect(report.rc, report.out).toBe(0);
+      const directive = JSON.parse(report.out);
+      expect(directive.kind).toBe("error");
+      expect(directive.message).toContain("did not match an offered choice");
+      expect(directive.message).toContain(`received reply ${displayedReply}`);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    },
+  );
 
   // --- Scenario C: CASCADE (load-bearing) ------------------------------------
   //
@@ -813,8 +915,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
 
-    test("a redundant approval answer is a no-op and report still approves", () => {
+    test("a redundant decorated approval answer is a no-op and report still approves", () => {
       const slug = field(proj, "Current Stage");
+      const reply = "Approve (Recommended)";
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
@@ -824,7 +927,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--stage",
         slug,
         "--details",
-        "Approve",
+        reply,
       ]);
       expect(answer.rc).toBe(0);
       expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
@@ -837,11 +940,15 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--result",
         "approved",
         "--user-input",
-        "Approve",
+        reply,
       ]);
       expect(approve.rc).toBe(0);
       expect(approve.out).toContain('"kind":"done"');
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(
+        readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
+      ).toContain(`**User Input**: ${reply}`);
+      expect(field(proj, "Current Stage")).not.toBe(slug);
     });
 
     test("a paraphrased approval is a no-op and report refuses it", () => {
@@ -915,7 +1022,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--stage",
         slug,
         "--details",
-        "Approve",
+        "Approve (Recommended)",
       ]);
       expect(answer.rc).not.toBe(0);
       expect(answer.out).toContain("Cannot record this approval choice");
@@ -927,12 +1034,15 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--result",
         "approved",
         "--user-input",
-        "fabricated approval",
+        "Approve (Recommended)",
       ]);
       expect(approve.rc).toBe(0);
       expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
+      expect(approve.out).toContain("no new human reply has been received");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+        `- [?] ${slug}`,
+      );
     });
 
     test("rejection with NO human turn refuses without mutating state", () => {
@@ -946,7 +1056,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--result",
         "rejected",
         "--user-input",
-        "Request Changes",
+        "Request Changes (Recommended)",
         "--reason",
         "tighten the schema",
       ]);
@@ -997,8 +1107,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });
 
-    test("a redundant rejection answer with a human turn is a no-op and report still rejects", () => {
+    test("a redundant decorated rejection answer with a human turn is a no-op and report still rejects", () => {
       const slug = field(proj, "Current Stage");
+      const reply = "Request Changes (Recommended)";
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
@@ -1008,7 +1119,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--stage",
         slug,
         "--details",
-        "Request Changes: tighten the schema",
+        `${reply}: tighten the schema`,
       ]);
       expect(answer.rc).toBe(0);
       expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
@@ -1020,12 +1131,17 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--result",
         "rejected",
         "--user-input",
-        "Request Changes",
+        reply,
         "--reason",
         "tighten the schema",
       ]);
       expect(reject.rc).toBe(0);
+      expect(reject.out).not.toContain('"kind":"error"');
       expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+      expect(field(proj, "Revision Count")).toBe("1");
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+        `- [R] ${slug}`,
+      );
     });
 
     test("a gate-word-prefixed answer to a pending non-gate question is recorded exactly", () => {

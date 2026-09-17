@@ -51,7 +51,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -480,6 +480,32 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 11 scopes)", () => {
 // =============================================================================
 
 describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated CLI)", () => {
+  test("resolve creates its engine directory on first write and observers create nothing", () => {
+    const project = mkdtempSync(join(tmpdir(), "t66-plan-"));
+    scratch.push(project);
+    const output = join(project, "aidlc", "spaces", "default", "intents", ".aidlc-engine", "plan.json");
+    const env = {
+      ...process.env,
+      AIDLC_GRAPH_RESOLVE: "1",
+      AIDLC_PROJECT_DIR: project,
+      AIDLC_PLAN_PATH: undefined,
+    };
+    const args = [GRAPH_TS, "resolve", "feature"];
+    const probe = spawnSync(BUN, args, {
+      env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" },
+      encoding: "utf8",
+    });
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain("engine observer");
+    expect(existsSync(join(project, "aidlc"))).toBe(false);
+    const write = spawnSync(BUN, args, { env, encoding: "utf8" });
+    expect(write.status, write.stderr).toBe(0);
+    expect(write.stdout.trim()).toBe(output);
+    expect(readFileSync(output, "utf8").trimEnd()).toBe(
+      readFileSync(join(PARITY_DIR, "feature.json"), "utf8").trimEnd(),
+    );
+  });
+
   for (const scope of SCOPES) {
     test(`resolve parity (frontmatter-derived grid == legacy): ${scope} byte-exact`, () => {
       const res = spawnSync(BUN, [GRAPH_TS, "resolve", scope, "--stdout"], {
@@ -553,7 +579,7 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 11 scopes)",
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 11 scopes (classic/workshop ~26 steps)
+  }, 120000); // many sequential CLI spawns across 11 scopes (workshop ~26 steps, classic 18)
 });
 
 // =============================================================================

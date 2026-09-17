@@ -53,8 +53,10 @@ describe("appendUnderHeading", () => {
   // .sh #5: Inserts new content before the next ## heading
   test("inserts content before the next ## heading", () => {
     const c = "## Mandated\n\n## Forbidden\n";
+    // A blank line separates the inserted content from the following heading:
+    // single-`\n`-terminated content must not abut the next `## ` heading.
     expect(appendUnderHeading(c, "## Mandated", "ALWAYS test\n")).toBe(
-      "## Mandated\n\nALWAYS test\n## Forbidden\n",
+      "## Mandated\n\nALWAYS test\n\n## Forbidden\n",
     );
   });
 
@@ -80,6 +82,24 @@ describe("appendUnderHeading", () => {
     c = appendUnderHeading(c, "## Mandated", "rule\n");
     const count = c.split("\n").filter((l) => l === "rule").length;
     expect(count).toBe(2);
+  });
+
+  // Regression (#1075): a bullet written under `## Decided` in the shipped
+  // project.md shape must be separated from the following `## Scope Overrides`
+  // heading by a blank line — the section writer must not abut the heading.
+  test("separates an inserted bullet from the following heading with a blank line", () => {
+    const projectMd =
+      "## Decided\n\n<!-- decisions -->\n\n## Scope Overrides\n\n<!-- overrides -->\n";
+    const out = appendUnderHeading(
+      projectMd,
+      "## Decided",
+      "- DECIDED: use Result<T,E> (learned 2026-09-09) <!-- cid:x -->\n",
+    );
+    expect(out).toContain(
+      "- DECIDED: use Result<T,E> (learned 2026-09-09) <!-- cid:x -->\n\n## Scope Overrides",
+    );
+    // No spurious double-blank (only one blank line separates them).
+    expect(out).not.toContain("<!-- cid:x -->\n\n\n## Scope Overrides");
   });
 });
 

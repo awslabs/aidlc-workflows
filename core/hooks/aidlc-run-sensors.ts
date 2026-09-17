@@ -10,7 +10,7 @@
 //
 // Coexists with `aidlc-write-audit-log.ts` under the same Write|Edit
 // matcher; recursion guard skips writes to the active record's
-// `.aidlc-sensors/` directory.
+// `.aidlc-engine/sensors/` directory.
 //
 // Exit-code contract (G5): always exit 0. Sensor verdicts surface
 // through the dispatcher's audit rows (SENSOR_FIRED + paired
@@ -28,11 +28,15 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  LEGACY_SENSORS_DIR,
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
+  resolveCeremony,
+  resolveProjectFlag,
   resolveProjectDirFromHook,
   sensorsDir,
+  sensorsReadDir,
   stateFilePath,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
@@ -47,7 +51,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 // avoid patching the production source tree. `Number(undefined) || N`
 // pattern handles unset / empty / unparseable equally.
 const SUBPROCESS_TIMEOUT_MS =
-  Number(process.env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000;
+  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || 90_000;
 
 // Health-dir for the heartbeat (run-sensors.last). Read by the future
 // hook-health doctor.
@@ -79,21 +83,15 @@ const filePath = isAbsolute(rawFilePath)
   ? rawFilePath
   : join(projectDir, rawFilePath);
 
-// Step 5 — Recursion guard. Skip writes to the dispatcher's detail-file
-// directory. Post-workspace-move that dir re-roots per intent
-// (<record>/.aidlc-sensors/ via sensorsDir(projectDir, intent, space)); the
-// active-intent resolution is implicit in sensorsDir's bare projectDir call
-// (it resolves the active record root). Keep the flat `aidlc-docs/.aidlc-sensors/`
-// literal as the transitional flat-legacy fallback (retired in P9). Dispatcher
-// uses direct fs I/O so the loop isn't reachable today; defensive depth for
-// future LLM sensors that may emit findings via Write.
-const sensorsLeaf = sensorsDir(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
+// Step 5 - Recursion guard. Cover new output and the readable legacy findings
+// directory, including the older flat aidlc-docs location. Writers always use
+// sensorsDir; resolving a legacy read never creates or moves either directory.
+const sensorsLeaves = [sensorsDir(projectDir), sensorsReadDir(projectDir)]
+  .map((path) => path.replace(/\\/g, "/").replace(/\/$/, ""));
 const filePathNorm = filePath.replace(/\\/g, "/");
 if (
-  filePathNorm === sensorsLeaf ||
-  filePathNorm.startsWith(`${sensorsLeaf}/`) ||
-  filePath.includes("aidlc-docs/.aidlc-sensors/") ||
-  filePath.includes("aidlc-docs\\.aidlc-sensors\\")
+  sensorsLeaves.some((leaf) => filePathNorm === leaf || filePathNorm.startsWith(`${leaf}/`)) ||
+  filePathNorm.includes(`aidlc-docs/${LEGACY_SENSORS_DIR}/`)
 ) {
   return 0;
 }
@@ -116,6 +114,11 @@ try {
 } catch {
   return 0;
 }
+
+// Scope and intent policy disable automatic sensors without leaving health
+// markers or the first-fire banner. Explicit sensor fire remains available.
+const scope = getField(stateContent, "Scope");
+if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 
 // Step 8 — Heartbeat (G3). The future hook-health doctor reads this
 // file's mtime to detect silent-hook failure. Placement: AFTER

@@ -29,7 +29,7 @@
 //     session skills — Copilot discovers project skills there, so the
 //     standard <harnessDir>/skills/ runner-gen step is skipped).
 //   - Copilot auto-reads the project-root AGENTS.md (both surfaces).
-//   - An .aidlc engine dir is ALSO what the opencode harness ships; an
+//   - An .aidlc runtime dir is ALSO what the opencode harness ships; an
 //     install is disambiguated by its wiring files (.github/hooks/aidlc.json
 //     + .aidlc/hooks/aidlc-copilot-adapter.ts here vs .opencode/plugin/
 //     there) — the doctor probes exactly that.
@@ -40,11 +40,38 @@ import emit from "./emit.ts";
 
 const manifest: HarnessManifest = {
   name: "copilot",
+  productName: "GitHub Copilot",
+  configNextStep: "start Copilot CLI or VS Code agent mode, then run `/aidlc --doctor`",
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",
+  rootIntegrations: [
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:f52e6097d36c2e5bc199a2529469a4c6e7c507f7960f94a0b2b46f9aeee60e56",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
+          "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
+        ],
+      },
+    },
+  ],
 
-  // Same core projection as claude, into .aidlc/. The persona .md files ARE
+  // Same core projection as claude, into .aidlc/. The runtime files ARE
   // core (the conductor adopts them inline from .aidlc/agents/); the
   // Copilot-native agent copies in .github/agents/ are emitted.
   coreDirs: [

@@ -9,6 +9,7 @@ description: Fix a specific bug
 skeleton: off
 runner: true
 review_cap: advisory
+change_control: relaxed
 ---
 
 # bugfix scope
@@ -17,6 +18,8 @@ Minimal depth for fixing one specific bug in an existing codebase. It
 skips ideation entirely (there is no new product to discover), runs
 reverse-engineering to understand the current code, pulls requirements for
 the fix, then generates, tests, and deploys it.
+
+Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
 
 ## Why these stages, why skip those
 

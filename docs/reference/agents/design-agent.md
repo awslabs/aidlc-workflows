@@ -76,4 +76,4 @@ rules, or component libraries.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-design-agent](../../guide/agents/design-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-design-agent.md`](../../../dist/claude/.claude/agents/aidlc-design-agent.md)
+- Authored source: [`core/agents/aidlc-design-agent.md`](../../../core/agents/aidlc-design-agent.md)

@@ -2,8 +2,8 @@
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
@@ -22,6 +22,7 @@ import {
   createTestProject,
   seedAidlcMemory,
   seedBoltDag,
+  recordArtifactWriteViaHook,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -159,34 +160,44 @@ function writeArtifact(
   content = "# Requirements\n",
 ): void {
   writeFileSync(artifact, content);
-  appendAuditEntry(event, { File: artifact, Tool: "Write" }, proj);
+  recordArtifactWriteViaHook(proj, artifact, event === "ARTIFACT_UPDATED" ? "Edit" : "Write");
 }
 
 function review(proj: string, verdict?: "READY" | "NOT-READY") {
+  const args = [
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+  ];
   if (verdict) {
-    appendFileSync(
-      requirementsPaths(proj).artifact,
-      `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+    const slot = reviewSlots.get(proj);
+    if (slot === undefined) throw new Error("review request did not open a slot");
+    mkdirSync(dirname(join(proj, slot)), { recursive: true });
+    writeFileSync(
+      join(proj, slot),
+      `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
       "utf-8",
     );
   }
-  return run(
+  const result = run(
     LOG,
-    [
-      "review",
-      "--stage",
-      "requirements-analysis",
-      "--reviewer",
-      "aidlc-product-lead-agent",
-      "--iteration",
-      "1",
-      ...(verdict ? ["--verdict", verdict] : []),
-    ],
+    [...args, ...(verdict ? ["--verdict", verdict] : [])],
     proj,
     {},
     ["AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD"],
   );
+  if (!verdict && result.status === 0) {
+    const { reviewFile } = JSON.parse(result.stdout) as { reviewFile: string };
+    reviewSlots.set(proj, reviewFile);
+  }
+  return result;
 }
+
+const reviewSlots = new Map<string, string>();
 
 function runHook(
   proj: string,
@@ -252,8 +263,9 @@ describe("t320 review/summary deadlock prevention", () => {
     const blocked = runHook(proj, artifact);
     expect(blocked.status).toBe(2);
     expect(blocked.stderr).toContain(
-      "tell me what should change and I'll record your Request Changes decision",
+      'Ask "What should change?" for stage "requirements-analysis"',
     );
+    expect(blocked.stderr).toContain("their exact text unchanged");
     expect(
       runHook(proj, artifact, {
         AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1",
@@ -295,9 +307,11 @@ describe("t320 review/summary deadlock prevention", () => {
     const wrongOrder = review(proj);
     expect(wrongOrder.status).not.toBe(0);
     expect(wrongOrder.stderr).toContain(
-      "was not saved after the confirmed answers",
+      "was last saved before the confirmed answers",
     );
-    expect(wrongOrder.stderr).toContain("Save the document after confirmation");
+    expect(wrongOrder.stderr).toContain(
+      "Save the document again, so its write descends from the current confirmation",
+    );
     expect(wrongOrder.stderr).not.toContain("Request Changes decision");
     writeArtifact(proj, artifact, "ARTIFACT_UPDATED", "# Requirements v2\n");
     expect(review(proj).status).toBe(0);
@@ -515,7 +529,7 @@ describe("t320 recovery guidance", () => {
         "- [-] requirements-analysis — EXECUTE",
         "requirements-analysis",
       ),
-    ).toContain("Request Changes decision");
+    ).toContain('Ask "What should change?"');
     expect(
       recoveryGuidance(
         "/p",

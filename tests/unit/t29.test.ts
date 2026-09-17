@@ -10,7 +10,7 @@
 //
 // The hook resolves the project dir from CLAUDE_PROJECT_DIR (aidlc-lib.ts:116)
 // and, on a qualifying TaskUpdate, (a) writes a health heartbeat at
-// aidlc-docs/.aidlc-hooks-health/sync-statusline.last and (b) shells out to
+// aidlc-docs/.aidlc-engine/hooks-health/sync-statusline.last and (b) shells out to
 // <projectDir>/.claude/tools/aidlc-utility.ts set-status, which rewrites
 // Current Stage / Lifecycle Phase / Active Agent / Status / Last Updated in
 // aidlc-state.md (aidlc-utility.ts:2432-2456). For the hook to find that tool,
@@ -93,7 +93,7 @@ function hookProject(): string {
 // and the set-status tool it shells out to both anchor under that record).
 const statePath = (p: string): string => seededStateFile(p);
 const heartbeatPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-hooks-health", "sync-workflow-state.last");
+  join(seededRecordDir(p), ".aidlc-engine/hooks-health", "sync-workflow-state.last");
 
 interface HookResult {
   status: number;
@@ -184,6 +184,18 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(r.status).toBe(0);
     // STRONGER: the hook never creates the state file on this path.
     expect(existsSync(statePath(p))).toBe(false);
+  }, 30000);
+
+  test("5b: an unknown stage fails open without changing state", () => {
+    const p = hookProject();
+    seedStateFile(p, MID_IDEATION);
+    const before = readFileSync(statePath(p), "utf-8");
+    const r = runHook(
+      p,
+      '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"in_progress","activeForm":"Running Unknown [unknown-stage]"}}',
+    );
+    expect(r.status).toBe(0);
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   }, 30000);
 
   // --- T6: Lifecycle Phase pulled from the stage graph (code-generation -> CONSTRUCTION) ---

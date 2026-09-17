@@ -1,5 +1,6 @@
 ---
 slug: state-init
+name: State Initialization
 phase: initialization
 execution: ALWAYS
 condition: Creates full populated state file and determines routing — auto-proceeds
@@ -55,8 +56,8 @@ from the compiled stage graph and scope grid:
 - Total Stages: count EXECUTE stages only (not SKIP). Authoritative counts come
   from the compiled scope grid (`{{HARNESS_DIR}}/tools/data/scope-grid.json`),
   transposed from each stage's `scopes:` frontmatter. Run
-  `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts scope-table` for the live scope
-  counts and `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts stage-table` for the
+  `{{INVOKE}} engine gen scope-table` for the live scope
+  counts and `{{INVOKE}} engine gen stage-table` for the
   live compiled stage list.
 - Completed: set to number of completed INITIALIZATION stages (typically 3)
 - In Progress: set to first post-initialization stage name
@@ -105,10 +106,8 @@ A future state-shape check should be a dedicated manifest imported here.
 
 ## Learn
 
-Follow stage-protocol.md §13 by maintaining
-`<record>/<phase>/<stage>/memory.md` under the four standard headings; the
-memory file stays in the artefact directory and the stage file remains
-immutable. This auto-proceeding bootstrap stage (`gate: false`) has no
-approval gate, so skip surfacing and persisting learnings and the mandatory
-"Anything to add for next time?" question; the gate-bound ritual begins with
-the first post-initialization stage.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

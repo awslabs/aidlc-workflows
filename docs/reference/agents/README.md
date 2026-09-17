@@ -72,12 +72,13 @@ On Claude Code, every agent *can* reach Bash and WebSearch by inheritance; the t
 Every shipped agent declares a `tier:` in its authored frontmatter; the
 packager projects it into each harness's native model/effort keys (on Claude
 Code: judgment -> `model: inherit` with no effort pin, balanced -> `model:
-sonnet` + `effort: medium`, templated -> `model: sonnet` + `effort: medium`).
-A judgment agent is therefore never downgraded below the session's own model
-and effort. An agent is templated only when its output is dominantly
+sonnet` + `effort: medium`, templated -> `model: inherit` with no effort pin).
+Judgment and templated agents therefore inherit the session's own model and
+effort. An agent is templated only when its output is dominantly
 pattern-following — delivery plans, CI/CD YAML, observability and runbook
 scaffolding — and the methodology is already encoded in the agent's knowledge
-files.
+files. The tier remains the Writing up group for `aidlc config models`, where
+a project can record the former downgrade as an explicit per-install choice.
 
 The nine judgment agents share one property: their work requires
 multi-constraint reasoning whose decisions cascade downstream. Architectural
@@ -85,12 +86,11 @@ boundaries, interpretation of ambiguous intent, UX trade-offs, code synthesis
 under dense context, risk-based test strategy, threat prioritisation,
 regulatory edge-cases, and cloud architecture trade-offs all fall in this
 category. The two balanced reviewers evaluate novel input against explicit
-criteria — the checklist encodes the method, so a mid-size model at `medium`
-effort suffices. Balanced and templated currently project identically on Claude
-Code, Codex, and opencode but remain distinct so either can be retuned; on Kiro,
-Cursor, and Copilot all tiers inherit the session model and effort. See the
-projection table and the `tier_cap` override in
-[Agent System](../05-agent-system.md).
+criteria — the checklist encodes the method, so a mid-size model at session
+effort suffices. The shipped balanced baseline pins medium effort on Claude
+Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the
+session model and effort. See the projection table and the
+`tier_cap` override in [Agent System](../05-agent-system.md).
 
 ---
 
@@ -133,7 +133,7 @@ that inherited tool; it does not grant or withhold access.
 
 **Observations:**
 - The aidlc-architect-agent has the broadest stage involvement (10 stages across 3 phases), reflecting its role as the central design authority.
-- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier, three carry the inheriting `templated` tier, and only the two `balanced` reviewers step down on Claude Code, Codex, and opencode. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. The matrix above covers the 11 domain-expert agents.
 - The aidlc-compliance-agent operates purely in an advisory capacity (4 support stages across Ideation, Construction, and Operation; no lead stages).
 - Six of 11 agents are expected to use Bash for CLI interaction (infrastructure, security, development, testing, deployment, operations).
 - Three agents are expected to use WebSearch for research tasks (product, design, compliance).
@@ -273,4 +273,4 @@ aidlc-operations-agent
 - [Agent System](../05-agent-system.md)
 - [Stage Documentation](../04-stages/)
 - [Agents chapter in the User Guide (philosophy and rationale)](../../guide/06-agents.md)
-- [SKILL.md (Conductor)](../../../dist/claude/.claude/skills/aidlc/SKILL.md) -- the forwarding loop that acts on engine directives; carries a human-readable stage-graph mirror
+- [SKILL.md (Conductor authored source)](../../../harness/claude/skills/aidlc/SKILL.md) -- the forwarding loop that acts on engine directives; carries a human-readable stage-graph mirror

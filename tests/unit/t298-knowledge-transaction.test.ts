@@ -571,12 +571,12 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
     expect(collectStaleJournals(p, SPACE)).toEqual([]);
   });
 
-  test("a txn dir stamped by a REAL, DIFFERENT, still-running process survives a concurrent sync", () => {
+  test("a txn dir stamped by a REAL, DIFFERENT, still-running process survives a concurrent sync", async () => {
     // The round-9 review finding, driven cross-process rather than by trusting
     // `isPidAlive` against this test's own pid (which is trivially true and
     // proves less). A second real bun process holds a txn dir open -- mkdirs
     // it and stamps it with ITS OWN pid, exactly like onboard's staging phase
-    // does, then sleeps -- while THIS process's `sync` (via `collectStaleJournals`)
+    // does, then waits -- while THIS process's `sync` (via `collectStaleJournals`)
     // runs concurrently. The live txn dir must survive; once the holder exits,
     // the SAME dir (now genuinely stale) must be collectable.
     const p = projectWithIntent();
@@ -584,6 +584,8 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
 
     const txnId = "019fda80-0000-7000-8000-0000000000aa";
     const holder = join(p, "txn-holder.ts");
+    const readyPath = join(p, "txn-holder.ready");
+    const releasePath = join(p, "txn-holder.release");
     writeFileSync(
       holder,
       `const kb = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))});\n` +
@@ -592,39 +594,67 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
         `fs.mkdirSync(dir, { recursive: true });\n` +
         `fs.writeFileSync(require("node:path").join(dir, "writer.pid"), String(process.pid) + "\\n");\n` +
         `fs.writeFileSync(require("node:path").join(dir, "marker.txt"), "still staging\\n");\n` +
-        `console.log("READY " + process.pid);\n` +
-        // Sleep long enough for the parent to run its assertions.
-        `const until = Date.now() + 3000;\n` +
-        `while (Date.now() < until) { fs.existsSync(${JSON.stringify(p)}); }\n`,
+        `fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, String(process.pid) + "\\n");\n` +
+        `fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)});\n` +
+        // Stay alive until the parent finishes collection, with a leak backstop.
+        `const until = Date.now() + 20000;\n` +
+        `while (!fs.existsSync(${JSON.stringify(releasePath)})) {\n` +
+        `  if (Date.now() >= until) throw new Error("parent did not release txn holder");\n` +
+        `  await Bun.sleep(10);\n` +
+        `}\n`,
     );
-    const holderProc = spawnSync("bash", ["-c",
-      `bun ${JSON.stringify(holder)} & echo $!`], { encoding: "utf-8" });
-    const holderPid = Number(holderProc.stdout.trim().split("\n").pop());
-    expect(Number.isInteger(holderPid) && holderPid > 0, `bad holder pid: ${holderProc.stdout}`).toBe(true);
+    // The OS child handle supplies the PID; stdout is never a PID protocol.
+    const holderProc = Bun.spawn([process.execPath, holder], {
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    const holderPid = holderProc.pid;
+    const holderStderr = new Response(holderProc.stderr).text();
 
     try {
+      expect(Number.isInteger(holderPid) && holderPid > 0, `bad holder pid: ${holderPid}`).toBe(true);
+      expect(holderPid).not.toBe(process.pid);
       // Wait for the holder's stamp to actually land (real cross-process
       // startup, not assumed-instant).
       const stampPath = join(journalTxnDir(p, SPACE, txnId), "writer.pid");
       const deadline = Date.now() + 5000;
-      while (!existsSync(stampPath) && Date.now() < deadline) { /* spin */ }
+      while (!existsSync(readyPath) && holderProc.exitCode === null && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(readyPath), "the holder process never signalled readiness").toBe(true);
+      expect(readFileSync(readyPath, "utf-8")).toBe(`${holderPid}\n`);
       expect(existsSync(stampPath), "the holder process never wrote its stamp").toBe(true);
+      expect(readFileSync(stampPath, "utf-8")).toBe(`${holderPid}\n`);
+      expect(isPidAliveViaKill(holderPid), "the holder must be alive before collection").toBe(true);
 
       // While the holder is still alive, collection must leave its dir alone.
       const collected = collectStaleJournals(p, SPACE);
       expect(collected).not.toContain(txnId);
       expect(existsSync(stampPath)).toBe(true);
+      expect(isPidAliveViaKill(holderPid), "the holder must stay alive through collection").toBe(true);
     } finally {
-      // Let the holder finish naturally (it self-terminates after ~3s); this
-      // is not a kill, so a genuine "process exits on its own" transition is
-      // what the next assertion observes.
-      try { spawnSync("bash", ["-c", `wait ${holderPid} 2>/dev/null; true`]); } catch { /* best-effort */ }
-      const deadline2 = Date.now() + 8000;
-      while (isPidAliveViaKill(holderPid) && Date.now() < deadline2) { /* spin */ }
+      // Release it to exit normally, and reap the actual child before collection.
+      writeFileSync(releasePath, "release\n");
+      let exitTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          holderProc.exited,
+          new Promise<never>((_, reject) => {
+            exitTimer = setTimeout(() => reject(new Error("txn holder did not exit within 8 seconds")), 8000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(exitTimer);
+        if (holderProc.exitCode === null) {
+          holderProc.kill("SIGKILL");
+          await holderProc.exited;
+        }
+      }
     }
 
     // Now the holder is gone: the SAME dir, same stamp file (naming a now-dead
     // pid), must be collectable.
+    expect(holderProc.exitCode, await holderStderr).toBe(0);
     expect(isPidAliveViaKill(holderPid), "the holder should have exited by now").toBe(false);
     const afterExit = collectStaleJournals(p, SPACE);
     expect(afterExit).toContain(txnId);

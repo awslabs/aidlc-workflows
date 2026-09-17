@@ -58,7 +58,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-next",
-    cmd: "aidlc next $ARGUMENTS",
+    cmd: "aidlc engine orchestrate next $ARGUMENTS",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -75,7 +75,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-next-scope",
-    cmd: "aidlc next --scope feature",
+    cmd: "aidlc engine orchestrate next --scope feature",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -92,7 +92,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-report",
-    cmd: "aidlc report --stage application-design --result approved --user-input \"Approve\"",
+    cmd: "aidlc engine orchestrate report --stage application-design --result approved --user-input \"Approve\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -109,7 +109,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-report-approved",
-    cmd: "aidlc report --stage practices-discovery --result approved --user-input \"exact label\"",
+    cmd: "aidlc engine orchestrate report --stage practices-discovery --result approved --user-input \"exact label\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -126,7 +126,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-next-status",
-    cmd: "aidlc next --status",
+    cmd: "aidlc engine orchestrate next --status",
     d1: false,
     d2: "pass",
     kind: "readonly",
@@ -143,7 +143,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-park",
-    cmd: "aidlc park",
+    cmd: "aidlc engine orchestrate park",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -160,7 +160,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-approve",
-    cmd: "aidlc state approve application-design --user-input \"Approve\"",
+    cmd: "aidlc engine state approve application-design --user-input \"Approve\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -177,7 +177,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-get",
-    cmd: "aidlc state get --field \"Current Stage\"",
+    cmd: "aidlc engine state get --field \"Current Stage\"",
     d1: false,
     d2: "fire",
     kind: "new-twin",
@@ -194,7 +194,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-gate-start",
-    cmd: "aidlc state gate-start application-design",
+    cmd: "aidlc engine state gate-start application-design",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -211,7 +211,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-reject",
-    cmd: "aidlc state reject application-design --feedback \"text\"",
+    cmd: "aidlc engine state reject application-design --feedback \"text\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -228,7 +228,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-revise",
-    cmd: "aidlc state revise application-design",
+    cmd: "aidlc engine state revise application-design",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -245,7 +245,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-advance",
-    cmd: "aidlc state advance \"completed-slug\" \"next-slug\"",
+    cmd: "aidlc engine state advance \"completed-slug\" \"next-slug\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -262,7 +262,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-finalize",
-    cmd: "aidlc state finalize \"completed-slug\"",
+    cmd: "aidlc engine state finalize \"completed-slug\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -279,7 +279,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-checkbox",
-    cmd: "aidlc state checkbox \"application-design=completed\"",
+    cmd: "aidlc engine state checkbox \"application-design=completed\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -296,7 +296,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-jump-execute",
-    cmd: "aidlc jump execute --target code-generation --direction forward --scope feature",
+    cmd: "aidlc engine jump execute --target code-generation --direction forward --scope feature",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -313,7 +313,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-bolt-dispatch-event",
-    cmd: "aidlc bolt dispatch-event --event MERGE_DISPATCH_INVOKED --slug example",
+    cmd: "aidlc engine bolt dispatch-event --event MERGE_DISPATCH_INVOKED --slug example",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -363,7 +363,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-swarm-prepare",
-    cmd: "aidlc swarm prepare --batch 2 --units a,b,c",
+    cmd: "aidlc engine swarm prepare --batch 2 --units a,b,c",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -380,7 +380,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-swarm-finalize",
-    cmd: "aidlc swarm finalize --batch 2 --units a,b,c --claimed a,b --check-cmd \"bun test\"",
+    cmd: "aidlc engine swarm finalize --batch 2 --units a,b,c --claimed a,b --check-cmd \"bun test\"",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -397,12 +397,12 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-status",
-    cmd: "aidlc status",
+    cmd: "aidlc engine status",
     d1: false,
     d2: "fire",
     kind: "new-twin",
     twinOf: "old-utility-status",
-    note: "Bare status stays out of D1 but fires D2 by utility parity.",
+    note: "Semantic status stays out of D1 but preserves D2 parity with the backing tool.",
   },
   {
     id: "old-utility-doctor",
@@ -420,7 +420,7 @@ const corpus: CorpusCase[] = [
     kind: "negative",
     twinOf: "old-utility-doctor",
     documentedFalsePositive: "d2",
-    note: "D1 negative. D2 deliberately preserves old utility false-fire parity.",
+    note: "D1 negative. D2 deliberately preserves the backing tool's false-fire parity.",
   },
   {
     id: "old-utility-version",
@@ -438,7 +438,7 @@ const corpus: CorpusCase[] = [
     kind: "negative",
     twinOf: "old-utility-version",
     documentedFalsePositive: "d2",
-    note: "D1 negative. D2 deliberately preserves old utility false-fire parity.",
+    note: "D1 negative. D2 deliberately preserves the backing tool's false-fire parity.",
   },
   {
     id: "old-utility-help",
@@ -450,12 +450,12 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-help",
-    cmd: "aidlc help",
+    cmd: "aidlc engine orchestrate help",
     d1: false,
     d2: "fire",
     kind: "new-twin",
     twinOf: "old-utility-help",
-    note: "D2 utility parity for help.",
+    note: "D2 backing-tool parity for semantic workflow help.",
   },
   {
     id: "old-utility-set-status",
@@ -467,7 +467,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-set-status",
-    cmd: "aidlc state set-status --stage application-design",
+    cmd: "aidlc engine state set-status --stage application-design",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -518,7 +518,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-runtime-compile",
-    cmd: "aidlc runtime compile",
+    cmd: "aidlc engine runtime compile",
     d1: false,
     d2: "reject",
     kind: "guard",
@@ -527,7 +527,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "composite-cd-state",
-    cmd: "cd foo && aidlc state approve",
+    cmd: "cd foo && aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -535,7 +535,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "composite-next-report",
-    cmd: "aidlc next && aidlc report --result approved",
+    cmd: "aidlc engine orchestrate next && aidlc engine orchestrate report --result approved",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -543,7 +543,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "composite-env-state",
-    cmd: "VAR=1 aidlc state approve",
+    cmd: "VAR=1 aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -560,7 +560,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-quoted-echo",
-    cmd: "echo \"aidlc state approve\"",
+    cmd: "echo \"aidlc engine state approve\"",
     d1: true,
     d2: "fire",
     kind: "semantic-edge",
@@ -594,7 +594,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "negative-plugin-select",
-    cmd: "aidlc plugin select aidlc,test-pro",
+    cmd: "aidlc engine plugin select aidlc,test-pro",
     d1: false,
     d2: "pass",
     kind: "negative",
@@ -634,7 +634,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "negative-statusline",
-    cmd: "aidlc statusline",
+    cmd: "aidlc engine statusline",
     d1: false,
     d2: "pass",
     kind: "negative",
@@ -690,7 +690,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "english-new-mention",
-    cmd: "Run aidlc state approve",
+    cmd: "Run aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "semantic-edge",
@@ -699,7 +699,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-report-result-only",
-    cmd: "aidlc report --result approved",
+    cmd: "aidlc engine orchestrate report --result approved",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -707,15 +707,87 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-leading-space-state",
-    cmd: " aidlc state approve",
+    cmd: " aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "composite",
     note: "P4 leading-space case.",
   },
   {
+    id: "native-delegate-orchestrate-next",
+    cmd: "aidlc engine orchestrate next --scope feature",
+    d1: true,
+    d2: "pass",
+    kind: "composite",
+    note: "Authored native dispatcher form for an engine directive fetch.",
+  },
+  {
+    id: "native-delegate-orchestrate-report",
+    cmd: "aidlc engine orchestrate report --stage application-design --result approved",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for a gate transition.",
+  },
+  {
+    id: "native-delegate-state",
+    cmd: "aidlc engine state approve application-design",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for state mutation.",
+  },
+  {
+    id: "native-delegate-jump",
+    cmd: "aidlc engine jump execute --target code-generation",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for a jump transition.",
+  },
+  {
+    id: "native-delegate-bolt",
+    cmd: "aidlc engine bolt dispatch-event --event MERGE_DISPATCH_INVOKED",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for a bolt transition.",
+  },
+  {
+    id: "native-delegate-swarm",
+    cmd: "aidlc engine swarm prepare --batch 2 --units a,b",
+    d1: true,
+    d2: "pass",
+    kind: "composite",
+    note: "Authored native dispatcher form for swarm engagement.",
+  },
+  {
+    id: "native-delegate-status",
+    cmd: "aidlc engine status",
+    d1: false,
+    d2: "fire",
+    kind: "readonly",
+    note: "Authored semantic dispatcher form retains status parity.",
+  },
+  {
+    id: "native-delegate-runtime-summary",
+    cmd: "aidlc engine runtime summary --json",
+    d1: false,
+    d2: "pass",
+    kind: "readonly",
+    note: "Runtime summary is read-only and must not trip the recursion guard.",
+  },
+  {
+    id: "native-delegate-runtime-compile",
+    cmd: "aidlc engine runtime compile",
+    d1: false,
+    d2: "reject",
+    kind: "guard",
+    note: "Authored native dispatcher form for the recursion guard.",
+  },
+  {
     id: "new-scope-change",
-    cmd: "aidlc scope change feature",
+    cmd: "aidlc engine scope change feature",
     d1: false,
     d2: "fire",
     kind: "composite",
@@ -765,35 +837,362 @@ describe("detector corpus", () => {
   });
 
   test("explicit regression guards", () => {
-    expect(d1("cd x && aidlc state approve")).toBe(true);
-    expect(classifyRuntimeCompileCommand("cd x && aidlc state approve")).toBe("fire");
+    expect(d1("cd x && aidlc engine state approve")).toBe(true);
+    expect(classifyRuntimeCompileCommand("cd x && aidlc engine state approve")).toBe("fire");
 
-    expect(classifyRuntimeCompileCommand("aidlc report --result approved")).toBe("fire");
+    expect(classifyRuntimeCompileCommand("aidlc engine orchestrate report --result approved")).toBe("fire");
 
-    expect(d1(" aidlc state approve")).toBe(true);
-    expect(classifyRuntimeCompileCommand(" aidlc state approve")).toBe("fire");
+    expect(d1(" aidlc engine state approve")).toBe(true);
+    expect(classifyRuntimeCompileCommand(" aidlc engine state approve")).toBe("fire");
 
-    expect(classifyRuntimeCompileCommand("aidlc runtime compile")).toBe("reject");
-    expect(classifyRuntimeCompileCommand("cd x && aidlc runtime compile")).toBe("reject");
+    expect(classifyRuntimeCompileCommand("aidlc engine runtime compile")).toBe("reject");
+    expect(classifyRuntimeCompileCommand("cd x && aidlc engine runtime compile")).toBe("reject");
     expect(
       classifyRuntimeCompileCommand(
-        'aidlc state approve application-design --user-input "aidlc runtime notes"',
+        'aidlc engine state approve application-design --user-input "aidlc engine runtime notes"',
       ),
     ).toBe("fire");
     expect(
       classifyRuntimeCompileCommand(
-        'aidlc state approve application-design --user-input "notes; aidlc runtime compile"',
+        'aidlc engine state approve application-design --user-input "notes; aidlc engine runtime compile"',
       ),
     ).toBe("fire");
     expect(
       classifyRuntimeCompileCommand(
-        "aidlc state approve application-design --user-input 'notes && aidlc runtime compile'",
+        "aidlc engine state approve application-design --user-input 'notes && aidlc engine runtime compile'",
       ),
     ).toBe("fire");
   });
 
   test("new top-level park is intentional engagement", () => {
-    // Intended delta: new-shape `aidlc park` mutates workflow state.
-    expect(d1("aidlc park")).toBe(true);
+    // Intended delta: new-shape `aidlc engine orchestrate park` mutates workflow state.
+    expect(d1("aidlc engine orchestrate park")).toBe(true);
+  });
+
+  test("workspace navigation through next is terminal in native and source forms", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      'bun "/project with spaces/.claude/tools/aidlc.ts" engine orchestrate',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        'space switch "team B"',
+        "space --json",
+        "intent list",
+        "intent switch existing",
+        "space help",
+      ]) {
+        const command = `${entry} next ${args}`;
+        expect(d1(command), command).toBe(false);
+        expect(d1(`cd project && ${command}`), command).toBe(false);
+        expect(d1(`${command} && aidlc engine state advance`), command).toBe(true);
+        expect(d1(`aidlc engine state advance; ${command}`), command).toBe(true);
+      }
+      expect(d1(`${entry} next intent create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent \\create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent creat? --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent cr*ate --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --project-dir . create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --aidlc-attempt-id run-1 create --scope poc --arguments app`)).toBe(true);
+      for (const flag of ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"]) {
+        const command = `${entry} next intent ${flag} create --scope poc --arguments app`;
+        expect(d1(command), command).toBe(true);
+      }
+      expect(d1(`${entry} next --arguments "space-create teamB"`)).toBe(true);
+      expect(d1(`${entry} next space-create "$(aidlc engine state advance)"`)).toBe(true);
+      expect(d1(`${entry} next space-create "unterminated`)).toBe(true);
+    }
+    expect(d1(
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB',
+    )).toBe(true);
+  });
+
+  test("observed workspace navigation through next is terminal", () => {
+    expect(
+      d1("bun .claude/tools/aidlc.ts engine orchestrate next space-create teamB"),
+    ).toBe(false);
+  });
+
+  test("workspace next uses the leading workspace grammar across command forms", () => {
+    for (const entry of [
+      "aidlc next",
+      "aidlc engine orchestrate next",
+      "bun .claude/tools/aidlc-orchestrate.ts next",
+      'bun "/workspace/project with spaces/.claude/tools/aidlc.ts" engine orchestrate next',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        "space teamb",
+        'space switch "team B"',
+        "space list --json",
+        "intent list --json",
+        "intent switch existing-intent",
+        "space help",
+        "space create",
+        "space archive",
+      ]) {
+        const command = `env MODE=test ${entry} ${args}`;
+        expect(d1(command), command).toBe(false);
+      }
+    }
+  });
+
+  test("workspace navigation never exempts actual workflow engagement", () => {
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next space teamb";
+    for (const command of [
+      "aidlc next",
+      "aidlc engine orchestrate next --scope feature",
+      "aidlc engine orchestrate next --stage intent-capture",
+      "aidlc engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc-orchestrate.ts next intent create --scope poc",
+      'aidlc next "space teamb"',
+      "aidlc next --scope feature space teamb",
+      'aidlc report --user-input "aidlc next space teamb"',
+      'aidlc state approve --user-input "aidlc next space teamb"',
+      `${terminal} && aidlc next`,
+      `${terminal}; aidlc report --result approved`,
+      `aidlc report --result approved; ${terminal}`,
+      `${terminal} & aidlc next`,
+      "aidlc next space $(aidlc next)",
+      // Config/flag refusals are a separate classification question.
+      "aidlc next --depth invalid",
+      "aidlc next --config project --stage intent-capture",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("workspace classification follows runtime global-argument normalization", () => {
+    for (const command of [
+      "aidlc engine orchestrate next intent --project-dir . create --scope poc",
+      "aidlc engine orchestrate next --project-dir . intent create --scope poc",
+      "aidlc engine orchestrate next intent --quiet create --scope poc",
+      "aidlc --project-dir . engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc.ts --project-dir . engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc-orchestrate.ts next intent --aidlc-attempt-id attempt-1 create --scope poc",
+      "aidlc engine orchestrate next -- intent --project-dir . create --scope poc",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    for (const command of [
+      "aidlc engine orchestrate next --project-dir . space teamb",
+      "aidlc engine orchestrate next space --project-dir . create teamB",
+      "aidlc engine orchestrate next space --quiet create teamB",
+      "aidlc --project-dir . engine orchestrate next space teamb",
+      "bun .claude/tools/aidlc.ts --project-dir . engine orchestrate next space teamb",
+      "bun .claude/tools/aidlc-orchestrate.ts --project-dir . next space teamb",
+    ]) {
+      expect(d1(command), command).toBe(false);
+    }
+  });
+
+  test("uncertain shell syntax cannot hide workflow calls behind workspace navigation", () => {
+    for (const command of [
+      'META="$(aidlc engine orchestrate next)" aidlc engine orchestrate next space teamb',
+      'META=`aidlc engine orchestrate next` aidlc engine orchestrate next space teamb',
+      String.raw`aidlc engine orchestrate next intent cr\eate --scope poc`,
+      String.raw`aidlc --project-dir . engine orchestrate next intent cr\eate --scope poc`,
+      String.raw`aidlc engine orchestrate next intent 'create' --scope poc`,
+      'aidlc next intent "$ACTION" --scope poc',
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("opaque script arguments are never selected as the engine executable", () => {
+    for (const command of [
+      "sh -c 'aidlc engine orchestrate report --stage intent-capture --result approved' aidlc next --status",
+      "sh -c 'aidlc engine orchestrate next' aidlc next space teamb",
+      "bash -c 'aidlc next' aidlc next --config project",
+      "opaque-runner 'aidlc report --result approved' aidlc next space teamb",
+      "bun opaque-script.ts 'aidlc next' aidlc next --status",
+      "node opaque-script.ts 'aidlc next' aidlc next --status",
+      '"META=literal" aidlc next --status',
+      '"X=one" aidlc next space teamb',
+      'X"Y"=one aidlc next space teamb',
+      "command META=literal aidlc next --status",
+      "exec META=literal aidlc next space teamb",
+      "command X=one aidlc next space teamb",
+      "exec X=one aidlc next space teamb",
+      "env X=one command aidlc next space teamb",
+      "exec command aidlc next space teamb",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    expect(d1('LABEL="team B" command aidlc next space "team B"')).toBe(false);
+    expect(d1('env "LABEL=team B" aidlc next space "team B"')).toBe(false);
+    expect(d1('X="one" aidlc next space teamb')).toBe(false);
+    expect(d1('env "X=one" aidlc next space teamb')).toBe(false);
+  });
+
+  test("unquoted glob and brace expansion cannot turn a workspace name into a verb", () => {
+    for (const name of ["cr*", "cr?ate", "cr[e]ate", "cr{ea,zz}te"]) {
+      expect(d1(`aidlc next intent ${name}`), name).toBe(true);
+      expect(d1(`aidlc next intent "${name}"`), name).toBe(false);
+    }
+  });
+
+  test("redirection and expansion cannot change workspace argv before classification", () => {
+    for (const command of [
+      "aidlc next intent >/tmp/out create",
+      "aidlc next intent > /tmp/out create",
+      "aidlc next intent </tmp/in create",
+      "aidlc next intent 2>&1 create",
+      "aidlc next intent --project-dir $SELECTOR",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    expect(d1('aidlc next intent ">/tmp/out"')).toBe(false);
+    expect(d1("aidlc next space teamb 2>&1")).toBe(false);
+    expect(d1("env X=one aidlc next space teamb")).toBe(false);
+  });
+
+  test("adjacent redirections keep legacy workflow commands engaged", () => {
+    for (const command of [
+      "bun .claude/tools/aidlc-orchestrate.ts</tmp/input next",
+      "bun .claude/tools/aidlc-state.ts>/tmp/output approve",
+      "bun .claude/tools/aidlc-unit.ts</tmp/input claim",
+      "sh -c 'bun .claude/tools/aidlc-state.ts>/tmp/output approve'",
+      "bun .claude/tools/aidlc-state.t[sx] approve",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("the unconditional configuration alias is terminal without exempting workflow modifiers", () => {
+    for (const args of ["--config", "--config project", "--config trust", "--config unknown"]) {
+      expect(d1(`aidlc engine orchestrate next ${args}`), args).toBe(false);
+    }
+    for (const command of [
+      "aidlc next --config project --scope feature",
+      "aidlc next --depth minimal --stage intent-capture",
+      "aidlc next --depth minimal --new-intent",
+      "aidlc next --config project && aidlc report --result approved",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("conditional configuration needs its exact authoritative dispatch output", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    const directive = {
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    };
+    const output = JSON.stringify(directive);
+    expect(d1(command)).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, output)).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, [{ type: "text", text: output }])).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, [{ type: "text", text: output }, { type: "image", data: "other" }])).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, directive)).toBe(true);
+    for (const other of [
+      "aidlc next",
+      "aidlc next --depth minimal",
+      "aidlc next --depth extreme --stage intent-capture",
+      "aidlc next --depth extreme --scope feature",
+      "aidlc next --depth extreme --new-intent",
+      `${command} && aidlc report --result approved`,
+      `sh -c 'aidlc next' aidlc next --depth extreme`,
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next --depth extreme',
+    ]) {
+      expect(isEngineToolCall("Bash", { command: other }, output), other).toBe(true);
+    }
+    for (const invalid of [
+      "",
+      output.slice(0, -1),
+      `${output}\n${output}`,
+      JSON.stringify({ ...directive, continue: true }),
+      JSON.stringify({ kind: "run-stage", stage: "intent-capture" }),
+      JSON.stringify({ ...directive, message: "Run the workflow, then continue." }),
+      JSON.stringify({ ...directive, unexpected: "field" }),
+      JSON.stringify({ ...directive, message: directive.message.replace("depth extreme`", "depth extreme --project-dir ;`") }),
+      `{"kind":"run-stage",${output.slice(1)}`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
+    }
+  });
+
+  test("observed unified Bun report has native and legacy transition classifications", () => {
+    const args = 'report --stage intent-capture --result awaiting-approval';
+    for (const command of [
+      `aidlc engine orchestrate ${args}`,
+      `bun .claude/tools/aidlc-orchestrate.ts ${args}`,
+      `bun .claude/tools/aidlc.ts engine orchestrate ${args}`,
+    ]) {
+      expect(classifyRuntimeCompileCommand(command), command).toBe("fire");
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("unified Bun transport preserves every native engine corpus label", () => {
+    const nativeCases = corpus.filter((c) => /\baidlc\s+engine\b/.test(c.cmd));
+    expect(nativeCases.length).toBeGreaterThan(0);
+    for (const c of nativeCases) {
+      const command = c.cmd.replace(/\baidlc(?=\s+engine\b)/g, "bun .claude/tools/aidlc.ts");
+      expect(d1(command), `${c.id} unified D1`).toBe(c.d1);
+      expect(classifyRuntimeCompileCommand(command), `${c.id} unified D2`).toBe(c.d2);
+    }
+  });
+
+  test("source dispatcher paths preserve quoting and transition wrappers", () => {
+    for (const entry of [
+      "bun .claude/tools/aidlc.ts",
+      'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+      "bun '/workspace/project with spaces/.claude/tools/aidlc.ts'",
+      'bun "C:\\workspace\\project with spaces\\.claude\\tools\\aidlc.ts"',
+      "bun .kiro/tools/aidlc.ts",
+      "bun .codex/tools/aidlc.ts",
+      "bun .aidlc/tools/aidlc.ts",
+      "bun .cursor/tools/aidlc.ts",
+    ]) {
+      for (const prefix of ["", "cd app && ", "env MODE=test ", "command "]) {
+        const report = `${prefix}${entry} engine orchestrate report --result approved`;
+        expect(d1(report), report).toBe(true);
+        expect(classifyRuntimeCompileCommand(report), report).toBe("fire");
+        const status = `${prefix}${entry} engine orchestrate next --status`;
+        expect(d1(status), status).toBe(false);
+        expect(classifyRuntimeCompileCommand(status), status).toBe("pass");
+      }
+    }
+  });
+
+  test("unified runtime recursion wins in composites but not quoted argument text", () => {
+    for (const entry of [
+      "bun .claude/tools/aidlc.ts",
+      'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+      "bun '/workspace/project with spaces/.claude/tools/aidlc.ts'",
+    ]) {
+      const compile = `${entry} engine runtime compile`;
+      const report = `${entry} engine orchestrate report --result approved`;
+      for (const command of [compile, `cd app && ${compile}`, `${compile} && ${report}`, `${report}; ${compile}`]) {
+        expect(classifyRuntimeCompileCommand(command), command).toBe("reject");
+      }
+      for (const command of [
+        `${report} --user-input "notes; bun .claude/tools/aidlc.ts engine runtime compile"`,
+        `${report} --user-input 'notes && bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine runtime compile'`,
+        `echo 'bun .claude/tools/aidlc.ts engine runtime compile' && ${report}`,
+      ]) {
+        expect(classifyRuntimeCompileCommand(command), command).toBe("fire");
+      }
+      expect(classifyRuntimeCompileCommand(`${entry} engine runtime summary --json`)).toBe("pass");
+    }
+  });
+
+  test("unrelated executables and non-dispatcher paths remain outside normalization", () => {
+    for (const entry of [
+      "node .claude/tools/aidlc.ts",
+      "bun app/aidlc.ts",
+      "bun .claude/tools/aidlc.ts.bak",
+      "bun .claude/tools/other.ts",
+    ]) {
+      const command = `${entry} engine orchestrate report --result approved`;
+      expect(d1(command), command).toBe(false);
+      expect(classifyRuntimeCompileCommand(command), command).toBe("pass");
+    }
   });
 });

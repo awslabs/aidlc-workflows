@@ -401,6 +401,8 @@ function compositionScenario(
   );
   git(repoA, "add", "--", "aidlc/application.ts");
   git(repoA, "commit", "-q", "-m", "seed composition source");
+  // The scenario pins the strict source refusal; the feature scope's Change
+  // Control default is relaxed, so the intent asks for strict explicitly.
   const created = runUtil(
     proj,
     "intent-create",
@@ -408,6 +410,8 @@ function compositionScenario(
     "feature",
     "--repos",
     "repo-a",
+    "--change-control",
+    "strict",
   );
   if (created.status !== 0) throw new Error(created.out);
   const unit = `composition-${suffix}`;
@@ -2094,5 +2098,26 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(hasBoltBranch(proj, "repo-a", "orphanunit")).toBe(false);
       expect(hasBoltBranch(proj, "repo-b", "orphanunit")).toBe(false);
     });
+  });
+});
+
+// ===========================================================================
+// A recorded repo name becomes a working DIRECTORY through repoDir — an
+// immediate child of the workspace root. That holds for the sibling layout
+// above and fails whenever the workspace root IS the repository, where no such
+// child exists. Recording `repos` is exactly what a developer reaches for when
+// the codekb store is named after a git worktree rather than the repository, so
+// the unchecked path was reachable by following the only documented lever.
+// The resolved cwd is verified, and the message names the path.
+// ===========================================================================
+describe("recorded repo whose directory is absent dead-ends with the resolved path", () => {
+  const proj = freshWorkspace();
+  runUtil(proj, "intent-create", "--scope", "feature", "--repos", "ghost");
+
+  test("worktree create names the missing directory instead of failing inside it", () => {
+    const r = runWorktree(proj, "create", "--slug", "u1", "--base", "main");
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.out).toContain(join(proj, "ghost"));
+    expect(r.out).toContain("does not exist");
   });
 });

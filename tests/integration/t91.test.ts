@@ -16,7 +16,7 @@
 //      must match AND `aidlc-runtime\.ts` must NOT appear (the explicit
 //      recursion-guard reject fires FIRST, defeating composites).
 //   3. Audit-existence guard before the heartbeat write.
-//   4. Heartbeat at aidlc-docs/.aidlc-hooks-health/runtime-compile.last (only
+//   4. Heartbeat at aidlc-docs/.aidlc-engine/hooks-health/runtime-compile.last (only
 //      written once the command filter passes).
 //   5. Tail-read the LAST 3 audit blocks (split on /\n---\n/); if any carries
 //      `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|
@@ -29,7 +29,9 @@
 //
 // FIXTURE DISCIPLINE — replicate the .sh's make_project (t91:36-47) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
-// with the five tool modules (aidlc-runtime.ts, aidlc-lib.ts,
+// with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
+// aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
+// aidlc-channel.ts, aidlc-version.ts,
 // aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-audit.ts),
 // data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
@@ -105,7 +107,7 @@ afterAll(() => {
 /**
  * make_project (t91:36-47): a fresh temp project with a self-contained
  * .claude/ skeleton so the hook + the compile it spawns resolve every path
- * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the five tool files + the hook
+ * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the hook and required tool files
  * — aidlc-lib.ts resolves data/stage-graph.json relative to its own location,
  * so the data file must sit beside the copied lib. toPortablePath round-trips
  * the path on Windows.
@@ -122,6 +124,26 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-lib.ts"),
     join(proj, ".claude", "tools", "aidlc-lib.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-settings.ts"),
+    join(proj, ".claude", "tools", "aidlc-settings.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-install-paths.ts"),
+    join(proj, ".claude", "tools", "aidlc-install-paths.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-distribution.ts"),
+    join(proj, ".claude", "tools", "aidlc-distribution.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-channel.ts"),
+    join(proj, ".claude", "tools", "aidlc-channel.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-version.ts"),
+    join(proj, ".claude", "tools", "aidlc-version.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-artifact-vocabulary.ts"),
@@ -163,7 +185,7 @@ const auditPath = (proj: string): string =>
 const graphPath = (proj: string): string =>
   join(seededRecordDir(proj), "runtime-graph.json");
 const heartbeatPath = (proj: string): string =>
-  join(seededRecordDir(proj), ".aidlc-hooks-health", "rebuild-stage-graph.last");
+  join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "rebuild-stage-graph.last");
 
 interface HookResult {
   status: number;

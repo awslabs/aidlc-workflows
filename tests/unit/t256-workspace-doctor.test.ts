@@ -4,7 +4,7 @@
 // covers: file:core/tools/aidlc-workspace-doctor.ts
 //
 // The contract these workspace-doctor rows must hold:
-//   - EVERY row is advisory (pass:true) - they never flip doctor's exit code.
+//   - Advisory drift uses severity warn and never flips doctor's exit code.
 //   - W1 (uncommitted records under aidlc/) runs in any git workspace and
 //     overrides status.showUntrackedFiles so user config cannot hide records.
 //   - W2 (repos.json vs on-disk sibling drift) + W3 (stale managed .gitignore
@@ -50,7 +50,7 @@ function writeManifest(root: string, body: string): void {
   writeFileSync(join(root, "repos.json"), body, "utf-8");
 }
 
-// Assert the load-bearing invariant on any set of rows: nothing is ever a fail.
+// Assert the load-bearing invariant on rows that represent healthy or skipped state.
 function expectAllAdvisory(rows: Array<{ pass: boolean; label: string }>): void {
   for (const r of rows) expect(r.pass).toBe(true);
 }
@@ -91,7 +91,8 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     mkdirSync(join(ws, "aidlc"), { recursive: true });
     writeFileSync(join(ws, "aidlc", "note.md"), "unstaged\n", "utf-8");
     const rows = workspaceManifestChecks(ws);
-    expectAllAdvisory(rows);
+    expect(rows[0].pass).toBe(false);
+    expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toContain("uncommitted change(s) under aidlc/");
     // The advisory hint names the git remedy, not any fork-specific infra.
     expect(rows[0].label).toContain("git add aidlc/");

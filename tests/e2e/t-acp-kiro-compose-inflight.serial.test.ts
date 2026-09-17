@@ -140,6 +140,34 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
           timeoutMs: TURN_MS,
           keepAlive: true,
         });
+        // Kiro's adapter pre-dispatches this literal compose request, so the
+        // composer path is already selected even without a visible next call.
+        // The named-stage fast path applies only before next compose runs.
+        // Match the captured native crew signature, not other tools mentioning an agent.
+        const composerIndex = r1.toolCalls.findIndex((call) => {
+          const input = call.rawInput;
+          return call.title === "Spawning agent crew" && call.kind === "" &&
+            input !== null && typeof input === "object" && !Array.isArray(input) &&
+            Object.hasOwn(input, "mode") && Object.hasOwn(input, "stages") &&
+            Object.hasOwn(input, "task") &&
+            JSON.stringify(input).includes("aidlc-composer-agent");
+        });
+        expect(composerIndex, "literal compose must dispatch the requested composer").toBeGreaterThan(-1);
+        expect(r1.toolCalls[composerIndex]?.status).toBe("completed");
+        const dispatchDirectiveIndex = r1.toolCalls.findIndex((call) =>
+          call.output.join("").includes("Dispatch the composer agent")
+        );
+        if (dispatchDirectiveIndex >= 0) {
+          expect(composerIndex, "next compose must dispatch the requested composer").toBeGreaterThan(
+            dispatchDirectiveIndex,
+          );
+        }
+        expect(r1.toolCalls.some((call) => {
+          const input = call.rawInput as { command?: string } | undefined;
+          return /\bvalidate-grid\b/.test(input?.command ?? "") &&
+            /(?:^|\s)--strict(?:\s|$)/.test(input?.command ?? "") &&
+            /"valid"\s*:\s*true/.test(call.output.join(""));
+        }), "composer must validate the proposed grid strictly before the approval gate").toBe(true);
         // The marker was written, the gate is pending, and NOTHING is applied
         // yet: state byte-unchanged, no RECOMPOSED (the marker-first discipline).
         expect(existsSync(markerPath(root))).toBe(true);

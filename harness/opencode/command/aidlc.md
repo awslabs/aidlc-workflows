@@ -7,7 +7,7 @@ description: >
   auto-detected.
 ---
 Invoke the `aidlc` skill now and follow it exactly. It defines the AI-DLC
-forwarding loop: you run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts next`
+forwarding loop: you run `{{INVOKE}} engine orchestrate next`
 with the arguments below passed through verbatim, act on the one directive it
 returns, report the outcome, and repeat until the engine says done.
 

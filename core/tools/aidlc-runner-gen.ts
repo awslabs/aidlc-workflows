@@ -61,7 +61,6 @@ import { dirname, join } from "node:path";
 import {
   errorMessage,
   frontmatterBlock,
-  harnessDir,
   isPluginEnabled,
   loadScopeMetadataAll,
   loadStageGraphAll,
@@ -71,6 +70,9 @@ import {
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
+  aidlcDispatcherInvocation,
+  aidlcToolInvocation,
+  runtimeHarnessDir as harnessDir,
   resolveHarnessPath,
   resolveSkillsPath,
 } from "./aidlc-runtime-paths.ts";
@@ -166,7 +168,7 @@ that flag without this skill.
 1. Ask the engine for the single-stage directive:
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --stage ${node.slug} --single
+   ${aidlcToolInvocation("orchestrate")} next --stage ${node.slug} --single
    \`\`\`
 
    The engine emits one \`run-stage\` directive for \`${node.slug}\` (carrying the
@@ -185,7 +187,7 @@ that flag without this skill.
 3. When the stage's work is done, commit the single-stage record:
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --single --stage ${node.slug} --result completed
+   ${aidlcToolInvocation("orchestrate")} report --single --stage ${node.slug} --result completed
    \`\`\`
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow
@@ -244,7 +246,7 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
+   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
    Pass the user's \`--scope <name>\` when they named one; otherwise omit
@@ -299,7 +301,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
    \`compose\` verb (pass \`--report <path>\` / \`--new-scope\` through as-is):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-orchestrate.ts next compose $ARGUMENTS
+   ${aidlcToolInvocation("orchestrate")} next compose $ARGUMENTS
    \`\`\`
 
 2. Act on the directive exactly as the \`aidlc\` skill's forwarding loop
@@ -479,7 +481,7 @@ function handleCheck(): void {
   if (orphans.length > 0) {
     console.log(`ORPHAN runners (skill drives --single stage with no matching stage): ${orphans.join(", ")}`);
   }
-  console.log(`Run \`bun ${harnessDir()}/tools/aidlc-runner-gen.ts write\` to regenerate.`);
+  console.log(`Run \`${aidlcDispatcherInvocation("gen runners")}\` to regenerate.`);
   process.exit(1);
 }
 
@@ -640,7 +642,7 @@ engine owns all routing; the conductor persona arrives on the first directive's
 
 ## The loop
 
-1. \`directive = bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --scope ${scope} $ARGUMENTS\`
+1. \`directive = ${aidlcToolInvocation("orchestrate")} next --scope ${scope} $ARGUMENTS\`
 2. Before acting on each directive, read
    \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` once per session,
    then read every
@@ -649,7 +651,7 @@ engine owns all routing; the conductor persona arrives on the first directive's
    only a module already loaded earlier in this session. Then act on
    \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
    ask / print / error / done).
-3. \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
 4. Repeat from step 1 until \`directive.kind == done\`.
 
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
@@ -669,7 +671,7 @@ continuation; the escape hatch is \`next --new-intent\`.
 
 - **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject
-  (\`bun ${harnessDir()}/tools/aidlc-utility.ts intent --json\` gives its \`slug\` and
+  (\`${aidlcDispatcherInvocation("intent list")} --json\` gives its \`slug\` and
   \`status\`). When in doubt, continue: false-positive offers are the main risk.
 - **On genuine new-work, OFFER, never auto-create.** Surface an
   \`AskUserQuestion\` showing the active intent and the proposed new one, **including
@@ -683,7 +685,7 @@ continuation; the escape hatch is \`next --new-intent\`.
   new-work text:
 
   \`\`\`bash
-  bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
+  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the new-work description>"
   \`\`\`
 
   The engine returns a \`print\` directive naming the \`intent-create\` command
@@ -763,7 +765,9 @@ function handleScopes(rest: string[]): void {
     if (drift.length > 0) {
       console.error("Scope-runner drift detected:");
       for (const d of drift) console.error(`  ${d}`);
-      console.error("Re-run `bun aidlc-runner-gen.ts scopes` to regenerate.");
+      console.error(
+        `Re-run \`${aidlcDispatcherInvocation("gen runner-scopes")}\` to regenerate.`,
+      );
       process.exit(1);
     }
     console.log(`OK — ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
@@ -781,8 +785,9 @@ function handleScopes(rest: string[]): void {
 }
 
 function scopeRunnerSlugFromBody(body: string): string | null {
-  if (!body.includes("aidlc-orchestrate.ts next --scope")) return null;
-  const m = body.match(/aidlc-orchestrate\.ts\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/);
+  const m = body.match(
+    /(?:aidlc\s+engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/,
+  );
   return m?.[1] ?? null;
 }
 
@@ -828,6 +833,21 @@ export function main(argv: string[]): void {
         `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: write, check, list, scopes`,
       );
       process.exit(1);
+  }
+}
+
+/** Regenerate both runner families without writing CLI progress to stdout. */
+export function regenerateRunnerSurfaces(): void {
+  const priorLog = console.log;
+  const priorError = console.error;
+  try {
+    console.log = () => {};
+    console.error = () => {};
+    handleWrite();
+    handleScopes([]);
+  } finally {
+    console.log = priorLog;
+    console.error = priorError;
   }
 }
 

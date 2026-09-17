@@ -50,8 +50,8 @@ const SKIP_REASON = skipReason();
 // SDK calibration — real, not guessed):
 //   aidlc-utility.ts handleDoctor(): header + bun label; the Kiro tree adds
 //   the adapter + agent-config labels (harness-aware doctor, parity closeout).
-const DOCTOR_HEADER = "AI-DLC Health Check";
-const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
+const DOCTOR_HEADER = "AI-DLC doctor";
+const DOCTOR_RUNTIME_LABEL = "Self-contained binary runtime (bun is not required)";
 const DOCTOR_ADAPTER_LABEL = "aidlc-kiro-adapter.ts present";
 const DOCTOR_AGENT_LABEL = "agents/aidlc.json present";
 
@@ -63,14 +63,14 @@ describe("kiro-acp-drive calibration (known-answer)", () => {
       try {
         const r = await driveKiroAcp({
           projectDir: proj,
-          prompt: "/aidlc --doctor",
+          prompt: "/aidlc --doctor --verbose",
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
         const doctorCall = r.toolCalls.find((t) => t.title.includes("aidlc-utility.ts doctor"));
         expect(doctorCall).toBeDefined();
         const out = doctorCall!.output.join("");
         expect(out).toContain(DOCTOR_HEADER);
-        expect(out).toContain(DOCTOR_BUN_LABEL);
+        expect(out).toContain(DOCTOR_RUNTIME_LABEL);
         expect(out).toContain(DOCTOR_ADAPTER_LABEL);
         expect(out).toContain(DOCTOR_AGENT_LABEL);
       } finally {

@@ -1,11 +1,10 @@
-// t248-copilot-packaging: dist/copilot parity + drift guard + shell shape.
+// t248-copilot-packaging: dist/copilot determinism + shell shape.
 //
 // covers: file:tools/aidlc-lib.ts
 //
 // WHAT. Four contracts land here:
-//   (1) The committed dist/copilot tree is byte-identical to what
-//       `bun scripts/package.ts copilot --check` regenerates (drift guard,
-//       same UX as codex's t150 test 1 / opencode's t240 test 1).
+//   (1) `bun scripts/package.ts copilot --check` produces byte-identical clean
+//       builds (same UX as codex's t150 / opencode's t240 test 1).
 //   (2) Core parity: every .ts under dist/copilot/.aidlc/{tools,hooks}/
 //       except the authored adapter is BYTE-IDENTICAL to its dist/claude
 //       source (the architecture-B invariant: the packager may transform
@@ -58,17 +57,19 @@ function* walk(dir: string): Generator<string> {
 }
 
 describe("t248 dist/copilot packaging parity + shell shape", () => {
-  test("1: committed dist/copilot matches the packaging script (drift guard)", () => {
+  test("1: copilot package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "copilot", "--check"], {
       encoding: "utf-8",
       cwd: REPO_ROOT,
       timeout: 180_000,
     });
-    expect(r.stdout + r.stderr).toContain("--check: OK");
+    expect(r.stdout + r.stderr).toContain(
+      "deterministic across two independent build(s) for copilot",
+    );
     expect(r.status).toBe(0);
-  });
+  }, 60_000);
 
-  test("2: engine .ts files are byte-identical to the dist/claude sources", () => {
+  test("2: engine .ts files differ only at declared projection tokens", () => {
     expect(existsSync(ENGINE)).toBe(true);
     let compared = 0;
     for (const sub of ["tools", "hooks"]) {
@@ -81,7 +82,11 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         if (rel.split(sep).includes("data")) continue;
         const claudeTwin = join(CLAUDE_SRC, rel);
         expect(existsSync(claudeTwin)).toBe(true);
-        expect(readFileSync(file, "utf-8")).toBe(readFileSync(claudeTwin, "utf-8"));
+        const copilot = readFileSync(file, "utf-8").replaceAll(
+          "bun .aidlc/tools/aidlc.ts",
+          "bun .claude/tools/aidlc.ts",
+        );
+        expect(copilot).toBe(readFileSync(claudeTwin, "utf-8"));
         compared++;
       }
     }
@@ -161,7 +166,9 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(skills.length).toBeGreaterThan(30);
     const orchestrator = readFileSync(join(SHELL, "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(orchestrator).toContain("Copilot harness");
-    expect(orchestrator).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next");
+    expect(orchestrator).toContain(
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next",
+    );
     expect(orchestrator).not.toContain("{{HARNESS_DIR}}");
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");
@@ -215,6 +222,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         [
           join(project, ".aidlc", "tools", "aidlc-utility.ts"),
           "doctor",
+          "--verbose",
           "--project-dir",
           project,
         ],
@@ -231,11 +239,11 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       );
       const output = `${result.stdout}${result.stderr}`;
       expect(result.status).not.toBe(0);
-      expect(output).toContain("✗  aidlc-state-transition-guard.ts present");
-      expect(output).toContain("✗  aidlc-deliver-stage-rules.ts present");
-      expect(output).toContain("✗  aidlc-plan-approval-guard.ts present");
-      expect(output).toContain("✗  aidlc-review-freeze.ts present");
-      expect(output).toContain("✗  AGENTS.md present (onboarding + method imports)");
+      expect(output).toContain("fail  aidlc-state-transition-guard.ts present");
+      expect(output).toContain("fail  aidlc-deliver-stage-rules.ts present");
+      expect(output).toContain("fail  aidlc-plan-approval-guard.ts present");
+      expect(output).toContain("fail  aidlc-review-freeze.ts present");
+      expect(output).toContain("fail  AGENTS.md present (onboarding + method imports)");
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
@@ -254,6 +262,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
           [
             join(project, ".aidlc", "tools", "aidlc-utility.ts"),
             "doctor",
+            "--verbose",
             "--project-dir",
             project,
           ],
@@ -282,14 +291,14 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       const valid = runDoctor();
       expect(valid.status).toBe(0);
       expect(`${valid.stdout}${valid.stderr}`).toContain(
-        "✓  project folder in ~/.copilot/config.json trustedFolders",
+        "ok    project folder in ~/.copilot/config.json trustedFolders",
       );
 
       writeFileSync(configPath, '{ "trustedFolders": [\n');
       const malformed = runDoctor();
       expect(malformed.status).not.toBe(0);
       expect(`${malformed.stdout}${malformed.stderr}`).toContain(
-        "✗  could not parse ~/.copilot/config.json",
+        "fail  could not parse ~/.copilot/config.json",
       );
     } finally {
       rmSync(project, { recursive: true, force: true });

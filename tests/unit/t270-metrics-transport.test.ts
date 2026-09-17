@@ -90,9 +90,25 @@ function installFakeCompiledWorker(): { executable: string; captures: string } {
   const root = freshRoot("aidlc-t270-worker-");
   const captures = join(root, "captures");
   mkdirSync(captures);
-  const executable = join(root, "aidlc");
-  writeFileSync(executable, FAKE_COMPILED_WORKER, "utf-8");
-  chmodSync(executable, 0o755);
+  const executable = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+  if (process.platform === "win32") {
+    const source = join(root, "worker.ts");
+    writeFileSync(source, FAKE_COMPILED_WORKER, "utf-8");
+    const built = Bun.spawnSync([
+      process.execPath,
+      "build",
+      "--compile",
+      source,
+      "--outfile",
+      executable,
+    ]);
+    if (built.exitCode !== 0) {
+      throw new Error(`fake metric worker build failed: ${built.stderr.toString()}`);
+    }
+  } else {
+    writeFileSync(executable, FAKE_COMPILED_WORKER, "utf-8");
+    chmodSync(executable, 0o755);
+  }
   return { executable, captures };
 }
 

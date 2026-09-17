@@ -75,4 +75,4 @@ organizational capacity constraints.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-delivery-agent](../../guide/agents/delivery-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-delivery-agent.md`](../../../dist/claude/.claude/agents/aidlc-delivery-agent.md)
+- Authored source: [`core/agents/aidlc-delivery-agent.md`](../../../core/agents/aidlc-delivery-agent.md)

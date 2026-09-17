@@ -70,7 +70,11 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
             projectDir: proj,
             answerScript: APPROVE_ALL,
             timeoutMs: DRIVE_TIMEOUT_MS,
-            stopAfterToolResult: { toolName: "Bash", resultIncludes: "Recomposed:" },
+            stopAfterToolResult: {
+              toolName: "Bash",
+              resultIncludes: "Recomposed:",
+              inputExcludes: "--dry-run",
+            },
           },
         );
 

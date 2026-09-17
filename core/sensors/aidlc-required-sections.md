@@ -1,7 +1,7 @@
 ---
 id: required-sections
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-required-sections.ts
+command: {{INVOKE}} engine sensor-required-sections
 default_severity: advisory
 fire_on: gate
 description: Checks at the gate that stage output contains the required H2 headings
@@ -65,7 +65,7 @@ present, the output keeps the generic ≥2-H2 floor.
 ## Failure mode
 
 When required headings are missing, emits `SENSOR_FAILED` and writes detail
-to `aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-sensors/<stage-slug>/required-sections-<fire-id>.md`,
+to `aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-engine/sensors/<stage-slug>/required-sections-<fire-id>.md`,
 where the space and intent come from the active cursors. The fire id is the
 8-hex correlator from the `SENSOR_FIRED` row in the active record's
 `audit/<host>-<clone-id>.md` shard. The detail lists the missing headings.

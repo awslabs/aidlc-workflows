@@ -26,7 +26,12 @@ import {
 } from "../../scripts/agent-knowledge.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
-import { projectTier } from "../../core/tools/aidlc-tiers.ts";
+import type { Tier } from "../../core/tools/aidlc-tiers.ts";
+import {
+  modelAgentName,
+  resolveModelPolicy,
+  writeCodexAgentSurface,
+} from "../../core/tools/aidlc-model-policy.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
@@ -60,14 +65,24 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   { event: "Stop", target: "continue-workflow" },
 ];
 
-const adapterCmd = (harnessDir: string, target: string) =>
-  `bun ${harnessDir}/hooks/aidlc-codex-adapter.ts ${target}`;
+const adapterCmd = (
+  harnessName: string,
+  target: string,
+  trustedNamespace: string,
+) => `{{INVOKE}} ${trustedNamespace} adapter ${harnessName} ${target}`;
 
-function emitHooksJson(harnessDir: string): string {
+function emitHooksJson(
+  substituteToken: (value: string) => string,
+  harnessName: string,
+  trustedNamespace: string,
+): string {
   const hooks: Record<string, Array<Record<string, unknown>>> = {};
   for (const { event, matcher, target } of HOOK_WIRING) {
     const group: Record<string, unknown> = {
-      hooks: [{ type: "command", command: adapterCmd(harnessDir, target) }],
+      hooks: [{
+        type: "command",
+        command: substituteToken(adapterCmd(harnessName, target, trustedNamespace)),
+      }],
     };
     if (matcher) group.matcher = matcher;
     hooks[event] ??= [];
@@ -82,7 +97,7 @@ function emitConfigToml(): string {
 #
 # Model: these session defaults are what judgment-tier agent roles inherit
 # (their TOMLs omit model/model_reasoning_effort by design - see the tier
-# projection); balanced/templated roles pin gpt-5.6-terra per the tier table.
+# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.
 # D-9: Amazon Bedrock is the shipped default provider (web_search is
 # unavailable there; the market-research stage degrades gracefully). For
 # OpenAI-auth setups, comment out model_provider and the [model_providers]
@@ -143,14 +158,24 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 `;
 }
 
-function emitDefaultRules(harnessDir: string): string {
+export function emitDefaultRules(
+  harnessDir: string,
+  invoke: string,
+  trustedNamespace: string,
+): string {
+  const trustedPattern = ["aidlc", trustedNamespace]
+    .map((token) => JSON.stringify(token))
+    .join(", ");
+  const runtimeRules = invoke === "aidlc"
+    ? `# Native runtime allowlist: framework commands invoke the self-contained binary.
+prefix_rule(pattern = [${trustedPattern}], decision = "allow")`
+    : `# Bun copy-channel allowlist: deterministic framework tools stay under the harness tree.
+prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
 #
-# bun tool allowlist: the deterministic core runs via these exact prefixes.
-prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")
-prefix_rule(pattern = ["bun", "${harnessDir}/hooks/"], decision = "allow")
+${runtimeRules}
 
 # Git allow-rules (S9d): workspace-write keeps .git read-only in-sandbox and
 # routes git writes through escalation; these prefix rules pre-approve the
@@ -203,7 +228,11 @@ export function trustEntries(
   projectDir: string,
   hooksJsonPath?: string,
   harnessDir = ".codex",
+  harnessName = "codex",
+  invoke = "aidlc",
+  trustedNamespace?: string,
 ): string {
+  if (!trustedNamespace) throw new Error("trusted route namespace is required");
   // A supplied hooks path is already the Codex trust identity: preserve it
   // exactly. For the default, choose the path implementation from the project
   // spelling so Windows installers can generate native paths even when this
@@ -220,19 +249,28 @@ export function trustEntries(
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
-    const hash = trustHash(snake, adapterCmd(harnessDir, target));
+    const command = adapterCmd(harnessName, target, trustedNamespace)
+      .replace("{{INVOKE}}", invoke);
+    const hash = trustHash(snake, command);
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });
 }
 
-function emitTrustSeed(harnessDir: string): string {
+export function emitTrustSeed(
+  harnessDir: string,
+  harnessName = "codex",
+  invoke = "aidlc",
+  trustedNamespace?: string,
+): string {
+  if (!trustedNamespace) throw new Error("trusted route namespace is required");
+  const recipe = `# This template hashes the projected \`${invoke} ${trustedNamespace} adapter ${harnessName} ...\`
+# commands in hooks.json. Start one interactive Codex session and choose
+# "Trust all and continue" to register the project-specific hook identities.
+`;
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
-    `# From an AI-DLC source checkout, install the pinned serializer first:\n` +
-    `#   bun install --frozen-lockfile\n` +
-    `# Then generate ready-to-paste entries:\n` +
-    `#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]\n` +
+    recipe +
     `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
     `# If entries for that hooks.json path already exist, replace the full set;\n` +
     `# appending a second set creates invalid TOML. The hash covers the\n` +
@@ -240,7 +278,14 @@ function emitTrustSeed(harnessDir: string): string {
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
-    trustEntries("<PROJECT_DIR>", undefined, harnessDir)
+    trustEntries(
+      "<PROJECT_DIR>",
+      undefined,
+      harnessDir,
+      harnessName,
+      invoke,
+      trustedNamespace,
+    )
   );
 }
 
@@ -250,9 +295,8 @@ function emitTrustSeed(harnessDir: string): string {
 // {model, effort} via projectTier. A null projected value means the TOML key
 // is OMITTED: the spawned role then falls back to the shipped config.toml
 // session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
-// TOML without `model` spawns on the config.toml model + effort). judgment
-// omits both keys;
-// balanced and templated both pin a model and medium effort.
+// TOML without `model` spawns on the config.toml model + effort). Judgment
+// and templated omit both keys; balanced pins both.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.
@@ -285,7 +329,17 @@ export default function emit(ctx: EmitContext): void {
   // tierCap is the packager's resolved pack-time cap, passed through so the
   // emit-owned TOML projections use the SAME cap as every declarative
   // projection - never re-resolved here.
-  const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
+  const {
+    coreRoot,
+    harnessRoot,
+    harnessName,
+    distRoot,
+    harnessDir,
+    trustedRouteNamespace,
+    substituteToken,
+    tierCap,
+  } = ctx;
+  const invoke = substituteToken("{{INVOKE}}");
   const CODEX_ROOT = join(distRoot, harnessDir);
   const SKILLS_DST = join(distRoot, ".agents", "skills");
 
@@ -342,7 +396,13 @@ export default function emit(ctx: EmitContext): void {
     // packager's own reader strips it for the other harnesses).
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
-    const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
+    const effective = resolveModelPolicy(
+      null,
+      modelAgentName(mdPath),
+      tier as Tier,
+      "codex",
+      tierCap,
+    );
     // The harness-neutral reviewer persona cites its own turn cap as "the
     // `maxTurns: <n>` frontmatter above - keep the two numbers in sync". That
     // citation assumes a YAML frontmatter block sits above the body - true on
@@ -358,14 +418,11 @@ export default function emit(ctx: EmitContext): void {
         "frontmatter and no native per-agent cap key, so this number is " +
         "prose-only here; update it by hand if the authored cap changes",
     );
-    const modelLines =
-      (proj.model !== null ? `model = "${proj.model}"\n` : "") +
-      (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
-    return (
+    return writeCodexAgentSurface(
       `name = "${name}"\n` +
       `description = "${description.replace(/"/g, '\\"')}"\n` +
-      modelLines +
-      `developer_instructions = ${tomlMultiline(instructions.trim())}\n`
+      `developer_instructions = ${tomlMultiline(instructions.trim())}\n`,
+      effective,
     );
   }
 
@@ -401,15 +458,21 @@ export default function emit(ctx: EmitContext): void {
   const emissions: Array<{ path: string; content: () => string }> = [];
 
   // codex-only config + wiring + trust + AGENTS.md
-  emissions.push({ path: join(CODEX_ROOT, "hooks.json"), content: () => emitHooksJson(harnessDir) });
+  emissions.push({
+    path: join(CODEX_ROOT, "hooks.json"),
+    content: () =>
+      emitHooksJson(substituteToken, harnessName, trustedRouteNamespace),
+  });
   emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),
-    content: () => emitDefaultRules(harnessDir),
+    content: () =>
+      emitDefaultRules(harnessDir, invoke, trustedRouteNamespace),
   });
   emissions.push({
     path: join(CODEX_ROOT, "trust-seed.toml"),
-    content: () => emitTrustSeed(harnessDir),
+    content: () =>
+      emitTrustSeed(harnessDir, harnessName, invoke, trustedRouteNamespace),
   });
   emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
 
@@ -422,11 +485,14 @@ export default function emit(ctx: EmitContext): void {
     });
   }
 
-  // (a) authored orchestrator shell — verbatim from harness/codex/skills/aidlc/
+  // (a) authored orchestrator shell with the standard token projection.
   for (const f of ["SKILL.md", "question-rendering.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
-      content: () => readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8"),
+      content: () =>
+        substituteToken(
+          readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8"),
+        ),
     });
   }
   // (b) stage runners + init, generated, with the implicit-invocation guard
@@ -462,7 +528,7 @@ export default function emit(ctx: EmitContext): void {
 
   // Clean-sweep the emitted skills tree so a removed runner doesn't linger.
   // In --check mode distRoot is temporary; the packager compares its complete
-  // inventory with the committed distribution after emit returns.
+  // inventory with the independently generated counterpart after emit returns.
   rmSync(SKILLS_DST, { recursive: true, force: true });
   for (const { path, content } of emissions) {
     mkdirSync(dirname(path), { recursive: true });

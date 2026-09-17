@@ -30,6 +30,65 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
+Distribution coverage is split by contract:
+
+- `t145-packaging-parity.test.ts` proves that copy, native, and plugin
+  projections are deterministic across two independent clean packager runs.
+- `t238-build-binaries.test.ts` compiles and probes the standalone binary
+  closure, including native routes, hooks/adapters, project mutation, and the
+  final installed layout with no `bun` on `PATH`.
+- `t242-plugin-state.test.ts` proves host inventory normalization, composition
+  hashes, transactional sync rollback, and ownership-safe prune.
+- `t243-install-mechanism.test.ts` covers archive rejection, the shared
+  transaction engine and recovery paths, project init/refresh ownership,
+  checksums, lifecycle, pins, offline packages, and copy/native projection
+  separation.
+- `t244-install-management.test.ts` covers machine configuration, update
+  discovery, installer harness selection, Windows lifecycle surfaces,
+  completions, and release-workflow candidate continuity.
+- `t330-release-channel-grammar.test.ts` pins the closed stable and preview
+  version-id grammar, the installer and lifecycle literals of it, and a preview
+  install that runs through the launcher shim.
+- `t331-preview-channel-lifecycle.test.ts` covers `config --channel`,
+  channel-aware `update` and `update --check`, API failure as unavailable,
+  switching back to stable, preview retention, and preview pins.
+- `t332-preview-release-pipeline.test.ts` covers the annotated-tag prerelease
+  publication, the preview planner and notes, and the plan record. It checks
+  multiple changed-source previews on one UTC day, including a later manual run
+  after a scheduled publication. Unchanged sources skip; drafts and orphan tags
+  permit retry planning with unoccupied ids. Workflow assertions cover
+  isolation of stable tags from scheduled/manual previews, shared
+  `release-preview` concurrency, CI gate ancestry, channel-specific provenance
+  signers, and build stamping.
+
+The test runner regenerates all projections under a process lock before test
+discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
+CI also runs an explicit package step before each job that consumes generated
+trees. Binary and release packagers perform their own regeneration and
+determinism checks before reading `dist-release/`.
+
+Release CI adds native smoke on Linux, macOS, and Windows, builds the seven
+target artifacts on their native runner architectures, and executes both musl
+probes in disposable Alpine containers after installing the documented
+`libgcc` and `libstdc++` runtime prerequisites shared by Bun and Node.js. The
+musl matrix uses
+`fail-fast: false` so both architectures report before CI stages one
+checksum-verified candidate. Unix and Windows lifecycle
+journeys consume those bytes without signing permissions. The workflow then
+attests them and uploads one workflow artifact. `release` rechecks the tag and
+checksums, creates the GitHub Release in the source repository with
+`GITHUB_TOKEN`, and compares the uploaded asset inventory with the candidate.
+Publishing never rebuilds or repackages the candidate.
+
+`tests/harness/release-fixture.ts` builds deterministic release directories
+from the generated projection manifests and can serve them locally with
+redirect, delay, truncation, captive-portal, oversized-metadata, and
+missing-asset faults. Run
+`bun tests/harness/release-fixture.ts --output <dir>` to author a fixture.
+The normal suite stays offline; set `AIDLC_RELEASE_CONTRACT_LIVE=1` when
+running t243 to opt into the public release metadata and checksum contract
+check.
+
 The deterministic e2e slice (`bash tests/run-tests.sh --debug -P 8 --e2e --filter "^t[0-9]"`) runs in CI with `--no-llm`, while local development loops default to smoke + unit + integration. Branches that touch merge, worktree, or swarm paths should also run this slice locally before review rounds, because mode-boundary regressions between ordinary-Bolt and swarm execution are invisible to the default tier.
 
 **Filename convention.** A test's filename is `t<NN>[-description].test.ts` —
@@ -50,7 +109,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 
 **What it tests:**
 - File existence, permissions, naming conventions (smoke)
-- Hook scripts (11 TypeScript via bun), stage frontmatter, knowledge inventory (unit)
+- All 17 hook sources through copy/native dispatch, stage frontmatter, knowledge inventory (unit)
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 
@@ -91,7 +150,7 @@ The test suite runs on macOS, Linux, and Windows through the native Bun runner:
 bun tests/run-tests.ts [--ci | --all --debug -P 8]
 ```
 
-`bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. At runtime this implementation's hooks, CLI tools, and test runner require `bun`; Bash is no longer the primary runner substrate.
+`bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. Repository tests and copy-channel hooks/tools require `bun`; native release projections invoke hooks/tools through the installed `aidlc` binary. Bash is not the primary runner substrate.
 
 **Portability constraints baked into the suite:**
 
@@ -210,7 +269,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | CI pipeline | L2 | `bun tests/run-tests.ts --ci` | CI/CD pipeline |
-| Release / merge to main | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
+| Release / merge to `main` | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
@@ -336,6 +395,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --filter PAT    # Only run tests whose filename matches extended regex PAT
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
+--shard N/M     # Run one duration-balanced unit shard.
+                # Requires --unit with no other level or profile flags.
 ```
 
 `--no-llm` (or `AIDLC_NO_LLM=1`) closes the derived Claude gate and forces every
@@ -372,10 +433,32 @@ explicitly to keep those files on their in-test SKIP path.
 
 All 8 parallel calls observed `cache_read=73789` — Bedrock prompt caching stays warm across concurrent workers. No throttling or corruption observed at 8-way.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially regardless. They already complete in seconds and their interleaved output would hurt debuggability for no wall-clock gain. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each GitHub Actions job owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live (several can appear back-to-back before the first `DONE` — that's the visible signal workers are concurrent). In normal/verbose mode, each worker's TAP body is buffered and flushed to stdout as one contiguous block under a directory-mutex (`mkdir $LOG_DIR/.stdout.lock`, atomic on POSIX — works on macOS bash 3.2 without `flock`). So `ok`/`not ok` lines from different files never interleave; stdout reads top-to-bottom like a serial run, just with the file completion order determined by how long each test took rather than dispatch order. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping live workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; their exact filenames depend on process IDs and TUI session names, so the runner prints the glob at startup and at each test start. The Kiro-ACP trace records the live `kiro-cli acp` turn event-by-event (spawn, prompt start, each `tool_call`/`tool_call_update` with its verbatim output preview, permission answers, the spawned process's stderr, and the terminal `result`/`timeout`/`end`), so a `session/prompt` timeout can be diagnosed after the fact — distinguishing a turn that was progressing (real tool calls firing) from one that stalled.
 
 **Worker coordination.** The parent backgrounds `run_bun_test_file` with `&` and holds a slot gate via `jobs -rp | wc -l`. Each worker writes an atomic `.meta` sidecar to `$LOG_DIR/_results/`; the parent reads them after `wait` to populate the summary tables. macOS ships bash 3.2.57 (no `wait -n`), so the gate polls every 200ms — negligible next to minute-long LLM calls.
 
 **Guidance.** Start with `--parallel 4`. Raise to `8` if Bedrock capacity and your bill tolerate it. Drop back to serial for debugging a single failing test — or use `--filter` to isolate it.
+
+## Unit Sharding
+
+`--unit --shard N/M` assigns every discovered unit file to exactly one of `M`
+duration-balanced shards. Assignment is deterministic and uses
+`tests/unit-shard-weights.json` for the slowest files. Unlisted files receive a
+one-second default weight, so new tests join the least-loaded shard without
+changing the command. The runner exits 2 when `M` exceeds the number of
+assignable groups, so no valid shard command can report success after running
+zero files.
+
+Each shard remains serial. Run separate shards in separate checkouts or CI jobs.
+Do not run them concurrently against one repository tree because packaging
+tests regenerate `dist/` and can race tests that read generated files.
+
+The affinity list keeps cross-file prerequisites explicit. The native binary
+builder test currently runs before the Copilot compiled-adapter coverage in the
+same shard. Sharded unit execution requires that compiled coverage to resolve
+the producer's native build result, so a missing artifact fails instead of
+silently skipping the compiled cases. The smoke runner contract verifies that
+all four CI shards are non-empty, disjoint, cover the complete unit inventory,
+and preserve this ordering.

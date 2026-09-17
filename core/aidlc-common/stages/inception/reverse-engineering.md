@@ -57,7 +57,7 @@ Read `<record>/aidlc-state.md` to confirm:
 - Project type is brownfield
 
 If the project is not brownfield, run
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "<reason>"`.
+`{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason "<reason>"`.
 The engine records the skip and advances to the next in-scope stage.
 
 #### Resolve the intent's repo set (multi-repo)
@@ -95,7 +95,7 @@ accumulates across intents. For every repo in the resolved set, run the
 read-only check:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
+{{INVOKE}} engine workspace codekb-scope-diff --repo <repo>
 ```
 
 - **NO_STORE** - first scan for this repo. Proceed to Step 2; no question.
@@ -185,7 +185,7 @@ Only after every repository decision has been resolved:
 
 - If every repo is reused on an ordinary workflow run, report the stage as
   skipped exactly once:
-  `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "codekb reuse: all resolved stores CURRENT, human chose reuse"`.
+  `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason "codekb reuse: all resolved stores CURRENT, human chose reuse"`.
 - If every repo is reused on an isolated run (`directive.single === true`), do
   NOT call the main-workflow skipped report. Return the reused-repositories
   summary to the orchestrator's isolated stage-runner branch; the single-run
@@ -295,7 +295,7 @@ Choose the write behavior recorded in Step 1:
   `./`.
 
 The architect MUST write the candidate into
-`<record>/.aidlc-codekb-stage-<repo>/`, not into the
+`<record>/.aidlc-engine/codekb-stage-<repo>/`, not into the
 shared CodeKB. The staging directory contains exactly the nine filenames above
 and no other entries. It is temporary transaction input, not a durable stage
 artifact.
@@ -305,7 +305,7 @@ For the block's `fingerprint:` line, run the mint command with the final
 its output verbatim:
 
    ```
-   bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
+   {{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
    ```
 
 At Minimal depth, all nine artifacts and every required section above still
@@ -318,7 +318,7 @@ is the methodology's existing depth contract, not an output-length cap.
 yourself.** Run the read-only tool
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-path --repo <repo>
+{{INVOKE}} engine workspace codekb --repo <repo>
 ```
 
 (omit `--repo` only for an unrecorded project-root repo; pass it for every
@@ -335,7 +335,7 @@ repo; NOT the timestamp filename - record-dir placement checks key on the
 artifact stems) and run
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
+{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
 ```
 
 Keep the output keyed by `<repo>` for Step 5's completion summary. This is the
@@ -352,7 +352,7 @@ exact snapshot values captured immediately before Step 2:
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-publish \
   --repo <repo> \
-  --staged <record>/.aidlc-codekb-stage-<repo>/ \
+  --staged <record>/.aidlc-engine/codekb-stage-<repo>/ \
   --paths <snapshot paths> \
   --expect-store <snapshot store_generation> \
   --expect-source <snapshot source_fingerprint> \
@@ -378,7 +378,7 @@ rollback/recovery. No other step may write those nine shared files.
 
 Never bypass a refusal with direct writes or by substituting the newly observed
 generation into the old candidate. After a successful publish, delete that
-repo's `.aidlc-codekb-stage-<repo>/` directory. The final directory remains the
+repo's `.aidlc-engine/codekb-stage-<repo>/` directory. The final directory remains the
 durable per-repo code knowledge base shared across every intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
@@ -394,7 +394,7 @@ Do not report completion until every selected repo's chain has both receipts.
 
 After every selected repo scan has completed, hand completion to
 `stage-protocol.md` exactly once via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage reverse-engineering --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 5: Present Completion & Request Approval
@@ -432,9 +432,8 @@ Upstream targets: none.
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

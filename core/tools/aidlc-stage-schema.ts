@@ -1,7 +1,7 @@
 // Stage frontmatter schema — machine-checkable realisation of the spec in
 // dist/claude/.claude/aidlc-common/protocols/stage-definition.md. Consumed by
 // parseStageFrontmatter (lib.ts), aidlc-graph compile, and the doctor
-// schema-lint check (aidlc-utility.ts handleDoctor). Hand-rolled,
+// schema-lint check (aidlc-utility.ts collectDoctorReport). Hand-rolled,
 // zero-dep — matches parseAgentFrontmatter precedent in lib.ts. Pure
 // validator: no I/O, no YAML parsing, no mutation — callers pass an
 // already-parsed object.
@@ -78,7 +78,10 @@ export interface StageFrontmatter {
   // (stage-protocol-reviewer.md §12a). Optional; absent when the stage has no review step.
   reviewer?: string;
   // review_artifact — required with reviewer. Names the required Markdown
-  // produces[] artifact that owns the appended `## Review` section.
+  // produces[] artifact the review is about: the artifact the review record is
+  // keyed to, named at the gate, and used in `--reject-finding <artifact>#R-NN`.
+  // The reviewer never writes to it; a legacy `## Review` section inside it is
+  // read for migration only.
   review_artifact?: string;
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
@@ -251,9 +254,10 @@ export function validateStageFrontmatter(
   checkString(o, "slug", errors);
   checkSlugPattern(o, "slug", SLUG_RE, "kebab-case", errors);
 
-  // number / name / plugin — optional plugin-mechanism display + ownership
-  // metadata. Absent is valid (core stages omit them); shape-checked when
-  // present. number must be `<int>.<int>`; name + plugin any non-empty string.
+  // number / name / plugin — optional display + ownership metadata. Absent is
+  // valid; core stages use name only when title-casing the slug would lose an
+  // established label. number must be `<int>.<int>`; name + plugin any
+  // non-empty string.
   checkString(o, "number", errors);
   checkSlugPattern(o, "number", NUMBER_RE, "<phase-prefix>.<index>", errors);
   checkString(o, "name", errors);

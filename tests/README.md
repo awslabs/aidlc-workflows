@@ -101,6 +101,9 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
+# Run one deterministic unit shard. CI uses four isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/4
+
 # Verbose / debug output
 bash tests/run-tests.sh --verbose
 bash tests/run-tests.sh --debug   # streams output and writes SDK/TUI NDJSON traces
@@ -108,6 +111,10 @@ bash tests/run-tests.sh --debug   # streams output and writes SDK/TUI NDJSON tra
 # Run a single test directly
 bun test tests/smoke/t01-file-structure.test.ts
 ```
+
+The runner rejects shard counts that exceed the number of assignable test
+groups. Sharded unit runs also require the native binary producer to make the
+compiled Copilot adapter cases executable.
 
 Live SDK and TUI drivers default to project-only Claude setting sources. That
 keeps the copied test `.claude/` tree authoritative while excluding developer

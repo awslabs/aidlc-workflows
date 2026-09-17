@@ -102,8 +102,7 @@ import {
   relativeRecordDir,
   reviewArtifactFingerprint,
   reviewArtifactBytesSnapshot,
-  reviewCompletionMatchesRequest,
-  reviewRequestBindingFromBlock,
+  reviewedSourceEvidencePath,
   reviewedSourceRef,
   resolveAuditWorktreePath,
   resolveBoltDag,
@@ -112,7 +111,6 @@ import {
   resolveStage,
   sourceListingSha256,
   shapeSourceSnapshotIndex,
-  terminalReviewVerdict,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
@@ -126,6 +124,7 @@ import {
   workspaceSourceListing,
   workspaceSourceSnapshotPaths,
   worktreeStateFilePath,
+  worktreeReviewAttemptProjection,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -198,7 +197,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
   const executable = compiledExecutable();
   const noun = toolFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
   const command = executable
-    ? [executable, noun, ...args, "--project-dir", projectDir]
+    ? [executable, "engine", noun, ...args, "--project-dir", projectDir]
     : [process.execPath, join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
@@ -397,49 +396,25 @@ function reviewerReceiptError(
     : auditBlockField(creationBlock, "Base Source Listing");
   const creationModern = creationBaseCommit !== null || creationBaseListing !== null;
 
-  const relevant = new Set([
-    "BOLT_STARTED",
-    "REVIEW_REQUESTED",
-    "REVIEW_COMPLETED",
-  ]);
-  const events = readAuditShardEvents(wt)
-    .filter((event) => relevant.has(event.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shard < b.shard ? -1 : 1;
-    });
-  const crossShardTied = (index: number): boolean =>
-    events.some(
-      (candidate, other) =>
-        other !== index &&
-        candidate.timestamp === events[index].timestamp &&
-        candidate.shard !== events[index].shard,
-    );
-
-  let boltStart = -1;
-  for (let i = 0; i < events.length; i++) {
-    if (
-      events[i].event === "BOLT_STARTED" &&
-      auditBlockField(events[i].block, "Bolt slug") === boltSlug
-    ) {
-      if (crossShardTied(i)) {
-        let end = i;
-        while (end + 1 < events.length && events[end + 1].timestamp === events[i].timestamp) end++;
-        boltStart = end;
-        i = end;
-      } else {
-        boltStart = i;
-      }
-    }
-  }
-  if (boltStart === -1) {
+  const reviewAttempt = worktreeReviewAttemptProjection(
+    wt,
+    readAuditShardEvents(wt),
+    {
+      boltSlug,
+      unit,
+      stage,
+      reviewer,
+      reviewClass,
+      maxIterations,
+    },
+  );
+  if (reviewAttempt.boltStart === null) {
     return {
       error: `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`,
     };
   }
 
-  const boltStartBlock = events[boltStart].block;
+  const boltStartBlock = reviewAttempt.boltStart.block;
   const baseCommit = auditBlockField(boltStartBlock, "Base commit");
   const baseSourceListing = auditBlockField(boltStartBlock, "Base Source Listing");
   if (
@@ -483,77 +458,13 @@ function reviewerReceiptError(
     }
   }
 
-  const pendingRequests = new Map<
-    string,
-    {
-      binding: ReturnType<typeof reviewRequestBindingFromBlock>;
-      recovery: boolean;
-      timestamp: string;
-      shard: string;
-    }
-  >();
-  let latestTerminal:
-    | {
-        block: string;
-        binding: NonNullable<
-          ReturnType<typeof reviewRequestBindingFromBlock>
-        >;
-      }
-    | null = null;
-  for (let i = boltStart + 1; i < events.length; i++) {
-    const event = events[i];
-    if (
-      event.event !== "REVIEW_REQUESTED" &&
-      event.event !== "REVIEW_COMPLETED"
-    ) {
-      continue;
-    }
-    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
-    if (auditBlockField(event.block, "Stage") !== stage) continue;
-    if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
-    if (auditBlockField(event.block, "Unit") !== unit) continue;
-    const iteration = auditBlockField(event.block, "Iteration");
-    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
-    const requestKey = `${unit}\u0000${iteration}`;
-    if (event.event === "REVIEW_REQUESTED") {
-      if (crossShardTied(i)) continue;
-      const binding = reviewRequestBindingFromBlock(event.block);
-      if (binding === null) continue;
-      pendingRequests.set(requestKey, {
-        binding,
-        recovery: auditBlockField(event.block, "Recovery") === "stale-receipt",
-        timestamp: event.timestamp,
-        shard: event.shard,
-      });
-      continue;
-    }
-    if (crossShardTied(i)) {
-      pendingRequests.delete(requestKey);
-      continue;
-    }
-    const request = pendingRequests.get(requestKey);
-    if (
-      request === undefined ||
-      (request.timestamp === event.timestamp && request.shard !== event.shard) ||
-      !request.binding ||
-      !reviewCompletionMatchesRequest(request.binding, event.block)
-    ) {
-      continue;
-    }
-    pendingRequests.delete(requestKey);
-    const rawVerdict = auditBlockField(event.block, "Verdict");
-    const verdict = request.recovery
-      ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
-        ? rawVerdict
-        : null
-      : terminalReviewVerdict(rawVerdict, iteration, reviewClass, maxIterations);
-    if (verdict !== null) {
-      latestTerminal = {
-        block: event.block,
-        binding: request.binding,
-      };
-    }
-  }
+  const latestTerminal =
+    reviewAttempt.terminal === null
+      ? null
+      : {
+          block: reviewAttempt.terminal.event.block,
+          binding: reviewAttempt.terminal.binding,
+        };
 
   if (latestTerminal === null) {
     return {
@@ -823,12 +734,61 @@ function captureReviewedRecordSnapshot(
           `re-run the reviewer`,
       };
     }
+    // The committed reviewed-listing evidence must travel with the manifest: the
+    // manifest alone lands a claim whose content nothing can verify, so the unit
+    // would resolve `unverifiable` on main (aidlc-attest.ts) even though it was
+    // reviewed. Its sha256 IS the receipt's Unit Source Fingerprint.
+    const hex = /^sha256:([0-9a-f]{64})$/.exec(receipt.unitSourceFingerprint)?.[1];
+    if (hex === undefined) {
+      return { error: `unit "${unit}" carries a malformed Unit Source Fingerprint` };
+    }
+    const evidenceLogicalPath =
+      `construction/${unit}/${stage.slug}/reviewed-source-${hex.slice(0, 12)}.tsv`;
+    const evidencePath = reviewedSourceEvidencePath(
+      wtRecord,
+      unit,
+      stage.slug,
+      hex.slice(0, 12),
+    );
+    let evidenceBytes: Buffer;
+    try {
+      evidenceBytes = readRegularFileNoFollowOrThrow(
+        assertNoSymlinkInChainOrThrow(
+          realpathSync(wt),
+          relative(wt, evidencePath),
+        ),
+        `reviewed source evidence for unit ${unit}`,
+      );
+    } catch {
+      try {
+        lstatSync(evidencePath);
+        return {
+          error:
+            `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+            `re-run the reviewer`,
+        };
+      } catch {
+        // Reviews completed before committed evidence was introduced still
+        // retain these exact, receipt-bound bytes in .aidlc-engine/source-review.
+        // Promote them into the transferred snapshot so an in-flight swarm can
+        // finish after upgrading without weakening the new provenance record.
+        evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
+      }
+    }
+    if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
+      return {
+        error:
+          `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+          `re-run the reviewer`,
+      };
+    }
     entries.push(
       {
         logicalPath:
           `construction/${unit}/${stage.slug}/source-manifest.json`,
         bytes: manifestBytes,
       },
+      { logicalPath: evidenceLogicalPath, bytes: evidenceBytes },
     );
   }
 
@@ -1709,6 +1669,9 @@ function handlePrepare(rest: string[]): void {
     .toLowerCase()
     .replace(/\s+/g, "-");
   const autonomy = (getField(state, "Construction Autonomy Mode") ?? "").trim();
+  // Human lines for source drift accepted under Change Control `relaxed` when
+  // protected Code Generation authority started for the batch's units.
+  const swarmChangeNotices: string[] = [];
   if (stage === "code-generation" && autonomy === "autonomous") {
     const invalid = units
       .map((unit) => evaluateCodeGenerationApproval(projectDir, { unit }))
@@ -1723,7 +1686,7 @@ function handlePrepare(rest: string[]): void {
     }
     try {
       for (const unit of units) {
-        beginCodeGeneration(projectDir, { unit });
+        swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
       }
     } catch (error) {
       fail(
@@ -1885,7 +1848,13 @@ function handlePrepare(rest: string[]): void {
 
   console.log(
     JSON.stringify(
-      { batch: flags.batch, base, concurrency: Number(concurrency), units: prepared },
+      {
+        batch: flags.batch,
+        base,
+        concurrency: Number(concurrency),
+        units: prepared,
+        ...(swarmChangeNotices.length > 0 ? { change_notices: swarmChangeNotices } : {}),
+      },
       null,
       2
     )

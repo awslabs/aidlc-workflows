@@ -11,7 +11,7 @@
 //     argv and their directive is injected; ambiguous freeform invocations
 //     stamp the exact argv in aidlc/.aidlc-forwarding-latch.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
-//     `aidlc-orchestrate.ts next` while the latch is fresh-for-this-turn
+//     `aidlc engine orchestrate next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
 //     (advancing flag), a stale latch, or no latch at all → exit 0 (inert). A
 //     fresh forwarding latch rejects changed/dropped first-next arguments and
@@ -23,7 +23,7 @@
 // <cwd>/aidlc/ and signals Kiro purely via stdout + exit code. In-process
 // testing would bypass the exact surface being contracted. No live LLM: the
 // verb-intercept args are recovered deterministically from either the expanded
-// prompt body's `aidlc-orchestrate.ts next <ARGS>` forwarding anchor or a raw
+// prompt body's `aidlc engine orchestrate next <ARGS>` forwarding anchor or a raw
 // leading `/aidlc` prompt, and pretool-block reads only the counter/latch files
 // we seed.
 
@@ -77,10 +77,10 @@ function fakeCompiledExecutable(projectDir: string): string {
 }
 
 // Build an expanded-prompt body carrying the forwarding-loop anchor the seam
-// recovers args from: `… aidlc-orchestrate.ts next <ARGS>` inside a backtick
+// recovers args from: `… aidlc engine orchestrate next <ARGS>` inside a backtick
 // code span (exactly what Kiro substitutes $ARGUMENTS into).
 function promptWithNext(args: string): string {
-  return `Step 1: run \`bun .kiro/tools/aidlc-orchestrate.ts next ${args}\` and relay the output.`;
+  return `Step 1: run \`aidlc engine orchestrate next ${args}\` and relay the output.`;
 }
 
 const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-turn-counter");
@@ -89,6 +89,19 @@ const forwardingPath = (dir: string) =>
   join(dir, "aidlc", ".aidlc-forwarding-latch");
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
+  test("native state-transition guard routes through the compiled hook ABI", () => {
+    const source = readFileSync(
+      join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
+      "utf-8",
+    );
+    const branch = source.slice(
+      source.indexOf('if (target === "state-transition-guard")'),
+      source.indexOf("// --- plan-approval-guard"),
+    );
+    expect(branch).toContain("AIDLC_COMPILED_EXECUTABLE");
+    expect(branch).toContain('[executable, "engine", "hook", "state-transition-guard"]');
+  });
+
   test("1: read-only flag (--status) bumps counter to 1 and stamps the read-only-flag latch", () => {
     const dir = scratchProject();
     try {
@@ -204,7 +217,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("2c: compiled plugin dispatch translates internal utility names back to public argv", () => {
+  test("2c: compiled plugin dispatch translates internal utility names to engine argv", () => {
     const dir = scratchProject();
     try {
       const executable = fakeCompiledExecutable(dir);
@@ -221,7 +234,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         );
         expect(r.code, command).toBe(0);
         const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
-        expect(relayed, command).toBe(command);
+        expect(relayed, command).toBe(`engine ${command}`);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -295,7 +308,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         );
         expect(r.code, command).toBe(0);
         const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
-        expect(relayed, command).toBe(command);
+        expect(relayed, command).toBe(`engine ${command}`);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -313,7 +326,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
       expect(r.stdout).toContain(
-        `bun .kiro/tools/aidlc-orchestrate.ts next ${raw}`,
+        `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`,
       );
       expect(existsSync(counterPath(dir))).toBe(true);
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
@@ -340,7 +353,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
       expect(r.stdout).toContain(
-        `bun .kiro/tools/aidlc-orchestrate.ts next ${raw}`,
+        `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`,
       );
       expect(existsSync(latchPath(dir))).toBe(false);
       const forwarding = JSON.parse(
@@ -365,11 +378,41 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
       expect(r.stdout).toContain(
-        "aidlc-utility.ts intent-create --scope poc --arguments 'build auth'",
+        "aidlc.ts engine intent create --scope poc --arguments 'build auth'",
       );
       expect(r.stdout).not.toContain("Intent created:");
       expect(existsSync(latchPath(dir))).toBe(false);
       expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3aa: config alias is engine-pre-dispatched and arms the same-turn latch", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext("--config trust"),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain('"kind":"print"');
+      expect(r.stdout).toContain("config trust --show --json");
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
+        turn?: number;
+        flag?: string;
+        source?: string;
+      };
+      expect(latch.turn).toBe(1);
+      expect(latch.flag).toBe("config trust");
+      expect(latch.source).toBe("config-alias");
+
+      const blocked = runAdapter(dir, "guard-tool-call", {
+        tool_input: { command: "aidlc engine orchestrate next" },
+        cwd: dir,
+      });
+      expect(blocked.code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -408,7 +451,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
       expect(r.stdout).toContain('"kind":"print"');
       expect(r.stdout).toContain(
-        "aidlc-utility.ts intent-create --scope feature",
+        "aidlc.ts engine intent create --scope feature",
       );
       expect(existsSync(counterPath(dir))).toBe(true);
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
@@ -535,7 +578,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
       );
     }
   }
-  const BARE_NEXT = "bun .kiro/tools/aidlc-orchestrate.ts next";
+  const BARE_NEXT = "aidlc engine orchestrate next";
 
   function seedForwarding(
     dir: string,

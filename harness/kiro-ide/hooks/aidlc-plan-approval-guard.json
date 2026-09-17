@@ -5,7 +5,7 @@
       "name": "aidlc-plan-approval-guard",
       "trigger": "PreToolUse",
       "description": "Blocks Code Generation before a human-owned Plan Approval receipt, using exact tool targets when available and a source-floor fallback for legacy argument-less payloads.",
-      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard" }
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide plan-approval-guard" }
     }
   ]
 }

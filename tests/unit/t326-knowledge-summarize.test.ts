@@ -67,10 +67,10 @@ afterEach(() => {
   }
 });
 
-/** Drives the PUBLIC surface only -- `aidlc.ts knowledge <verb>`, never
+/** Drives the PUBLIC surface only -- `aidlc.ts engine knowledge <verb>`, never
  *  `aidlc-knowledge.ts` directly (baseline §8.12). */
 function knowledge(p: string, args: string[]): { status: number | null; out: string; err: string } {
-  const r = spawnSync("bun", [AIDLC, "knowledge", ...args, "--project-dir", p, "--json"], {
+  const r = spawnSync("bun", [AIDLC, "engine", "knowledge", ...args, "--project-dir", p, "--json"], {
     encoding: "utf-8",
     env: CHILD_ENV,
   });
@@ -139,7 +139,7 @@ describe("t326 summarize: through the public dispatcher", () => {
 
       const human = spawnSync(
         "bun",
-        [AIDLC, "knowledge", ...verb, "--project-dir", p],
+        [AIDLC, "engine", "knowledge", ...verb, "--project-dir", p],
         { encoding: "utf-8", env: CHILD_ENV },
       );
       expect(human.status, human.stderr).toBe(0);
@@ -417,7 +417,7 @@ describe("t326 ACTION-only probe (a): a driven race — concurrent summarize pub
     const outA = join(p, "a.out");
     const outB = join(p, "b.out");
     const cmd = (text: string, out: string) =>
-      `( bun ${JSON.stringify(AIDLC)} knowledge summarize ${JSON.stringify(id)} ` +
+      `( bun ${JSON.stringify(AIDLC)} engine knowledge summarize ${JSON.stringify(id)} ` +
       `--text-file ${JSON.stringify(text)} --source-revision ${JSON.stringify(sha256)} ` +
       `--project-dir ${JSON.stringify(p)} --json > ${JSON.stringify(out)} 2>/dev/null; ` +
       `echo done ) &`;

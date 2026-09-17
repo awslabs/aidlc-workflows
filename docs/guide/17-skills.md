@@ -128,20 +128,20 @@ Here's the part that matters if you're customizing the framework: **you don't wr
 To add a stage-runner, add a stage. Write the stage file, recompile the graph, and regenerate:
 
 ```bash
-bun .claude/tools/aidlc-runner-gen.ts write
+aidlc engine gen runners
 ```
 
 The generator reads the compiled stage list (the one source of truth) and emits a runner shell per runnable stage. Your new stage's `/aidlc-<your-stage>` command appears automatically — no runner file to author, no boilerplate to copy. Scope-runners work the same way for scopes whose frontmatter declares `runner: true`; `scopes --all` emits runners for every scope file.
 
 ```bash
-bun .claude/tools/aidlc-runner-gen.ts scopes      # generate scope-runners
+aidlc engine gen runner-scopes      # generate scope-runners
 ```
 
 Because the runner set is derived rather than hand-maintained, it can't drift from the stages and scopes it covers. Two checks fail CI the moment the on-disk set diverges from the source of truth:
 
 ```bash
-bun .claude/tools/aidlc-runner-gen.ts check            # stage-runner drift
-bun .claude/tools/aidlc-runner-gen.ts scopes --check   # scope-runner drift
+aidlc engine gen runners --check             # stage-runner drift
+aidlc engine gen runner-scopes --check       # scope-runner drift
 ```
 
 A stage added to the graph without a regenerated runner — or an orphan runner for a stage that's gone — fails loudly with a diff. Adding a stage file and regenerating is the whole authoring path; the runner follows as a consequence the generator maintains for you.
@@ -167,8 +167,8 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 /aidlc-init [--scope <name>]        == /aidlc on a fresh workspace
 
 # Add your own: write a stage/scope file, then
-bun .claude/tools/aidlc-runner-gen.ts write
-bun .claude/tools/aidlc-runner-gen.ts scopes
+aidlc engine gen runners
+aidlc engine gen runner-scopes
 ```
 
 See also: [CLI Commands](12-cli-commands.md) · [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) · [Customization](13-customization.md)

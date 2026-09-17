@@ -15,8 +15,8 @@
 //   (3) aidlc/active-space                — the per-user space CURSOR, shipped
 //       pointed at the always-present "default" so a fresh copy resolves the
 //       default space with zero ceremony. GITIGNORED in the user's workspace
-//       (§5.1), yet SHIPPED as part of the shell (the dist .gitignore ignores
-//       it for the END USER; our repo commits it once via git add -f).
+//       (§5.1), yet SHIPPED as part of the shell (the projected .gitignore
+//       ignores it for the END USER).
 //   (4) the per-harness NATIVE INCLUDE that points the CLI at the method tree
 //       (Claude @-stub, Kiro CLI resources, Kiro IDE steering, Codex
 //       AGENTS.md/AIDLC_RULES_DIR, OpenCode instructions) — P5 authored these;
@@ -39,7 +39,7 @@
 // marker or a dummy intents/*/aidlc-state.md (that would defeat P1's
 // flat-layout migration detection).
 //
-// Mechanism: file-inspection over the committed dist trees (zero tokens) +
+// Mechanism: file-inspection over the generated dist trees (zero tokens) +
 // in-process loadRules() against a freshly-copied shell via the documented
 // AIDLC_RULES_DIR seam (no LLM, no subprocess).
 
@@ -262,7 +262,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         "aidlc/spaces/*/intents/*/.aidlc-*",
       );
       expect(lines, `${h}: ignores engine-shaped sensor caches at any depth`).toContain(
-        "**/aidlc/spaces/*/intents/**/.aidlc-sensors/",
+        "**/aidlc/spaces/*/intents/**/.aidlc-engine/",
       );
       if (h === "cursor") {
         expect(lines, "cursor: ignores the primary subagent ledger").toContain(
@@ -278,7 +278,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status, `${h}: git init`).toBe(0);
       writeFileSync(join(repo, ".gitignore"), gi, "utf-8");
       const nestedSensorCache =
-        "packages/api/aidlc/spaces/default/intents/.aidlc-sensors/x";
+        "packages/api/aidlc/spaces/default/intents/.aidlc-engine/sensors/x";
       expect(
         spawnSync("git", ["check-ignore", "-q", nestedSensorCache], { cwd: repo }).status,
         `${h}: nested sensor cache is functionally ignored`,
