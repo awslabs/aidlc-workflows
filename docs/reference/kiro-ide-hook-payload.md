@@ -94,6 +94,9 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 3. **Paths in the result prose are workspace-RELATIVE**, but the core hooks
    compare against an absolute record root — so the adapter resolves them to
    absolute before forwarding.
+   The core hooks compare that path to the record root case-insensitively on
+   Windows, so an IDE-reported lower-case drive letter (`c:\...`) against a
+   `C:\...` project directory still counts as a record write.
 
 ## Consequences for each hook
 
