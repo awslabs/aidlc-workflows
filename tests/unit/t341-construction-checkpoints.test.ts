@@ -484,7 +484,12 @@ describe("t341 verification command consent", () => {
     expect(absent.code).not.toBe(0);
     expect(absent.out).toContain("HUMAN_TURN");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
-    human(dir);
+    const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+      encoding: "utf-8", cwd: dir,
+      env: { ...env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir },
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t341-command", prompt: "Approve" }),
+    });
+    expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(approved.code, approved.out).toBe(0);
     const replay = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
