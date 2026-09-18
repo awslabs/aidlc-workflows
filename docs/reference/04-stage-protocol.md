@@ -1037,7 +1037,11 @@ omits the reviewer block entirely and the stage runs reviewless.
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and writes exactly ONE file: its review, at the
    `reviewFile` path. The review contains one matching Verdict, Reviewer, and
-   Iteration line, its findings table, and no second H2 section; the reviewer
+   Iteration line, its findings table, and no second H2 section. Pass the table's
+   six required columns in the dispatch: `ID | Severity | Location | Finding |
+   Required action | Status`. A shortened table, repeated required column, or
+   missing/invalid separator is refused before recording completion, so these
+   table errors cannot turn real findings into an empty structured list. The reviewer
    writes nothing else, in particular not the artifact it reviews. The request
    binds artifact bytes and workspace source before dispatch; retry cannot
    rebaseline either, and completion uses one stable file-identity snapshot.
