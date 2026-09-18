@@ -7,17 +7,18 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
-  type ClaudeCodeHookInput,
   completeSubagentInflight,
   errorMessage,
   getField,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  isWorkflowParticipant,
   recordHookDrop,
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
   stateFilePathForSelection,
+  type ClaudeCodeHookInput,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 
@@ -51,11 +52,16 @@ export async function run(input: string): Promise<number> {
     completionError = errorMessage(error);
   }
 
+  const selection = resolveWorkflowSelection(projectDir, {
+    sessionId: sessionId ?? undefined,
+  });
+  // #1116: in a clone that never joined, the resolved target is a teammate's
+  // committed record reached through the lone-record fallback. The in-flight
+  // ledger above is session-local and still settles; nothing beyond it may
+  // touch that record.
+  if (!isWorkflowParticipant(projectDir, selection)) return 0;
   let stateContent: string;
   try {
-    const selection = resolveWorkflowSelection(projectDir, {
-      sessionId: sessionId ?? undefined,
-    });
     stateContent = readFileSync(
       stateFilePathForSelection(projectDir, selection),
       "utf-8",
@@ -89,7 +95,13 @@ export async function run(input: string): Promise<number> {
   if (agentMessage) fields.Message = agentMessage;
 
   try {
-    appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir);
+    appendAuditEntry(
+      "SUBAGENT_COMPLETED",
+      fields,
+      projectDir,
+      selection.intent ?? undefined,
+      selection.space,
+    );
   } catch (e) {
     recordHookDrop(projectDir, "log-subagent", errorMessage(e));
     return 0;
