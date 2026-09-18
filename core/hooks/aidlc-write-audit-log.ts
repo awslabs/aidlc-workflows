@@ -23,7 +23,9 @@ import {
   isoTimestamp,
   loadStageGraphAll,
   recordHookDrop,
+  relativeUnderRoot,
   resolveProjectDirFromHook,
+  runtimePlatform,
   SUMMARY_AUTHORIZATION_FIELD,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
@@ -63,31 +65,35 @@ const rawFile: string = parsed.tool_input?.file_path ?? "";
 if (!rawFile) return 0;
 const file = isAbsolute(rawFile) ? rawFile : join(projectDir, rawFile);
 const auditFileValue = file.replace(/\\/g, "/");
-const fileNorm = auditFileValue; // forward-slash form for all path matching below
 
 // Only log writes to the active intent's RECORD tree, plus the space's codekb
 // tree. The record re-roots per intent (aidlc/spaces/<space>/intents/
-// <slug>-<id8>/…), so a bare `includes("aidlc-docs/")` gate would DROP every
+// <slug>-<id8>/...), so a bare `includes("aidlc-docs/")` gate would DROP every
 // artifact write on the workspace layout. docsRoot() resolves that per-intent
 // root when an intent is active, else the bare space record root - the write is
 // logged iff it lands under that root. The codekb arm covers reverse-
 // engineering's artifacts: they live at the SPACE level keyed by repo
-// (aidlc/spaces/<space>/codekb/<repo>/…, a sibling of intents/, outside the
+// (aidlc/spaces/<space>/codekb/<repo>/..., a sibling of intents/, outside the
 // record root), and without it those writes emit no ARTIFACT_* rows at all -
 // which blinded the approve-time gate-revision backstop to codekb revisions
 // (Revision Count silently stayed 0 on a revised-then-approved RE gate).
 // codekbDir(pd, "_") is <pd>/aidlc/spaces/<space>/codekb/_; its parent is the
 // codekb root for the active space (same idiom as producesDirsForStage in
-// aidlc-state.ts).
+// aidlc-state.ts). Containment is decided by relativeUnderRoot under the
+// runtime platform: on win32 it is case-insensitive, so a lower-case drive
+// letter reported by an IDE still counts as a record write.
+const platform = runtimePlatform();
 const recordRoot = docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
-const underRecord = fileNorm === recordRoot || fileNorm.startsWith(`${recordRoot}/`);
+const recordRel = relativeUnderRoot(recordRoot, file, platform);
+const underRecord = recordRel !== null;
 const codekbRoot = join(codekbDir(projectDir, "_"), "..")
   .replace(/\\/g, "/")
   .replace(/\/$/, "");
-const underCodekb = fileNorm.startsWith(`${codekbRoot}/`);
+const codekbRel = relativeUnderRoot(codekbRoot, file, platform);
+const underCodekb = codekbRel !== null && codekbRel !== "";
 hookDebug(projectDir, "write-audit-log", "path-gate", {
   tool,
-  file: fileNorm,
+  file: auditFileValue,
   recordRoot,
   underRecord,
   codekbRoot,
@@ -97,6 +103,7 @@ if (!underRecord && !underCodekb) {
   hookDebug(projectDir, "write-audit-log", "exit: not under record or codekb root");
   return 0;
 }
+const recordArtifactRel = recordRel !== null && recordRel !== "" ? recordRel : null;
 
 // Don't log writes to an audit shard itself (avoid recursion). The shard is
 // audit/<host>-<clone>.md under the record dir; the bare audit.md guard also
@@ -124,10 +131,10 @@ if (!existsSync(auditFile)) {
 // fall back to the `aidlc-docs/` anchor for a flat-legacy write that didn't
 // match either root.
 let context: string;
-if (underRecord && fileNorm.length > recordRoot.length) {
-  context = fileNorm.slice(recordRoot.length + 1).replace(/\//g, " > ");
-} else if (underCodekb) {
-  context = `codekb > ${fileNorm.slice(codekbRoot.length + 1).replace(/\//g, " > ")}`;
+if (recordArtifactRel !== null) {
+  context = recordArtifactRel.replace(/\//g, " > ");
+} else if (codekbRel !== null && codekbRel !== "") {
+  context = `codekb > ${codekbRel.replace(/\//g, " > ")}`;
 } else {
   const aidlcIdxPosix = file.indexOf("aidlc-docs/");
   const aidlcIdxWin = file.indexOf("aidlc-docs\\");
@@ -183,7 +190,7 @@ const fields: Record<string, string> = {
   Context: context,
 };
 let stages: StageEntry[] = [];
-if (underRecord && fileNorm.length > recordRoot.length) {
+if (recordArtifactRel !== null) {
   try {
     stages = loadStageGraphAll();
   } catch (e) {
@@ -193,10 +200,10 @@ if (underRecord && fileNorm.length > recordRoot.length) {
 
 try {
   withAuditLock(projectDir, () => {
-    if (underRecord && fileNorm.length > recordRoot.length) {
+    if (recordArtifactRel !== null) {
       const authorization = activeSummaryAuthorizationForRecordPath(
         projectDir,
-        fileNorm.slice(recordRoot.length + 1),
+        recordArtifactRel,
         stages,
       );
       if (authorization !== null) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;

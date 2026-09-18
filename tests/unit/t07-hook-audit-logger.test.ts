@@ -1,4 +1,4 @@
-// covers: hook:aidlc-write-audit-log, function:appendAuditEntry
+// covers: hook:aidlc-write-audit-log, function:appendAuditEntry, function:relativeUnderRoot
 //
 // t07 — aidlc-write-audit-log.ts PostToolUse hook behaviour. Migrated from
 // tests/unit/t07-hook-audit-logger.sh (TAP plan 16). Mechanism: cli.
@@ -57,6 +57,10 @@
 //   .sh test 14 (skip path < 300ms)                        -> "skip path completes within 300ms"
 //   .sh test 15 (canonical **Event**: ARTIFACT_* field)    -> "emits canonical **Event**: ARTIFACT_* field"
 //   .sh test 16 (Write->CREATED, Edit->UPDATED same file)  -> "Write→CREATED, Edit→UPDATED on same file"
+//
+// Windows semantics are driven by AIDLC_TEST_PLATFORM=win32 with an
+// upper-cased project prefix. A literal C: root cannot be seeded on every host
+// because projectDir must name a real directory.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
@@ -69,7 +73,7 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { docsRoot } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { codekbDir, docsRoot } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -143,10 +147,18 @@ interface FireResult {
  * $HOOK`. When `setEnv` is false the env var is omitted so the hook exercises
  * its script-path projectDir fallback (test 10). Returns exit code + wall time.
  */
-function fire(json: string, p: string, hookPath = HOOK, setEnv = true): FireResult {
+function fire(
+  json: string,
+  p: string,
+  hookPath = HOOK,
+  setEnv = true,
+  extraEnv?: Record<string, string>,
+): FireResult {
   const env = { ...process.env };
   if (setEnv) env.CLAUDE_PROJECT_DIR = p;
   else delete env.CLAUDE_PROJECT_DIR;
+  delete env.AIDLC_TEST_PLATFORM;
+  Object.assign(env, extraEnv);
   const t0 = performance.now();
   const r = Bun.spawnSync({
     cmd: [BUN, hookPath],
@@ -165,6 +177,10 @@ function writeJson(p: string): string {
 
 function editJson(p: string): string {
   return JSON.stringify({ tool_name: "Edit", tool_input: { file_path: p } });
+}
+
+function caseVaried(abs: string): string {
+  return join(proj.toUpperCase(), relative(proj, abs));
 }
 
 describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + stdin seam)", () => {
@@ -223,6 +239,69 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     fire(writeJson(join(recordRoot, "ideation", "intent-capture", "intent.md")), proj);
     // STRONGER than the .sh grep: the breadcrumb is on a **Context**: line.
     expect(readShards(auditDir)).toContain("ideation > intent-capture > intent.md");
+  });
+
+  test("win32 semantics: a record write whose path differs only in case is logged with the record breadcrumb", () => {
+    expect(proj.toUpperCase()).not.toBe(proj);
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    fire(
+      writeJson(caseVaried(join(recordRoot, "ideation", "intent-capture", "intent.md"))),
+      proj,
+      HOOK,
+      true,
+      { AIDLC_TEST_PLATFORM: "win32" },
+    );
+    const audit = readShards(auditDir);
+    expect(audit).toContain("**Event**: ARTIFACT_CREATED");
+    expect(audit).toContain("**Context**: ideation > intent-capture > intent.md");
+  });
+
+  test("win32 semantics: Edit on a case-varied record path emits ARTIFACT_UPDATED", () => {
+    expect(proj.toUpperCase()).not.toBe(proj);
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    fire(
+      editJson(caseVaried(join(recordRoot, "ideation", "intent-capture", "intent.md"))),
+      proj,
+      HOOK,
+      true,
+      { AIDLC_TEST_PLATFORM: "win32" },
+    );
+    const audit = readShards(auditDir);
+    expect(audit).toContain("**Event**: ARTIFACT_UPDATED");
+    expect(audit).toContain("**Context**: ideation > intent-capture > intent.md");
+  });
+
+  test("win32 semantics: a case-varied codekb write carries the codekb breadcrumb", () => {
+    expect(proj.toUpperCase()).not.toBe(proj);
+    const { auditDir } = seedIntentShard(proj);
+    const file = caseVaried(join(codekbDir(proj, "repo-a"), "analysis.md"));
+    fire(writeJson(file), proj, HOOK, true, { AIDLC_TEST_PLATFORM: "win32" });
+    const audit = readShards(auditDir);
+    expect(audit).toContain("**Context**: codekb > repo-a > analysis.md");
+    expect(audit).toMatch(/\*\*Event\*\*: ARTIFACT_(CREATED|UPDATED)/);
+  });
+
+  test("win32 semantics: a case-varied path outside the record and codekb still emits nothing", () => {
+    expect(proj.toUpperCase()).not.toBe(proj);
+    const { auditDir } = seedIntentShard(proj);
+    const before = readShards(auditDir);
+    const file = caseVaried(join(proj, "src", "other.md"));
+    fire(writeJson(file), proj, HOOK, true, { AIDLC_TEST_PLATFORM: "win32" });
+    expect(readShards(auditDir)).toBe(before);
+  });
+
+  test("posix semantics stay case-sensitive: the same case-varied record path emits nothing", () => {
+    expect(proj.toUpperCase()).not.toBe(proj);
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    const before = readShards(auditDir);
+    fire(
+      writeJson(caseVaried(join(recordRoot, "ideation", "intent-capture", "intent.md"))),
+      proj,
+      HOOK,
+      true,
+      { AIDLC_TEST_PLATFORM: "linux" },
+    );
+    expect(readShards(auditDir)).toBe(before);
   });
 
   test("Edit tool emits ARTIFACT_UPDATED [.sh test 5]", () => {
