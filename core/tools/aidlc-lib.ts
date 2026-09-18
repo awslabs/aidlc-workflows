@@ -3396,7 +3396,7 @@ export function mintProtectedChallenge(
   if (!session.trim() || session !== session.trim() || !runtimeSessionSegment(session)) {
     throw new Error("Protected challenge requires a nonblank session ID.");
   }
-  return withAuditLock(projectDir, () => {
+  withAuditLock(projectDir, () => {
     ensurePlanApprovalRuntimeDir(projectDir);
     for (const other of Object.keys(PROTECTED_CHALLENGE_PATHS) as ProtectedChallengeKind[]) {
       if (other === kind) continue;
@@ -3406,7 +3406,7 @@ export function mintProtectedChallenge(
         }
       }
     }
-    return write();
+    write();
   });
 }
 
