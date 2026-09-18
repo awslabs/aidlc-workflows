@@ -32,15 +32,17 @@
 //       preserves surviving source/history and archives framework records, or
 //       creates a new child when native source landing removed the old one.
 //       Both paths require fresh protected Plan Approval before dispatch.
-//   check <unit> --check-cmd <cmd> [--test-file <path>]
-//       Stateless single-unit verdict: the project's check command (exit 0 = green,
+//   check <unit> [--check-cmd <cmd>] [--test-file <path>]
+//       Stateless single-unit verdict: the authorized Construction Verification
+//       Command under checkpoints; a required --check-cmd under legacy autonomy
+//       (exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its forked-git
 //       baseline. Prints {unit, converged, tampered, reason}; exits 0 iff the unit
 //       is GENUINELY converged (green AND untampered), non-zero otherwise. Emits
 //       no audit — it informs the conductor's retry decision (knowledge), it does
 //       not commit anything. Same input → same verdict, however many times called.
-//   finalize --batch <n> --units <a,b,c> --claimed <a,b> --check-cmd <cmd>
+//   finalize --batch <n> --units <a,b,c> --claimed <a,b> [--check-cmd <cmd>]
 //            [--test-file <path>] [--reasons <unit>=<reason>,...]
 //       The AUTHORITATIVE gate. The conductor's claimed-converged set is an
 //       explicit input and the only thing finalize trusts from it. For each
@@ -89,6 +91,8 @@ import {
   attemptEventDefinitelyBefore,
   auditBlockField,
   auditShardDir,
+  authorizedVerificationCommand,
+  constructionCheckpointsApply,
   boltSlugForUnit,
   filterProducesByKind,
   filteredRawIndexEntries,
@@ -121,6 +125,7 @@ import {
   resolveWorkflowSelection,
   resolveStage,
   sourceListingSha256,
+  stateFilePath,
   setFieldStrict,
   shapeSourceSnapshotIndex,
   sourceClaimCovers,
@@ -128,6 +133,8 @@ import {
   type SourceClaimModel,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
+  verificationCommandDetails,
+  VERIFICATION_COMMAND_RECOVERY,
   worktreeAuditFilePath,
   worktreePath,
   worktreeRuntimeGraphPath,
@@ -253,11 +260,8 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // Exit-code semantics (0 = converged) and the 60s timeout are unchanged across
 // all three.
 //
-// checkCmd is shell-interpreted, so shell metacharacters in it are honoured —
-// that is acceptable here: the swarm only fires under human-granted
-// Construction autonomy inside a live session, and checkCmd is the user's own
-// project check command (a trusted input), not attacker-controlled. (It was
-// already shell-interpreted under the old `bash -c` form — no new surface.)
+// Shell interpretation is intentional only after command authorization has been
+// resolved from the parent intent. Legacy autonomy retains its supplied command.
 function checkConverged(cwd: string, checkCmd: string): boolean {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
@@ -270,6 +274,32 @@ function checkConverged(cwd: string, checkCmd: string): boolean {
     shell,
   });
   return result.status === 0;
+}
+
+function swarmCheckCommand(projectDir: string, supplied: string | undefined, action: string): { command: string; sha256?: string } {
+  // Legacy stateless checks can run without a workflow. An existing unreadable
+  // state must still fail closed rather than silently selecting legacy policy.
+  const state = existsSync(stateFilePath(projectDir)) ? readStateFile(projectDir) : "";
+  if (!constructionCheckpointsApply(state)) {
+    if (!supplied) fail(`${action} requires --check-cmd <shell command; exit 0 = converged>`);
+    return { command: supplied };
+  }
+  const authorization = authorizedVerificationCommand(projectDir, state);
+  if (!authorization) {
+    fail(`${action} requires an authorized Construction Verification Command. ${VERIFICATION_COMMAND_RECOVERY}`);
+  }
+  if (supplied !== undefined) {
+    let digest: string;
+    try {
+      digest = verificationCommandDetails(supplied).sha256;
+    } catch (error) {
+      fail(`${error instanceof Error ? error.message : String(error)} ${VERIFICATION_COMMAND_RECOVERY}`);
+    }
+    if (digest !== authorization.sha256) {
+      fail(`--check-cmd does not match the authorized Construction Verification Command. Omit --check-cmd to use it, or authorize the replacement with set-construction-verification-command. ${VERIFICATION_COMMAND_RECOVERY}`);
+    }
+  }
+  return authorization;
 }
 
 // Anti-tamper, re-derived from the worktree's own git fork (stateless): the
@@ -1634,6 +1664,7 @@ function emitUnitConverged(
   attempt: SwarmAttemptStamp,
   binding?: SourceBinding,
   sourceFreshnessBypassed = false,
+  commandSha256?: string,
 ): void {
   appendAuditEntry(
     "SWARM_UNIT_CONVERGED",
@@ -1642,6 +1673,7 @@ function emitUnitConverged(
       "Unit name": unit,
       Stage: attempt.stage,
       "Run floor": attempt.floor,
+      ...(commandSha256 ? { "Command SHA-256": commandSha256 } : {}),
       ...(binding
         ? {
             "Source Fingerprint": binding.fingerprint,
@@ -2465,11 +2497,9 @@ function handleCheck(rest: string[]): void {
     fail("check requires a unit name (positional `check <unit>` or --unit <unit>)");
   }
   swarmBoltSlug(unit);
-  if (!flags["check-cmd"]) {
-    fail("check requires --check-cmd <shell command; exit 0 = converged>");
-  }
+  const check = swarmCheckCommand(projectDir, flags["check-cmd"], "check");
 
-  const verdict = verdictFor(unit, projectDir, flags["check-cmd"], flags["test-file"]);
+  const verdict = verdictFor(unit, projectDir, check.command, flags["test-file"]);
   if (!verdict.exists) {
     fail(`no worktree for unit "${unit}" — run \`prepare\` first`);
   }
@@ -2510,9 +2540,7 @@ function handleFinalize(rest: string[]): void {
   if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
     fail("finalize requires --batch <positive integer>");
   }
-  if (!flags["check-cmd"]) {
-    fail("finalize requires --check-cmd <shell command; exit 0 = converged>");
-  }
+  const check = swarmCheckCommand(projectDir, flags["check-cmd"], "finalize");
   const claimed = flags.claimed ? splitCsv(flags.claimed) : [];
   // The universe of units in the batch; defaults to the claimed set when the
   // conductor passes only --claimed (then declined-unit accounting is a no-op).
@@ -2542,7 +2570,6 @@ function handleFinalize(rest: string[]): void {
   }
   const claimedSet = new Set(claimed);
   const testFile = flags["test-file"];
-  const checkCmd = flags["check-cmd"];
   const review = reviewerRequirement(projectDir);
   const currentAttempt = currentSwarmAttempt(projectDir);
 
@@ -2583,7 +2610,7 @@ function handleFinalize(rest: string[]): void {
   const recoveryBudget = newGitlinkRecoveryBudget();
   for (const unit of allUnits) {
     if (claimedSet.has(unit)) {
-      const verdict = verdictFor(unit, projectDir, checkCmd, testFile);
+      const verdict = verdictFor(unit, projectDir, check.command, testFile);
       const preparedAttempt = preparedSwarmAttempt(
         projectDir,
         batch,
@@ -2765,6 +2792,7 @@ function handleFinalize(rest: string[]): void {
             attempt,
             sourceBindings.get(r.unit),
             sourceFreshnessBypassed,
+            check.sha256,
           );
         }
       }

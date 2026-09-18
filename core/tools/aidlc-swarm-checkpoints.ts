@@ -8,6 +8,7 @@ import {
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  authorizedVerificationCommand,
   claimAttemptFields,
   currentSwarmSourceMergeChain,
   eventMatchesClaimAttempt,
@@ -107,6 +108,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
   ));
   if (unreadable.length) throw new Error("Swarm checkpoint audit evidence is unreadable.");
+  const verificationCommand = shared ? shared.verificationCommand : authorizedVerificationCommand(pd, state, rows);
   const workflow = shared ? shared.workflow : latest(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");
   const floor = latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, undefined, rows);
@@ -127,7 +129,8 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     floors[unit] = unitFloor;
     if (unitFloor.startsWith("AMBIGUOUS:")) errors.push(`${unit}: current Code Generation attempt is ambiguous.`);
     const native = latest(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
-      auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit name") === unit));
+      auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit name") === unit &&
+      auditBlockField(row.block, "Run floor") === floor));
     const merged = latest(rows.filter((row) => row.event === "SWARM_SOURCE_MERGED" &&
       auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit name") === unit &&
       auditBlockField(row.block, "Run floor") === floor));
@@ -147,6 +150,10 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       chain.state !== "ready" || !chain.units.has(unit) ||
       (rejection !== null && !attemptEventDefinitelyBefore(rejection, native))) {
       errors.push(`${unit}: current native convergence and its source merge are required.`);
+    }
+    if (!verificationCommand || !native ||
+      auditBlockField(native.block, "Command SHA-256") !== verificationCommand.sha256) {
+      errors.push(`${unit}: batch was not checked with the authorized Construction Verification Command.`);
     }
     const artifact = reviewArtifactFingerprint(pd, definition, unit, {
       boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
@@ -224,10 +231,11 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     auditBlockField(gate.block, "Units") === units.join(", ") &&
     auditBlockField(gate.block, "Fingerprint") === fingerprint &&
     auditBlockField(gate.block, "Run floor") === floor &&
+    auditBlockField(gate.block, "Command SHA-256") === verificationCommand?.sha256 &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       auditBlockField(gate.block, "Autonomous") === "true");
   const result: SwarmCheckpoint = { batch, units, fingerprint, ready, approved, human_required: humanRequired, errors };
-  return { result, root, intent, rows, floor, floors, enabled };
+  return { result, root, intent, rows, floor, floors, enabled, verificationCommand };
 }
 
 export function resolveSwarmCheckpoint(
@@ -249,6 +257,7 @@ function fields(current: ReturnType<typeof snapshot>): Record<string, string> {
     "Batch number": String(current.result.batch), Units: current.result.units.join(", "),
     Fingerprint: current.result.fingerprint, Intent: current.intent,
     "Run floor": current.floor, "Run floors": JSON.stringify(current.floors),
+    ...(current.verificationCommand ? { "Command SHA-256": current.verificationCommand.sha256 } : {}),
   };
 }
 
@@ -259,6 +268,7 @@ function recheck(
   if ((approving && !after.result.ready) || !after.enabled ||
     before.root !== root || after.root !== root || recordDir(pd) !== root ||
     before.result.fingerprint !== after.result.fingerprint ||
+    before.verificationCommand?.sha256 !== after.verificationCommand?.sha256 ||
     before.result.human_required !== after.result.human_required) {
     throw new Error("Swarm checkpoint evidence changed before the decision.");
   }

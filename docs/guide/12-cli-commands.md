@@ -1408,6 +1408,26 @@ use the same authorized project check, not a newly chosen command. Version-1 and
 version-2 proofs are unverified after upgrading; authorize the recorded command
 and run `checkpoint --action verify` again before approval.
 
+### `aidlc engine swarm check` / `finalize` - verify native worktrees
+
+With Construction Checkpoints enabled, both commands run the intent's recorded,
+human-authorized Construction Verification Command in each prepared Unit worktree:
+
+```bash
+aidlc engine swarm check <Unit> [--test-file <protected spec>]
+aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
+```
+
+`--check-cmd` is optional under checkpoints; if supplied, its canonical digest
+must match the authorized command. A missing authorization refuses execution:
+complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
+and `set-construction-verification-command`, rather than substituting a passing
+command. Legacy autonomy without checkpoints still requires `--check-cmd` on
+both commands. `check` is advisory; `finalize` reruns the command and validates
+review evidence before merging each claimed Unit. Only verified native passes
+receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` under
+checkpoints. Land their source through the native worktree merge before `next`.
+
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
 After a swarm batch settles, the engine may return `swarm_checkpoint` before
@@ -1421,8 +1441,12 @@ aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>"
 
 Guided completion waits for the human; automatic completion omits `--user-input`
 when `human_required: false`. Readiness comes from the completed batch's current
-evidence. Resolve `errors` rather than rebuilding the whole batch or inventing
-a pass. Re-run `next` after the action; a batch approval is not whole-stage
+evidence, including each Unit's native `Command SHA-256` matching the current
+authorized Construction Verification Command. Batch approval binds that digest
+too: changing the authorized command invalidates prior approval, and older
+native receipts without the digest require fresh verification. Resolve `errors`
+rather than rebuilding the whole batch or inventing a pass. Re-run `next` after
+the action; a batch approval is not whole-stage
 approval. Later completion-only stage directives settle bookkeeping without
 another body, reviewer, or human learnings/approval question.
 

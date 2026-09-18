@@ -1,6 +1,7 @@
 // covers: audit:GATE_APPROVED, audit:GATE_REJECTED, function:currentSwarmSourceMergeChain,
 // function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint,
 // function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
+// covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -21,6 +22,8 @@ import {
   approvedConstructionUnits,
   artifactFilename,
   auditBlockField,
+  authorizedVerificationCommand,
+  boltSlugForUnit,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
   findStageBySlug,
@@ -33,11 +36,13 @@ import {
   reviewArtifactFingerprint,
   serializeSourceListing,
   setField,
+  stateDigest,
   sourceListingSha256,
   unitMajorConstructionStageSlugs,
   unitSourceFingerprint,
   workspaceSourceFingerprint,
   workspaceSourceListing,
+  writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -50,11 +55,19 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import {
+  approvalFingerprint,
+  codeGenerationRecordDir,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 resetAidlcEnv();
 const projects: string[] = [];
 const STAGE = "code-generation";
 const BATCH = ["alpha", "beta"];
+const CHECK = "git diff --check";
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
 });
@@ -78,10 +91,13 @@ function state(autonomous = false): string {
 - **Construction Checkpoints**: enabled
 - **Construction Iteration**: stage-major
 - **Construction Execution**: swarm
+- **Construction Verification Command**: ${CHECK}
 - **Construction Autonomy Mode**: ${autonomous ? "autonomous" : "gated"}
 - **Unit Ownership**: solo
 - **Review Override**: none
 - **Change Control**: strict
+- **Bolt Refs**: [empty list]
+- **Worktree Path**: -
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -118,12 +134,17 @@ function artifacts(pd: string, unit: string, stage = STAGE): void {
   }
 }
 
-function fixture(autonomous = false, repos: readonly string[] = []): string {
+function fixture(autonomous = false, repos: readonly string[] = [], authorize = true): string {
   const pd = createTestProject();
   projects.push(pd);
   seedAidlcMemory(pd);
   writeFileSync(seededStateFile(pd), state(autonomous));
   seedBoltDagBatches(pd, [BATCH, ["gamma"]]);
+  writeFileSync(join(pd, ".gitignore"), [
+    ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space",
+    "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
+    "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
+  ].join("\n"));
   if (repos.length) {
     const registry = join(pd, "aidlc/spaces/default/intents/intents.json");
     const entries = JSON.parse(readFileSync(registry, "utf-8"));
@@ -147,7 +168,72 @@ function fixture(autonomous = false, repos: readonly string[] = []): string {
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
   if (autonomous) appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
+  if (authorize) recordCommand(pd, CHECK);
   return pd;
+}
+
+function tool(pd: string, name: string, args: string[]) {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", pd], {
+    cwd: pd, encoding: "utf-8",
+    env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+  });
+  return { code: result.status, out: `${result.stdout}${result.stderr}`, stdout: result.stdout };
+}
+
+function choice(pd: string, session: string, prompt: string): void {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+    cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+}
+
+function recordCommand(pd: string, command: string): void {
+  const identity = ["--stage", STAGE, "--checkpoint", "verification-command", "--command", command, "--session", "t343-command"];
+  const decision = tool(pd, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+  expect(decision.code, decision.out).toBe(0);
+  choice(pd, "t343-command", "Approve");
+  const answer = tool(pd, "log", ["answer", ...identity, "--details", "Approve"]);
+  expect(answer.code, answer.out).toBe(0);
+  const applied = tool(pd, "state", ["set-construction-verification-command", command]);
+  expect(applied.code, applied.out).toBe(0);
+}
+
+function prepareNative(pd: string): void {
+  writeActiveDirectiveMarker(pd, {
+    kind: "invoke-swarm", stage: STAGE, units: BATCH,
+    state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
+  });
+  const contract = resolveTestingPosture(pd);
+  for (const unit of BATCH) {
+    const dir = codeGenerationRecordDir(pd, unit);
+    const body = `# Plan for ${unit}\n\n${renderTestingContract(contract)}\n## Steps\n- [ ] Implement\n`;
+    const instructions = `# Tests for ${unit}\n\nValidate the Unit.\n`;
+    writeFileSync(join(dir, "code-generation-plan.md"), body);
+    writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+    const questions = join(dir, "code-generation-questions.md");
+    writeFileSync(questions, [
+      "## Plan Approval",
+      `[Approval Fingerprint]: ${approvalFingerprint(body, instructions, contract.contract_sha256, resolveCodeGenerationAuthority(pd, { unit }))}`,
+      `[Planned Source]: ${workspaceSourceFingerprint(pd)}`,
+      "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
+    ].join("\n"));
+  }
+  git(pd, ["add", "-A"]);
+  git(pd, ["commit", "-qm", "native swarm plans"]);
+  for (const unit of BATCH) {
+    const questions = join(codeGenerationRecordDir(pd, unit), "code-generation-questions.md");
+    const identity = ["--stage", STAGE, "--checkpoint", "plan-approval", "--unit", unit,
+      "--questions-file", questions, "--session", `t343-${unit}`];
+    const decision = tool(pd, "log", ["decision", ...identity, "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"]);
+    expect(decision.code, decision.out).toBe(0);
+    choice(pd, `t343-${unit}`, "Approve Plan");
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
+    const answer = tool(pd, "log", ["answer", ...identity, "--details", "Approve Plan"]);
+    expect(answer.code, answer.out).toBe(0);
+  }
+  const prepared = tool(pd, "swarm", ["prepare", "--batch", "1", "--units", BATCH.join(","), "--base", git(pd, ["branch", "--show-current"])]);
+  expect(prepared.code, prepared.out).toBe(0);
 }
 
 // Protected append factory stands in for the existing review/finalize/merge
@@ -187,6 +273,7 @@ function converge(pd: string, batch = 1, units = BATCH, kind = "bound"): void {
     appendAuditEntry("SWARM_UNIT_CONVERGED", {
       Stage: STAGE, "Run floor": kind === "stale" ? "unstarted#0" : floor,
       "Batch number": String(batch), "Unit name": unit,
+      ...(kind === "unchecked" ? {} : { "Command SHA-256": authorizedVerificationCommand(pd, readFileSync(seededStateFile(pd), "utf-8"))!.sha256 }),
       ...(kind === "legacy" ? {} : kind === "bypass" ? { "Source Freshness Bypass": "true" } : {
         "Source Commit": commit, "Source Fingerprint": kind === "source-binding" ? "e".repeat(64) : nativeFingerprint,
       }),
@@ -212,6 +299,74 @@ function gates(pd: string, event = "GATE_APPROVED") {
 }
 
 describe("t343 completed swarm batch checkpoints", () => {
+  test("check and finalize refuse a missing or substituted authorized command before execution", () => {
+    const pd = fixture(false, [], false);
+    const marker = join(pd, "unauthorized-command-ran");
+    const supplied = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('${marker}','executed')"`;
+    const actions = [["check", "alpha"], ["finalize", "--batch", "1", "--units", BATCH.join(","), "--claimed", BATCH.join(",")]];
+    for (const action of actions) {
+      const missing = tool(pd, "swarm", [...action, "--check-cmd", supplied]);
+      expect(missing.code, missing.out).not.toBe(0);
+      expect(missing.out).toContain("set-construction-verification-command");
+    }
+    recordCommand(pd, CHECK);
+    for (const action of actions) {
+      const substituted = tool(pd, "swarm", [...action, "--check-cmd", supplied]);
+      expect(substituted.code, substituted.out).not.toBe(0);
+      expect(substituted.out).toContain("does not match");
+      expect(substituted.out).toContain("set-construction-verification-command");
+    }
+    expect(readdirSync(pd)).not.toContain("unauthorized-command-ran");
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "SWARM_UNIT_CONVERGED")).toEqual([]);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
+  }, 30_000);
+
+  test("older native convergence without its command digest cannot certify a batch", () => {
+    const pd = fixture();
+    converge(pd, 1, BATCH, "unchecked");
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({
+      ready: false, approved: false,
+      errors: BATCH.map((unit) => `${unit}: batch was not checked with the authorized Construction Verification Command.`),
+    });
+  }, 30_000);
+
+  test("changing the authorized command retires the batch approval even after re-verification", () => {
+    const pd = fixture(true);
+    converge(pd);
+    const approved = approveSwarmCheckpoint(pd, 1, BATCH);
+    expect(approved.approved).toBe(true);
+    recordCommand(pd, "git diff --exit-code -- src");
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({ ready: false, approved: false });
+    converge(pd, 1, BATCH, "unmerged");
+    const checked = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(checked).toMatchObject({ ready: true, approved: false, fingerprint: approved.fingerprint });
+    expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+  }, 30_000);
+
+  test("a passing caller check cannot replace the failing authorized command", () => {
+    const pd = fixture();
+    prepareNative(pd);
+    const passed = tool(pd, "swarm", ["check", "alpha"]);
+    expect(passed.code, passed.out).toBe(0);
+    recordCommand(pd, "exit 1");
+    writeActiveDirectiveMarker(pd, {
+      kind: "invoke-swarm", stage: STAGE, units: BATCH,
+      state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
+    });
+    const args = ["finalize", "--batch", "1", "--units", BATCH.join(","), "--claimed", BATCH.join(",")];
+    const permissive = tool(pd, "swarm", [...args, "--check-cmd", "true"]);
+    expect(permissive.code, permissive.out).toBe(1);
+    expect(permissive.out).toContain("does not match");
+    const failed = tool(pd, "swarm", args);
+    expect(failed.code, failed.out).toBe(2);
+    expect(JSON.parse(failed.stdout).units).toEqual(BATCH.map((unit) => ({
+      unit, bolt_slug: boltSlugForUnit(unit), status: "failed", reason: "error",
+      detail: "claimed converged but the check command did not pass on re-verify",
+    })));
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "SWARM_UNIT_CONVERGED")).toEqual([]);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
+  }, 60_000);
+
   test("stage approval requires each converged batch checkpoint to be approved", () => {
     const pd = fixture(true);
     converge(pd);
@@ -445,6 +600,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
     appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
+    recordCommand(pd, CHECK);
     converge(pd);
     const ready = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(ready.ready, ready.errors.join("\n")).toBe(true);
@@ -622,25 +778,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       ? `"${process.execPath.replaceAll('"', '""')}"`
       : `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 1')) process.exit(1)"`;
-    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", check, "--session", "t343-command"];
-    for (const [tool, args] of [
-      ["log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]],
-      ["log", ["answer", ...identity, "--details", "Approve"]],
-      ["state", ["set-construction-verification-command", check]],
-    ] as const) {
-      const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", pd], {
-        encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
-      });
-      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-      if (args[0] === "decision") {
-        const submitted = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
-          encoding: "utf-8", cwd: pd,
-          env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
-          input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t343-command", prompt: "Approve" }),
-        });
-        expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
-      }
-    }
+    recordCommand(pd, check);
     expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
     human(pd);
     expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve").approved).toBe(true);

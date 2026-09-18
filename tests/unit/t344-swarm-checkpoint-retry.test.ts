@@ -32,6 +32,7 @@ afterEach(() => {
   while (projects.length) cleanupWorktreeFixture(projects.pop()!);
 }, 30_000);
 const STAGE = "code-generation";
+const CHECK = "git diff --check";
 
 function tool(pd: string, file: string, args: string[], input?: unknown) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
@@ -40,6 +41,17 @@ function tool(pd: string, file: string, args: string[], input?: unknown) {
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
   return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+}
+
+function recordCommand(pd: string, command: string): void {
+  const identity = ["--stage", STAGE, "--checkpoint", "verification-command", "--command", command, "--session", "t344-command"];
+  const decision = tool(pd, "tools/aidlc-log.ts", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+  expect(decision.code, `${decision.out}\n${decision.err}`).toBe(0);
+  humanChoice(pd, "Approve", "t344-command");
+  const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve"]);
+  expect(answer.code, `${answer.out}\n${answer.err}`).toBe(0);
+  const applied = tool(pd, "tools/aidlc-state.ts", ["set-construction-verification-command", command]);
+  expect(applied.code, `${applied.out}\n${applied.err}`).toBe(0);
 }
 
 function swarm(pd: string, args: string[]) {
@@ -129,7 +141,7 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
   expect(answer.code, answer.err).toBe(0);
 }
 
-function fixture(units = ["alpha"]): string {
+function fixture(units = ["alpha"], command = CHECK): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
   seedAidlcMemory(pd);
@@ -178,6 +190,7 @@ function fixture(units = ["alpha"]): string {
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
+  recordCommand(pd, command);
   publish(pd, units);
   for (const unit of units) plan(pd, unit);
   git(pd, ["add", "-A"]);
@@ -299,17 +312,13 @@ function writeUnitSource(pd: string, unit: string, value: number): void {
 
 function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>): void {
   const units = Object.keys(values);
-  const executable = process.platform === "win32"
-    ? `"${process.execPath.replaceAll('"', '""')}"`
-    : `'${process.execPath.replaceAll("'", "'\\''")}'`;
   for (const unit of units) {
-    const check = `${executable} -e "if (!require('fs').readFileSync('src/${unit}.ts','utf8').includes('${unit} = ${values[unit]};')) process.exit(1)"`;
-    const checked = swarm(pd, ["check", unit, "--check-cmd", check]);
+    const checked = swarm(pd, ["check", unit]);
     expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
     reviewRevisedSource(pd, unit);
   }
   const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","),
-    "--claimed", units.join(","), "--check-cmd", "git diff --check"]);
+    "--claimed", units.join(",")]);
   expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
   for (const unit of units) {
     const merged = tool(pd, "tools/aidlc-worktree.ts", [
@@ -453,17 +462,17 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
   }, 60_000);
 
   test("failed initial fork preserves source and releases registration so discard then retry works", () => {
-    const pd = fixture();
+    const executable = process.platform === "win32"
+      ? `"${process.execPath.replaceAll('"', '""')}"`
+      : `'${process.execPath.replaceAll("'", "'\\''")}'`;
+    const check = `${executable} -e "require('fs').writeFileSync('.aidlc/unbound-check-ran','executed')"`;
+    const pd = fixture(["alpha"], check);
     const failed = interruptAfterBoltStart(pd, false);
     expect(failed.code, `${failed.out}\n${failed.err}`).toBe(2);
     expect(failed.out).toContain("aidlc-worktree discard");
     expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toContain("alpha = 1");
     expect(readFileSync(seededStateFile(pd), "utf-8")).toContain("**Bolt Refs**: [empty list]");
     const marker = join(wt(pd), ".aidlc", "unbound-check-ran");
-    const executable = process.platform === "win32"
-      ? `"${process.execPath.replaceAll('"', '""')}"`
-      : `'${process.execPath.replaceAll("'", "'\\''")}'`;
-    const check = `${executable} -e "require('fs').writeFileSync('.aidlc/unbound-check-ran','executed')"`;
     expect(existsSync(marker)).toBe(false);
     const refused = swarm(pd, ["check", "alpha", "--check-cmd", check]);
     expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);
@@ -663,15 +672,11 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(began.code, `${began.out}\n${began.err}`).toBe(0);
     unchangedAuthority();
     expect(readFileSync(join(beta, "src", "beta.ts"), "utf-8")).toContain("beta = 3");
-    const executable = process.platform === "win32"
-      ? `"${process.execPath.replaceAll('"', '""')}"`
-      : `'${process.execPath.replaceAll("'", "'\\''")}'`;
-    const check = `${executable} -e "if (!require('fs').readFileSync('src/beta.ts','utf8').includes('beta = 3')) process.exit(1)"`;
-    const ran = swarm(pd, ["check", "beta", "--check-cmd", check]);
+    const ran = swarm(pd, ["check", "beta"]);
     expect(ran.code, `${ran.out}\n${ran.err}`).toBe(0);
     reviewRevisedSource(pd, "beta");
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "beta",
-      "--claimed", "beta", "--check-cmd", check]);
+      "--claimed", "beta"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
     unchangedAuthority();
     const landedBeta = land("beta");
@@ -941,7 +946,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
   }, 60_000);
 
   test("a clean worktree fast-forwards to approved parent source and retains ignored notes", () => {
-    const pd = fixture(["alpha", "beta"]);
+    const pd = fixture(["alpha", "beta"], "git diff --quiet -- src/beta.ts");
     completeOld(pd, ["alpha", "beta"]);
     const child = wt(pd);
     const oldHead = git(child, ["rev-parse", "HEAD"]);
@@ -1036,14 +1041,14 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
   }, 60_000);
 
   test("finalize requires the resumed boundary, then checks and merges the revised work", () => {
-    const pd = fixture();
-    completeOld(pd);
-    reject(pd);
-    approvePlan(pd, "alpha", "revised");
     const executable = process.platform === "win32"
       ? `"${process.execPath.replaceAll('"', '""')}"`
       : `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 3')) process.exit(1)"`;
+    const pd = fixture(["alpha"], check);
+    completeOld(pd);
+    reject(pd);
+    approvePlan(pd, "alpha", "revised");
     const args = ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha", "--check-cmd", check];
     const stale = swarm(pd, args);
     expect(stale.code).toBe(2);
