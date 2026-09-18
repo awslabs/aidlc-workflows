@@ -391,6 +391,12 @@ function snapshot(
   });
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
+  const verification = onlyLatest(rows.filter((row) =>
+    row.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
+    auditBlockField(row.block, "Unit") === unit &&
+    auditBlockField(row.block, "Kind") === kind &&
+    eventMatchesClaimAttempt(projectDir, row.block, unit),
+  ));
   const ready = errors.length === 0;
   const verified = ready && proof !== null &&
     proof.kind === kind && proof.unit === unit &&
@@ -398,7 +404,12 @@ function snapshot(
     proof.fingerprint === fingerprint && proof.verified === true &&
     proof.evidence_unchanged === true && proof.exit_code === 0 &&
     proof.signal === null && proof.error === null &&
-    typeof proof.finished_at === "string";
+    typeof proof.finished_at === "string" && verification !== null &&
+    auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
+    auditBlockField(verification.block, "Verification Id") === proof.id &&
+    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
+    auditBlockField(verification.block, "Command SHA-256") === shared.verificationCommand.sha256 &&
+    auditBlockField(verification.block, "Verified") === "true";
   const gate = onlyLatest(rows.filter((row) => {
     if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
     if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
@@ -510,6 +521,19 @@ export function verifyConstructionCheckpoint(
       proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
+    appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_RECORDED", {
+      Unit: unit,
+      Kind: kind,
+      Stage: before.result.stages.at(-1)!,
+      Stages: before.result.stages.join(", "),
+      "Verification Id": proof.id,
+      Fingerprint: proof.fingerprint,
+      "Command SHA-256": proof.command_sha256,
+      "Exit Code": String(proof.exit_code),
+      Verified: String(proof.verified),
+      "Run floor": before.result.run_floor,
+      ...claimAttemptFields(projectDir, unit),
+    }, projectDir);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
   }, before.intent, before.space);
 }
@@ -547,7 +571,9 @@ export function approveConstructionCheckpoint(
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
-    if (!current.result.verified) throw new Error("Verify the current Construction checkpoint before approval.");
+    if (!current.result.verified) {
+      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
+    }
     if (current.result.approved && (userInput === undefined || userInput === "Approve")) {
       return current.result;
     }

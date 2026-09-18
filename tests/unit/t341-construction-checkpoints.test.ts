@@ -3,6 +3,7 @@
 // function:rejectConstructionCheckpoint, audit:GATE_APPROVED, audit:GATE_REJECTED
 // covers: function:authorizedVerificationCommand, function:verificationCommandDetails, audit:VERIFICATION_COMMAND_RECORDED, subcommand:aidlc-state:set-construction-verification-command
 // covers: function:recordVerificationCommandHumanResponse, hook:aidlc-record-human-turn
+// covers: audit:CHECKPOINT_VERIFICATION_RECORDED
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -449,6 +450,132 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const unbound = project();
     rmSync(join(seededRecordDir(unbound), "construction", "alpha", "code-generation", "source-manifest.json"));
     expect(resolveConstructionCheckpoint(unbound, "alpha", "unit").errors.join("\n")).toContain("source manifest");
+  });
+});
+
+describe("t341 tool-owned checkpoint verification receipts", () => {
+  test("a hand-written v3 proof cannot approve a checkpoint without its verifier receipt", () => {
+    const dir = project();
+    recordCommand(dir, "exit 0");
+    const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    const emptyDigest = createHash("sha256").update("").digest("hex");
+    const timestamp = new Date().toISOString();
+    mkdirSync(join(seededRecordDir(dir), ".aidlc-construction-checkpoints", "alpha"), { recursive: true });
+    writeFileSync(current.proof_path, JSON.stringify({
+      version: 3, id: randomUUID(), kind: "unit", unit: "alpha", fingerprint: current.fingerprint,
+      command_sha256: verificationCommandDetails("exit 0").sha256, command_label: "exit 0",
+      started_at: timestamp, finished_at: timestamp, exit_code: 0, signal: null,
+      stdout_bytes: 0, stderr_bytes: 0, stdout_sha256: emptyDigest, stderr_sha256: emptyDigest,
+      error: null, evidence_unchanged: true, verified: true,
+    }));
+    human(dir);
+    const forged = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(forged.ready).toBe(true);
+    expect(forged.verification?.verified).toBe(true);
+    expect(forged.verified).toBe(false);
+    expect(forged.approved).toBe(false);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve"))
+      .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
+    expect(approvals(dir)).toEqual([]);
+
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(verified.verified).toBe(true);
+    const receipt = readAuditShardEvents(dir).find((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED")!;
+    for (const [key, value] of Object.entries({
+      Unit: "alpha", Kind: "unit", Stage: "code-generation", Stages: STAGES.join(", "),
+      "Verification Id": verified.verification!.id, Fingerprint: verified.fingerprint,
+      "Command SHA-256": verificationCommandDetails("exit 0").sha256,
+      "Exit Code": "0", Verified: "true", "Run floor": verified.run_floor,
+    })) expect(auditBlockField(receipt.block, key)).toBe(value);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+    const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve");
+    expect(approved.approved).toBe(true);
+    expect(auditBlockField(approvals(dir).at(-1)!.block, "Verification Id")).toBe(verified.verification!.id);
+  }, 30_000);
+
+  test("the latest receipt must authorize this proof id, not a previous successful proof", () => {
+    const dir = project();
+    const verified = pass(dir);
+    human(dir);
+    expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve").approved).toBe(true);
+    appendAuditEntry("CHECKPOINT_VERIFICATION_RECORDED", {
+      Unit: "alpha", Kind: "unit", Stage: "code-generation", Stages: STAGES.join(", "),
+      "Verification Id": randomUUID(), Fingerprint: verified.fingerprint,
+      "Command SHA-256": verified.verification!.command_sha256,
+      "Exit Code": "0", Verified: "true", "Run floor": verified.run_floor,
+    }, dir);
+    const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(current.verified).toBe(false);
+    expect(current.approved).toBe(false);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve"))
+      .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
+  }, 30_000);
+
+  test("a failed verifier receipt cannot be upgraded by editing its proof JSON", () => {
+    const dir = project();
+    recordCommand(dir, "exit 7");
+    const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(failed.verified).toBe(false);
+    const receipt = readAuditShardEvents(dir).find((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED")!;
+    expect(auditBlockField(receipt.block, "Verification Id")).toBe(failed.verification!.id);
+    expect(auditBlockField(receipt.block, "Exit Code")).toBe("7");
+    expect(auditBlockField(receipt.block, "Verified")).toBe("false");
+    writeFileSync(failed.proof_path, JSON.stringify({ ...failed.verification!, exit_code: 0, verified: true }));
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve"))
+      .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
+  }, 30_000);
+
+  test("a proof written before an audit append failure remains unverified", () => {
+    const dir = project();
+    const previous = pass(dir);
+    const shard = readAuditShardEvents(dir)[0].shard;
+    const originalOpen = fs.openSync;
+    const failedAppend = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (path === shard && typeof flags === "number" && (flags & fs.constants.O_APPEND) !== 0) {
+        throw Object.assign(new Error("Audit shard is not writable"), { code: "EACCES" });
+      }
+      return originalOpen(path, flags, mode);
+    });
+    try {
+      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("Audit shard is not writable");
+    } finally {
+      failedAppend.mockRestore();
+    }
+    const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(current.verification!.id).not.toBe(previous.verification!.id);
+    expect(current.verification!.verified).toBe(true);
+    expect(current.verified).toBe(false);
+    expect(current.approved).toBe(false);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve"))
+      .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
+    expect(verifyConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+  }, 30_000);
+
+  test("a prior-attempt receipt cannot authorize a proof after a stage jump", () => {
+    const dir = project();
+    const verified = pass(dir);
+    appendAuditEntry("STAGE_JUMPED", { Stage: "code-generation" }, dir);
+    complete(dir, "alpha");
+    const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(current.ready).toBe(true);
+    expect(current.run_floor).not.toBe(verified.run_floor);
+    expect(current.verified).toBe(false);
+    expect(current.approved).toBe(false);
+    // Even replacing the proof's fingerprint cannot move its receipt to this attempt.
+    writeFileSync(current.proof_path, JSON.stringify({ ...verified.verification!, fingerprint: current.fingerprint }));
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve"))
+      .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
+    expect(verifyConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+  }, 30_000);
+
+  test("public audit append cannot mint a verifier receipt", () => {
+    const dir = project();
+    const refused = cli(dir, "audit", ["append", "CHECKPOINT_VERIFICATION_RECORDED", "--field", "Verified=true"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("reserved");
+    expect(readAuditShardEvents(dir).some((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED")).toBe(false);
   });
 });
 
