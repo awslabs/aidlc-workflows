@@ -13,6 +13,25 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  attemptEventDefinitelyBefore,
+  maximalAttemptEvents,
+  verificationCommandDetails,
+  readVerificationCommandFile,
+  verificationCommandChallengeRelativePath,
+  writeVerificationCommandChallenge,
+  readVerificationCommandChallenge,
+  readVerificationCommandResponse,
+  consumeVerificationCommandChallenge,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  VERIFICATION_COMMAND_RECOVERY,
+  validConstructionPolicyChange,
+  constructionPolicyChallengeRelativePath,
+  writeConstructionPolicyChallenge,
+  readConstructionPolicyChallenge,
+  readConstructionPolicyResponse,
+  consumeConstructionPolicyChallenge,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  CONSTRUCTION_POLICY_RECOVERY,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
@@ -108,6 +127,8 @@ import type {
   GuardRefusal,
   TeamUnitGateResolution,
   PlanApprovalRuntimeChallenge,
+  VerificationCommandRuntimeChallenge,
+  ConstructionPolicyRuntimeChallenge,
   ReviewClass,
   ReviewRecord,
   ReviewVerdict,
@@ -117,12 +138,15 @@ import {
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
   PLAN_APPROVAL_CHECKPOINT,
+  PLAN_APPROVAL_BATCH_FALLBACK,
   PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY,
   PlanApprovalOverrideHumanOnlyError,
   type PlanApprovalOverrideReceiptResult,
   PlanApprovalSourceDriftError,
   PlanApprovalUnbindableError,
   recordPlanApprovalChallenge,
+  recordPlanApprovalBatchChallenge,
+  recordPlanApprovalBatchReceipts,
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
@@ -199,6 +223,15 @@ function parseFlags(
     }
   }
   return { positional, flags };
+}
+
+function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
+  if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
+    error("Verification command requires exactly one of --command or --command-file. " + VERIFICATION_COMMAND_RECOVERY);
+  }
+  return flags["command-file"] !== undefined
+    ? readVerificationCommandFile(pd, flags["command-file"])
+    : verificationCommandDetails(flags.command);
 }
 
 // Whether anything sits at the path, symlink included, without following it.
@@ -286,6 +319,98 @@ function planApprovalFields(
   };
 }
 
+function handlePlanApprovalBatch(
+  pd: string,
+  flags: Record<string, string>,
+  action: "decision" | "answer",
+): void {
+  if (flags.checkpoint !== "plan-approval" || flags.stage !== "code-generation") {
+    error("--batch-file applies only to --stage code-generation --checkpoint plan-approval.");
+  }
+  if (["unit", "stage-level", "questions-file", "single", "override"].some((key) => flags[key] !== undefined)) {
+    error(`--batch-file cannot be combined with a single target or override. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+  }
+  if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
+    error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+  }
+  const session = flags.session?.trim();
+  if (!session) error("Plan Approval requires --session <id> from the invoking SessionStart context.");
+  const options = "Approve Plans,Request Changes";
+  if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
+    error(`Batch Plan Approval offers exactly "${options}".`);
+  }
+  const choice = flags.details === "Approve Plans" ? "Approve Plan" : flags.details;
+  if (action === "answer" && choice !== "Approve Plan" && choice !== "Request Changes") {
+    error('Batch Plan Approval requires --details "Approve Plans" or "Request Changes".');
+  }
+  try {
+    withAuditLock(pd, () => {
+      if (action === "decision") {
+        const challenge = recordPlanApprovalBatchChallenge(pd, flags["batch-file"], session, (batch) => {
+          emitAudit(pd, "DECISION_RECORDED", {
+            Stage: flags.stage,
+            Checkpoint: PLAN_APPROVAL_CHECKPOINT,
+            Decision: flags.decision,
+            Options: options,
+            Session: session,
+            Batch: batch.name,
+            Units: batch.members.map((member) => member.unit).join(", "),
+            "Batch Binding SHA-256": batch.bindingSha256,
+            "Batch Members": JSON.stringify(batch.members),
+          });
+        });
+        console.log(JSON.stringify({
+          emitted: "DECISION_RECORDED",
+          checkpoint: "plan-approval",
+          stage: flags.stage,
+          batch: challenge.batch,
+          options: challenge.options,
+          challengeId: challenge.challengeId,
+          challengeFile: planApprovalChallengeRelativePath(pd, session),
+        }));
+      } else {
+        const emitted = choice === "Approve Plan" ? "PLAN_APPROVAL_RECORDED" : "QUESTION_ANSWERED";
+        const receipts = recordPlanApprovalBatchReceipts(
+          pd, flags["batch-file"], session, choice as "Approve Plan" | "Request Changes", (batch, evidence) => {
+            for (const member of evidence) {
+              emitAudit(pd, emitted, {
+                Stage: flags.stage,
+                Details: choice,
+                Session: session,
+                Unit: member.authority.unit!,
+                ...claimAttemptFields(pd, member.authority.unit!),
+                ...planApprovalFields(member),
+                Batch: batch.name,
+                "Batch Binding SHA-256": batch.bindingSha256,
+              });
+            }
+          },
+        );
+        console.log(JSON.stringify({
+          emitted, checkpoint: "plan-approval", stage: flags.stage,
+          receipts: receipts.map((receipt) => ({ unit: receipt.targetId, fingerprint: receipt.fingerprint })),
+        }));
+      }
+    });
+  } catch (e) {
+    error(`Refusing grouped Plan Approval: ${errorMessage(e)}`);
+  }
+}
+
+function constructionPolicyFields(flags: Record<string, string>): Record<string, string> {
+  if (!validConstructionPolicyChange(flags.field, flags.value)) {
+    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  if (flags.single !== undefined || flags.unit !== undefined) {
+    error("Construction policy applies to the whole intent; omit --single and --unit.");
+  }
+  const session = flags.session?.trim();
+  if (!session) {
+    error("Construction policy requires --session <id> from the invoking SessionStart context. " + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -299,10 +424,12 @@ function handleDecision(args: string[]): void {
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "verification-command" &&
+    flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
 
@@ -323,11 +450,20 @@ function handleDecision(args: string[]): void {
       );
     }
   }
+  if (flags["batch-file"] !== undefined) {
+    handlePlanApprovalBatch(pd, flags, "decision");
+    return;
+  }
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence =
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
+  const verificationCommand = flags.checkpoint === "verification-command"
+    ? verificationCommandFromFlags(pd, flags) : null;
+  if (verificationCommand && (flags.single !== undefined || flags.unit !== undefined)) {
+    error("Construction verification commands apply to the whole intent; omit --single and --unit.");
+  }
   // The plan-approval checkpoint reads Change Control inside the evidence, only
   // when the source the plan was written against has moved; that read traces a
   // memory edit and raises an invalid memory value as its own error.
@@ -362,6 +498,28 @@ function handleDecision(args: string[]): void {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
   }
+  if (verificationCommand) {
+    fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
+    fields["Command SHA-256"] = verificationCommand.sha256;
+    fields["Command Label"] = verificationCommand.label;
+    const session = flags.session?.trim();
+    if (!session) {
+      error("Verification command requires --session <id> from the invoking SessionStart context. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    fields.Session = session;
+    const options = (flags.options ?? "").split(",").map((option) => option.trim().toLowerCase());
+    if (options.length !== 2 || options[0] !== "approve" || options[1] !== "request changes") {
+      error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+    }
+  }
+  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(flags) : null;
+  if (policyFields) {
+    Object.assign(fields, policyFields);
+    const options = (flags.options ?? "").split(",").map((option) => option.trim());
+    if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
+      error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+    }
+  }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
     const session = flags.session?.trim();
@@ -378,8 +536,45 @@ function handleDecision(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
+  let verificationChallenge: VerificationCommandRuntimeChallenge | null = null;
+  let policyChallenge: ConstructionPolicyRuntimeChallenge | null = null;
   try {
-    emitAudit(pd, "DECISION_RECORDED", fields);
+    if (policyFields) {
+      policyChallenge = withAuditLock(pd, () => {
+        const challenge: ConstructionPolicyRuntimeChallenge = {
+          version: 1,
+          session: fields.Session,
+          challengeId: createHash("sha256").update(randomBytes(32))
+            .update(JSON.stringify([fields.Field, fields.Value]), "utf-8").digest("hex"),
+          field: fields.Field,
+          value: fields.Value,
+          options: ["approve", "request changes"].map((option) =>
+            createHash("sha256").update(option, "utf-8").digest("hex"),
+          ) as [string, string],
+        };
+        writeConstructionPolicyChallenge(pd, challenge);
+        emitAudit(pd, "DECISION_RECORDED", fields);
+        return challenge;
+      });
+    } else
+    if (verificationCommand) {
+      verificationChallenge = withAuditLock(pd, () => {
+        const challenge: VerificationCommandRuntimeChallenge = {
+          version: 1,
+          session: fields.Session,
+          challengeId: randomBytes(32).toString("hex"),
+          commandSha256: verificationCommand.sha256,
+          options: ["approve", "request changes"].map((option) =>
+            createHash("sha256").update(option, "utf-8").digest("hex"),
+          ) as [string, string],
+        };
+        writeVerificationCommandChallenge(pd, challenge);
+        emitAudit(pd, "DECISION_RECORDED", fields);
+        return challenge;
+      });
+    } else {
+      emitAudit(pd, "DECISION_RECORDED", fields);
+    }
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -421,6 +616,20 @@ function handleDecision(args: string[]): void {
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
           }
         : {}),
+      ...(verificationChallenge !== null
+        ? {
+            command: verificationCommand!.command,
+            command_sha256: verificationChallenge.commandSha256,
+            challengeId: verificationChallenge.challengeId,
+            challengeFile: verificationCommandChallengeRelativePath(pd, verificationChallenge.session),
+          }
+        : {}),
+      ...(policyChallenge !== null
+        ? {
+            challengeId: policyChallenge.challengeId,
+            challengeFile: constructionPolicyChallengeRelativePath(pd, policyChallenge.session),
+          }
+        : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
     })
   );
@@ -448,6 +657,8 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
     "SUMMARY_CONFIRMATION_RECORDED",
+    "VERIFICATION_COMMAND_RECORDED",
+    "CONSTRUCTION_POLICY_RECORDED",
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -479,7 +690,9 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
       pending = true;
     } else if (
       event.event === "QUESTION_ANSWERED" ||
-      event.event === "SUMMARY_CONFIRMATION_RECORDED"
+      event.event === "SUMMARY_CONFIRMATION_RECORDED" ||
+      event.event === "VERIFICATION_COMMAND_RECORDED" ||
+      event.event === "CONSTRUCTION_POLICY_RECORDED"
     ) {
       pending = false;
     }
@@ -623,6 +836,54 @@ function pendingSummaryDecision(
   return { pending: true, humanAfterDecision: false };
 }
 
+function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  // A later proposal or answer supersedes the old question, even when its
+  // command or stage differs. Cross-shard ties never pick an arbitrary winner.
+  const actions = maximalAttemptEvents(rows.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "VERIFICATION_COMMAND_RECORDED"].includes(row.event) &&
+    auditBlockField(row.block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT,
+  ));
+  if (actions.length !== 1) return false;
+  const decision = actions[0];
+  return decision.event === "DECISION_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], decision) &&
+    auditBlockField(decision.block, "Stage") === stage &&
+    auditBlockField(decision.block, "Command SHA-256") === sha256 &&
+    auditBlockField(decision.block, "Session") === session;
+}
+
+function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string, session: string): boolean {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  // A choice for another pending decision must not also answer this challenge.
+  const actions = maximalAttemptEvents(rows.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "STAGE_AWAITING_APPROVAL", "GATE_APPROVED", "GATE_REJECTED",
+      "CONSTRUCTION_POLICY_RECORDED", "VERIFICATION_COMMAND_RECORDED",
+      "SUMMARY_CONFIRMATION_RECORDED", "PLAN_APPROVAL_RECORDED"].includes(row.event),
+  ));
+  if (actions.length !== 1) return false;
+  const decision = actions[0];
+  return decision.event === "DECISION_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], decision) &&
+    auditBlockField(decision.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
+    auditBlockField(decision.block, "Stage") === stage &&
+    auditBlockField(decision.block, "Field") === field &&
+    auditBlockField(decision.block, "Value") === value &&
+    auditBlockField(decision.block, "Session") === session;
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -631,14 +892,32 @@ function handleAnswer(args: string[]): void {
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "verification-command" &&
+    flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  const verificationCheckpoint = flags.checkpoint === "verification-command";
+  const policyCheckpoint = flags.checkpoint === "construction-policy";
+  const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
+  if (policyCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
+    error('Construction policy requires the exact human choice "Approve" or "Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
+    error("Construction verification commands apply to the whole intent; omit --single and --unit.");
+  }
+  if (verificationCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
+    error('Construction verification command requires the exact human choice "Approve" or "Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+  }
+  if (flags["batch-file"] !== undefined) {
+    handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
+    return;
+  }
   if (
     summaryCheckpoint &&
     flags.details !== "Looks correct" &&
@@ -690,6 +969,8 @@ function handleAnswer(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const verificationCommand = verificationCheckpoint
+    ? verificationCommandFromFlags(pd, flags) : null;
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
@@ -706,6 +987,21 @@ function handleAnswer(args: string[]): void {
     fields["Questions File"] = summaryEvidence!.relativePath;
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
+  }
+  if (verificationCommand) {
+    fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
+    fields["Command SHA-256"] = verificationCommand.sha256;
+    fields["Command Label"] = verificationCommand.label;
+    fields["User Input"] = flags.details;
+    const session = flags.session?.trim();
+    if (!session) {
+      error("Verification command requires --session <id> from the invoking SessionStart context. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    fields.Session = session;
+  }
+  if (policyFields) {
+    Object.assign(fields, policyFields);
+    fields["User Input"] = flags.details;
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -773,7 +1069,7 @@ function handleAnswer(args: string[]): void {
     // a human-backed checkpoint below: its fresh-turn requirement is not waived
     // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      autonomousDecision || humanPresenceGuardDisabled()
+      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) || humanPresenceGuardDisabled()
         ? null
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
@@ -782,6 +1078,45 @@ function handleAnswer(args: string[]): void {
           `chosen by the assistant (${answerAuthorship.category}: "${answerAuthorship.phrase}"). ` +
           `This question must be answered by the human. Re-present it and wait for their reply.`,
       );
+    }
+
+    if (verificationCommand) {
+      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
+      }
+      const challenge = readVerificationCommandChallenge(pd, fields.Session);
+      const response = readVerificationCommandResponse(pd, fields.Session);
+      // Like Plan Approval, the presence bypass never bypasses the exact
+      // hook-recorded response. Autonomy cannot choose a verification command.
+      if (!challenge || challenge.commandSha256 !== verificationCommand.sha256 ||
+        !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
+        error("Verification command requires the actual offered choice from this prompt and session: a matching challenge, Command SHA-256, and hook-recorded response for --details. " + VERIFICATION_COMMAND_RECOVERY);
+      }
+      const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      consumeVerificationCommandChallenge(pd, fields.Session);
+      console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
+      return;
+    }
+
+    if (policyFields) {
+      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
+        error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+      }
+      const challenge = readConstructionPolicyChallenge(pd, fields.Session);
+      const response = readConstructionPolicyResponse(pd, fields.Session);
+      if (!challenge || challenge.field !== fields.Field || challenge.value !== fields.Value ||
+        !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
+        error("Construction policy requires the actual offered choice from this prompt and session: a matching field/value challenge and hook-recorded response for --details. " + CONSTRUCTION_POLICY_RECOVERY);
+      }
+      const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
+      // Append first: a failed append leaves the human's one-shot answer retryable.
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      consumeConstructionPolicyChallenge(pd, fields.Session);
+      console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
+      return;
     }
 
     if (summaryCheckpoint) {

@@ -101,7 +101,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 99-event audit trail plus persistent state, team knowledge, and learned rules
+- 102-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -127,7 +127,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 71 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 73 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling
