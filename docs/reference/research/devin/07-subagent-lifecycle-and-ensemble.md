@@ -46,6 +46,8 @@ Residual limitations: `is_background` translation makes the core start marking D
 
 `10a0fbd0` added the missing binding; `d7ad958e` added binding parity tests. S02 captures in `0d7f63f9` exposed the separate dispatch, identity, and lifecycle gaps. They must not disappear from the findings merely because later prose work landed.
 
+`661527fa` landed the native `profile`/`task` translation, the `{task}`-only reverse translation, and the zero-marker wording (PR #996 review Item 2), with the attended `native-dispatch-run/` evidence. The standalone plan `pr-996-item-2-native-dispatch-translation-plan.md` was folded into this finding and DEVIN-14 afterwards; recover it with `git show 661527fa:docs/reference/research/devin/pr-996-item-2-native-dispatch-translation-plan.md`.
+
 Superseded: profile selection alone makes both core dispatch hooks fully compatible; a background launch can stand in for completion; ignoring read_subagent is completion deduplication; absent child identity can be guessed from tool_use_id prefixes; a hook registration proves reviewer read enforcement. The older instruction that status reconciles stuck background bookkeeping has no established repair contract here.
 
 ## Sources

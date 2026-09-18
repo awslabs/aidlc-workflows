@@ -105,7 +105,7 @@ git show 6e208f7b:docs/reference/research/devin/devin-harness-port-plan.md
 | stop-hook-read-only-probe-plan.md | DEVIN-11 |
 | testing-contract-repair-observability-plan.md | DEVIN-12 |
 
-Active (not yet folded): [pr-996-item-2-native-dispatch-translation-plan.md](pr-996-item-2-native-dispatch-translation-plan.md) — implementation plan for review Item 2 (DEVIN-07 native `profile`/`task` translation), implemented and live-accepted 2026-09-18 (`evidence/devin-e2e-run/native-dispatch-run/`); fold into DEVIN-07/09/14 once the change lands.
+`pr-996-item-2-native-dispatch-translation-plan.md` (DEVIN-07) was folded into findings 07/14 after the fix landed in `661527fa`; recover it with `git show 661527fa:docs/reference/research/devin/pr-996-item-2-native-dispatch-translation-plan.md`.
 
 `pr-996-item-1-plan-approval-session-isolation-plan.md` (DEVIN-09) was folded into findings 09/14 after the fix landed in `8bbdb928` and is not in the `6e208f7b` baseline; recover it with `git show 8bbdb928:docs/reference/research/devin/pr-996-item-1-plan-approval-session-isolation-plan.md`.
 
