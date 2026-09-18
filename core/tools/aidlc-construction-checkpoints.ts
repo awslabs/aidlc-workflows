@@ -23,6 +23,7 @@ import {
   getField,
   hasUnsafeSingleLineCharacter,
   consumeCheckpointApprovalChallenge,
+  clearCheckpointApprovalChallenges,
   requireCheckpointApprovalResponse,
   writeCheckpointApprovalChallenge,
   isAutonomousMode,
@@ -202,7 +203,8 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
       typeof proof.fingerprint !== "string" ||
       typeof proof.command_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.command_sha256) ||
       typeof proof.command_label !== "string" || !proof.command_label.trim() ||
-      proof.command_label.length > 120 || hasUnsafeSingleLineCharacter(proof.command_label) || /[\x80-\x9f]/.test(proof.command_label) ||
+      proof.command_label.length > 1024 || hasUnsafeSingleLineCharacter(proof.command_label) ||
+      /[\x80-\x9f\p{Cf}\p{Zl}\p{Zp}\u00a0]/u.test(proof.command_label) ||
       typeof proof.started_at !== "string" ||
       !Number.isSafeInteger(proof.stdout_bytes) || proof.stdout_bytes < 0 ||
       !Number.isSafeInteger(proof.stderr_bytes) || proof.stderr_bytes < 0 ||
@@ -465,6 +467,7 @@ export function verifyConstructionCheckpoint(
   kind: ConstructionCheckpointKind,
 ): ConstructionCheckpoint {
   const before = locked(projectDir, () => {
+    clearCheckpointApprovalChallenges(projectDir);
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     const authorization = current.verificationCommand;
@@ -556,8 +559,12 @@ function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Rec
   };
 }
 
-function approvalTarget(checkpoint: ConstructionCheckpoint) {
-  return { kind: "unit" as const, unit: checkpoint.unit, checkpointKind: checkpoint.kind, fingerprint: checkpoint.fingerprint };
+function approvalTarget(current: Snapshot) {
+  return {
+    kind: "unit" as const, unit: current.result.unit, checkpointKind: current.result.kind,
+    fingerprint: current.result.fingerprint, verificationId: current.result.verification?.id ?? "",
+    commandSha256: current.verificationCommand?.sha256 ?? "",
+  };
 }
 
 export function askConstructionCheckpoint(
@@ -568,8 +575,11 @@ export function askConstructionCheckpoint(
     if (!current.result.enabled || current.result.stages.length === 0) {
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
+    if (!current.result.ready || !current.result.verified) {
+      throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
+    }
     writeCheckpointApprovalChallenge(projectDir, {
-      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current.result),
+      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current),
       options: ["approve", "request changes"].map((option) => createHash("sha256").update(option).digest("hex")) as [string, string],
     });
     appendAuditEntryUnlocked("DECISION_RECORDED", {
@@ -597,7 +607,7 @@ export function approveConstructionCheckpoint(
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
       if (userInput !== "Approve") throw new Error('Construction checkpoint requires the exact "Approve" choice.');
-      requireCheckpointApprovalResponse(projectDir, approvalTarget(current.result), session, userInput);
+      requireCheckpointApprovalResponse(projectDir, approvalTarget(current), session, userInput);
     } else if (current.result.approved) {
       return current.result;
     }
@@ -638,7 +648,7 @@ export function rejectConstructionCheckpoint(
     if (!current.result.enabled || current.result.stages.length === 0) {
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
-    requireCheckpointApprovalResponse(projectDir, approvalTarget(current.result), session, userInput);
+    requireCheckpointApprovalResponse(projectDir, approvalTarget(current), session, userInput);
     const rechecked = snapshot(projectDir, unit, kind);
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");

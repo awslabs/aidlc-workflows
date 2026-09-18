@@ -92,6 +92,7 @@ import {
   auditBlockField,
   auditShardDir,
   authorizedVerificationCommand,
+  clearCheckpointApprovalChallenges,
   constructionCheckpointsApply,
   boltSlugForUnit,
   filterProducesByKind,
@@ -2540,6 +2541,7 @@ function handleFinalize(rest: string[]): void {
   if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
     fail("finalize requires --batch <positive integer>");
   }
+  clearCheckpointApprovalChallenges(projectDir);
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "finalize");
   const claimed = flags.claimed ? splitCsv(flags.claimed) : [];
   // The universe of units in the batch; defaults to the claimed set when the

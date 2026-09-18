@@ -6,6 +6,7 @@
 // covers: audit:CHECKPOINT_VERIFICATION_RECORDED
 // covers: function:readVerificationCommandFile
 // covers: function:askConstructionCheckpoint, function:recordCheckpointApprovalHumanResponse, function:mintProtectedChallenge
+// covers: function:clearCheckpointApprovalChallenges
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -33,6 +34,7 @@ import {
   readConstructionPolicyResponse,
   readCheckpointApprovalChallenge,
   readCheckpointApprovalResponse,
+  writeCheckpointApprovalChallenge,
   writeCheckpointApprovalResponse,
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
@@ -327,7 +329,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(JSON.stringify(failed)).not.toContain(marker);
     expect(readFileSync(failed.proof_path, "utf-8")).not.toContain(marker);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("Verify");
-    for (const cmd of ["", " \n\t", "a".repeat(8193), "echo\0bad"]) {
+    for (const cmd of ["", " \n\t", "a".repeat(1025), "echo\0bad"]) {
       expect(() => verificationCommandDetails(cmd)).toThrow("nonblank");
     }
   }, 60_000);
@@ -480,7 +482,6 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
       stdout_bytes: 0, stderr_bytes: 0, stdout_sha256: emptyDigest, stderr_sha256: emptyDigest,
       error: null, evidence_unchanged: true, verified: true,
     }));
-    human(dir);
     const forged = resolveConstructionCheckpoint(dir, "alpha", "unit");
     expect(forged.ready).toBe(true);
     expect(forged.verification?.verified).toBe(true);
@@ -500,6 +501,7 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
       "Exit Code": "0", Verified: "true", "Run floor": verified.run_floor,
     })) expect(auditBlockField(receipt.block, key)).toBe(value);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+    human(dir);
     const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
     expect(approved.approved).toBe(true);
     expect(auditBlockField(approvals(dir).at(-1)!.block, "Verification Id")).toBe(verified.verification!.id);
@@ -654,9 +656,9 @@ describe("t341 verification command consent", () => {
     const dir = project();
     const root = seededRecordDir(dir);
     writeFileSync(join(root, "command.txt"), "bun test\n");
-    // Below the canonical character limit but above the file byte limit.
+    // The file byte cap rejects oversized input before command validation.
     writeFileSync(join(root, "oversize.txt"), "界".repeat(6000));
-    writeFileSync(join(root, "long-command.txt"), "x".repeat(8193));
+    writeFileSync(join(root, "long-command.txt"), "x".repeat(1025));
     writeFileSync(join(root, "multiline.txt"), "bun test\nbun run build");
     mkdirSync(join(root, "commands"));
     writeFileSync(join(root, "commands", "command.txt"), "bun test\n");
@@ -902,7 +904,7 @@ describe("t341 verification command consent", () => {
     expect(cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env).code).not.toBe(0);
   }, 30_000);
 
-  test("canonical command bytes survive dollar substitutions and long labels are bounded", () => {
+  test("canonical command bytes survive dollar substitutions without abbreviating the label", () => {
     const dir = project();
     recordCommand(dir, "exit 0");
     const command = 'printf "%s" \'$& $` $1 $$\'; exit 0 # ' + "x".repeat(150);
@@ -910,7 +912,7 @@ describe("t341 verification command consent", () => {
     const authorization = authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!;
     expect(authorization.command).toBe(command);
     expect(authorization.sha256).toBe(createHash("sha256").update(command).digest("hex"));
-    expect(authorization.label).toBe(command.slice(0, 120));
+    expect(authorization.label).toBe(command);
     const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update("$& $` $1 $$").digest("hex"));
@@ -918,6 +920,67 @@ describe("t341 verification command consent", () => {
       const refused = cli(dir, "state", ["set-construction-verification-command", invalid]);
       expect(refused.code).not.toBe(0);
       expect(refused.out).toContain("control characters");
+    }
+  }, 30_000);
+
+  test("the full 300-character command is displayed before consent and retained in its receipt and proof", () => {
+    const dir = project();
+    const command = `echo ${"benign".repeat(20)}${" ".repeat(166)}&& exit 0`;
+    const sha256 = createHash("sha256").update(command).digest("hex");
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", `  ${command}  `, "--session", "visible-command"];
+    const decision = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+    expect(decision.code, decision.out).toBe(0);
+    expect(JSON.parse(decision.out)).toMatchObject({ command, command_sha256: sha256 });
+    submitCommandChoice(dir, "visible-command", "Approve");
+    const answer = cli(dir, "log", ["answer", ...identity, "--details", "Approve"]);
+    expect(answer.code, answer.out).toBe(0);
+    expect(JSON.parse(answer.out).command_sha256).toBe(sha256);
+    const receipt = readAuditShardEvents(dir).find((row) => row.event === "VERIFICATION_COMMAND_RECORDED")!;
+    expect(auditBlockField(receipt.block, "Command Label")).toBe(command);
+    expect(cli(dir, "state", ["set-construction-verification-command", command]).code).toBe(0);
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(verified.verified).toBe(true);
+    expect(verified.verification!.command_label).toBe(command);
+    expect(verified.verification_command).toBe(command);
+    human(dir);
+    expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
+  }, 30_000);
+
+  test("1024-character commands work end to end; oversized legacy state and proofs fail closed", () => {
+    const dir = project();
+    const command = `echo ${"x".repeat(1019)}`;
+    recordCommand(dir, command);
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(verified.verified).toBe(true);
+    expect(verified.verification!.command_label).toBe(command);
+    const oversized = `${command}x`;
+    const refused = cli(dir, "log", ["decision", "--stage", "code-generation", "--checkpoint", "verification-command", "--command", oversized,
+      "--session", "too-long", "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("1024");
+    const stateContent = readFileSync(seededStateFile(dir), "utf-8");
+    const rows = readAuditShardEvents(dir).map((row) => row.event === "VERIFICATION_COMMAND_RECORDED"
+      ? { ...row, block: row.block.replace(verified.verification!.command_sha256, createHash("sha256").update(oversized).digest("hex")) }
+      : row);
+    expect(authorizedVerificationCommand(dir, setField(stateContent, "Construction Verification Command", oversized), rows)).toBeNull();
+    writeFileSync(verified.proof_path, JSON.stringify({ ...verified.verification, command_label: oversized }));
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
+  }, 30_000);
+
+  test("display-spoofing characters are rejected by command input and persisted proof readers", () => {
+    const dir = project();
+    const verified = pass(dir);
+    for (const character of ["\u200b", "\u202e", "\u2028", "\u2029", "\u00a0"]) {
+      for (const command of [`echo${character}safe`, `${character}echo safe${character}`]) {
+        expect(() => verificationCommandDetails(command)).toThrow("display-spoofing characters");
+      }
+      const command = `echo${character}safe`;
+      const refused = cli(dir, "log", ["decision", "--stage", "code-generation", "--checkpoint", "verification-command", "--command", command,
+        "--session", "spoofed-command", "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+      expect(refused.code).not.toBe(0);
+      expect(refused.out).toContain("display-spoofing characters");
+      writeFileSync(verified.proof_path, JSON.stringify({ ...verified.verification, command_label: command }));
+      expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
     }
   }, 30_000);
 
@@ -1115,6 +1178,65 @@ describe("t341 response-bound checkpoint decisions", () => {
   const session = "checkpoint-consent";
   const env = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
   const route = (kind = "unit", id = session) => ["checkpoint", "--unit", "alpha", "--kind", kind, "--session", id];
+
+  test("an unverified checkpoint cannot ask or pre-collect consent for a later verification", () => {
+    const pd = project();
+    recordCommand(pd, "exit 0");
+    expect(resolveConstructionCheckpoint(pd, "alpha", "unit")).toMatchObject({ ready: true, verified: false });
+    const asked = cli(pd, "bolt", [...route(), "--action", "ask"], env);
+    expect(asked.code).not.toBe(0);
+    expect(asked.out).toMatch(/verify.*first/i);
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
+    const approve = () => cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env);
+    expect(approve().code).not.toBe(0);
+    expect(approvals(pd)).toEqual([]);
+    expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(approve().code).toBe(0);
+  }, 30_000);
+
+  test("re-verifying identical evidence withdraws every session's question and binds fresh consent to the new proof", () => {
+    const pd = project();
+    const first = pass(pd);
+    for (const id of [session, "another-checkpoint-session"]) {
+      expect(cli(pd, "bolt", [...route("unit", id), "--action", "ask"], env).code).toBe(0);
+      submitCommandChoice(pd, id, "Approve", env);
+    }
+    const previous = readCheckpointApprovalChallenge(pd, session)!;
+    const response = readCheckpointApprovalResponse(pd, session)!;
+    const checked = verifyConstructionCheckpoint(pd, "alpha", "unit");
+    expect(checked.verified).toBe(true);
+    expect(checked.fingerprint).toBe(first.fingerprint);
+    expect(checked.verification!.id).not.toBe(first.verification!.id);
+    for (const id of [session, "another-checkpoint-session"]) {
+      expect(readCheckpointApprovalChallenge(pd, id)).toBeNull();
+      expect(readCheckpointApprovalResponse(pd, id)).toBeNull();
+      submitCommandChoice(pd, id, "Approve", env);
+      expect(readCheckpointApprovalResponse(pd, id)).toBeNull();
+      expect(cli(pd, "bolt", [...route("unit", id), "--action", "approve", "--user-input", "Approve"], env).code).not.toBe(0);
+    }
+    // Restoring the retired mailbox cannot turn the old proof into current consent.
+    writeCheckpointApprovalChallenge(pd, previous);
+    writeCheckpointApprovalResponse(pd, response);
+    expect(cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env).code).not.toBe(0);
+    expect(approvals(pd)).toEqual([]);
+    expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env).code).toBe(0);
+  }, 30_000);
+
+  test("a failed re-verification withdraws an unanswered checkpoint before it executes", () => {
+    const pd = project();
+    pass(pd);
+    expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
+    writeCheck(pd, "process.exit(1);\n");
+    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(false);
+    expect(readCheckpointApprovalChallenge(pd, session)).toBeNull();
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).not.toBe(0);
+  }, 30_000);
 
   test.each(["unit", "skeleton"])("%s refuses unrelated prompts, cross-session choices, and consumed responses", (kind) => {
     const pd = project();

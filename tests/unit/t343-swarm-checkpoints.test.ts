@@ -3,6 +3,7 @@
 // function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
 // covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
 // covers: function:askSwarmCheckpoint, function:requireCheckpointApprovalResponse
+// covers: function:clearCheckpointApprovalChallenges
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -450,7 +451,10 @@ describe("t343 completed swarm batch checkpoints", () => {
     const pd = fixture();
     if (kind !== "missing") converge(pd, 1, BATCH, kind);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
-    human(pd);
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code).not.toBe(0);
+    expect(asked.out).toContain("not ready");
+    expect(readCheckpointApprovalChallenge(pd, "t343-checkpoint")).toBeNull();
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("not ready");
     expect(gates(pd)).toHaveLength(0);
   }, 30_000);
@@ -735,8 +739,9 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
-    human(pd, "Request Changes");
-    expect(rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint").approved).toBe(false);
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code).not.toBe(0);
+    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint")).toThrow("--action ask");
   }, 30_000);
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {
@@ -811,6 +816,51 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
 describe("t343 response-bound swarm decisions", () => {
   const session = "swarm-consent";
   const route = (id = session) => ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--session", id];
+
+  test("finalize withdraws every outstanding session's batch question and response", () => {
+    const pd = fixture();
+    converge(pd);
+    const before = resolveSwarmCheckpoint(pd, 1, BATCH);
+    for (const id of [session, "other-swarm-session"]) {
+      expect(tool(pd, "bolt", [...route(id), "--action", "ask"]).code).toBe(0);
+      choice(pd, id, "Approve");
+      expect(readCheckpointApprovalResponse(pd, id)?.choice).toBe("Approve");
+    }
+    // Even a finalize run that declines all Units starts a new verification boundary.
+    const finalized = tool(pd, "swarm", ["finalize", "--batch", "1", "--units", BATCH.join(",")]);
+    expect(finalized.code, finalized.out).toBe(2);
+    const after = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(after).toMatchObject({ ready: true, fingerprint: before.fingerprint });
+    for (const id of [session, "other-swarm-session"]) {
+      expect(readCheckpointApprovalChallenge(pd, id)).toBeNull();
+      expect(readCheckpointApprovalResponse(pd, id)).toBeNull();
+      choice(pd, id, "Approve");
+      expect(tool(pd, "bolt", [...route(id), "--action", "approve", "--user-input", "Approve"]).code).not.toBe(0);
+    }
+    expect(gates(pd)).toEqual([]);
+    expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
+    choice(pd, session, "Approve");
+    expect(tool(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"]).code).toBe(0);
+  }, 30_000);
+
+  test("consent binds per-Unit command digests even when rechecked content has the same fingerprint", () => {
+    const pd = fixture();
+    converge(pd);
+    const before = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
+    choice(pd, session, "Approve");
+    recordCommand(pd, "git diff --exit-code -- src");
+    converge(pd, 1, BATCH, "unmerged");
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({ ready: true, fingerprint: before.fingerprint });
+    const approve = () => tool(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"]);
+    const stale = approve();
+    expect(stale.code).not.toBe(0);
+    expect(stale.out).toContain("--action ask");
+    expect(gates(pd)).toEqual([]);
+    expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
+    choice(pd, session, "Approve");
+    expect(approve().code).toBe(0);
+  }, 30_000);
 
   test("unrelated and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
     const pd = fixture();

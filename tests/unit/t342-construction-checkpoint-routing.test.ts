@@ -242,7 +242,7 @@ describe("t342 Construction checkpoint routing", () => {
     const command = recordCommand(p);
     const recorded = next(p).construction_checkpoint;
     expect(recorded?.command_authorized).toBe(true);
-    expect(recorded?.verification_command).toBe(command.slice(0, 120));
+    expect(recorded?.verification_command).toBe(command);
     approve(p, "alpha");
     const following = next(p);
     expect(following.unit).toBe("beta");

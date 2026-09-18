@@ -3177,8 +3177,8 @@ export interface ConstructionPolicyRuntimeResponse {
 }
 
 export type CheckpointApprovalTarget =
-  | { kind: "unit"; unit: string; checkpointKind: "unit" | "skeleton"; fingerprint: string }
-  | { kind: "batch"; batch: number; units: string[]; fingerprint: string };
+  | { kind: "unit"; unit: string; checkpointKind: "unit" | "skeleton"; fingerprint: string; verificationId: string; commandSha256: string }
+  | { kind: "batch"; batch: number; units: string[]; fingerprint: string; commandSha256s: Record<string, string> };
 
 export interface CheckpointApprovalRuntimeChallenge {
   version: 1;
@@ -3727,11 +3727,17 @@ export function readCheckpointApprovalChallenge(projectDir: string, session: str
     target && typeof target.fingerprint === "string" && /^sha256:[a-f0-9]{64}$/.test(target.fingerprint) &&
     (target.kind === "unit"
       ? typeof target.unit === "string" && validateUnitName(target.unit) === null &&
-        (target.checkpointKind === "unit" || target.checkpointKind === "skeleton")
+        (target.checkpointKind === "unit" || target.checkpointKind === "skeleton") &&
+        typeof target.verificationId === "string" && target.verificationId.length > 0 &&
+        typeof target.commandSha256 === "string" && /^[a-f0-9]{64}$/.test(target.commandSha256)
       : target.kind === "batch" && Number.isSafeInteger(target.batch) && target.batch > 0 &&
         Array.isArray(target.units) && target.units.length > 0 &&
         new Set(target.units).size === target.units.length &&
-        target.units.every((unit) => typeof unit === "string" && validateUnitName(unit) === null)) &&
+        target.units.every((unit) => typeof unit === "string" && validateUnitName(unit) === null) &&
+        target.commandSha256s !== null && typeof target.commandSha256s === "object" &&
+        !Array.isArray(target.commandSha256s) && Object.keys(target.commandSha256s).length === target.units.length &&
+        target.units.every((unit) => Object.hasOwn(target.commandSha256s, unit) &&
+          typeof target.commandSha256s[unit] === "string" && /^[a-f0-9]{64}$/.test(target.commandSha256s[unit]))) &&
     Array.isArray(value.options) && value.options.length === 2 &&
     value.options.every((option) => typeof option === "string" && /^[a-f0-9]{64}$/.test(option))
     ? value : null;
@@ -3765,6 +3771,25 @@ export function consumeCheckpointApprovalChallenge(projectDir: string, session: 
   }
 }
 
+/** Re-verification withdraws every session's outstanding checkpoint question. */
+export function clearCheckpointApprovalChallenges(projectDir: string): void {
+  withAuditLock(projectDir, () => {
+    const dir = planApprovalRuntimeDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    let names: string[];
+    try { names = readdirSync(dir); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const name of names) {
+      if (!name.startsWith("checkpoint-approval-") || !name.endsWith(".json")) continue;
+      try { unlinkSync(join(dir, name)); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  });
+}
+
 export function requireCheckpointApprovalResponse(
   projectDir: string, target: CheckpointApprovalTarget, session: string, choice: string,
 ): void {
@@ -3773,14 +3798,16 @@ export function requireCheckpointApprovalResponse(
   const offered = challenge?.target;
   const matches = offered?.fingerprint === target.fingerprint &&
     (target.kind === "unit"
-      ? offered.kind === "unit" && offered.unit === target.unit && offered.checkpointKind === target.checkpointKind
+      ? offered.kind === "unit" && offered.unit === target.unit && offered.checkpointKind === target.checkpointKind &&
+        offered.verificationId === target.verificationId && offered.commandSha256 === target.commandSha256
       : offered.kind === "batch" && offered.batch === target.batch &&
-        offered.units.length === target.units.length && offered.units.every((unit, i) => unit === target.units[i]));
+        offered.units.length === target.units.length && offered.units.every((unit, i) =>
+          unit === target.units[i] && offered.commandSha256s[unit] === target.commandSha256s[unit]));
   if (!challenge || !response || response.challengeId !== challenge.challengeId || response.choice !== choice || !matches) {
     const command = target.kind === "unit"
       ? `bolt checkpoint --action ask --unit "${target.unit}" --kind ${target.checkpointKind}`
       : `bolt swarm-checkpoint --action ask --batch ${target.batch} --units "${target.units.join(",")}"`;
-    throw new Error(`Checkpoint requires the actual human choice for the current fingerprint and session. Re-ask with ${command} --session "<session ID>", then wait for Approve or Request Changes.`);
+    throw new Error(`Checkpoint requires the actual human choice for the current verification, command digest, fingerprint, and session. Re-ask with ${command} --session "<session ID>", then wait for Approve or Request Changes.`);
   }
   if (!humanPresenceGuardDisabled() && !humanActedSinceGate(projectDir)) {
     throw new Error("Checkpoint approval requires a fresh human turn.");
@@ -8507,14 +8534,17 @@ export interface VerificationCommand {
 }
 
 export function verificationCommandDetails(command: string): VerificationCommand {
+  if (/[\p{Cf}\p{Zl}\p{Zp}\u00a0]/u.test(command)) {
+    throw new Error("Construction verification command must contain no display-spoofing characters. Put complex checks in a script and record its invocation.");
+  }
   const canonical = command.trim();
-  if (!canonical || canonical.length > 8192 || hasUnsafeSingleLineCharacter(canonical) || /[\x80-\x9f]/.test(canonical)) {
-    throw new Error("Construction verification command must be nonblank, at most 8192 characters, and contain no control characters. Put multiline checks in a script and record its invocation.");
+  if (!canonical || canonical.length > 1024 || hasUnsafeSingleLineCharacter(canonical) || /[\x80-\x9f]/.test(canonical)) {
+    throw new Error("Construction verification command must be nonblank, at most 1024 characters, and contain no control characters. Put multiline checks in a script and record its invocation.");
   }
   return {
     command: canonical,
     sha256: createHash("sha256").update(canonical, "utf8").digest("hex"),
-    label: canonical.slice(0, 120),
+    label: canonical,
   };
 }
 

@@ -126,6 +126,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   if (!definition) throw new Error("Code Generation stage definition is unavailable.");
   const repos = intentRepos(pd);
   const floors: Record<string, string> = {};
+  const commandSha256s: Record<string, string> = {};
   const evidence = units.map((unit) => {
     const unitFloor = latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, unit, rows);
     floors[unit] = unitFloor;
@@ -142,6 +143,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       (auditBlockField(row.block, "Unit") === null || auditBlockField(row.block, "Unit") === unit)));
     const commit = native && auditBlockField(native.block, "Source Commit");
     const nativeSource = native && auditBlockField(native.block, "Source Fingerprint");
+    commandSha256s[unit] = native ? auditBlockField(native.block, "Command SHA-256") ?? "" : "";
     if (!native || !merged || !commit || !/^[0-9a-f]{40,64}$/.test(commit) ||
       !nativeSource || !/^[0-9a-f]{40,64}$/.test(nativeSource) ||
       auditBlockField(native.block, "Source Freshness Bypass") !== null ||
@@ -237,7 +239,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       auditBlockField(gate.block, "Autonomous") === "true");
   const result: SwarmCheckpoint = { batch, units, fingerprint, ready, approved, human_required: humanRequired, errors };
-  return { result, root, intent, rows, floor, floors, enabled, verificationCommand };
+  return { result, root, intent, rows, floor, floors, enabled, verificationCommand, commandSha256s };
 }
 
 export function resolveSwarmCheckpoint(
@@ -247,16 +249,20 @@ export function resolveSwarmCheckpoint(
   return locked(pd, () => snapshot(pd, batch, units, stateContent, evidence).result);
 }
 
-function approvalTarget(checkpoint: SwarmCheckpoint) {
-  return { kind: "batch" as const, batch: checkpoint.batch, units: checkpoint.units, fingerprint: checkpoint.fingerprint };
+function approvalTarget(checkpoint: SwarmCheckpoint, commandSha256s: Record<string, string>) {
+  return {
+    kind: "batch" as const, batch: checkpoint.batch, units: checkpoint.units,
+    fingerprint: checkpoint.fingerprint, commandSha256s,
+  };
 }
 
 export function askSwarmCheckpoint(pd: string, batch: number, units: string[], session: string): SwarmCheckpoint {
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
+    if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
     writeCheckpointApprovalChallenge(pd, {
-      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current.result),
+      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current.result, current.commandSha256s),
       options: ["approve", "request changes"].map((option) => createHash("sha256").update(option).digest("hex")) as [string, string],
     });
     appendAuditEntryUnlocked("DECISION_RECORDED", {
@@ -301,7 +307,7 @@ export function approveSwarmCheckpoint(
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
       if (userInput !== "Approve") throw new Error('Swarm checkpoint requires the exact "Approve" choice.');
-      requireCheckpointApprovalResponse(pd, approvalTarget(current.result), session, userInput);
+      requireCheckpointApprovalResponse(pd, approvalTarget(current.result, current.commandSha256s), session, userInput);
     } else if (current.result.approved) {
       return current.result;
     }
@@ -327,7 +333,7 @@ export function rejectSwarmCheckpoint(
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
-    requireCheckpointApprovalResponse(pd, approvalTarget(current.result), session, userInput);
+    requireCheckpointApprovalResponse(pd, approvalTarget(current.result, current.commandSha256s), session, userInput);
     const after = recheck(pd, batch, units, current, selection.root, false);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",

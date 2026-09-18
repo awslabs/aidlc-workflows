@@ -618,6 +618,8 @@ function handleDecision(args: string[]): void {
         : {}),
       ...(verificationChallenge !== null
         ? {
+            command: verificationCommand!.command,
+            command_sha256: verificationChallenge.commandSha256,
             challengeId: verificationChallenge.challengeId,
             challengeFile: verificationCommandChallengeRelativePath(pd, verificationChallenge.session),
           }
@@ -1094,7 +1096,7 @@ function handleAnswer(args: string[]): void {
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeVerificationCommandChallenge(pd, fields.Session);
-      console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage }));
+      console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
       return;
     }
 
