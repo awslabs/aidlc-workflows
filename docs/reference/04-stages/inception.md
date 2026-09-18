@@ -1209,15 +1209,19 @@ All Inception phase artifacts:
    decision. Confirm the first integrated Unit when skeleton-on applies. For
    checkpoint-enabled work, propose a real project check from the scan and show
    **Use this command to verify each completed Unit?** with the exact command
-   and **Approve** / **Request Changes**. Before presenting the command, use the
-   invoking SessionStart session ID: both `log decision` and `log answer` require
-   `--checkpoint verification-command --command "<cmd>" --session "<session ID>"`.
+   and **Approve** / **Request Changes**. Before presenting the command, write it
+   to `<record>/verification-command.txt` using the harness's file-write
+   tool (Write/edit), never a shell `echo` or heredoc. Repo-derived command text
+   must never be interpolated into a shell line, where substitutions could run
+   before approval. Use the invoking SessionStart session ID: both `log decision`
+   and `log answer` require
+   `--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
    Record the decision before asking and wait for the human's exact **Approve** /
    **Request Changes** reply in that session. Record the answer with the same
    stage/checkpoint/command/session; only **Approve** authorizes the receipt.
    An unrelated reply, **Request Changes**, or a reply from another session does
    not. Never write `--details "Approve"` unless the human chose it; only then run
-   `state set-construction-verification-command`. **Request Changes** means
+   `state set-construction-verification-command --command-file verification-command.txt`. **Request Changes** means
    propose another command. The receipt must precede the state field; never use
    generic `state set` or auto-approve. This command is reused for all Unit/batch
    checkpoints and changes require a new receipt.

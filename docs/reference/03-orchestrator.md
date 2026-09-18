@@ -499,14 +499,18 @@ is not evidence of a shipped skeleton.
 
 The intent's `Construction Verification Command` is recorded during Delivery
 Planning or, if the human defers because no runnable check exists, at the first
-checkpoint. Before presenting the command, use the invoking SessionStart session
-ID: both `log decision` and `log answer` require
-`--checkpoint verification-command --command "<cmd>" --session "<session ID>"`.
+checkpoint. Before presenting the command, write it to
+`<record>/verification-command.txt` with the harness's file-write tool
+(Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
+be interpolated into a shell line, where substitutions could execute before
+approval. Use the invoking SessionStart session ID: both `log decision` and
+`log answer` require
+`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
 The human's exact **Approve** / **Request Changes** reply in that session binds
 the answer to the canonical command digest. Only **Approve** authorizes the
 receipt; an unrelated reply, **Request Changes**, or a reply from another session
 does not. Never write `--details "Approve"` unless the human chose it; only then
-run `state set-construction-verification-command` to write the matching Runtime State
+run `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime State
 field. The latest current-workflow `VERIFICATION_COMMAND_RECORDED` receipt is the
 authority, not the field alone. When `command_authorized: false`, route to that
 question before any `verify`, even under autonomy, then re-run `next`. Every

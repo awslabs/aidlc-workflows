@@ -61,8 +61,13 @@ greenfield project without a runnable check may defer to the first checkpoint.
 The same command is reused for all Unit/batch checkpoints; choosing or changing
 it requires the [recorded-command flow](../guide/12-cli-commands.md#construction-verification-command-record-human-authorization),
 never generic `state set` or an autonomy grant.
-Before presenting the command, use the invoking SessionStart session ID for both
-`log decision` and `log answer` via `--session "<session ID>"`. Record the human's
+Before presenting the command, write it to
+`<record>/verification-command.txt` with the harness's file-write tool
+(Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
+be interpolated into a shell line, where substitutions could run before approval.
+Use `--command-file verification-command.txt` for `log decision`,
+`log answer`, and `state set-construction-verification-command`; use the invoking
+SessionStart session ID for both log calls via `--session "<session ID>"`. Record the human's
 exact **Approve** / **Request Changes** reply in that session; only **Approve**
 authorizes the receipt, not an unrelated reply, **Request Changes**, or a reply
 from another session. Never write `--details "Approve"` unless the human chose it.

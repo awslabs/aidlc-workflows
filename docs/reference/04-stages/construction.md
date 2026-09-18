@@ -55,14 +55,18 @@ it does not establish that an integrated skeleton has been built.
 
 All Unit/batch checkpoints reuse the intent's recorded, human-authorized
 `Construction Verification Command`. Delivery Planning proposes it from the
-project scan. Before presenting the command, use the invoking SessionStart
-session ID: both `log decision` and `log answer` require
-`--checkpoint verification-command --command "<cmd>" --session "<session ID>"`.
+project scan. Before presenting the command, write it to
+`<record>/verification-command.txt` with the harness's file-write tool
+(Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
+be interpolated into a shell line, where substitutions could execute before
+approval. Use the invoking SessionStart session ID: both `log decision` and
+`log answer` require
+`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
 The human's exact **Approve** / **Request Changes** reply in that session binds
 the answer to the pending command. Only **Approve** authorizes the receipt;
 an unrelated reply, **Request Changes**, or a reply from another session does not.
 Never write `--details "Approve"` unless the human chose it; only then run
-`state set-construction-verification-command` to write the matching Runtime
+`state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
 check exists yet; the first checkpoint then asks. The current approval receipt,
 not the field alone, authorizes execution. Changing it requires a new receipt

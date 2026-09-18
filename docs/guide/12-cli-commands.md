@@ -1279,11 +1279,15 @@ framework records or other files.
 For checkpoint-enabled work, Delivery Planning proposes a real project check from
 the project scan, such as `bun test`, `pytest`, or `make check`. Show the exact
 command with **Use this command to verify each completed Unit?** as a structured
-**Approve** / **Request Changes** question. Before presenting the command, use
-the invoking SessionStart session ID:
+**Approve** / **Request Changes** question. Before presenting the command, write
+it as UTF-8 text to `<record>/verification-command.txt` with the harness's
+file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived command
+text must never be interpolated into a shell line: shell substitutions could
+execute before approval. Pass only the record-relative path and use the invoking
+SessionStart session ID:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
 Wait for the human's exact **Approve** / **Request Changes** reply in that
@@ -1292,24 +1296,30 @@ session. Only **Approve** authorizes the receipt; an unrelated reply,
 `--details "Approve"` unless the human chose it. Only then run:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve"
-{{INVOKE}} engine state set-construction-verification-command "<cmd>"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
 ```
 
 These are the `aidlc-log` decision/answer checkpoint forms. Both require the same
-`--stage`, `--checkpoint verification-command`, canonical `--command`, and
-`--session "<session ID>"`.
+`--stage`, `--checkpoint verification-command`, canonical command, and
+`--session "<session ID>"`. Each accepts exactly one of `--command-file <path>`
+or `--command`; both or neither are refused. Use the file form for conductor
+shell calls; the direct argument is only safe when passed without shell
+interpolation. Files must be record-relative regular files, with no absolute
+path, `..`, or symlink in the chain, and no larger than 16 KiB. The file is decoded
+as UTF-8 and canonicalized exactly like the direct argument.
 Leading/trailing whitespace is trimmed before recording, hashing, and execution.
 The resulting command must be nonblank, at most 8192 characters, and a single
 line with no control characters (including newline, CR, tab, or NUL). Put
 multiline checks in a script and record its invocation.
 `decision` records `DECISION_RECORDED` with `Checkpoint: Construction Verification
-Command` and `Command SHA-256`. `answer` requires a matching pending decision and,
-unless `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, the human-turn hook's response bound to
-that command and session's current challenge, with the exact choice matching
+Command` and `Command SHA-256`. `answer` requires a matching pending decision and
+the human-turn hook's response bound to that command and session's current
+challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the exact choice matching
 `--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
-replaces the session's prior challenge and response; a successful answer consumes
-both, so stale, mismatched, and reused responses are refused.
+replaces the session's prior challenge and response; a successful answer appends
+the audit event before consuming both. An append failure leaves the same response
+retryable; stale, mismatched, and successfully consumed responses are refused.
 `--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
 `--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
 another command without setting state. Other answers are refused. The receipt
@@ -1318,8 +1328,9 @@ control-character-free display label truncated to 120 characters, and the
 human's exact choice.
 `aidlc-audit append` cannot mint this reserved receipt.
 
-The typed setter writes `- **Construction Verification Command**: <cmd>` under
-`## Runtime State` in `aidlc-state.md` only when the latest current-workflow
+The typed setter accepts `--command-file <record-relative path>` or one positional
+command argument, never both. It writes `- **Construction Verification Command**: <cmd>`
+under `## Runtime State` in `aidlc-state.md` only when the latest current-workflow
 approval receipt matches its digest. It does not ask for another human turn:
 the receipt, not the state field, authorizes execution. Verification checks the
 same binding; older-workflow and isolated-stage receipts do not authorize it,

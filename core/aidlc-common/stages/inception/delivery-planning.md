@@ -203,11 +203,15 @@ invent a placeholder or treat deferral as approval.
 Use one nonblank line of at most 8192 characters with no control characters
 (including newline, CR, tab, or NUL). The tools trim leading/trailing whitespace
 before recording, hashing, and executing the command. Put multiline checks in a
-script and record its invocation. Before presenting the command, use the invoking
-SessionStart session ID:
+script and record its invocation. Before presenting the command, write it as
+UTF-8 text to `<record>/verification-command.txt` using the harness's
+file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived
+command text must never be interpolated into a shell line: shell substitutions
+could execute before the human approves. Pass only the record-relative file path
+below and use the invoking SessionStart session ID:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
 Show the actual proposed command in the structured question and wait for the human:
@@ -231,8 +235,8 @@ their answer using the same session ID, and set the command with the matching
 tool-owned receipt:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve"
-{{INVOKE}} engine state set-construction-verification-command "<cmd>"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
 ```
 
 For **Request Changes**, record the same `log answer` with
